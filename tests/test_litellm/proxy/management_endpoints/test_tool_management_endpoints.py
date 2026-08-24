@@ -7,8 +7,8 @@ and litellm.proxy.proxy_server.prisma_client) because the endpoint code
 imports these inside function bodies to avoid circular imports.
 """
 
-import os
-import sys
+import inspect
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from prisma.actions import LiteLLM_TeamTableActions
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.management_endpoints.tool_management_endpoints import router
 from litellm.types.tool_management import LiteLLM_ToolTableRow
@@ -72,6 +72,47 @@ def _rollup_row(date: str, tool_name: str, spend: float, request_count: int, tot
 
 def _group_row(tool_name: str, spend: float, request_count: int, total_tokens: int) -> dict:
     return {"tool_name": tool_name, "_sum": {"spend": spend, "total_tokens": total_tokens, "request_count": request_count}}
+
+
+class FakeTeamTable:
+    """Stand-in for ``prisma_client.db.litellm_teamtable``.
+
+    ``AsyncMock`` accepts any keyword argument, so a plain mock cannot catch a call
+    the generated prisma client would reject at runtime. This double binds every
+    call against the real action signature, so an unsupported kwarg (e.g. ``select``)
+    raises the same ``TypeError`` the proxy surfaces as an HTTP 500.
+    """
+
+    def __init__(self, rows: Sequence[MagicMock], updated_count: int = 1):
+        self._rows = tuple(rows)
+        self._updated_count = updated_count
+        self.find_unique_calls: list[dict[str, object]] = []
+        self.update_many_calls: list[dict[str, object]] = []
+
+    async def find_unique(self, **kwargs: object) -> Optional[MagicMock]:
+        inspect.signature(LiteLLM_TeamTableActions.find_unique).bind(self, **kwargs)
+        index = len(self.find_unique_calls)
+        self.find_unique_calls.append(kwargs)
+        return self._rows[index] if index < len(self._rows) else None
+
+    async def update_many(self, **kwargs: object) -> int:
+        inspect.signature(LiteLLM_TeamTableActions.update_many).bind(self, **kwargs)
+        self.update_many_calls.append(kwargs)
+        return self._updated_count
+
+
+def _team_row(object_permission_id: Optional[str]) -> MagicMock:
+    row = MagicMock()
+    row.object_permission_id = object_permission_id
+    return row
+
+
+def _team_policy_prisma(team_table: FakeTeamTable) -> MagicMock:
+    prisma = MagicMock()
+    prisma.db.litellm_teamtable = team_table
+    prisma.db.litellm_objectpermissiontable.create = AsyncMock()
+    prisma.db.litellm_objectpermissiontable.delete = AsyncMock()
+    return prisma
 
 
 def _rollup_prisma(group_rows: list, daily_rows: list | None = None) -> MagicMock:
@@ -160,6 +201,72 @@ class TestToolManagementEndpoints:
         body = resp.json()
         assert body["input_policy"] == "blocked"
         assert body["updated"] is True
+
+    @patch(
+        "litellm.proxy.db.tool_registry_writer.add_tool_to_object_permission_blocked",
+        new_callable=AsyncMock,
+    )
+    def test_update_tool_policy_for_team_does_not_500_on_unsupported_prisma_kwarg(self, mock_block):
+        """
+        Regression: POST /v1/tool/policy with a team_id returned 500 with
+        "LiteLLM_TeamTableActions.find_unique() got an unexpected keyword argument
+        'select'". The team lookup passed select={"object_permission_id": True}, and
+        the generated prisma client has no select kwarg, so the call raised TypeError
+        that the handler turned into a 500.
+        """
+        mock_block.return_value = True
+        team_table = FakeTeamTable([_team_row("existing-op-id")])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", _team_policy_prisma(team_table)), patch(
+            "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry"
+        ) as mock_registry:
+            mock_registry.return_value.is_initialized.return_value = False
+            resp = self.client.post(
+                "/v1/tool/policy",
+                json={"tool_name": "my_tool", "input_policy": "blocked", "team_id": "team-123"},
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["team_id"] == "team-123"
+        assert team_table.find_unique_calls == [{"where": {"team_id": "team-123"}}]
+        mock_block.assert_awaited_once_with(
+            prisma_client=mock_block.await_args.kwargs["prisma_client"],
+            object_permission_id="existing-op-id",
+            tool_name="my_tool",
+        )
+
+    @patch(
+        "litellm.proxy.db.tool_registry_writer.add_tool_to_object_permission_blocked",
+        new_callable=AsyncMock,
+    )
+    def test_update_tool_policy_for_team_reresolves_when_permission_race_is_lost(self, mock_block):
+        """
+        Same regression on the second team lookup: when the team has no object
+        permission yet and a concurrent writer wins the update_many (0 rows updated),
+        the handler re-reads the team to pick up the winner's id. That fallback read
+        passed the same unsupported select kwarg.
+        """
+        mock_block.return_value = True
+        team_table = FakeTeamTable(
+            [_team_row(None), _team_row("winner-op-id")],
+            updated_count=0,
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", _team_policy_prisma(team_table)), patch(
+            "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry"
+        ) as mock_registry:
+            mock_registry.return_value.is_initialized.return_value = False
+            resp = self.client.post(
+                "/v1/tool/policy",
+                json={"tool_name": "my_tool", "input_policy": "blocked", "team_id": "team-123"},
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert team_table.find_unique_calls == [
+            {"where": {"team_id": "team-123"}},
+            {"where": {"team_id": "team-123"}},
+        ]
+        assert mock_block.await_args.kwargs["object_permission_id"] == "winner-op-id"
 
     @patch("litellm.proxy.proxy_server.prisma_client", None)
     def test_list_tools_no_db_returns_500(self):

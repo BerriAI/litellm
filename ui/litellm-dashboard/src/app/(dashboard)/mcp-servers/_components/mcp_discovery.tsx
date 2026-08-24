@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
 import { fetchDiscoverableMCPServers } from "@/components/networking";
 import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "@/components/mcp_tools/types";
-import { mcpLogoImg } from "./create_mcp_server";
+import { mcpLogoImg } from "./CreateMCPServer";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 
 interface MCPDiscoveryProps {
@@ -19,13 +19,13 @@ interface MCPDiscoveryProps {
 }
 
 const INITIAL_COLORS = [
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-amber-500",
-  "bg-red-500",
+  "bg-info",
+  "bg-success",
+  "bg-warning",
+  "bg-destructive",
   "bg-violet-500",
   "bg-pink-500",
-  "bg-cyan-500",
+  "bg-info",
   "bg-lime-500",
 ];
 

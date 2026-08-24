@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { ArrowLeftOutlined, CopyOutlined, CheckOutlined, LinkOutlined } from "@ant-design/icons";
-import { formatInstallCommand } from "./helpers";
+import { ArrowLeft, Check, Copy, Link2 } from "lucide-react";
+import { buildMarketplaceSettingsSnippet, formatInstallCommand } from "./helpers";
 import { Plugin } from "./types";
 
 interface SkillDetailProps {
@@ -31,6 +31,10 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
 
   const installCommand = formatInstallCommand(skill);
 
+  const settingsSnippet = buildMarketplaceSettingsSnippet(
+    typeof window !== "undefined" ? window.location.origin : "<proxy-url>",
+  );
+
   const detailRows = [
     ...(skill.category ? [{ property: "Category", value: skill.category }] : []),
     ...(skill.domain ? [{ property: "Domain", value: skill.domain }] : []),
@@ -60,7 +64,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
           marginBottom: 24,
         }}
       >
-        <ArrowLeftOutlined style={{ fontSize: 11 }} />
+        <ArrowLeft className="size-3" />
         <span>Skills</span>
       </div>
 
@@ -159,7 +163,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   }}
                 >
                   {sourceUrl.replace("https://", "")}
-                  <LinkOutlined style={{ fontSize: 11, flexShrink: 0 }} />
+                  <Link2 className="size-3 shrink-0" />
                 </a>
               </div>
             )}
@@ -239,7 +243,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   padding: 0,
                 }}
               >
-                {copiedKey === "install" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "install" ? <Check className="size-3" /> : <Copy className="size-3" />}
                 {copiedKey === "install" ? "Copied" : "Copy"}
               </button>
             </div>
@@ -298,21 +302,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
             >
               <span style={{ fontSize: 13, color: "#3c4043", fontWeight: 500 }}>~/.claude/settings.json</span>
               <button
-                onClick={() => {
-                  const snippet = JSON.stringify(
-                    {
-                      extraKnownMarketplaces: {
-                        "my-org": {
-                          source: "url",
-                          url: `${typeof window !== "undefined" ? window.location.origin : ""}/claude-code/marketplace.json`,
-                        },
-                      },
-                    },
-                    null,
-                    2,
-                  );
-                  copyToClipboard(snippet, "settings");
-                }}
+                onClick={() => copyToClipboard(settingsSnippet, "settings")}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -325,7 +315,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   padding: 0,
                 }}
               >
-                {copiedKey === "settings" ? <CheckOutlined /> : <CopyOutlined />}
+                {copiedKey === "settings" ? <Check className="size-3" /> : <Copy className="size-3" />}
                 {copiedKey === "settings" ? "Copied" : "Copy"}
               </button>
             </div>
@@ -339,18 +329,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                 backgroundColor: "#fff",
               }}
             >
-              {JSON.stringify(
-                {
-                  extraKnownMarketplaces: {
-                    "my-org": {
-                      source: "url",
-                      url: `${typeof window !== "undefined" ? window.location.origin : "<proxy-url>"}/claude-code/marketplace.json`,
-                    },
-                  },
-                },
-                null,
-                2,
-              )}
+              {settingsSnippet}
             </pre>
           </div>
         </div>

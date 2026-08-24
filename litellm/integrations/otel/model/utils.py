@@ -65,7 +65,7 @@ def as_str_tuple(value: object) -> tuple[str, ...] | None:
     return None
 
 
-def to_ns(value: datetime | float | int | None) -> int | None:
+def to_ns(value: datetime | float | None) -> int | None:
     """Coerce a datetime / epoch value to integer nanoseconds."""
     if value is None:
         return None
@@ -76,7 +76,7 @@ def to_ns(value: datetime | float | int | None) -> int | None:
     return None
 
 
-def to_seconds(value: datetime | float | int | str | None) -> float | None:
+def to_seconds(value: datetime | float | str | None) -> float | None:
     """Coerce a datetime / epoch / formatted-string value to epoch seconds."""
     if value is None:
         return None

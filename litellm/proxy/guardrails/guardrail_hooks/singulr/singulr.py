@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
@@ -29,9 +29,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-_DEFAULT_API_BASE = "http://localhost:8003"
-_GUARD_ENDPOINT = "/api/v1/ai-gateway/litellm"
-_DEFAULT_TIMEOUT = 30.0
+_DEFAULT_API_BASE: Final = "http://localhost:8003"
+_GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm"
+_DEFAULT_TIMEOUT: Final = 30.0
 
 
 class SingulrGuardrail(CustomGuardrail):
@@ -49,7 +49,7 @@ class SingulrGuardrail(CustomGuardrail):
         self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
             "/"
         )
-        parsed = urlparse(self.singulr_api_base)
+        parsed: Final = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
             "localhost",
             "127.0.0.1",
@@ -65,7 +65,7 @@ class SingulrGuardrail(CustomGuardrail):
         self.singulr_guardrail_id = singulr_guardrail_id or os.environ.get("SINGULR_GUARDRAIL_ID")
 
         if block_on_error is None:
-            env = os.environ.get("SINGULR_BLOCK_ON_ERROR", "true")
+            env: Final = os.environ.get("SINGULR_BLOCK_ON_ERROR", "true")
             self.block_on_error = env.lower() in ("true", "1", "yes")
         else:
             self.block_on_error = block_on_error
@@ -99,7 +99,7 @@ class SingulrGuardrail(CustomGuardrail):
         input_type: str,
     ) -> dict[str, Any]:
         if not request_data:
-            texts = inputs.get("texts", [])
+            texts: Final = inputs.get("texts", [])
 
             payload = SingulrGuardrailPayload(
                 input_type=input_type,
@@ -107,8 +107,8 @@ class SingulrGuardrail(CustomGuardrail):
                 playground_text=texts[0] if texts else None,
             )
         else:
-            response = request_data.get("response")
-            singulr_req_object = SingulrGuardrailRequest(
+            response: Final = request_data.get("response")
+            singulr_req_object: Final = SingulrGuardrailRequest(
                 model=request_data.get("model"),
                 messages=request_data.get("messages"),
                 tools=request_data.get("tools"),
@@ -139,18 +139,18 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
     async def _call_api(self, payload: dict[str, Any]) -> SingulrGuardrailResponse | None:
-        endpoint = f"{self.singulr_api_base}{_GUARD_ENDPOINT}"
+        endpoint: Final = f"{self.singulr_api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 
         try:
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=endpoint,
                 headers=self._build_headers(),
                 json=payload,
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            result = SingulrGuardrailResponse.model_validate(response.json())
+            result: Final = SingulrGuardrailResponse.model_validate(response.json())
             verbose_proxy_logger.debug("Singulr: result=%s", result)
             return result
 
@@ -193,11 +193,11 @@ class SingulrGuardrail(CustomGuardrail):
         input_type: str,
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        payload = self._build_payload(request_data, inputs, input_type)
+        payload: Final = self._build_payload(request_data, inputs, input_type)
         if not payload:
             return inputs
 
-        result = await self._call_api(payload)
+        result: Final = await self._call_api(payload)
         if result is None:
             return inputs
 
@@ -211,6 +211,7 @@ class SingulrGuardrail(CustomGuardrail):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
                 message=f"Blocked by Singulr: {result.blocking_due_to or 'unknown'}",
+                blocked_content=True,
             )
 
         return inputs

@@ -70,20 +70,19 @@ from e2e_config import (
     POLL_TIMEOUT,
     PROXY_BASE_URL,
     REQUEST_TIMEOUT,
+    SLOW_PROVIDER_TIMEOUT_SECONDS,
+    settle_propagation,
 )
 from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
-# After /model/new, the control-plane writer reloads itself immediately, but every
-# other gateway worker (and peer pod) only picks the model up on its add_deployment
-# job. That job runs every proxy_config_reload_interval_seconds (product default 30).
-# A single /v1/models hit can land on a hot worker while the next /chat hits a cold
-# one ("Invalid model name"). Wait for first listing within MODEL_SERVABLE_TIMEOUT,
-# then require continuous listing for MODEL_SERVABLE_DB_SYNC_SECONDS (the default
-# reload interval) so every worker has had a chance to sync from the DB.
+# After /model/new, poll data-plane /v1/models until the model is listed (or fail).
+# Bound by MODEL_SERVABLE_TIMEOUT so a stuck reload does not burn the spend
+# poll_timeout (120s). Return on first listing; settle_propagation owns the separate
+# wait that lets every worker and replica reload before the caller uses the model.
 MODEL_SERVABLE_TIMEOUT = 40.0
-MODEL_SERVABLE_DB_SYNC_SECONDS = 30.0
+MODEL_SERVABLE_DB_SYNC_SECONDS = 0.0
 MODEL_SERVABLE_INTERVAL = 2.0
 # Cap each /v1/models poll so one slow request cannot outlast the remaining budget.
 MODEL_SERVABLE_REQUEST_TIMEOUT = 5.0
@@ -277,44 +276,54 @@ class ProxyClient:
         mode: ModelMode | None = None,
     ) -> str:
         """Register a deployment under `model_name` and return its proxy-assigned
-        model_id, once the model is actually servable on the data plane.
+        model_id, once the model is actually servable on the data plane."""
+        return self.register_model(
+            ModelNewBody(
+                model_name=model_name,
+                litellm_params=litellm_params,
+                model_info=ModelInfoBody(mode=mode),
+            )
+        )
 
-        /model/new is a control-plane route; in a split control/data-plane
-        deployment the gateway (data plane, which serves /chat, /ocr, ...) only
-        picks the new model up on its next DB reload, so a call issued the instant
-        this returns can race the reload and 400 with "Invalid model name passed".
-        We therefore poll the data-plane /v1/models until the model appears before
-        handing back, so callers can invoke it immediately. In the monolithic case
-        it is already present on the first poll, so this adds one request.
+    def register_model(self, body: ModelNewBody, listed_for: str | None = None) -> str:
+        """`create_model` for deployments that carry more than a mode: access groups,
+        team scoping, a pinned id. `listed_for` is the virtual key whose /v1/models
+        view must list the deployment before it counts as servable, because a
+        team-scoped deployment is listed to its own team and to nobody else, master
+        key included; leave it unset for a proxy-wide model.
 
-        First listing must arrive within `model_servable_timeout` (not the longer
-        spend `poll_timeout`). The model must then stay listed for
-        `model_servable_db_sync_seconds` (product default DB reload interval) so every
-        gateway worker has run add_deployment before callers use the model."""
+        /model/new is a control-plane route; the data plane (which serves /chat,
+        /ocr, ...) only picks the new model up on its next DB reload, so a call
+        issued the instant this returns can race the reload and 400 with "Invalid
+        model name passed". We poll the data-plane /v1/models until the model
+        appears, then settle for the remainder of the propagation budget.
+
+        Both steps are needed, and the second is the one that matters at >1 replica.
+        The poll proves *a* replica is serving the model; it cannot prove they all
+        are, because every request opens a fresh connection and a load-balanced
+        Service routes each one independently -- so the caller's next request
+        re-rolls and can land on a replica that has not reloaded yet. Waiting out
+        PROPAGATION_TIMEOUT is what makes the model safe to use anywhere."""
         model_id = unwrap(
             self.transport.post(
                 "/model/new",
                 headers=self.transport.master,
-                json=ModelNewBody(
-                    model_name=model_name,
-                    litellm_params=litellm_params,
-                    model_info=ModelInfoBody(mode=mode),
-                ),
+                json=body,
                 response_type=ModelNewResponse,
             )
         ).model_id
-        self._await_model_servable(model_name)
+        written_at = time.monotonic()
+        self._await_model_servable(body.model_name, listed_for)
+        settle_propagation(written_at)
         return model_id
 
-    def _await_model_servable(self, model_name: str) -> None:
-        """Block until the data plane lists `model_name` long enough for DB sync.
-
-        Fails if first listing misses model_servable_timeout, or if continuous listing
-        for model_servable_db_sync_seconds never holds (multi-worker / peer reload)."""
+    def _await_model_servable(self, model_name: str, listed_for: str | None = None) -> None:
+        """Block until the data plane lists `model_name`, or fail at model_servable_timeout."""
+        headers = self.transport.master if listed_for is None else self.transport.bearer(listed_for)
         outcome = await_servable(
             lambda poll_timeout: self.transport.get(
                 "/v1/models",
-                headers=self.transport.master,
+                headers=headers,
                 params=NoBody(),
                 response_type=ModelsListResponse,
                 timeout=poll_timeout,
@@ -417,6 +426,7 @@ class ProxyClient:
             headers=self.transport.bearer(key),
             json=body,
             response_type=OcrResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
@@ -534,20 +544,25 @@ def build_proxy_client(
     The endpoints are injectable for callers that resolve the proxy some other
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
     pass all three together, since a caller that overrides only the data plane
-    would leave management calls pointed at the env default."""
-    return ProxyClient(
-        transport=SplitTransport(
-            data=HttpTransport(
-                base_url=base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
-            control=HttpTransport(
-                base_url=control_plane_base_url,
-                master_key=master_key,
-                request_timeout=REQUEST_TIMEOUT,
-            ),
+    would leave management calls pointed at the env default.
+
+    Test-to-proxy traffic always goes over the wire, in every E2E_FIXTURE_MODE:
+    record and replay scope to the proxy's provider-bound calls via the
+    provider edge (see provider_edge.py), never to this transport."""
+    split = SplitTransport(
+        data=HttpTransport(
+            base_url=base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
         ),
+        control=HttpTransport(
+            base_url=control_plane_base_url,
+            master_key=master_key,
+            request_timeout=REQUEST_TIMEOUT,
+        ),
+    )
+    return ProxyClient(
+        transport=split,
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,
     )

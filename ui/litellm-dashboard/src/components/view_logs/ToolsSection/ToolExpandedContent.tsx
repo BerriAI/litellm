@@ -3,12 +3,10 @@
  */
 
 import { useState } from "react";
-import { Typography, Radio } from "antd";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ParsedTool } from "./types";
 import { FormattedToolView } from "./FormattedToolView";
 import { JsonToolView } from "./JsonToolView";
-
-const { Text } = Typography;
 
 type ViewMode = "formatted" | "json";
 
@@ -29,13 +27,13 @@ export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
           marginBottom: 12,
         }}
       >
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          Description
-        </Text>
-        <Radio.Group size="small" value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
-          <Radio.Button value="formatted">Formatted</Radio.Button>
-          <Radio.Button value="json">JSON</Radio.Button>
-        </Radio.Group>
+        <span className="text-xs text-muted-foreground">Description</span>
+        <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)}>
+          <TabsList>
+            <TabsTrigger value="formatted">Formatted</TabsTrigger>
+            <TabsTrigger value="json">JSON</TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       {viewMode === "formatted" ? <FormattedToolView tool={tool} /> : <JsonToolView tool={tool} />}

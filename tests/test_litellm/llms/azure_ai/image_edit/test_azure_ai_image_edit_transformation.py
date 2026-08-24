@@ -1,9 +1,4 @@
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.azure_ai.image_edit.flux2_transformation import (

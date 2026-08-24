@@ -1,7 +1,5 @@
-import { useSearchParams } from "next/navigation";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback } from "react";
-
-import { navigateWithParams } from "@/app/(dashboard)/navigateWithParams";
 
 export const LOG_ID_QUERY_PARAM = "log_id";
 export const SESSION_ID_QUERY_PARAM = "session_id";
@@ -11,47 +9,46 @@ export interface LogDetailRouting {
   sessionId: string | null;
   openLog: (requestId: string) => void;
   openSession: (sessionId: string, requestId: string | null) => void;
-  selectLog: (requestId: string) => void;
+  selectLog: (requestId: string, sessionId?: string | null) => void;
   close: () => void;
 }
 
 export function useLogDetailRouting(): LogDetailRouting {
-  const searchParams = useSearchParams();
+  const [{ log_id, session_id }, setParams] = useQueryStates(
+    { log_id: parseAsString, session_id: parseAsString },
+    { history: "push" },
+  );
 
-  const openLog = useCallback((requestId: string) => {
-    navigateWithParams((params) => {
-      params.set(LOG_ID_QUERY_PARAM, requestId);
-      params.delete(SESSION_ID_QUERY_PARAM);
-    });
-  }, []);
+  const openLog = useCallback(
+    (requestId: string) => {
+      void setParams({ log_id: requestId, session_id: null });
+    },
+    [setParams],
+  );
 
-  const openSession = useCallback((sessionId: string, requestId: string | null) => {
-    navigateWithParams((params) => {
-      params.set(SESSION_ID_QUERY_PARAM, sessionId);
-      if (requestId === null) {
-        params.delete(LOG_ID_QUERY_PARAM);
-      } else {
-        params.set(LOG_ID_QUERY_PARAM, requestId);
-      }
-    });
-  }, []);
+  const openSession = useCallback(
+    (sessionId: string, requestId: string | null) => {
+      void setParams({ session_id: sessionId, log_id: requestId });
+    },
+    [setParams],
+  );
 
-  const selectLog = useCallback((requestId: string) => {
-    navigateWithParams((params) => {
-      params.set(LOG_ID_QUERY_PARAM, requestId);
-    }, "replace");
-  }, []);
+  const selectLog = useCallback(
+    (requestId: string, sessionId?: string | null) => {
+      void setParams(sessionId ? { log_id: requestId, session_id: sessionId } : { log_id: requestId }, {
+        history: "replace",
+      });
+    },
+    [setParams],
+  );
 
   const close = useCallback(() => {
-    navigateWithParams((params) => {
-      params.delete(LOG_ID_QUERY_PARAM);
-      params.delete(SESSION_ID_QUERY_PARAM);
-    });
-  }, []);
+    void setParams({ log_id: null, session_id: null });
+  }, [setParams]);
 
   return {
-    logId: searchParams?.get(LOG_ID_QUERY_PARAM) ?? null,
-    sessionId: searchParams?.get(SESSION_ID_QUERY_PARAM) ?? null,
+    logId: log_id,
+    sessionId: session_id,
     openLog,
     openSession,
     selectLog,
