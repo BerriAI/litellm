@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { type VariantProps } from "cva";
 
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { cn, cva } from "@/lib/cva.config";
+import { cva, type VariantProps } from "class-variance-authority";
+
+import { cn } from "@/lib/cva.config";
 
 const FieldSet = React.forwardRef<HTMLFieldSetElement, React.ComponentPropsWithoutRef<"fieldset">>(
   ({ className, ...props }, ref) => (
@@ -51,8 +52,7 @@ const FieldGroup = React.forwardRef<HTMLDivElement, React.ComponentPropsWithoutR
 );
 FieldGroup.displayName = "FieldGroup";
 
-const fieldVariants = cva({
-  base: "group/field flex w-full gap-3 data-[invalid=true]:text-destructive",
+const fieldVariants = cva("group/field flex w-full gap-3 data-[invalid=true]:text-destructive", {
   variants: {
     orientation: {
       vertical: "flex-col *:w-full [&>.sr-only]:w-auto",
