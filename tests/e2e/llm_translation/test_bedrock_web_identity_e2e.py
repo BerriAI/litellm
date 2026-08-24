@@ -28,10 +28,11 @@ from e2e_config import (
     BEDROCK_OIDC_TOKEN_ENV,
     unique_marker,
 )
-from e2e_http import require_successful_call, unwrap
+from e2e_http import Result, Success, UnauthorizedError, UnknownApiError
 from endpoints_client import EndpointsClient, RerankResult
 from lifecycle import ResourceManager
-from models import CountTokensBody, ChatMessage, LiteLLMParamsBody
+from models import ChatMessage, CountTokensBody, LiteLLMParamsBody
+from pydantic import BaseModel
 
 pytestmark = [pytest.mark.e2e, pytest.mark.bedrock_oidc]
 
@@ -44,6 +45,42 @@ DOCUMENTS = [
     "Capital punishment has existed in the United States since before it was a country.",
 ]
 QUERY = "What is the capital of the United States?"
+
+
+# AWS says this when a session policy is what denied the call, as opposed to
+# the role's own identity policy or a missing model grant. It is the only thing
+# in a 403 body that distinguishes a ceiling omission from a misconfigured role,
+# which matters because both surface as the same status code.
+_CEILING_DENIAL_SIGNATURE = "no session policy allows"
+
+
+def _attribute_failure(body: str, status_code: int, action: str) -> str:
+    """Explain a non-2xx in terms of what a maintainer should go fix."""
+    if _CEILING_DENIAL_SIGNATURE in body:
+        return (
+            f"{action} is missing from the BedrockLiteLLM session policy in "
+            f"build_bedrock_session_policy(). AWS denied the call at the ceiling, so the "
+            f"assumed role's own permissions are irrelevant. Body: {body[:400]}"
+        )
+    return (
+        f"Bedrock returned {status_code}, but not a session-policy denial, so this is a "
+        f"credentials or configuration problem with the assumed role rather than the "
+        f"ceiling this test covers. Check that the role grants {action} and that the model "
+        f"is enabled in the region. Body: {body[:400]}"
+    )
+
+
+def _unwrap_authorized[R: BaseModel](result: Result[R], action: str) -> R:
+    """unwrap(), but a failure says whether the ceiling or the role is at fault."""
+    match result:
+        case Success(data=data):
+            return data
+        case UnknownApiError(status_code=status_code, body=body):
+            raise AssertionError(_attribute_failure(body, status_code, action))
+        case UnauthorizedError(body=body):
+            raise AssertionError(_attribute_failure(body, 401, action))
+        case _:
+            raise AssertionError(f"{action} call did not reach Bedrock: {result}")
 
 
 def _require_role_arn() -> str:
@@ -89,7 +126,7 @@ class TestBedrockWebIdentitySessionPolicy:
             key,
             CountTokensBody(model=model, messages=[ChatMessage(role="user", content="hello")]),
         )
-        counted = unwrap(result)
+        counted = _unwrap_authorized(result, "bedrock:CountTokens")
         assert counted.input_tokens > 0, f"count_tokens returned {counted.input_tokens} tokens"
 
     def test_rerank_is_authorized(
@@ -102,6 +139,6 @@ class TestBedrockWebIdentitySessionPolicy:
         key = resources.key()
 
         result = endpoints_client.rerank(key, model, QUERY, DOCUMENTS, top_n=2)
-        require_successful_call(result)
+        assert result.ok, _attribute_failure(result.body, result.status_code, "bedrock:Rerank")
         parsed = RerankResult.model_validate_json(result.body)
         assert parsed.results, f"/rerank returned no results: {result.body[:300]}"
