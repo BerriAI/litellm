@@ -95,21 +95,6 @@ def clear_gcp_iam_token_cache():
     _token_cache.clear()
 
 
-def test_redis_uses_the_hiredis_response_parser():
-    """The proxy extra must keep redis-py's C response parser available."""
-    from redis._parsers import _HiredisParser
-    from redis.connection import HIREDIS_AVAILABLE, DefaultParser
-
-    if not HIREDIS_AVAILABLE:
-        pytest.skip("hiredis is not installed in this test environment")
-
-    assert DefaultParser is _HiredisParser
-
-    client = get_redis_client(host="redis-host", port=6379)
-    connection = client.connection_pool.make_connection()
-    assert isinstance(connection._parser, _HiredisParser)
-
-
 def test_redis_allowlists_include_credential_provider():
     assert "credential_provider" in _get_redis_kwargs()
     assert "credential_provider" in _get_redis_url_kwargs()
@@ -230,6 +215,19 @@ def test_async_url_pool_preserves_credential_provider_identity(clean_redis_envir
     assert pool.connection_kwargs["credential_provider"] is provider
 
 
+def test_async_url_pool_strips_userinfo_for_the_provider(clean_redis_environment):
+    """The url allowlist has to carry the provider through, and redis-py rejects it next to userinfo."""
+    provider = _StubCredentialProvider()
+
+    pool = get_redis_connection_pool(url="rediss://url-user:url-pass@redis-host:6379/3", credential_provider=provider)
+
+    connection = pool.make_connection()
+    assert connection.credential_provider is provider
+    assert connection.username is None
+    assert connection.password is None
+    assert connection.db == 3
+
+
 def test_sync_cluster_preserves_credential_provider_identity(clean_redis_environment):
     provider = _StubCredentialProvider()
     startup_nodes = [{"host": "cluster-node", "port": 6379}]
@@ -272,6 +270,47 @@ def test_explicit_provider_skips_automatic_auth_and_callback(clean_redis_environ
     mock_azure.assert_not_called()
     assert redis_kwargs["credential_provider"] is provider
     assert "redis_connect_func" not in redis_kwargs
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"gcp_ssl_ca_certs": "/tmp/ca.pem"},
+        {"gcp_service_account": "sa@example.com", "gcp_ssl_ca_certs": "/tmp/ca.pem"},
+    ],
+    ids=["certs-without-service-account", "both-alongside-a-provider"],
+)
+def test_gcp_kwargs_never_survive_client_logic(clean_redis_environment, overrides):
+    """redis.Redis has no gcp_* parameters, so anything left behind raises TypeError on connect."""
+    redis_kwargs = _get_redis_client_logic(
+        host="redis-host",
+        port=6379,
+        credential_provider=_StubCredentialProvider() if "gcp_service_account" in overrides else None,
+        **overrides,
+    )
+
+    assert "gcp_service_account" not in redis_kwargs
+    assert "gcp_ssl_ca_certs" not in redis_kwargs
+
+
+def test_provider_keeps_the_rest_of_the_url_intact(clean_redis_environment):
+    """Stripping the userinfo must not take the database path, query, or scheme with it."""
+    provider = _StubCredentialProvider()
+
+    redis_kwargs = _get_redis_client_logic(
+        url="rediss://url-user:url-pass@redis-host:6379/3?protocol=3",
+        credential_provider=provider,
+    )
+
+    assert redis_kwargs["url"] == "rediss://redis-host:6379/3?protocol=3"
+
+
+def test_provider_free_url_is_left_untouched(clean_redis_environment):
+    url = "redis://url-user:url-pass@redis-host:6379/3"
+
+    redis_kwargs = _get_redis_client_logic(url=url)
+
+    assert redis_kwargs["url"] == url
 
 
 def test_async_direct_explicit_provider_is_preserved_when_normalization_is_bypassed():
@@ -376,6 +415,21 @@ def test_redis_cache_key_does_not_serialize_connect_func():
 
     first_key = cache._get_async_client_cache_key()
     assert first_key == cache._get_async_client_cache_key()
+
+
+def test_redis_cache_key_keys_opaque_kwargs_by_identity():
+    """Any object a caller passes through must key by identity rather than crash the JSON dump."""
+
+    class _Opaque:
+        pass
+
+    first = RedisCache.__new__(RedisCache)
+    first.redis_kwargs = {"host": "redis-host", "retry": _Opaque()}
+    second = RedisCache.__new__(RedisCache)
+    second.redis_kwargs = {"host": "redis-host", "retry": _Opaque()}
+
+    assert first._get_async_client_cache_key() == first._get_async_client_cache_key()
+    assert first._get_async_client_cache_key() != second._get_async_client_cache_key()
 
 
 def test_get_redis_url_from_environment_single_url(monkeypatch):
@@ -1182,6 +1236,25 @@ def test_url_config_drops_kwargs_the_connection_cannot_accept(client_only_kwarg,
     assert pool is not None
     pool.make_connection()
     assert pool.connection_kwargs.get("socket_timeout") == 5.0
+
+
+def test_redis_uses_the_hiredis_response_parser():
+    """The C parser must be the one redis-py actually picks.
+
+    hiredis is declared in the `proxy` extra purely for speed; nothing imports it, so
+    dropping it from pyproject.toml would silently fall back to the pure-Python parser
+    with no other symptom. redis-py selects it at import time, so asserting on the
+    selection is what catches that.
+    """
+    from redis._parsers import _HiredisParser
+    from redis.connection import HIREDIS_AVAILABLE, DefaultParser
+
+    assert HIREDIS_AVAILABLE, "hiredis is not installed; redis-py fell back to the pure-Python parser"
+    assert DefaultParser is _HiredisParser, f"redis-py selected {DefaultParser.__name__}, expected _HiredisParser"
+
+    client = get_redis_client(host="redis-host", port=6379)
+    connection = client.connection_pool.make_connection()
+    assert isinstance(connection._parser, _HiredisParser)
 
 
 def test_init_arg_names_sees_through_decorated_inits():

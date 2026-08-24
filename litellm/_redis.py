@@ -14,6 +14,7 @@ import json
 import os
 from collections.abc import Callable
 from typing import Final
+from urllib.parse import urlsplit, urlunsplit
 
 import redis
 import redis.asyncio as async_redis
@@ -156,7 +157,7 @@ def _get_redis_cluster_kwargs(client=None):
 def _get_redis_env_kwarg_mapping():
     PREFIX: Final = "REDIS_"
 
-    exclude_from_environment: Final = {"credential_provider"}
+    exclude_from_environment: Final = frozenset({"credential_provider"})
     return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs() if x not in exclude_from_environment}
 
 
@@ -355,6 +356,14 @@ def get_redis_url_from_environment():
     return f"{redis_protocol}://{auth_part}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
 
 
+def _url_without_userinfo(url: str) -> str:
+    """redis-py rejects a url that carries its own username or password next to a credential
+    provider, so the provider's credentials replace whatever userinfo the url was configured with."""
+    parts: Final = urlsplit(url)
+    netloc: Final = parts.netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
 def _get_redis_client_logic(**env_overrides):
     """
     Common functionality across sync + async redis client implementations
@@ -476,10 +485,7 @@ def _get_redis_client_logic(**env_overrides):
         redis_kwargs.pop("username", None)
         redis_kwargs.pop("password", None)
         if redis_kwargs.get("url") is not None:
-            from urllib.parse import urlsplit, urlunsplit
-
-            parsed_url = urlsplit(redis_kwargs["url"])
-            redis_kwargs["url"] = urlunsplit(parsed_url._replace(netloc=parsed_url.netloc.rsplit("@", 1)[-1]))
+            redis_kwargs["url"] = _url_without_userinfo(redis_kwargs["url"])
 
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         # Only strip host/port/db/password when not routing to a cluster.
@@ -490,8 +496,6 @@ def _get_redis_client_logic(**env_overrides):
             redis_kwargs.pop("port", None)
             redis_kwargs.pop("db", None)
             redis_kwargs.pop("password", None)
-            if redis_kwargs.get("credential_provider") is not None:
-                redis_kwargs.pop("username", None)
     elif (
         "startup_nodes" in redis_kwargs
         and redis_kwargs["startup_nodes"] is not None
@@ -623,18 +627,17 @@ def _async_auth_kwargs(redis_kwargs: dict) -> dict:
     """Swaps a connect func an async path cannot run for the equivalent credential provider,
     which supersedes any static username or password redis-py would otherwise reject it with."""
     explicit_provider: Final = redis_kwargs.get("credential_provider")
-    if explicit_provider is not None:
-        superseded: Final = frozenset({"redis_connect_func", "username", "password"})
-        kept: Final = ((k, v) for k, v in redis_kwargs.items() if k not in superseded)
-        return dict(kept)
-
-    credential_provider: Final = _async_credential_provider(redis_kwargs.get("redis_connect_func"))
+    credential_provider: Final = (
+        explicit_provider
+        if explicit_provider is not None
+        else _async_credential_provider(redis_kwargs.get("redis_connect_func"))
+    )
     if credential_provider is None:
         return redis_kwargs
 
-    automatic_superseded: Final = frozenset({"redis_connect_func", "username", "password"})
-    automatic_kept: Final = ((k, v) for k, v in redis_kwargs.items() if k not in automatic_superseded)
-    return dict(automatic_kept, credential_provider=credential_provider)
+    superseded: Final = frozenset({"redis_connect_func", "username", "password"})
+    kept: Final = ((k, v) for k, v in redis_kwargs.items() if k not in superseded)
+    return dict(kept, credential_provider=credential_provider)  # mutable-ok: the branches below mutate these kwargs
 
 
 def get_redis_client(**env_overrides):

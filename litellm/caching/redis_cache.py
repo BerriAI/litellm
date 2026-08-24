@@ -175,6 +175,10 @@ _RedisCallResult = TypeVar("_RedisCallResult")
 _swallowed_redis_failures: Final[ContextVar[int]] = ContextVar("litellm_swallowed_redis_failures", default=0)
 
 
+def _opaque_kwarg_key(value: object) -> str:
+    return f"{type(value).__name__}-{id(value)}"
+
+
 @functools.lru_cache(maxsize=1)
 def _redis_health_error_types() -> tuple[type, ...]:
     """Exception types that mean the Redis backend itself is unhealthy.
@@ -398,24 +402,14 @@ class RedisCache(BaseCache):
         """
         Generate a cache key for the async Redis client based on connection parameters.
         This ensures different Redis configurations use different cached clients.
+
+        Kwargs the caller hands over as live objects (a credential provider, a connect func) are not
+        JSON-serializable and carry no stable value identity, so they key on instance identity.
         """
-        # Create a stable representation of redis_kwargs for hashing
         # Sort keys to ensure consistent hash regardless of parameter order
-        redis_kwargs: Final[dict[str, object]] = self.redis_kwargs
-        provider: Final = redis_kwargs.get("credential_provider")
-        redis_connect_func: Final = redis_kwargs.get("redis_connect_func")
-        sorted_kwargs: Final = sorted(
-            item for item in redis_kwargs.items() if item[0] not in {"credential_provider", "redis_connect_func"}
-        )
-        kwargs_str: Final = json.dumps(sorted_kwargs, sort_keys=True)
-        identity_suffix: Final = (
-            ""
-            if provider is None and redis_connect_func is None
-            else f":provider-{id(provider)}"
-            if provider is not None
-            else f":connect-func-{id(redis_connect_func)}"
-        )
-        kwargs_hash: Final = hashlib.sha256(f"{kwargs_str}{identity_suffix}".encode()).hexdigest()[:16]
+        sorted_kwargs: Final = sorted(self.redis_kwargs.items())
+        kwargs_str: Final = json.dumps(sorted_kwargs, sort_keys=True, default=_opaque_kwarg_key)
+        kwargs_hash: Final = hashlib.sha256(kwargs_str.encode()).hexdigest()[:16]
         return f"async-redis-client-{kwargs_hash}"
 
     def init_async_client(
