@@ -142,6 +142,14 @@ class TestOutputConfigStructuredOutput:
         assert fmt["strict"] is False
         assert fmt["name"] == "structured_output"
 
+    def test_output_config_format_explicit_strict_true_is_preserved(self):
+        """Nested output_config.format with explicit strict=True is preserved."""
+        req = _make_request(
+            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": True}}
+        )
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is True
+
     def test_output_config_without_format_does_not_set_text(self):
         """output_config with only non-format keys doesn't produce text.format."""
         req = _make_request(output_config={"effort": "high"})
