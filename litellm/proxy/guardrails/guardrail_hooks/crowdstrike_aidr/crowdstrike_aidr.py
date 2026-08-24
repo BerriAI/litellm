@@ -364,6 +364,24 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
         return [_extract_text_from_message(msg) for msg in tail]
 
+    async def _call_or_fail_open(
+        self, payload: dict[str, Any], hook_name: str
+    ) -> _GuardChatCompletionsResult:
+        try:
+            return await self._call_crowdstrike_aidr_guard(payload, hook_name)
+        except HTTPException:
+            raise
+        except Exception as error:
+            if self.fail_on_error:
+                raise
+            verbose_proxy_logger.error(
+                "CrowdStrike AIDR Guardrail failed open | hook_name: %s error: %s",
+                hook_name,
+                error,
+                exc_info=True,
+            )
+            return _GuardChatCompletionsResult()
+
     @override
     def structured_messages_cover_full_request(self) -> bool:
         return effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self)
@@ -441,27 +459,10 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 extra_info["user_name"] = user_email
             ai_guard_payload["extra_info"] = extra_info
 
-        result: _GuardChatCompletionsResult | None
-        try:
-            result = await self._call_crowdstrike_aidr_guard(ai_guard_payload, hook_name)
-        except HTTPException:
-            raise
-        except Exception as error:
-            if self.fail_on_error:
-                raise
-            verbose_proxy_logger.error(
-                "CrowdStrike AIDR Guardrail failed open | hook_name: %s error: %s",
-                hook_name,
-                error,
-                exc_info=True,
-            )
-            result = None
+        result = await self._call_or_fail_open(ai_guard_payload, hook_name)
 
         if "body" in request_data or "messages" in request_data:
             add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
-
-        if result is None:
-            return inputs
 
         if not result.transformed or result.guard_output is None:
             return inputs
