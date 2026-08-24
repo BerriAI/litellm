@@ -4056,3 +4056,95 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "use_in_pass_through" in close_kwargs["reason"]
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+
+class TestPassthroughRouterModelBudgetReservation:
+    """
+    Router-model passthrough on /vllm and /azure must thread the calling key's
+    metadata into ``allm_passthrough_route``. Without ``user_api_key`` the spend
+    is attributed to nobody, and without ``user_api_key_budget_reservation`` the
+    pre-call reservation is never released, so the shared spend counter drifts up
+    until the key falsely trips a 429 BudgetExceededError (LIT-5470).
+    """
+
+    def _key_with_reservation(self) -> UserAPIKeyAuth:
+        reservation = {
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
+        }
+        return UserAPIKeyAuth(
+            api_key="hashed-token",
+            user_id="u1",
+            team_id="t1",
+            budget_reservation=reservation,
+            agent_id="agent-xyz",
+            end_user_max_budget=42.0,
+        )
+
+    def _request(self) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+        return request
+
+    def _install_recording_router(self, monkeypatch, body: dict) -> list[dict]:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        captured: list[dict] = []
+
+        class RecordingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"ok": True})
+
+        async def fake_get_request_body(_request):
+            return body
+
+        monkeypatch.setattr(proxy_server, "llm_router", RecordingRouter())
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        return captured
+
+    def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
+        assert len(captured) == 1, "the router-model branch must dispatch exactly once"
+        assert captured[0].get("metadata") is None, (
+            "attribution must ride the litellm_metadata bucket the router canonicalizes on; "
+            "the plain metadata bucket is dropped for every non-user_api_key field"
+        )
+        litellm_metadata = captured[0]["litellm_metadata"]
+        assert litellm_metadata["user_api_key"] == user_api_key_dict.api_key
+        assert litellm_metadata["user_api_key_budget_reservation"] is user_api_key_dict.budget_reservation
+        assert litellm_metadata["user_api_key_user_id"] == user_api_key_dict.user_id
+        assert litellm_metadata["user_api_key_team_id"] == user_api_key_dict.team_id
+        assert litellm_metadata["agent_id"] == user_api_key_dict.agent_id
+        assert litellm_metadata["user_api_end_user_max_budget"] == user_api_key_dict.end_user_max_budget
+
+    @pytest.mark.asyncio
+    async def test_vllm_router_model_threads_key_metadata(self, monkeypatch):
+        user_api_key_dict = self._key_with_reservation()
+        captured = self._install_recording_router(monkeypatch, {"model": "router-model", "stream": False})
+
+        await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        self._assert_metadata_carries_attribution(captured, user_api_key_dict)
+
+    @pytest.mark.asyncio
+    async def test_azure_router_model_threads_key_metadata(self, monkeypatch):
+        user_api_key_dict = self._key_with_reservation()
+        captured = self._install_recording_router(monkeypatch, {"model": "gpt-5", "stream": False})
+
+        await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        self._assert_metadata_carries_attribution(captured, user_api_key_dict)
