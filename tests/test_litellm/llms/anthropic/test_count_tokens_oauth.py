@@ -10,6 +10,8 @@ Regression test for https://github.com/BerriAI/litellm/issues/22040
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.anthropic.count_tokens.transformation import (
@@ -78,3 +80,53 @@ class TestCountTokensOAuthHeaders:
         beta_value = headers.get("anthropic-beta", "")
         assert "token-counting" in beta_value, f"token-counting beta missing from OAuth headers: {beta_value}"
         assert "oauth-2025-04-20" in beta_value, f"oauth beta missing from OAuth headers: {beta_value}"
+
+
+class TestCountTokensUsesWorkloadIdentity:
+    """A federated deployment holds no static key. Without minting one, count_tokens returns None
+    and the caller silently falls back to the local tokenizer, so the number a federated
+    deployment reports would never come from Anthropic."""
+
+    @pytest.mark.asyncio
+    async def test_a_federated_deployment_mints_and_counts(self, monkeypatch):
+        from litellm.llms.anthropic.count_tokens import token_counter as token_counter_module
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        minted = "sk-ant-oat01-minted-for-count"
+
+        async def fake_mint(_params, _api_base, _model):
+            return minted
+
+        monkeypatch.setattr(token_counter_module, "aget_anthropic_wif_token", fake_mint, raising=False)
+        monkeypatch.setattr("litellm.llms.anthropic.wif.aget_anthropic_wif_token", fake_mint, raising=False)
+
+        seen: dict[str, object] = {}
+
+        async def fake_request(**kwargs):
+            seen.update(kwargs)
+            return {"input_tokens": 42}
+
+        monkeypatch.setattr(
+            token_counter_module.anthropic_count_tokens_handler,
+            "handle_count_tokens_request",
+            fake_request,
+            raising=False,
+        )
+
+        result = await token_counter_module.AnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "anthropic_federation_rule_id": "fdrl_x",
+                    "anthropic_organization_id": "org-x",
+                }
+            },
+            request_model="claude-sonnet-4-5",
+        )
+
+        assert result is not None
+        assert result.total_tokens == 42
+        assert seen["api_key"] == minted
