@@ -274,6 +274,7 @@ _REMINDER_CLOSE: Final = "</system-reminder>"
 _DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
 
 _TRUNCATION_MARKER: Final = "..."
+_TRUNCATION_HEAD_FRACTION: Final = 0.3
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
 
@@ -552,8 +553,21 @@ def _matched_plan_mode_sentinel(
 
 
 def _truncate(text: str, limit: int) -> str:
-    """Cap text at limit characters, marking it so the classifier can tell the turn was cut short."""
-    return text if len(text) <= limit else f"{text[:limit]}{_TRUNCATION_MARKER}"
+    """Cap text at limit characters, keeping both ends and eliding the middle.
+
+    A chat turn states its ask at the end, so cutting the tail keeps the preamble and discards the
+    request the turn exists to make: a turn opening with an incident report and closing with "rewrite
+    the retry path and prove it cannot livelock" reached the classifier as the incident report alone.
+    Keeping both ends costs nothing at the same budget and is what the truncation literature finds
+    best for classifying long text, head+tail measuring above both head-only and tail-only in Sun et
+    al. 2019. The marker sits at the cut, so the turn reads as having its middle removed rather than
+    as trailing off mid-thought.
+    """
+    if len(text) <= limit:
+        return text
+    head_chars: Final = max(int(limit * _TRUNCATION_HEAD_FRACTION), 0)
+    tail_chars: Final = max(limit - head_chars, 0)
+    return f"{text[:head_chars]}{_TRUNCATION_MARKER}{text[len(text) - tail_chars :]}"
 
 
 def _iter_context_turns_newest_first(
