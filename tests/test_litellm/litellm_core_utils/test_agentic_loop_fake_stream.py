@@ -13,9 +13,7 @@ from litellm.utils import CustomStreamWrapper
 def _response() -> ModelResponse:
     return ModelResponse(
         id="chatcmpl-1",
-        choices=[
-            Choices(index=0, finish_reason="stop", message=Message(role="assistant", content="hello"))
-        ],
+        choices=[Choices(index=0, finish_reason="stop", message=Message(role="assistant", content="hello"))],
         model="gpt-4o",
         object="chat.completion",
     )
@@ -60,9 +58,7 @@ class TestWrapResponseAsFakeStream:
 
         assert chunks, "expected at least one chunk"
         assert all(getattr(c, "object", None) == "chat.completion.chunk" for c in chunks)
-        text = "".join(
-            (c.choices[0].delta.content or "") for c in chunks if getattr(c, "choices", None)
-        )
+        text = "".join((c.choices[0].delta.content or "") for c in chunks if getattr(c, "choices", None))
         assert "hello" in text
 
     def test_an_already_wrapped_stream_is_passed_through(self):
