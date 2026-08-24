@@ -19,6 +19,7 @@ from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -851,9 +852,12 @@ def image_edit(
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
-            image_edit_request_params.update(non_default_params)
-            if isinstance(extra_body, dict):
-                image_edit_request_params.update(extra_body)
+            image_edit_request_params.update(
+                flatten_form_field_values(
+                    non_default_params,
+                    extra_body if isinstance(extra_body, dict) else None,
+                )
+            )
 
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
