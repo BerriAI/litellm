@@ -1046,10 +1046,13 @@ def test_sync_close_leaves_caller_supplied_client_open():
 
 @pytest.mark.asyncio
 async def test_async_aexit_closes_an_owned_client_but_not_an_assigned_one():
+    """
+    Driven through `async with`, which is how Python calls `__aexit__`: with the three
+    exception arguments. Calling it bare passes against a signature the protocol cannot use.
+    """
     owning = AsyncHTTPHandler()
-    owned = owning.client
-
-    await owning.__aexit__()
+    async with owning as owned:
+        pass
 
     assert owned.is_closed
 
@@ -1058,11 +1061,27 @@ async def test_async_aexit_closes_an_owned_client_but_not_an_assigned_one():
     assigned = httpx.AsyncClient()
     borrowing.client = assigned
 
-    await borrowing.__aexit__()
+    async with borrowing as handed_out:
+        assert handed_out is assigned
 
     assert not assigned.is_closed
     await assigned.aclose()
     await original.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_propagates_the_body_error_and_still_closes():
+    """
+    An `__aexit__` that rejects the exception arguments raises while unwinding, which
+    replaces the caller's error with a TypeError and skips the close.
+    """
+    handler = AsyncHTTPHandler()
+
+    with pytest.raises(RuntimeError, match="body failed"):
+        async with handler as owned:
+            raise RuntimeError("body failed")
+
+    assert owned.is_closed
 
 
 @pytest.mark.asyncio

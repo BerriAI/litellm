@@ -1,4 +1,5 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Union
 
 import httpx
@@ -67,11 +68,21 @@ class BaseLLM:
 
         return _aclient_session
 
-    def __exit__(self):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_val: BaseException | None = None,
+        exc_tb: TracebackType | None = None,
+    ) -> None:
         if hasattr(self, "_client_session") and self._client_session is not None:
             self._client_session.close()
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_val: BaseException | None = None,
+        exc_tb: TracebackType | None = None,
+    ) -> None:
         if hasattr(self, "_aclient_session"):
             await self._aclient_session.aclose()
 
