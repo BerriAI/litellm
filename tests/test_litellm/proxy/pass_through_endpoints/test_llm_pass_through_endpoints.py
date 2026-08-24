@@ -3736,6 +3736,36 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert "x-company-key" not in forwarded
         assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_mapped_route_litellm_user_api_key_header_is_stripped(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"litellm_user_api_key", self.VKEY.encode()),
+                (b"authorization", b"Bearer ya29.byo-google-oauth"),
+                (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert forwarded.get("authorization") == "Bearer ya29.byo-google-oauth"
+        assert "litellm_user_api_key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_mapped_route_litellm_user_api_key_header_alone_is_rejected(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"litellm_user_api_key", self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, "a virtual key in the mapped-route litellm_user_api_key header must be dropped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
 
 class TestGetAzureAISearchIndexFromEndpoint:
     """The operable index is only the segment right after ``indexes``.
