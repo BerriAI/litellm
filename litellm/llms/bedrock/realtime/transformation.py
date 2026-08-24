@@ -1155,10 +1155,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         Nova Sonic delivers one tool call, fully formed, in a single event, and starts the
         block with ``contentStart`` role ``TOOL``, which opens no OpenAI response. Mint the
-        response/item ids when they are missing, emit the item added/delta/done trio the
-        OpenAI realtime protocol requires around ``function_call_arguments.done``, then close
-        the response so no in-progress response is left orphaned and downstream spend logging
-        can harvest the call from ``response.done`` output.
+        response/item ids when they are missing, opening the response first so its
+        ``response.done`` is never unmatched, emit the item added/delta/done trio the OpenAI
+        realtime protocol requires around ``function_call_arguments.done``, then close the
+        response so nothing is left in progress and downstream spend logging can harvest the
+        call from ``response.done`` output.
 
         Returns:
             Tuple of (events, tool_call_id, tool_name). The caller clears the response and
@@ -1167,6 +1168,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling toolUse")
         tool_use: Final = BedrockToolUse.model_validate(event["toolUse"])
 
+        is_new_response: Final = not current_response_id
         response_id: Final = current_response_id or f"resp_{uuid.uuid4()}"
         item_id: Final = current_output_item_id or f"item_{uuid.uuid4()}"
         tool_call_id: Final = tool_use.toolUseId
@@ -1186,7 +1188,28 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             {**function_call_item, "status": "in_progress", "arguments": ""}
         )
 
+        # A tool turn that Bedrock opens with contentStart role TOOL has no response yet, so the
+        # response.done below would close an id the client never saw opened.
+        response_created: Final[tuple[OpenAIRealtimeEvents, ...]] = (
+            (
+                OpenAIRealtimeStreamResponseBaseObject(
+                    type="response.created",
+                    event_id=f"event_{uuid.uuid4()}",
+                    response={
+                        "object": "realtime.response",
+                        "id": response_id,
+                        "status": "in_progress",
+                        "output": [],
+                        "conversation_id": conversation_id,
+                    },
+                ),
+            )
+            if is_new_response
+            else ()
+        )
+
         events: Final[list[OpenAIRealtimeEvents]] = [
+            *response_created,
             OpenAIRealtimeStreamResponseOutputItemAdded(
                 type="response.output_item.added",
                 event_id=f"event_{uuid.uuid4()}",

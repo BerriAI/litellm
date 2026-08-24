@@ -16,7 +16,8 @@ from litellm.llms.bedrock.realtime.transformation import (
 )
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 
-# The OpenAI realtime function-call lifecycle a single Nova Sonic toolUse must expand into.
+# The OpenAI realtime function-call lifecycle a single Nova Sonic toolUse must expand into,
+# when an assistant block already opened the response the tool call belongs to.
 _TOOL_CALL_EVENT_SEQUENCE = [
     "response.output_item.added",
     "conversation.item.added",
@@ -26,6 +27,10 @@ _TOOL_CALL_EVENT_SEQUENCE = [
     "response.done",
 ]
 
+# Nova Sonic opens tool turns with contentStart role TOOL, which opens no response, so the
+# tool call has to open one itself before it can close it.
+_TOOL_CALL_EVENT_SEQUENCE_NEW_RESPONSE = ["response.created", *_TOOL_CALL_EVENT_SEQUENCE]
+
 
 def _only(events, event_type):
     matches = [event for event in events if event["type"] == event_type]
@@ -34,11 +39,10 @@ def _only(events, event_type):
 
 
 def _response_id_of(event):
-    if event["type"] == "response.done":
+    """The response id an event is bound to, or None for events that carry no response id."""
+    if event["type"] in ("response.created", "response.done"):
         return event["response"]["id"]
-    if event["type"] == "conversation.item.added":
-        return None
-    return event["response_id"]
+    return event.get("response_id")
 
 
 class TestBedrockRealtimeConfig:
@@ -659,8 +663,10 @@ class TestBedrockRealtimeResponseTransformation:
             None,
             "conv_1",
         )
-        assert [event["type"] for event in events] == _TOOL_CALL_EVENT_SEQUENCE
+        assert [event["type"] for event in events] == _TOOL_CALL_EVENT_SEQUENCE_NEW_RESPONSE
         function_call = _only(events, "response.function_call_arguments.done")
+        assert _only(events, "response.created")["response"]["id"] == function_call["response_id"]
+        assert _only(events, "response.created")["response"]["conversation_id"] == "conv_1"
         assert function_call["call_id"] == "tool_call_no_ids"
         assert function_call["name"] == "get_weather"
         assert function_call["response_id"].startswith("resp_")
@@ -790,8 +796,9 @@ class TestBedrockRealtimeResponseTransformation:
             realtime_response_transform_input=state,
         )
 
-        assert [msg["type"] for msg in result["response"]] == _TOOL_CALL_EVENT_SEQUENCE
+        assert [msg["type"] for msg in result["response"]] == _TOOL_CALL_EVENT_SEQUENCE_NEW_RESPONSE
         function_call = _only(result["response"], "response.function_call_arguments.done")
+        assert _only(result["response"], "response.created")["response"]["id"] == function_call["response_id"]
         assert function_call["response_id"].startswith("resp_")
         assert function_call["item_id"].startswith("item_")
         assert json.loads(function_call["arguments"]) == {"location": "Seattle"}
@@ -1325,6 +1332,40 @@ class TestBedrockRealtimeContentBlockLifecycle:
         done = [msg["response"]["id"] for msg in emitted if msg["type"] == "response.done"]
         assert len(created) == 2
         assert created == done
+        assert state["current_response_id"] is None
+
+    def test_every_response_is_opened_and_closed_on_a_tool_first_turn(self):
+        """
+        Nova Sonic opens tool turns with contentStart role TOOL, which emits nothing, so the
+        tool call is the first thing in the session. It has to open the response it closes,
+        or the client sees a response.done for an id it never saw created.
+        """
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+        state = self._state(current_conversation_id=None)
+
+        turn = [
+            {"event": {"contentStart": {"role": "TOOL", "type": "TOOL"}}},
+            {
+                "event": {
+                    "toolUse": {
+                        "toolUseId": "tool_1",
+                        "toolName": "get_weather",
+                        "content": json.dumps({"location": "Seattle"}),
+                    }
+                }
+            },
+            {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL"}}},
+        ]
+        emitted = [msg for event in turn for msg in self._apply(config, logging_obj, state, event)["response"]]
+
+        created = [msg["response"]["id"] for msg in emitted if msg["type"] == "response.created"]
+        done = [msg["response"]["id"] for msg in emitted if msg["type"] == "response.done"]
+        assert len(created) == 1
+        assert created == done
+        # Every event in the turn is bound to that one response.
+        assert {_response_id_of(msg) for msg in emitted} - {None} == set(created)
         assert state["current_response_id"] is None
 
     def test_second_assistant_content_block_reuses_response_not_item(self):
