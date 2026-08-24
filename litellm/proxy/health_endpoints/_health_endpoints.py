@@ -1952,8 +1952,13 @@ async def test_model_connection(
             **request_litellm_params,
         }
 
-        ## Auth check
         resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        litellm_params = _update_litellm_params_for_health_check(
+            model_info=resolved_model_info or {},
+            litellm_params=litellm_params,
+        )
+
+        ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
@@ -1963,10 +1968,6 @@ async def test_model_connection(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-        )
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info=resolved_model_info or {},
-            litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
 
