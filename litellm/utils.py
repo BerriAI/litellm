@@ -5726,6 +5726,8 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
+                output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
+                output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
@@ -5753,6 +5755,7 @@ def _get_model_info_helper(
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
+                supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
                 thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
@@ -6526,21 +6529,10 @@ def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain ca
 
 
 def prompt_token_calculator(model, messages):
-    # use tiktoken or anthropic's tokenizer depending on the model
     text: Final = " ".join(message["content"] for message in messages)
-    num_tokens = 0
     if "claude" in model:
-        try:
-            import anthropic
-        except Exception:
-            Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
-
-        anthropic_obj: Final = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
-    else:
-        num_tokens = len(_get_default_encoding().encode(text))
-    return num_tokens
+        return token_counter(model=model, text=text)
+    return len(_get_default_encoding().encode(text))
 
 
 def valid_model(model):

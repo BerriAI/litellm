@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -41,6 +42,7 @@ from litellm.utils import (
     get_prompt_cache_min_tokens,
     is_cached_message,
     is_prompt_caching_valid_prompt,
+    prompt_token_calculator,
 )
 
 # Adds the parent directory to the system path
@@ -730,7 +732,9 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "input_cost_per_second",
         "output_cost_per_second",
+        "output_cost_per_second_480p",
         "output_cost_per_second_1080p",
+        "output_cost_per_second_4k",
         "input_cost_per_query",
         "input_cost_per_request",
         "input_cost_per_audio_token",
@@ -860,7 +864,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
-                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_video_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
@@ -944,7 +947,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
+                "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
+                "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
@@ -993,6 +998,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
@@ -1004,7 +1010,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "tpm": {"type": "number"},
-                "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
                     "type": "array",
                     "items": {
@@ -1124,6 +1129,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     exceptions = [
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
+        "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -4973,3 +4979,19 @@ def test_completion_does_not_leak_rust_flag_into_provider_request_body():
     create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
     assert "rust" not in create_kwargs
     assert "rust" not in (create_kwargs.get("extra_body") or {})
+
+
+def test_prompt_token_calculator_counts_claude_without_the_anthropic_sdk():
+    """
+    The claude branch used to call the anthropic SDK's `count_tokens`, which the SDK
+    removed, so every claude call raised AttributeError. Counting must work with
+    `anthropic` unimportable.
+    """
+    messages: Final = [{"role": "user", "content": "the quick brown fox jumps over the lazy dog"}]
+
+    with patch.dict(sys.modules, {"anthropic": None}):
+        claude_tokens = prompt_token_calculator("claude-sonnet-4-5", messages)
+        gpt_tokens = prompt_token_calculator("gpt-4o", messages)
+
+    assert claude_tokens == 9
+    assert gpt_tokens == 9
