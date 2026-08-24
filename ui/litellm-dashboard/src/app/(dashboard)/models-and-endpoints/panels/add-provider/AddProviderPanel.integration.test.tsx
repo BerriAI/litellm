@@ -94,6 +94,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
           ],
         },
       },
+      {
+        provider: "OpenAI",
+        provider_display_name: "OpenAI",
+        litellm_provider: "openai",
+        default_model_placeholder: "gpt-4o",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password" }],
+      },
     ],
     isLoading: false,
     error: null,
@@ -389,6 +396,50 @@ describe("AddProviderPanel", () => {
       expect(credentialCreateCall).toHaveBeenCalledWith(
         "test-access-token",
         expect.objectContaining({ credential_name: "anthropic-second" }),
+      ),
+    );
+    expect(credentialUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("creates rather than PATCHes when the provider changes under the same credential name", async () => {
+    discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus"] });
+    const { user } = await setup();
+
+    await chooseProvider(user, "Anthropic");
+    await user.type(screen.getByLabelText("Credential name"), "shared-name");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "Authentication method" }),
+      "Workload Identity Federation (LiteLLM-signed)",
+    );
+    fireEvent.change(await screen.findByLabelText("Organization ID"), { target: { value: "org-1" } });
+    fireEvent.change(screen.getByLabelText("Issuer URL"), { target: { value: "https://proxy.example.com" } });
+    fireEvent.change(screen.getByLabelText("Issuer Subject"), { target: { value: "litellm-proxy" } });
+    fireEvent.change(screen.getByLabelText("Signing Key Reference"), { target: { value: "os.environ/SIGNING_KEY" } });
+    await user.click(screen.getByRole("button", { name: "Save credential" }));
+
+    // A credential is (name, provider). Keeping the name but switching provider must not PATCH the
+    // Anthropic credential into an OpenAI one.
+    await screen.findByText("Register this JWKS with Anthropic");
+    await user.click(screen.getByRole("button", { name: /Back/ }));
+    await user.click(await screen.findByRole("button", { name: /Back/ }));
+    await chooseProvider(user, "OpenAI");
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    credentialCreateCall.mockClear();
+    credentialUpdateCall.mockClear();
+    await user.type(await screen.findByLabelText("API Key"), "sk-openai-test");
+    await user.click(screen.getByRole("button", { name: /Save credential/ }));
+
+    await waitFor(() =>
+      expect(credentialCreateCall).toHaveBeenCalledWith(
+        "test-access-token",
+        expect.objectContaining({
+          credential_name: "shared-name",
+          credential_info: { custom_llm_provider: "openai" },
+        }),
       ),
     );
     expect(credentialUpdateCall).not.toHaveBeenCalled();

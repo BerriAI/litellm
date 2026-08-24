@@ -90,7 +90,7 @@ export default function AddProviderPanel() {
   const [step, setStep] = React.useState<WizardStep>("provider");
   const [selectedProvider, setSelectedProvider] = React.useState<Providers | null>(null);
   const [credentialName, setCredentialName] = React.useState("");
-  const [savedCredentialName, setSavedCredentialName] = React.useState<string | null>(null);
+  const [savedCredential, setSavedCredential] = React.useState<{ name: string; provider: string } | null>(null);
   const [savedValues, setSavedValues] = React.useState<Record<string, unknown>>({});
   const [federationRuleId, setFederationRuleId] = React.useState("");
   const [jwks, setJwks] = React.useState<AnthropicJwks | null>(null);
@@ -125,11 +125,14 @@ export default function AddProviderPanel() {
   );
   const litellmProvider = selectedProviderInfo?.litellm_provider ?? "";
 
-  const credentialSaved = savedCredentialName !== null && savedCredentialName === credentialName;
+  // A credential is identified by name AND provider: switching provider under the same name must
+  // create a new one, not PATCH the previous provider's credential into a different provider.
+  const credentialSaved =
+    savedCredential !== null && savedCredential.name === credentialName && savedCredential.provider === litellmProvider;
 
   const nameCollision =
     credentialName.length > 0 &&
-    credentialName !== savedCredentialName &&
+    !credentialSaved &&
     (credentialsResponse?.credentials ?? []).some((c) => c.credential_name === credentialName);
 
   const goTo = (next: WizardStep) => setStep(next);
@@ -164,7 +167,7 @@ export default function AddProviderPanel() {
         await credentialUpdateCall(accessToken, credentialName, updatePayload);
       }
       setSavedValues(values);
-      setSavedCredentialName(credentialName);
+      setSavedCredential({ name: credentialName, provider: litellmProvider });
       setFederationRuleId(
         typeof values.anthropic_federation_rule_id === "string" ? values.anthropic_federation_rule_id : "",
       );

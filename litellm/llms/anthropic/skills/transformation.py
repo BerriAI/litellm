@@ -37,6 +37,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         from litellm.llms.anthropic.common_utils import (
             AnthropicModelInfo,
             merge_anthropic_beta_headers,
+            without_caller_credential_headers,
         )
 
         auth_header: Final = AnthropicModelInfo.get_auth_header(
@@ -52,12 +53,15 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
             ANTHROPIC_SKILLS_API_BETA_VERSION,
         )
-        headers.update(auth_header)
-        headers["anthropic-version"] = "2023-06-01"
-        headers["anthropic-beta"] = merged_beta
-        headers["content-type"] = "application/json"
-
-        return headers
+        # The deployment's own credential is applied here, so a caller-supplied one must not ride
+        # along upstream beside a minted federation Bearer.
+        return {  # mutable-ok: validate_environment's contract returns a real dict, which httpx then consumes
+            **without_caller_credential_headers(headers),
+            **auth_header,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": merged_beta,
+            "content-type": "application/json",
+        }
 
     def get_complete_url(
         self,

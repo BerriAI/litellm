@@ -54,3 +54,23 @@ def identity_source_ref(config: AnthropicIdentitySourceConfig) -> str:
     whenever any field does, including a ``*_ref`` pointer NAME (never the secret it points to)."""
     digest: Final = hashlib.sha256(config.model_dump_json().encode()).hexdigest()[:_REF_HASH_HEX_LENGTH]
     return f"oidc/{config.kind.value}/{digest}"
+
+
+_POINTER_REF_PREFIXES: Final = (
+    "oidc/",
+    "os.environ/",
+    "hashicorp_vault/",
+    "aws_secret_manager/",
+    "google_secret_manager/",
+)
+
+
+def ref_for_error_message(ref: str) -> str:
+    """A ``*_ref`` rendered for an operator-facing error.
+
+    Naming the pointer is deliberate: it is what tells an operator which setting failed to
+    resolve. But these fields only ever fail to resolve when what was written is not a pointer,
+    and an operator who pasted the secret itself has made the field's value the secret. So the
+    value is echoed only when it is recognizably a pointer, and withheld otherwise.
+    """
+    return ref if ref.startswith(_POINTER_REF_PREFIXES) else "<withheld: not a secret reference>"

@@ -34,6 +34,17 @@ from ...common_utils import (
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
+_CALLER_CREDENTIAL_HEADERS: Final = frozenset({"x-api-key", "authorization"})
+
+
+def _carries_caller_credential(headers: Mapping[str, str]) -> bool:
+    """Whether the caller sent their own Anthropic credential, in which case this passthrough
+    honors it and never mints. Matched case-insensitively: an SDK caller passing ``X-Api-Key``
+    through extra_headers would otherwise slip the check and end up sending their key beside a
+    minted federation Bearer."""
+    return any(name.lower() in _CALLER_CREDENTIAL_HEADERS for name in headers)
+
+
 DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING: Final = (
     "Dropping adaptive `thinking`/`output_config.effort` for model=%s: the model "
     "does not support extended thinking, or max_tokens is too small to fit the "
@@ -310,7 +321,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
-        if "x-api-key" not in headers and "authorization" not in headers:
+        if not _carries_caller_credential(headers):
             self._apply_env_auth_header(
                 headers,
                 AnthropicModelInfo.get_auth_header(
@@ -347,7 +358,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
         oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
-        if "x-api-key" not in oauth_headers and "authorization" not in oauth_headers:
+        if not _carries_caller_credential(oauth_headers):
             self._apply_env_auth_header(
                 oauth_headers,
                 await AnthropicModelInfo.aget_auth_header(

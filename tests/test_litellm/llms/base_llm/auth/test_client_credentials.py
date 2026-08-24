@@ -412,3 +412,42 @@ class TestOversizedSuccessBody:
             fetch_keycloak_assertion(
                 make_config(), poster=ScriptedPoster([oversized]), secret_reader=DEFAULT_SECRET_READER
             )
+
+
+class TestUnresolvedSecretRefIsNotEchoed:
+    """An operator who pastes the secret itself into the *_ref field turns that field INTO the
+    secret, and this error reaches model callers, so it must never echo the value."""
+
+    def test_keycloak_ref_value_is_not_in_the_error(self):
+        from litellm.llms.base_llm.auth.client_credentials import keycloak_assertion_source
+        from litellm.llms.base_llm.auth.identity_source import KeycloakSource
+
+        pasted_secret = "sUp3r-s3cret-value-not-a-pointer"
+        config = KeycloakSource(
+            token_url="https://keycloak.example.com/realms/p/protocol/openid-connect/token",
+            client_id="litellm",
+            client_secret_ref=pasted_secret,
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            keycloak_assertion_source(config, secret_reader=lambda _ref: None)()
+
+        assert pasted_secret not in str(excinfo.value)
+        assert "withheld" in str(excinfo.value)
+
+    def test_internal_issuer_ref_value_is_not_in_the_error(self):
+        from litellm.llms.base_llm.auth.identity_source import InternalIssuerSource
+        from litellm.llms.base_llm.auth.internal_issuer import internal_issuer_assertion_source
+
+        pasted_pem = "-----BEGIN PRIVATE KEY-----MIGHAgEA-----END PRIVATE KEY-----"
+        config = InternalIssuerSource(
+            issuer_url="https://proxy.example.com",
+            subject="litellm-proxy",
+            signing_key_ref=pasted_pem,
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            internal_issuer_assertion_source(config, key_reader=lambda _ref: None)()
+
+        assert pasted_pem not in str(excinfo.value)
+        assert "withheld" in str(excinfo.value)

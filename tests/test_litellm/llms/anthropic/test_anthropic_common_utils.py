@@ -2350,6 +2350,52 @@ class TestWifServerOwnedAuthHeaderStrip:
         assert headers["user-agent"] == "caller/1.0"
 
     @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
+    def test_skills_surface_strips_caller_credentials_too(self, monkeypatch, wif_engine, header_name):
+        """Skills builds its own headers as well; every minting surface needs the same strip."""
+        from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
+
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+        caller_key = "sk-litellm-CALLER-VIRTUAL-KEY"
+
+        headers = AnthropicSkillsConfig().validate_environment(
+            headers={header_name.title(): caller_key, "user-agent": "caller/1.0"},
+            litellm_params=None,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
+        assert header_name == "authorization" or header_name not in {name.lower() for name in headers}
+        assert all(caller_key not in value for value in headers.values())
+        assert headers["user-agent"] == "caller/1.0"
+
+    def test_passthrough_honors_a_case_variant_caller_key_instead_of_minting(self, monkeypatch, wif_engine):
+        """The passthrough surface hands the caller's own credential upstream rather than minting.
+        That check was case-sensitive, so X-Api-Key slipped past it and the caller's key would have
+        travelled beside a minted Bearer."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        for name, value in WIF_ENV.items():
+            monkeypatch.setenv(name, value)
+        poster, _ = wif_engine
+        caller_key = "sk-ant-CALLER-SUPPLIED"
+
+        headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
+            headers={"X-Api-Key": caller_key},
+            model="claude-sonnet-4-5",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["X-Api-Key"] == caller_key
+        assert "authorization" not in {name.lower() for name in headers}
+        assert len(poster.requests) == 0
+
+    @pytest.mark.parametrize("header_name", PROXY_CREDENTIAL_HEADER_NAMES)
     def test_batches_surface_strips_caller_credentials_too(self, monkeypatch, wif_engine, header_name):
         """Batches builds its own headers on the create path, so it needs the same strip: the
         handler's retrieve path passes none, but this entry point takes the caller's."""

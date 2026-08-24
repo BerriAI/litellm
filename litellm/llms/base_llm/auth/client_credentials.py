@@ -21,7 +21,7 @@ import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
 from typing_extensions import assert_never
 
-from litellm.llms.base_llm.auth.identity_source import KeycloakSource
+from litellm.llms.base_llm.auth.identity_source import KeycloakSource, ref_for_error_message
 from litellm.llms.base_llm.auth.token_exchange import (
     MAX_RESPONSE_BYTES,
     redact_oauth_error_body,
@@ -140,7 +140,7 @@ def _prepared_request(config: KeycloakSource, client_secret: str) -> tuple[bytes
 def _resolve_client_secret(config: KeycloakSource, secret_reader: SecretReader) -> str:
     secret: Final = secret_reader(config.client_secret_ref)
     if not secret:
-        raise ValueError(f"keycloak client secret {config.client_secret_ref} could not be read")
+        raise ValueError(f"keycloak client secret {ref_for_error_message(config.client_secret_ref)} could not be read")
     return secret
 
 

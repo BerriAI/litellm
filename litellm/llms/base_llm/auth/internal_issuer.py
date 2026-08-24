@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from litellm.llms.base_llm.auth.identity_source import InternalIssuerSource
+from litellm.llms.base_llm.auth.identity_source import InternalIssuerSource, ref_for_error_message
 from litellm.llms.base_llm.auth.jwt_signing import jwks_document_json, sign_es256_jwt
 
 SigningKeyReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list
@@ -46,7 +46,9 @@ def _claims(config: InternalIssuerSource, issued_at: int) -> Mapping[str, object
 def _resolve_signing_key(config: InternalIssuerSource, key_reader: SigningKeyReader) -> str:
     pem: Final = key_reader(config.signing_key_ref)
     if not pem:
-        raise ValueError(f"internal_issuer signing key {config.signing_key_ref} could not be read")
+        raise ValueError(
+            f"internal_issuer signing key {ref_for_error_message(config.signing_key_ref)} could not be read"
+        )
     return pem
 
 
