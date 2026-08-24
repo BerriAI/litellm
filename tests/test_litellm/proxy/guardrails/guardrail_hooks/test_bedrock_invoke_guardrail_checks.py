@@ -397,16 +397,20 @@ async def test_request_uses_checks_path_and_body():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "expected_auth_prefix"),
-    [("nvidia_nim", "AWS4-HMAC-SHA256"), ("bedrock", "Bearer bedrock-key")],
+    ("model", "expected_auth_prefix"),
+    [
+        ("nvidia_nim/test-model", "AWS4-HMAC-SHA256"),
+        ("bedrock/test-model", "Bearer bedrock-key"),
+        ("amazon.nova-lite-v1:0", "Bearer bedrock-key"),
+    ],
 )
 async def test_request_scopes_api_key_to_bedrock_provider(
-    custom_llm_provider, expected_auth_prefix, monkeypatch
-):
+    model: str, expected_auth_prefix: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
     request_data = {
-        "model": f"{custom_llm_provider}/test-model",
+        "model": model,
         "api_key": "bedrock-key",
     }
     mock_credentials = MagicMock()

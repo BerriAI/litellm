@@ -670,6 +670,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     #### CALL HOOKS - proxy only ####
     @staticmethod
+    def _resolve_model_provider(model: str) -> str | None:
+        try:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            return custom_llm_provider
+        except Exception:
+            return model.partition("/")[0]
+
+    @staticmethod
     def _get_bedrock_api_key(request_data: Mapping[str, object] | None) -> str | None:
         if not request_data:
             return None
@@ -679,8 +687,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             top_level_provider if isinstance(top_level_provider, str) else None
         )
         model: Final[object | None] = request_data.get("model")
-        model_provider: Final = model.partition("/")[0] if isinstance(model, str) else None
-        custom_llm_provider: Final = request_provider or model_provider
+        model_provider: Final[str | None] = (
+            BedrockGuardrail._resolve_model_provider(model) if isinstance(model, str) else None
+        )
+        custom_llm_provider: Final[str | None] = request_provider or model_provider
         if custom_llm_provider not in ("bedrock", "bedrock_converse"):
             return None
 

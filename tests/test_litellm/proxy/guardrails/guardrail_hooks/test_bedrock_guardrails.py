@@ -1116,19 +1116,23 @@ async def test_make_apply_guardrail_request_skips_scan_without_credentials():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("custom_llm_provider", "expected_auth_prefix"),
-    [("nvidia_nim", "AWS4-HMAC-SHA256"), ("bedrock", "Bearer bedrock-key")],
+    ("model", "expected_auth_prefix"),
+    [
+        ("nvidia_nim/test-model", "AWS4-HMAC-SHA256"),
+        ("bedrock/test-model", "Bearer bedrock-key"),
+        ("amazon.nova-lite-v1:0", "Bearer bedrock-key"),
+    ],
 )
 async def test_make_apply_guardrail_request_scopes_api_key_to_bedrock_provider(
-    custom_llm_provider, expected_auth_prefix, monkeypatch
-):
+    model: str, expected_auth_prefix: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     guardrail = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
     )
     request_data = {
-        "model": f"{custom_llm_provider}/test-model",
+        "model": model,
         "api_key": "bedrock-key",
     }
     mock_credentials = MagicMock()
