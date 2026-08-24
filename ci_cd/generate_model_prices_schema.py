@@ -58,6 +58,12 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
 }
 
 ARRAY_KEYS: dict[str, JsonSchema] = {
+    "aliases": {
+        "type": "array",
+        "description": "Alternate model ids that share this entry's pricing and capabilities.",
+        "items": STRING,
+        "uniqueItems": True,
+    },
     "supported_endpoints": {
         "type": "array",
         "description": "OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.",

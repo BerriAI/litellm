@@ -1005,6 +1005,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
+                "aliases": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                },
                 "supported_endpoints": {
                     "type": "array",
                     "items": {

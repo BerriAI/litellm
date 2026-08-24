@@ -72,6 +72,7 @@ def test_prices_file_validates_against_committed_schema(prices: dict, committed_
         {"litellm_provider": "openai", "supports_vision": "yes"},
         {"litellm_provider": "openai", "max_tokens": 8191.5},
         {"litellm_provider": "openai", "tiered_pricing": [{"unknown_tier_field": 1}]},
+        {"litellm_provider": "openai", "aliases": ["duplicate", "duplicate"]},
     ],
     ids=[
         "cost_as_string",
@@ -88,6 +89,7 @@ def test_prices_file_validates_against_committed_schema(prices: dict, committed_
         "boolean_flag_as_string",
         "fractional_max_tokens",
         "unknown_tiered_pricing_field",
+        "duplicate_alias",
     ],
 )
 def test_schema_rejects_malformed_entries(committed_schema: dict, entry: dict):

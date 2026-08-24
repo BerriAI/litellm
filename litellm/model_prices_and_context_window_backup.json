@@ -6731,6 +6731,9 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-luna": {
+        "aliases": [
+            "azure/gpt-5.6-luna-2026-07-09"
+        ],
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4e-08,
         "cache_read_input_token_cost_priority": 4e-08,
