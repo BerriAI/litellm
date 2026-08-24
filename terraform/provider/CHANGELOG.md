@@ -17,6 +17,21 @@ longer signal it.
 ### Added
 
 - **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
+- **user**: New `litellm_user` resource and `litellm_user` / `litellm_users` data sources for managing internal users
+- **budget**: New `litellm_budget` resource and `litellm_budget` / `litellm_budgets` data sources for reusable budget objects
+- **tag**: New `litellm_tag` resource and `litellm_tag` / `litellm_tags` data sources for spend and routing tags
+- **project**: New `litellm_project` resource and `litellm_project` / `litellm_projects` data sources
+- **guardrail**: New `litellm_guardrail` resource and `litellm_guardrail` / `litellm_guardrails` data sources; `litellm_params` is sensitive and never read back into state
+- **prompt**: New `litellm_prompt` resource and `litellm_prompt` / `litellm_prompts` data sources for prompt templates
+- **agent**: New `litellm_agent` resource and `litellm_agent` / `litellm_agents` data sources for A2A agents
+- **search_tool**: New `litellm_search_tool` resource and `litellm_search_tool` / `litellm_search_tools` data sources
+- **access groups**: New `litellm_access_group` and `litellm_unified_access_group` resources with matching singular and plural data sources
+- **fallback**: New `litellm_fallback` resource and data source for per-model fallbacks (general, context window and content policy)
+- **block resources**: New `litellm_key_block` and `litellm_team_block` resources to manage the blocked state of existing keys and teams
+- **data sources for existing resources**: New `litellm_key` / `litellm_keys`, `litellm_team` / `litellm_teams`, `litellm_model` / `litellm_models`, `litellm_organization` / `litellm_organizations` and `litellm_mcp_server` / `litellm_mcp_servers` data sources
+- **key**: New arguments `budget_id`, `enforced_params`, `allowed_routes`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type`, `prompts`, `organization_id` and `project_id`
+- **team**: New arguments `model_aliases`, `guardrails`, `prompts`, `team_member_budget`, `team_member_budget_duration`, `team_member_rpm_limit`, `team_member_tpm_limit`, `team_member_key_duration`, `model_rpm_limit`, `model_tpm_limit`, `allowed_passthrough_routes`, `rpm_limit_type` and `tpm_limit_type`
+- **import**: `terraform import` support for `litellm_team`, `litellm_model`, `litellm_organization`, `litellm_mcp_server`, `litellm_vector_store` and every new resource
 
 ### Fixed
 
