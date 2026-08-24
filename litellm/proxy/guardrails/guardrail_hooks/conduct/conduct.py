@@ -137,7 +137,7 @@ class ConductGuardrail(CustomGuardrail):
         fail_mode: FailMode = "fail_closed",
         tool_name: str = "llm_call",
         timeout: float = 8.0,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
