@@ -331,7 +331,7 @@ class TestTerminateHardKillSignal:
         this same "already dead or inaccessible" case.
         """
 
-        def fake_kill: Final = Mock(side_effect=raised)
+        fake_kill: Final = Mock(side_effect=raised)
 
         monkeypatch.setattr(process_module.os, "kill", fake_kill)
         monkeypatch.setattr(process_module, "is_running", lambda pid: True)
