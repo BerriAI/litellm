@@ -57,6 +57,16 @@ func Provider() *schema.Provider {
 			"litellm_tags":                  dataSourceLiteLLMTags(),
 			"litellm_project":               dataSourceLiteLLMProject(),
 			"litellm_projects":              dataSourceLiteLLMProjects(),
+			"litellm_key":                   dataSourceLiteLLMKey(),
+			"litellm_keys":                  dataSourceLiteLLMKeys(),
+			"litellm_team":                  dataSourceLiteLLMTeam(),
+			"litellm_teams":                 dataSourceLiteLLMTeams(),
+			"litellm_model":                 dataSourceLiteLLMModel(),
+			"litellm_models":                dataSourceLiteLLMModels(),
+			"litellm_organization":          dataSourceLiteLLMOrganization(),
+			"litellm_organizations":         dataSourceLiteLLMOrganizations(),
+			"litellm_mcp_server":            dataSourceLiteLLMMCPServer(),
+			"litellm_mcp_servers":           dataSourceLiteLLMMCPServers(),
 		},
 		Schema: map[string]*schema.Schema{
 			"api_base": {
