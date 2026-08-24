@@ -730,7 +730,9 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "input_cost_per_second",
         "output_cost_per_second",
+        "output_cost_per_second_480p",
         "output_cost_per_second_1080p",
+        "output_cost_per_second_4k",
         "input_cost_per_query",
         "input_cost_per_request",
         "input_cost_per_audio_token",
@@ -944,7 +946,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
+                "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
+                "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
@@ -1124,6 +1128,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     exceptions = [
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
+        "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
