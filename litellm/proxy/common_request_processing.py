@@ -1845,6 +1845,12 @@ class ProxyBaseLLMRequestProcessing:
 
         self.data["litellm_logging_obj"] = logging_obj
 
+        from litellm.proxy.agent_endpoints.a2a_routing import (
+            merge_a2a_agent_guardrails_before_hooks,
+        )
+
+        self.data = await merge_a2a_agent_guardrails_before_hooks(self.data)
+
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set
         # via litellm_params.guardrails are only honored on post_call paths

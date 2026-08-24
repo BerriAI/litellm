@@ -173,6 +173,23 @@ class A2ACompletionBridgeTransformation:
             if hasattr(choice, "message") and choice.message:
                 content = choice.message.content or ""
 
+        tool_calls: list[Any] | None = None
+        finish_reason: str | None = None
+        if hasattr(response, "choices") and response.choices:
+            choice = response.choices[0]
+            finish_reason = getattr(choice, "finish_reason", None)
+            message = getattr(choice, "message", None)
+            raw_tool_calls = getattr(message, "tool_calls", None)
+            if raw_tool_calls:
+                tool_calls = [
+                    call.model_dump(exclude_none=True)
+                    if hasattr(call, "model_dump")
+                    else call.dict(exclude_none=True)
+                    if hasattr(call, "dict")
+                    else call
+                    for call in raw_tool_calls
+                ]
+
         # Build A2A message
         a2a_message: Final = {
             "kind": "message",
@@ -180,6 +197,10 @@ class A2ACompletionBridgeTransformation:
             "parts": [{"kind": "text", "text": content}],
             "messageId": uuid4().hex,
         }
+        if tool_calls:
+            a2a_message["tool_calls"] = tool_calls
+        if finish_reason:
+            a2a_message["finish_reason"] = finish_reason
 
         # Build A2A response
         a2a_response: Final = {

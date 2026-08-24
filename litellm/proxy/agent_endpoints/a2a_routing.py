@@ -23,7 +23,7 @@ from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.llms.a2a.common_utils import A2AError, convert_messages_to_prompt, extract_text_from_a2a_response
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, CustomPricingLiteLLMParams, Message, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -66,6 +66,24 @@ _FORWARDED_REQUEST_PARAMS: Final = frozenset(
         "web_search_options",
     }
 )
+_A2A_PRICING_PARAMS: Final = frozenset({"cost_per_query", "response_cost"}) | frozenset(
+    CustomPricingLiteLLMParams.model_fields
+)
+
+
+def _get_agent_request_headers(data: Mapping[str, object]) -> dict[str, str]:
+    proxy_request: Final = data.get("proxy_server_request")
+    raw_headers: object = proxy_request.get("headers") if isinstance(proxy_request, Mapping) else None
+    if not isinstance(raw_headers, Mapping):
+        metadata: Final = data.get("metadata")
+        if not isinstance(metadata, Mapping):
+            metadata = data.get("litellm_metadata")
+        raw_headers = metadata.get("headers") if isinstance(metadata, Mapping) else None
+    return (
+        {str(key).lower(): str(value) for key, value in raw_headers.items()}
+        if isinstance(raw_headers, Mapping)
+        else {}
+    )
 
 
 class _A2ATextPart(TypedDict):
@@ -132,6 +150,18 @@ async def _route_registered_provider(
     if agent_extra_headers:
         provider_params["extra_headers"] = agent_extra_headers
 
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        pricing_params = {
+            key: litellm_params[key]
+            for key in _A2A_PRICING_PARAMS
+            if key in litellm_params and litellm_params[key] is not None
+        }
+        if pricing_params:
+            logging_obj.litellm_params.update(pricing_params)
+            logging_obj.model_call_details["litellm_params"].update(pricing_params)
+            logging_obj.custom_pricing = True
+
     if stream:
         streaming_response: Final = A2ACompletionBridgeHandler.handle_streaming(
             request_id=request_id,
@@ -145,7 +175,6 @@ async def _route_registered_provider(
             sync_stream=False,
             model=model_name,
         )
-        logging_obj: Final = data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging):
             raise TypeError("litellm_logging_obj is required for streaming A2A requests")
         return CustomStreamWrapper(
@@ -172,19 +201,35 @@ async def _route_registered_provider(
             message=f"A2A error: {error_message if isinstance(error_message, str) else 'Unknown error'}",
         )
 
+    result: Final = response.get("result")
+    result_dict: Final = result if isinstance(result, Mapping) else {}
+    nested_message: Final = result_dict.get("message")
+    response_message: Final = nested_message if isinstance(nested_message, Mapping) else result_dict
+    tool_calls: Final = response_message.get("tool_calls")
+    normalized_tool_calls: Final = tool_calls if isinstance(tool_calls, list) else None
+    finish_reason: Final = response_message.get("finish_reason")
     text: Final = extract_text_from_a2a_response(response)
     model_response: Final = ModelResponse(
         id=str(response.get("id") or request_id),
         model=model_name,
         choices=[  # mutable-ok: ModelResponse requires a choices list
-            Choices(finish_reason="stop", index=0, message=Message(content=text, role="assistant"))
+            Choices(
+                finish_reason=(
+                    finish_reason
+                    if isinstance(finish_reason, str)
+                    else "tool_calls"
+                    if normalized_tool_calls
+                    else "stop"
+                ),
+                index=0,
+                message=Message(content=text, role="assistant", tool_calls=normalized_tool_calls),
+            )
         ],
     )
     usage: Final = response.get("usage")
     if usage is not None:
         setattr(model_response, "usage", usage)
 
-    logging_obj: Final = data.get("litellm_logging_obj")
     if isinstance(logging_obj, Logging):
 
         def _enqueue_logging() -> None:
@@ -211,7 +256,8 @@ def _merge_agent_guardrails(
     configured_guardrails: list[object] = (
         agent_guardrails if isinstance(agent_guardrails, list) else [agent_guardrails]
     )
-    metadata = data.get("metadata")
+    metadata_key: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
+    metadata = data.get(metadata_key)
     metadata_guardrails = metadata.get("guardrails") if isinstance(metadata, dict) else None
     root_guardrails = data.get("guardrails")
     existing_guardrails: list[object] = []
@@ -227,14 +273,27 @@ def _merge_agent_guardrails(
     if isinstance(data, dict):
         data["guardrails"] = merged_guardrails
         if isinstance(metadata, dict):
-            metadata["guardrails"] = merged_guardrails
+            data[metadata_key] = {**metadata, "guardrails": merged_guardrails}
         return data
 
     merged_data = dict(data)
     merged_data["guardrails"] = merged_guardrails
     if isinstance(metadata, dict):
-        merged_data["metadata"] = {**metadata, "guardrails": merged_guardrails}
+        merged_data[metadata_key] = {**metadata, "guardrails": merged_guardrails}
     return merged_data
+
+
+async def merge_a2a_agent_guardrails_before_hooks(data: Mapping[str, object]) -> Mapping[str, object]:
+    model_name: Final = data.get("model")
+    if not isinstance(model_name, str) or not model_name.startswith("a2a/"):
+        return data
+
+    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+    agent = await get_agent_with_read_through(model_name[4:])
+    if agent is None or not agent.litellm_params:
+        return data
+    return _merge_agent_guardrails(data, agent.litellm_params.get("guardrails"))
 
 
 def _get_agent_dynamic_headers(
@@ -243,20 +302,13 @@ def _get_agent_dynamic_headers(
     agent_name: str,
     extra_headers: list[str] | None,
 ) -> dict[str, str]:
-    proxy_request: Final = data.get("proxy_server_request")
-    raw_headers: object = proxy_request.get("headers") if isinstance(proxy_request, Mapping) else None
-    if not isinstance(raw_headers, Mapping):
-        metadata: Final = data.get("metadata")
-        raw_headers = metadata.get("headers") if isinstance(metadata, Mapping) else None
-    normalized_headers: Final = (
-        {str(key).lower(): str(value) for key, value in raw_headers.items()}
-        if isinstance(raw_headers, Mapping)
-        else {}
-    )
+    normalized_headers: Final = _get_agent_request_headers(data)
 
     dynamic_headers: dict[str, str] = {}
     for header_name in extra_headers or []:
         header_name_str: Final = str(header_name)
+        if header_name_str.lower().startswith("x-litellm-"):
+            continue
         value: Final = normalized_headers.get(header_name_str.lower())
         if value is not None:
             dynamic_headers[header_name_str] = value
@@ -266,9 +318,30 @@ def _get_agent_dynamic_headers(
         for key, value in normalized_headers.items():
             if key.startswith(prefix):
                 header_name: Final = key[len(prefix) :]
-                if header_name:
+                if header_name and not header_name.lower().startswith("x-litellm-"):
                     dynamic_headers[header_name] = value
     return dynamic_headers
+
+
+def _get_agent_identity_headers(user_api_key_dict: UserAPIKeyAuth | None) -> dict[str, str]:
+    if user_api_key_dict is None:
+        return {}
+    headers: dict[str, str] = {}
+    if user_api_key_dict.user_id:
+        headers["X-LiteLLM-User-Id"] = user_api_key_dict.user_id
+    if user_api_key_dict.team_id:
+        headers["X-LiteLLM-Team-Id"] = user_api_key_dict.team_id
+    return headers
+
+
+def _enforce_inbound_trace_id(data: Mapping[str, object], agent_id: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    if not get_chain_id_from_headers(_get_agent_request_headers(data)):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent '{agent_id}' requires x-litellm-trace-id header on all inbound requests.",
+        )
 
 
 async def route_a2a_agent_request(
@@ -325,6 +398,9 @@ async def route_a2a_agent_request(
                 detail=f"Agent '{agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+    if (agent.litellm_params or {}).get("require_trace_id_on_calls_to_agent"):
+        _enforce_inbound_trace_id(data, agent.agent_id)
+
     # Get API base URL from agent config
     agent_card_params: Final = agent.agent_card_params
     agent_url: Final = agent_card_params.get("url") if agent_card_params else None
@@ -336,7 +412,7 @@ async def route_a2a_agent_request(
     configured_api_base: Final = registered_params_value.get("api_base") if registered_params_value else None
     api_base: Final = configured_api_base if isinstance(configured_api_base, str) else agent_url
     registered_model: Final = registered_params_value.get("model") if registered_params_value else None
-    cardless_provider: Final = (
+    cardless_provider: Final = registered_provider == "watsonx_orchestrate" or (
         registered_provider == "bedrock" and isinstance(registered_model, str) and "agentcore" in registered_model
     )
     if (not isinstance(agent_url, str) or not agent_url) and not cardless_provider:
@@ -354,6 +430,19 @@ async def route_a2a_agent_request(
         agent_name=agent.agent_name,
         extra_headers=agent.extra_headers,
     )
+    registered_static_headers: Mapping[str, str] | None = agent.static_headers
+    if registered_params_value and registered_params_value.get("databricks_oauth"):
+        from litellm.proxy.agent_endpoints.databricks_oauth import resolve_databricks_app_auth_header
+
+        databricks_headers = await resolve_databricks_app_auth_header(dict(registered_params_value))
+        registered_static_headers = merge_agent_headers(
+            dynamic_headers=registered_static_headers,
+            static_headers=databricks_headers,
+        )
+    registered_static_headers = merge_agent_headers(
+        dynamic_headers=registered_static_headers,
+        static_headers=_get_agent_identity_headers(user_api_key_dict),
+    )
     if (
         registered_provider
         and registered_provider != "a2a"
@@ -366,7 +455,7 @@ async def route_a2a_agent_request(
             model_name=model_name,
             api_base=api_base,
             litellm_params=registered_params_value,
-            static_headers=agent.static_headers,
+            static_headers=registered_static_headers,
             dynamic_headers=registered_dynamic_headers,
         )
 
