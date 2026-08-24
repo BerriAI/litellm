@@ -55,15 +55,18 @@ def test_ui_friendly_name():
     assert _config().ui_friendly_name() == "Grounding with Bing Search"
 
 
-def test_validate_environment_with_explicit_key():
-    headers = _config().validate_environment({}, api_key="explicit-token")
-    assert headers["Authorization"] == "Bearer explicit-token"
+def test_validate_environment_api_key_uses_api_key_header_not_bearer():
+    headers = _config().validate_environment({}, api_key="azure-api-key")
+    assert headers["api-key"] == "azure-api-key"
+    assert "Authorization" not in headers
     assert headers["Content-Type"] == "application/json"
 
 
 def test_validate_environment_reads_env_token(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BING_GROUNDING_TOKEN", "env-token")
-    assert _config().validate_environment({})["Authorization"] == "Bearer env-token"
+    headers = _config().validate_environment({})
+    assert headers["Authorization"] == "Bearer env-token"
+    assert "api-key" not in headers
 
 
 def test_validate_environment_falls_back_to_entra_minter():
@@ -74,8 +77,9 @@ def test_validate_environment_falls_back_to_entra_minter():
 def test_validate_environment_api_key_beats_env_token(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BING_GROUNDING_TOKEN", "env-token")
     minter = Mock(return_value="entra-token")
-    headers = _config(entra_token_minter=minter).validate_environment({}, api_key="explicit-token")
-    assert headers["Authorization"] == "Bearer explicit-token"
+    headers = _config(entra_token_minter=minter).validate_environment({}, api_key="azure-api-key")
+    assert headers["api-key"] == "azure-api-key"
+    assert "Authorization" not in headers
     minter.assert_not_called()
 
 
@@ -263,6 +267,53 @@ def test_transform_search_response_no_message_output():
 def test_transform_search_response_malformed_body_raises_instead_of_reporting_empty(body: str):
     with pytest.raises(Exception, match="Grounding with Bing Search"):
         _config().transform_search_response(_resp(body, status_code=502), logging_obj=Mock())
+
+
+def test_transform_search_response_caps_results_to_max_results():
+    annotations = [_citation(f"https://example.com/{i}", f"T{i}", 0, 5) for i in range(5)]
+    resp = _config().transform_search_response(
+        _resp(_message_response("claim", annotations)), logging_obj=Mock(), optional_params={"max_results": 2}
+    )
+    assert [r.url for r in resp.results] == ["https://example.com/0", "https://example.com/1"]
+
+
+def test_transform_search_response_without_max_results_returns_all_citations():
+    annotations = [_citation(f"https://example.com/{i}", f"T{i}", 0, 5) for i in range(4)]
+    resp = _config().transform_search_response(_resp(_message_response("c", annotations)), logging_obj=Mock())
+    assert len(resp.results) == 4
+
+
+def test_transform_search_response_failed_status_raises_with_error_message():
+    payload = {"output": [], "status": "failed", "error": {"message": "content was filtered"}}
+    with pytest.raises(Exception, match="content was filtered") as excinfo:
+        _config().transform_search_response(_resp(payload), logging_obj=Mock())
+    assert excinfo.value.status_code == 502
+
+
+def test_transform_search_response_incomplete_with_no_results_raises_with_reason():
+    payload = {"output": [], "status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}
+    with pytest.raises(Exception, match="incomplete: max_output_tokens"):
+        _config().transform_search_response(_resp(payload), logging_obj=Mock())
+
+
+def test_transform_search_response_incomplete_with_partial_results_returns_them():
+    payload = _message_response("claim", [_citation("https://example.com", "Example", 0, 5)])
+    payload["status"] = "incomplete"
+    resp = _config().transform_search_response(_resp(payload), logging_obj=Mock())
+    assert [r.url for r in resp.results] == ["https://example.com"]
+
+
+def test_transform_search_response_web_search_mode_zeroes_per_query_cost():
+    payload = _message_response("claim", [_citation("https://example.com", "Example", 0, 5)])
+    resp = _config().transform_search_response(_resp(payload), logging_obj=Mock())
+    assert resp._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0
+
+
+def test_transform_search_response_connection_mode_leaves_price_to_cost_map(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BING_GROUNDING_CONNECTION_ID", "conn-id")
+    payload = _message_response("claim", [_citation("https://example.com", "Example", 0, 5)])
+    resp = _config().transform_search_response(_resp(payload), logging_obj=Mock())
+    assert "additional_headers" not in resp._hidden_params
 
 
 def test_get_error_class_attributes_the_provider():

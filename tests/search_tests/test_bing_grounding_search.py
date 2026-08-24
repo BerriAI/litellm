@@ -175,7 +175,19 @@ class TestBingGroundingSearchTransformation:
         assert mock_post.call_args.kwargs["json"]["tools"] == [{"type": "web_search"}]
         assert len(response.results) == 2
 
-    def test_bing_grounding_search_tracks_cost(self, monkeypatch: pytest.MonkeyPatch):
+    def test_web_search_mode_is_not_billed_the_g1_price(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+        with patch(  # test-quality-ok: litellm.search has no client injection seam
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            return_value=_mock_response(),
+        ):
+            response = litellm.search(query="pricing check", search_provider="bing_grounding")
+
+        assert response._hidden_params["response_cost"] == 0.0
+
+    def test_connection_mode_tracks_the_g1_cost(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("BING_GROUNDING_CONNECTION_ID", "conn-id")
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
         with patch(  # test-quality-ok: litellm.search has no client injection seam

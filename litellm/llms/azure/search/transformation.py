@@ -12,10 +12,11 @@ Setup:
     3. Optional: set BING_GROUNDING_CONNECTION_ID to a Grounding with Bing Search
        project connection id to use the `bing_grounding` tool; without it the
        project's built-in `web_search` tool is used
-    4. Auth: pass api_key, or set BING_GROUNDING_TOKEN to an Entra bearer token for
-       scope https://ai.azure.com/.default, or configure azure-identity
-       (AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID, managed identity,
-       or any DefaultAzureCredential source) and the token is minted automatically
+    4. Auth: pass api_key (an Azure API key, sent in the api-key header), or set
+       BING_GROUNDING_TOKEN to an Entra bearer token for scope
+       https://ai.azure.com/.default, or configure azure-identity (AZURE_CLIENT_ID /
+       AZURE_CLIENT_SECRET / AZURE_TENANT_ID, managed identity, or any
+       DefaultAzureCredential source) and the token is minted automatically
 
 Usage:
     response = litellm.search(
@@ -56,6 +57,8 @@ ENTRA_SCOPE: Final = "https://ai.azure.com/.default"
 
 _RESPONSES_PATH: Final = "/openai/v1/responses"
 _SNIPPET_FALLBACK_LENGTH: Final = 300
+_UPSTREAM_ERROR_STATUS: Final = 502
+_RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
 class _Annotation(BaseModel):
@@ -83,19 +86,31 @@ class _OutputItem(BaseModel):
     content: tuple[_ContentPart, ...] = ()
 
 
-class _ResponsesEnvelope(BaseModel):
-    """A Foundry Responses API body. `output` is required: a body without it is not a
-    Responses API response and must not be reported as a successful empty search."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    output: tuple[_OutputItem, ...]
-
-
 class _ErrorBody(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     message: str | None = None
+
+
+class _IncompleteDetails(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    reason: str | None = None
+
+
+class _ResponsesEnvelope(BaseModel):
+    """A Foundry Responses API body. `output` is required: a body without it is not a
+    Responses API response and must not be reported as a successful empty search.
+
+    A 200 body can still carry `status` `failed` or `incomplete`; those are surfaced as
+    errors rather than reported as a successful empty search."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    output: tuple[_OutputItem, ...]
+    status: str | None = None
+    error: _ErrorBody | None = None
+    incomplete_details: _IncompleteDetails | None = None
 
 
 class _ErrorEnvelope(BaseModel):
@@ -161,6 +176,26 @@ def _citation_results(envelope: _ResponsesEnvelope) -> tuple[SearchResult, ...]:
     )
     first_by_url: Final = MappingProxyType({result.url: result for result in reversed(cited)})
     return tuple(first_by_url[url] for url in dict.fromkeys(result.url for result in cited))
+
+
+def _requested_max_results(response_kwargs: Mapping[str, object]) -> int | None:
+    """The unified `max_results` cap the caller asked for, if any.
+
+    The built-in web_search tool has no server-side result-count knob, so the cap is
+    enforced here after the fact; connection mode also honors it as a hard ceiling on
+    top of the tool's `count` hint.
+    """
+    optional_params: Final = response_kwargs.get("optional_params")
+    if not isinstance(optional_params, Mapping):
+        return None
+    max_results: Final = optional_params.get("max_results")
+    return (
+        max_results if isinstance(max_results, int) and not isinstance(max_results, bool) and max_results > 0 else None
+    )
+
+
+def _capped(results: tuple[SearchResult, ...], max_results: int | None) -> tuple[SearchResult, ...]:
+    return results[:max_results] if max_results is not None else results
 
 
 class _SearchConfiguration(BaseModel):
@@ -247,18 +282,28 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         Returns a new dict rather than mutating ``headers``: the http handler calls this
         a second time after ``litellm/search/main.py`` already did, so it has to be idempotent.
         """
-        resolved_token: Final = self.resolve_server_api_key(
-            caller_api_key=api_key,
+        return {  # mutable-ok: httpx requires a plain dict of headers
+            **headers,
+            **self._auth_header(api_key, api_base),
+            "Content-Type": "application/json",
+        }
+
+    def _auth_header(self, api_key: str | None, api_base: str | None) -> Mapping[str, str]:
+        """
+        A caller-supplied ``api_key`` is an Azure API key and rides the ``api-key`` header;
+        an Entra bearer token (``BING_GROUNDING_TOKEN`` or one minted via azure-identity)
+        rides ``Authorization: Bearer``. Foundry rejects the wrong scheme for each.
+        """
+        if api_key:
+            return MappingProxyType({"api-key": api_key})
+        token: Final = self.resolve_server_api_key(
+            caller_api_key=None,
             caller_api_base=api_base,
             key_env_vars=(TOKEN_ENV,),
             base_env_var=PROJECT_ENDPOINT_ENV,
             default_api_base=None,
         ) or self._mint_entra_token(api_base)
-        return {  # mutable-ok: httpx requires a plain dict of headers
-            **headers,
-            "Authorization": f"Bearer {resolved_token}",
-            "Content-Type": "application/json",
-        }
+        return MappingProxyType({"Authorization": f"Bearer {token}"})
 
     def _mint_entra_token(self, caller_api_base: str | None) -> str:
         self._assert_trusted_api_base_for_server_credential(
@@ -303,8 +348,9 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         Transform Search request to the Foundry Responses API format.
 
         The unified params map as far as the API allows:
-        - max_results -> the bing_grounding search configuration's `count` (the built-in
-          web_search tool has no result-count knob, so it is dropped in that mode)
+        - max_results -> the bing_grounding search configuration's `count`; the built-in
+          web_search tool has no result-count knob, so that mode instead caps the returned
+          results after the fact (see transform_search_response)
         - country -> web_search's approximate `user_location` (bing_grounding's `market`
           wants a full locale like en-US, which a bare country code cannot fill)
         - search_domain_filter, max_tokens_per_page -> no API equivalent, dropped
@@ -336,8 +382,44 @@ class BingGroundingSearchConfig(BaseSearchConfig):
                 status_code=raw_response.status_code,
                 headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
             )
-        results: Final = list(_citation_results(parsed))  # mutable-ok: SearchResponse.results is list[SearchResult]
-        return SearchResponse(results=results, object="search")
+        if parsed.status == "failed":
+            detail: Final = (
+                parsed.error.message if parsed.error and parsed.error.message else "the grounded search failed"
+            )
+            raise self._upstream_error(detail, raw_response)
+        results: Final = _capped(_citation_results(parsed), _requested_max_results(kwargs))
+        if not results and parsed.status == "incomplete":
+            reason: Final = (
+                parsed.incomplete_details.reason
+                if parsed.incomplete_details and parsed.incomplete_details.reason
+                else "unknown reason"
+            )
+            raise self._upstream_error(f"the grounded search was incomplete: {reason}", raw_response)
+        return self._priced(results)
+
+    def _upstream_error(self, detail: str, raw_response: httpx.Response) -> Exception:
+        return self.get_error_class(
+            error_message=detail,
+            status_code=_UPSTREAM_ERROR_STATUS,
+            headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
+        )
+
+    def _priced(self, results: tuple[SearchResult, ...]) -> SearchResponse:
+        """web_search mode runs no paid Grounding with Bing transaction, so it must not
+        inherit the connection-mode ``bing_grounding/search`` price; zero its per-query
+        cost while leaving connection mode to the cost map."""
+        response: Final = SearchResponse(
+            results=list(results),  # mutable-ok: SearchResponse.results is list[SearchResult]
+            object="search",
+        )
+        if get_secret_str(CONNECTION_ID_ENV):
+            return response
+        response._hidden_params[
+            "additional_headers"
+        ] = {  # mutable-ok: response_cost_calculator writes into _hidden_params
+            _RESPONSE_COST_HEADER: 0.0
+        }
+        return response
 
     def get_error_class(
         self,

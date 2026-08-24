@@ -1844,6 +1844,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def async_search(
@@ -1942,6 +1943,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def _async_post_anthropic_messages_with_http_error_retry(
