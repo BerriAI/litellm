@@ -4901,11 +4901,11 @@
         "supports_prompt_caching": false,
         "supports_reasoning": false,
         "supports_response_schema": false,
-        "supports_audio_input": true,
-        "supports_audio_output": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "supports_audio_input": true,
+        "supports_audio_output": true
     },
     "azure/gpt-audio-mini-2025-10-06": {
         "deprecation_date": "2027-04-06",
@@ -5126,7 +5126,6 @@
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
         "input_cost_per_audio_token": 1e-05,
-        "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,
@@ -5152,7 +5151,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "input_cost_per_image_token": 8e-07
     },
     "azure/gpt-realtime-mini-2025-10-06": {
         "cache_creation_input_audio_token_cost": 3e-07,
@@ -14588,6 +14588,8 @@
         ]
     },
     "databricks/databricks-bge-large-en": {
+        "cache_creation_input_token_cost": 1.0003e-07,
+        "cache_read_input_token_cost": 1.0003e-07,
         "input_cost_per_token": 1.0003e-07,
         "input_dbu_cost_per_token": 1.429e-06,
         "litellm_provider": "databricks",
@@ -14603,8 +14605,8 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-claude-3-7-sonnet": {
-        "cache_creation_input_token_cost": 3.7499875e-06,
-        "cache_read_input_token_cost": 2.9999900000000006e-07,
+        "cache_creation_input_token_cost": 3.74997e-06,
+        "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
@@ -14625,8 +14627,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-fable-5": {
-        "cache_creation_input_token_cost": 1.2500075e-05,
-        "cache_read_input_token_cost": 1.0000060000000001e-06,
+        "cache_creation_input_token_cost": 1.250004e-05,
+        "cache_read_input_token_cost": 1.00002e-06,
         "input_cost_per_token": 1.000006e-05,
         "input_dbu_cost_per_token": 0.000142858,
         "litellm_provider": "databricks",
@@ -14634,26 +14636,27 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_token": 5.0000020000000004e-05,
+        "output_cost_per_token": 5.000002e-05,
         "output_dbu_cost_per_token": 0.000714286,
         "prompt_cache_min_tokens": 512,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_sampling_params": false,
         "supports_tool_choice": true,
-        "supports_vision": true,
+        "supports_vision": false,
         "thinking_always_on": true
     },
     "databricks/databricks-claude-haiku-4-5": {
-        "cache_creation_input_token_cost": 1.2500250000000002e-06,
-        "cache_read_input_token_cost": 1.0000200000000002e-07,
+        "cache_creation_input_token_cost": 1.24999e-06,
+        "cache_read_input_token_cost": 1.0003e-07,
         "input_cost_per_token": 1.00002e-06,
         "input_dbu_cost_per_token": 1.4286e-05,
         "litellm_provider": "databricks",
@@ -14675,8 +14678,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-claude-opus-4": {
-        "cache_creation_input_token_cost": 1.8750025e-05,
-        "cache_read_input_token_cost": 1.500002e-06,
+        "cache_creation_input_token_cost": 1.874999e-05,
+        "cache_read_input_token_cost": 1.50003e-06,
         "input_cost_per_token": 1.5000020000000002e-05,
         "input_dbu_cost_per_token": 0.000214286,
         "litellm_provider": "databricks",
@@ -14697,8 +14700,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-opus-4-1": {
-        "cache_creation_input_token_cost": 1.8750025e-05,
-        "cache_read_input_token_cost": 1.500002e-06,
+        "cache_creation_input_token_cost": 1.874999e-05,
+        "cache_read_input_token_cost": 1.50003e-06,
         "input_cost_per_token": 1.5000020000000002e-05,
         "input_dbu_cost_per_token": 0.000214286,
         "litellm_provider": "databricks",
@@ -14720,8 +14723,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-claude-opus-4-5": {
-        "cache_creation_input_token_cost": 6.2500375e-06,
-        "cache_read_input_token_cost": 5.000030000000001e-07,
+        "cache_creation_input_token_cost": 6.25002e-06,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
         "input_dbu_cost_per_token": 7.1429e-05,
         "litellm_provider": "databricks",
@@ -14744,8 +14747,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-claude-opus-4-6": {
-        "cache_creation_input_token_cost": 6.2500375e-06,
-        "cache_read_input_token_cost": 5.000030000000001e-07,
+        "cache_creation_input_token_cost": 6.25002e-06,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
         "input_dbu_cost_per_token": 7.1429e-05,
         "litellm_provider": "databricks",
@@ -14766,8 +14769,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-opus-4-7": {
-        "cache_creation_input_token_cost": 6.2500375e-06,
-        "cache_read_input_token_cost": 5.000030000000001e-07,
+        "cache_creation_input_token_cost": 6.25002e-06,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
         "input_dbu_cost_per_token": 7.1429e-05,
         "litellm_provider": "databricks",
@@ -14775,10 +14778,10 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_token": 2.5000010000000002e-05,
+        "output_cost_per_token": 2.500001e-05,
         "output_dbu_cost_per_token": 0.000357143,
         "prompt_cache_min_tokens": 2048,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
@@ -14792,8 +14795,8 @@
         "supports_vision": true
     },
     "databricks/databricks-claude-opus-4-8": {
-        "cache_creation_input_token_cost": 6.2500375e-06,
-        "cache_read_input_token_cost": 5.000030000000001e-07,
+        "cache_creation_input_token_cost": 6.25002e-06,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
         "input_dbu_cost_per_token": 7.1429e-05,
         "litellm_provider": "databricks",
@@ -14801,16 +14804,17 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_token": 2.5000010000000002e-05,
+        "output_cost_per_token": 2.500001e-05,
         "output_dbu_cost_per_token": 0.000357143,
         "prompt_cache_min_tokens": 1024,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_sampling_params": false,
@@ -14818,8 +14822,8 @@
         "supports_vision": true
     },
     "databricks/databricks-claude-opus-5": {
-        "cache_creation_input_token_cost": 6.2500375e-06,
-        "cache_read_input_token_cost": 5.000030000000001e-07,
+        "cache_creation_input_token_cost": 6.25002e-06,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.00003e-06,
         "input_dbu_cost_per_token": 7.1429e-05,
         "litellm_provider": "databricks",
@@ -14827,16 +14831,17 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields."
         },
         "mode": "chat",
-        "output_cost_per_token": 2.5000010000000002e-05,
+        "output_cost_per_token": 2.500001e-05,
         "output_dbu_cost_per_token": 0.000357143,
         "prompt_cache_min_tokens": 512,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_sampling_params": false,
@@ -14844,8 +14849,8 @@
         "supports_vision": true
     },
     "databricks/databricks-claude-sonnet-4": {
-        "cache_creation_input_token_cost": 3.7499875e-06,
-        "cache_read_input_token_cost": 2.9999900000000006e-07,
+        "cache_creation_input_token_cost": 3.74997e-06,
+        "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
@@ -14867,8 +14872,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-claude-sonnet-4-1": {
-        "cache_creation_input_token_cost": 3.7499875e-06,
-        "cache_read_input_token_cost": 2.9999900000000006e-07,
+        "cache_creation_input_token_cost": 3.74997e-06,
+        "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
@@ -14889,8 +14894,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4-5": {
-        "cache_creation_input_token_cost": 3.7499875e-06,
-        "cache_read_input_token_cost": 2.9999900000000006e-07,
+        "cache_creation_input_token_cost": 3.74997e-06,
+        "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
@@ -14912,8 +14917,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-claude-sonnet-4-6": {
-        "cache_creation_input_token_cost": 3.7499875e-06,
-        "cache_read_input_token_cost": 2.9999900000000006e-07,
+        "cache_creation_input_token_cost": 3.74997e-06,
+        "cache_read_input_token_cost": 3.0002e-07,
         "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
@@ -14934,25 +14939,26 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-5": {
-        "cache_creation_input_token_cost": 2.4999625e-06,
-        "cache_read_input_token_cost": 1.9999700000000004e-07,
-        "input_cost_per_token": 1.9999700000000004e-06,
-        "input_dbu_cost_per_token": 2.8571e-05,
+        "cache_creation_input_token_cost": 3.74997e-06,
+        "cache_read_input_token_cost": 3.0002e-07,
+        "input_cost_per_token": 2.99999e-06,
+        "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation. Claude Sonnet 5 DBU rates are Anthropic's introductory launch pricing, in effect through 2026-08-31, after which the standard Sonnet 5 rates (equal to Sonnet 4.5 / 4.6) take effect."
+            "notes": "Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields. Introductory launch rates of 28.571 input / 142.857 output / 35.714 cache write / 2.857 cache read DBU run through 2026-08-31; the standard rates are listed here because entries carry no expiry date."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.999990000000002e-06,
-        "output_dbu_cost_per_token": 0.000142857,
+        "output_cost_per_token": 1.500002e-05,
+        "output_dbu_cost_per_token": 0.000214286,
         "prompt_cache_min_tokens": 1024,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_mid_conversation_system": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_sampling_params": false,
@@ -14960,7 +14966,7 @@
         "supports_vision": true
     },
     "databricks/databricks-gemini-2-5-flash": {
-        "cache_creation_input_token_cost": 3.0001999999999996e-07,
+        "cache_creation_input_token_cost": 3.0002e-07,
         "cache_read_input_token_cost": 3.0002e-08,
         "input_cost_per_token": 3.0001999999999996e-07,
         "input_dbu_cost_per_token": 4.285999999999999e-06,
@@ -15003,7 +15009,7 @@
     },
     "databricks/databricks-gemini-3-1-flash-lite": {
         "cache_creation_input_token_cost": 3.1248e-07,
-        "cache_read_input_token_cost": 3.1248e-08,
+        "cache_read_input_token_cost": 3.122e-08,
         "input_cost_per_token": 3.1248e-07,
         "input_dbu_cost_per_token": 4.464e-06,
         "litellm_provider": "databricks",
@@ -15023,7 +15029,7 @@
     },
     "databricks/databricks-gemini-3-1-pro": {
         "cache_creation_input_token_cost": 2.49998e-06,
-        "cache_read_input_token_cost": 2.49998e-07,
+        "cache_read_input_token_cost": 2.4997e-07,
         "input_cost_per_token": 2.49998e-06,
         "input_dbu_cost_per_token": 3.5714e-05,
         "litellm_provider": "databricks",
@@ -15042,8 +15048,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-3-flash": {
-        "cache_creation_input_token_cost": 6.250300000000001e-07,
-        "cache_read_input_token_cost": 6.250300000000001e-08,
+        "cache_creation_input_token_cost": 6.2503e-07,
+        "cache_read_input_token_cost": 6.251e-08,
         "input_cost_per_token": 6.2503e-07,
         "input_dbu_cost_per_token": 8.929e-06,
         "litellm_provider": "databricks",
@@ -15063,7 +15069,7 @@
     },
     "databricks/databricks-gemini-3-pro": {
         "cache_creation_input_token_cost": 2.49998e-06,
-        "cache_read_input_token_cost": 2.49998e-07,
+        "cache_read_input_token_cost": 2.4997e-07,
         "input_cost_per_token": 2.49998e-06,
         "input_dbu_cost_per_token": 3.5714e-05,
         "litellm_provider": "databricks",
@@ -15082,6 +15088,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-gemma-3-12b": {
+        "cache_creation_input_token_cost": 1.5001e-07,
+        "cache_read_input_token_cost": 1.5001e-07,
         "input_cost_per_token": 1.5000999999999998e-07,
         "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
@@ -15099,7 +15107,7 @@
     },
     "databricks/databricks-gpt-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
-        "cache_read_input_token_cost": 1.24999e-07,
+        "cache_read_input_token_cost": 1.2502e-07,
         "input_cost_per_token": 1.24999e-06,
         "input_dbu_cost_per_token": 1.7857e-05,
         "litellm_provider": "databricks",
@@ -15118,7 +15126,7 @@
     },
     "databricks/databricks-gpt-5-1": {
         "cache_creation_input_token_cost": 1.24999e-06,
-        "cache_read_input_token_cost": 1.24999e-07,
+        "cache_read_input_token_cost": 1.2502e-07,
         "input_cost_per_token": 1.24999e-06,
         "input_dbu_cost_per_token": 1.7857e-05,
         "litellm_provider": "databricks",
@@ -15137,7 +15145,7 @@
     },
     "databricks/databricks-gpt-5-1-codex-max": {
         "cache_creation_input_token_cost": 1.24999e-06,
-        "cache_read_input_token_cost": 1.24999e-07,
+        "cache_read_input_token_cost": 1.2502e-07,
         "input_cost_per_token": 1.24999e-06,
         "input_dbu_cost_per_token": 1.7857e-05,
         "litellm_provider": "databricks",
@@ -15154,8 +15162,8 @@
         "supports_prompt_caching": true
     },
     "databricks/databricks-gpt-5-1-codex-mini": {
-        "cache_creation_input_token_cost": 2.4997000000000006e-07,
-        "cache_read_input_token_cost": 2.4997000000000005e-08,
+        "cache_creation_input_token_cost": 2.4997e-07,
+        "cache_read_input_token_cost": 2.499e-08,
         "input_cost_per_token": 2.4997e-07,
         "input_dbu_cost_per_token": 3.571e-06,
         "litellm_provider": "databricks",
@@ -15172,8 +15180,8 @@
         "supports_prompt_caching": true
     },
     "databricks/databricks-gpt-5-2": {
-        "cache_creation_input_token_cost": 1.7500000000000002e-06,
-        "cache_read_input_token_cost": 1.7500000000000002e-07,
+        "cache_creation_input_token_cost": 1.75e-06,
+        "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 1.75e-06,
         "input_dbu_cost_per_token": 2.5e-05,
         "litellm_provider": "databricks",
@@ -15190,8 +15198,8 @@
         "supports_prompt_caching": true
     },
     "databricks/databricks-gpt-5-2-codex": {
-        "cache_creation_input_token_cost": 1.7500000000000002e-06,
-        "cache_read_input_token_cost": 1.7500000000000002e-07,
+        "cache_creation_input_token_cost": 1.75e-06,
+        "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 1.75e-06,
         "input_dbu_cost_per_token": 2.5e-05,
         "litellm_provider": "databricks",
@@ -15208,8 +15216,8 @@
         "supports_prompt_caching": true
     },
     "databricks/databricks-gpt-5-3-codex": {
-        "cache_creation_input_token_cost": 1.7500000000000002e-06,
-        "cache_read_input_token_cost": 1.7500000000000002e-07,
+        "cache_creation_input_token_cost": 1.75e-06,
+        "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 1.75e-06,
         "input_dbu_cost_per_token": 2.5e-05,
         "litellm_provider": "databricks",
@@ -15227,7 +15235,7 @@
     },
     "databricks/databricks-gpt-5-4": {
         "cache_creation_input_token_cost": 2.49998e-06,
-        "cache_read_input_token_cost": 2.49998e-07,
+        "cache_read_input_token_cost": 2.4997e-07,
         "input_cost_per_token": 2.49998e-06,
         "input_dbu_cost_per_token": 3.5714e-05,
         "litellm_provider": "databricks",
@@ -15245,7 +15253,7 @@
     },
     "databricks/databricks-gpt-5-4-mini": {
         "cache_creation_input_token_cost": 7.4998e-07,
-        "cache_read_input_token_cost": 7.499800000000001e-08,
+        "cache_read_input_token_cost": 7.497e-08,
         "input_cost_per_token": 7.4998e-07,
         "input_dbu_cost_per_token": 1.0714e-05,
         "litellm_provider": "databricks",
@@ -15263,7 +15271,7 @@
     },
     "databricks/databricks-gpt-5-4-nano": {
         "cache_creation_input_token_cost": 1.9999e-07,
-        "cache_read_input_token_cost": 1.9999000000000003e-08,
+        "cache_read_input_token_cost": 2.002e-08,
         "input_cost_per_token": 1.9999e-07,
         "input_dbu_cost_per_token": 2.857e-06,
         "litellm_provider": "databricks",
@@ -15280,8 +15288,8 @@
         "supports_prompt_caching": true
     },
     "databricks/databricks-gpt-5-mini": {
-        "cache_creation_input_token_cost": 2.4997000000000006e-07,
-        "cache_read_input_token_cost": 2.4997000000000005e-08,
+        "cache_creation_input_token_cost": 2.4997e-07,
+        "cache_read_input_token_cost": 2.499e-08,
         "input_cost_per_token": 2.4997000000000006e-07,
         "input_dbu_cost_per_token": 3.571e-06,
         "litellm_provider": "databricks",
@@ -15300,7 +15308,7 @@
     },
     "databricks/databricks-gpt-5-nano": {
         "cache_creation_input_token_cost": 4.998e-08,
-        "cache_read_input_token_cost": 4.998000000000001e-09,
+        "cache_read_input_token_cost": 4.97e-09,
         "input_cost_per_token": 4.998e-08,
         "input_dbu_cost_per_token": 7.14e-07,
         "litellm_provider": "databricks",
@@ -15318,6 +15326,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-gpt-oss-120b": {
+        "cache_creation_input_token_cost": 1.5001e-07,
+        "cache_read_input_token_cost": 1.5001e-07,
         "input_cost_per_token": 1.5000999999999998e-07,
         "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
@@ -15334,6 +15344,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-gpt-oss-20b": {
+        "cache_creation_input_token_cost": 7e-08,
+        "cache_read_input_token_cost": 7e-08,
         "input_cost_per_token": 7e-08,
         "input_dbu_cost_per_token": 1e-06,
         "litellm_provider": "databricks",
@@ -15350,6 +15362,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-gte-large-en": {
+        "cache_creation_input_token_cost": 1.2999e-07,
+        "cache_read_input_token_cost": 1.2999e-07,
         "input_cost_per_token": 1.2999000000000001e-07,
         "input_dbu_cost_per_token": 1.857e-06,
         "litellm_provider": "databricks",
@@ -15365,6 +15379,8 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-llama-2-70b-chat": {
+        "cache_creation_input_token_cost": 5.0001e-07,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.0001e-07,
         "input_dbu_cost_per_token": 7.143e-06,
         "litellm_provider": "databricks",
@@ -15381,6 +15397,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-llama-4-maverick": {
+        "cache_creation_input_token_cost": 5.0001e-07,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.0001e-07,
         "input_dbu_cost_per_token": 7.143e-06,
         "litellm_provider": "databricks",
@@ -15398,6 +15416,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-meta-llama-3-1-405b-instruct": {
+        "cache_creation_input_token_cost": 5.00003e-06,
+        "cache_read_input_token_cost": 5.00003e-06,
         "input_cost_per_token": 5.00003e-06,
         "input_dbu_cost_per_token": 7.1429e-05,
         "litellm_provider": "databricks",
@@ -15414,6 +15434,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-meta-llama-3-1-8b-instruct": {
+        "cache_creation_input_token_cost": 1.5001e-07,
+        "cache_read_input_token_cost": 1.5001e-07,
         "input_cost_per_token": 1.5000999999999998e-07,
         "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
@@ -15430,6 +15452,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-meta-llama-3-3-70b-instruct": {
+        "cache_creation_input_token_cost": 5.0001e-07,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.0001e-07,
         "input_dbu_cost_per_token": 7.143e-06,
         "litellm_provider": "databricks",
@@ -15447,6 +15471,8 @@
         "supports_response_schema": true
     },
     "databricks/databricks-meta-llama-3-70b-instruct": {
+        "cache_creation_input_token_cost": 1.00002e-06,
+        "cache_read_input_token_cost": 1.00002e-06,
         "input_cost_per_token": 1.00002e-06,
         "input_dbu_cost_per_token": 1.4286e-05,
         "litellm_provider": "databricks",
@@ -15463,6 +15489,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-mixtral-8x7b-instruct": {
+        "cache_creation_input_token_cost": 5.0001e-07,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.0001e-07,
         "input_dbu_cost_per_token": 7.143e-06,
         "litellm_provider": "databricks",
@@ -15479,6 +15507,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-mpt-30b-instruct": {
+        "cache_creation_input_token_cost": 1.00002e-06,
+        "cache_read_input_token_cost": 1.00002e-06,
         "input_cost_per_token": 1.00002e-06,
         "input_dbu_cost_per_token": 1.4286e-05,
         "litellm_provider": "databricks",
@@ -15495,6 +15525,8 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-mpt-7b-instruct": {
+        "cache_creation_input_token_cost": 5.0001e-07,
+        "cache_read_input_token_cost": 5.0001e-07,
         "input_cost_per_token": 5.0001e-07,
         "input_dbu_cost_per_token": 7.143e-06,
         "litellm_provider": "databricks",
@@ -31641,7 +31673,6 @@
         "supports_vision": false
     },
     "multimodalembedding": {
-        "deprecation_date": "2027-04-01",
         "input_cost_per_character": 2e-07,
         "input_cost_per_image": 0.0001,
         "input_cost_per_token": 8e-07,
@@ -31662,7 +31693,8 @@
             "text",
             "image",
             "video"
-        ]
+        ],
+        "deprecation_date": "2027-04-01"
     },
     "multimodalembedding@001": {
         "deprecation_date": "2027-04-01",
@@ -42449,7 +42481,6 @@
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/Qwen/Qwen3-Coder-480B-A35B-Instruct": {
-        "deprecation_date": "2026-08-25",
         "max_tokens": 262000,
         "max_input_tokens": 262000,
         "max_output_tokens": 262000,
@@ -42457,17 +42488,18 @@
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "wandb",
         "mode": "chat",
+        "deprecation_date": "2026-08-25",
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/moonshotai/Kimi-K2-Instruct": {
-        "deprecation_date": "2026-03-04",
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "wandb",
-        "mode": "chat"
+        "mode": "chat",
+        "deprecation_date": "2026-03-04"
     },
     "wandb/moonshotai/Kimi-K2.5": {
         "max_tokens": 262144,
@@ -42485,7 +42517,6 @@
         "supports_vision": true
     },
     "wandb/MiniMaxAI/MiniMax-M2.5": {
-        "deprecation_date": "2026-08-25",
         "max_tokens": 197000,
         "max_input_tokens": 197000,
         "max_output_tokens": 197000,
@@ -42496,7 +42527,8 @@
         "source": "https://wandb.ai/site/pricing/tokens/",
         "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "deprecation_date": "2026-08-25"
     },
     "wandb/meta-llama/Llama-3.1-8B-Instruct": {
         "max_tokens": 128000,

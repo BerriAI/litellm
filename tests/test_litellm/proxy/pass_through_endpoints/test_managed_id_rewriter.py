@@ -126,3 +126,24 @@ async def test_list_files_limit_above_batch_cap_still_served():
 
     assert result is not None
     assert [item["id"] for item in result["data"]] == [managed_id]
+
+
+@pytest.mark.asyncio
+async def test_list_files_drops_batch_guardrail_key_persisted_by_an_older_proxy():
+    """Rows written before the response serializer dropped the key still carry an explicit null."""
+    managed_id = new_managed_id("openai", "file-abc")
+    row = _file_row(managed_id)
+    row.file_object = {**row.file_object, "litellm_batch_guardrail": None}
+    pc = _prisma_client(file_rows=[row])
+
+    result = await list_passthrough_ids_from_db(
+        provider="openai",
+        route="/openai/v1/files",
+        user_api_key_dict=_user(),
+        prisma_client=pc,
+        query_params={},
+    )
+
+    assert result is not None
+    assert "litellm_batch_guardrail" not in result["data"][0]
+    assert result["data"][0]["filename"] == "test.jsonl"

@@ -441,6 +441,12 @@ class CallTypes(str, Enum):
     aquery = "aquery"
 
     #########################################################
+    # Google Interactions API Call Types
+    #########################################################
+    create_interaction = "create_interaction"
+    acreate_interaction = "acreate_interaction"
+
+    #########################################################
     # Container Call Types
     #########################################################
     create_container = "create_container"
@@ -3299,6 +3305,11 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     dd_site: str | None
     dd_agent_host: str | None
     dd_agent_port: str | None
+
+    # New Relic dynamic params (proxy-stamped team/key callback vars only;
+    # request-supplied values are blocked)
+    newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+    newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages

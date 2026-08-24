@@ -22,9 +22,7 @@ _LEGACY_ENDPOINT_NAMES: Final = MappingProxyType(
 )
 
 
-def _base_model(model: str) -> str:
-    """The registry key for ``model``, mapping the endpoint names that predate the
-    ``databricks-`` prefixed keys onto their current entries."""
+def _registry_key(model: str) -> str:
     name: Final = model.removeprefix("databricks/")
     return next(
         (key for prefix, key in _LEGACY_ENDPOINT_NAMES.items() if name.startswith(prefix)),
@@ -44,7 +42,7 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     return generic_cost_per_token(
-        model=_base_model(model),
+        model=_registry_key(model),
         usage=usage,
         custom_llm_provider="databricks",
     )
