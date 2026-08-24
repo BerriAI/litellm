@@ -257,6 +257,64 @@ class TestOpenAIPassthroughLoggingHandler:
         )
         assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("") == False
 
+    def test_is_openai_route_recognizes_cognitiveservices_azure_com(self):
+        """Azure OpenAI resources created via the newer "Azure AI Foundry" /
+        Cognitive Services pathway live on `*.cognitiveservices.azure.com`
+        subdomains rather than the older `openai.azure.com`. All four
+        is_openai_*_route methods must recognize both Azure subdomains so
+        cost tracking applies regardless of which Azure naming the user's
+        resource happens to be on.
+        """
+        cognitive_chat = (
+            "https://my-resource.cognitiveservices.azure.com/v1/chat/completions"
+        )
+        cognitive_images_gen = (
+            "https://my-resource.cognitiveservices.azure.com/v1/images/generations"
+        )
+        cognitive_images_edit = (
+            "https://my-resource.cognitiveservices.azure.com/v1/images/edits"
+        )
+        cognitive_responses = (
+            "https://my-resource.cognitiveservices.azure.com/v1/responses"
+        )
+
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(
+                cognitive_chat
+            )
+            is True
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(
+                cognitive_images_gen
+            )
+            is True
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(
+                cognitive_images_edit
+            )
+            is True
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_responses_route(
+                cognitive_responses
+            )
+            is True
+        )
+
+        # Cross-route negatives still hold for cognitiveservices hosts.
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(
+                cognitive_responses
+            )
+            is False
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_responses_route(cognitive_chat)
+            is False
+        )
+
     @patch("litellm.completion_cost")
     @patch(
         "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
@@ -625,36 +683,43 @@ class TestOpenAIPassthroughLoggingHandler:
         "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
     )
     @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.get_provider_config"
+        "litellm.llms.openai.responses.transformation.OpenAIResponsesAPIConfig.transform_response_api_response"
     )
     def test_responses_api_cost_tracking(
-        self, mock_get_provider_config, mock_get_standard_logging, mock_completion_cost
+        self,
+        mock_transform_responses,
+        mock_get_standard_logging,
+        mock_completion_cost,
     ):
-        """Test cost tracking for responses API route"""
+        """Test cost tracking for responses API route.
+
+        Mocks the Responses-API transformer (the dedicated one this branch
+        of the handler dispatches into post-fix) so we can assert the
+        downstream cost-calculation contract without depending on the
+        real transformer's full behavior.
+        """
         # Arrange
         mock_completion_cost.return_value = 0.000050
         mock_get_standard_logging.return_value = {"test": "logging_payload"}
 
-        # Mock the provider config's transform_response to return a valid ModelResponse
-        from litellm import ModelResponse
+        # Mock the Responses transformer's return — a ResponsesAPIResponse
+        # carrying the usage fields downstream cost-calc expects.
+        from litellm.types.llms.openai import ResponsesAPIResponse
 
-        mock_model_response = ModelResponse(
+        mock_responses_api_response = ResponsesAPIResponse.model_construct(
             id="resp_abc123",
+            object="response",
+            created_at=1677652288,
             model="gpt-4o-2024-08-06",
-            choices=[
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello! How can I help you today?",
-                    }
-                }
-            ],
-            usage={"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35},
+            status="completed",
+            output=[],
+            usage={
+                "input_tokens": 20,
+                "output_tokens": 15,
+                "total_tokens": 35,
+            },
         )
-
-        mock_provider_config = MagicMock()
-        mock_provider_config.transform_response.return_value = mock_model_response
-        mock_get_provider_config.return_value = mock_provider_config
+        mock_transform_responses.return_value = mock_responses_api_response
 
         # Mock responses API response
         mock_responses_response = {
@@ -709,6 +774,109 @@ class TestOpenAIPassthroughLoggingHandler:
         assert mock_logging_obj.model_call_details["response_cost"] == 0.000050
         assert mock_logging_obj.model_call_details["model"] == "gpt-4o"
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "openai"
+
+    @patch("litellm.completion_cost")
+    @patch(
+        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
+    )
+    def test_responses_api_uses_responses_transformer_not_chat_completions(
+        self, mock_get_standard_logging, mock_completion_cost
+    ):
+        """Regression test for the Responses-API cost-tracking dispatch bug.
+
+        BUG: the `elif is_responses:` branch in `openai_passthrough_handler`
+        was calling `OpenAIConfig.transform_response` (the chat-completions
+        transformer) on a Responses API payload. Chat-completions
+        transform_response expects `choices: [...]` in the raw response;
+        the Responses API uses `output: [...]` and `usage.input_tokens` /
+        `usage.output_tokens` (not `prompt_tokens` / `completion_tokens`).
+        The result was a KeyError 'choices' inside
+        `convert_to_model_response_object`, swallowed by the surrounding
+        try/except, and the SpendLogs row was written with zero tokens
+        and zero spend.
+
+        FIX: use the dedicated `OpenAIResponsesAPIConfig.transform_response_api_response`
+        for the Responses branch.
+
+        This test exercises the REAL transformer (no mocked
+        `get_provider_config`) so that running it against the un-fixed
+        handler raises and running it against the fixed handler succeeds.
+        """
+        mock_completion_cost.return_value = 0.000050
+        mock_get_standard_logging.return_value = {"test": "logging_payload"}
+
+        # A real-shaped Azure / OpenAI Responses API payload — NO `choices`,
+        # uses `output` and `usage.input_tokens` / `usage.output_tokens`.
+        responses_api_body = {
+            "id": "resp_abc123",
+            "object": "response",
+            "created_at": 1677652288,
+            "model": "gpt-4o-2024-08-06",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Hello!",
+                        }
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 15,
+                "total_tokens": 35,
+            },
+        }
+
+        mock_httpx_response = self._create_mock_httpx_response(responses_api_body)
+        mock_logging_obj = self._create_mock_logging_obj()
+        passthrough_payload = self._create_passthrough_logging_payload()
+
+        kwargs = {
+            "passthrough_logging_payload": passthrough_payload,
+            "model": "gpt-4o",
+            "custom_llm_provider": "openai",
+        }
+
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=responses_api_body,
+            logging_obj=mock_logging_obj,
+            url_route="https://api.openai.com/v1/responses",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"model": "gpt-4o", "input": "Tell me about AI"},
+            **kwargs,
+        )
+
+        # Pre-fix this assertion fails — the handler swallows the
+        # KeyError raised by the chat-completions transformer and falls
+        # back to the passthrough_chat_handler which yields a different
+        # response_cost value. Post-fix, the Responses transformer
+        # succeeds and we get the mocked 0.000050.
+        assert result is not None
+        assert result["kwargs"]["response_cost"] == 0.000050
+        assert result["kwargs"]["model"] == "gpt-4o"
+
+        # `completion_cost` must be called with the responses call type
+        # and a `ResponsesAPIResponse` (not a `ModelResponse`).
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["call_type"] == "responses"
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        assert isinstance(call_kwargs["completion_response"], ResponsesAPIResponse), (
+            "completion_response must be a ResponsesAPIResponse; passing a "
+            "chat-completions ModelResponse means the Responses transformer "
+            "isn't being used and we're back in the bug."
+        )
 
 
 class TestOpenAIPassthroughIntegration:
@@ -766,6 +934,14 @@ class TestOpenAIPassthroughIntegration:
             == True
         )
         assert self.handler.is_openai_route("https://api.openai.com/v1/models") == True
+        # Azure OpenAI on the shared Cognitive Services domain, identified by an
+        # OpenAI-style path segment.
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/v1/chat/completions"
+            )
+            == True
+        )
 
         # Negative cases
         assert (
@@ -782,7 +958,149 @@ class TestOpenAIPassthroughIntegration:
             self.handler.is_openai_route("https://api.assemblyai.com/v2/transcript")
             == False
         )
+        # Non-OpenAI Azure Cognitive Services share the `cognitiveservices.azure.com`
+        # domain but must NOT be classified as OpenAI routes (no OpenAI path segment).
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/speechtotext/v3.1/recognize"
+            )
+            == False
+        )
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/vision/v3.2/analyze"
+            )
+            == False
+        )
+        # A look-alike domain that merely contains an OpenAI host as a substring
+        # must be rejected by the suffix-based hostname match.
+        assert (
+            self.handler.is_openai_route(
+                "https://cognitiveservices.azure.com.attacker.example/v1/chat/completions"
+            )
+            == False
+        )
         assert self.handler.is_openai_route("") == False
+
+    def test_is_supported_openai_endpoint_includes_responses_api(self):
+        """Regression test for the outer dispatch gate.
+
+        `_is_supported_openai_endpoint` is the gate that decides whether the
+        OpenAI handler runs for a given URL. Before this gate accepted the
+        Responses API, calls to `/v1/responses` would fail the gate and the
+        handler's `elif is_responses:` branch was unreachable in the live
+        success-handler pipeline — every Responses-API call landed in
+        `LiteLLM_SpendLogs` with zero tokens / zero spend even though the
+        handler had a Responses branch internally.
+
+        This test exercises the dispatch decision directly so future
+        refactors of `_is_supported_openai_endpoint` can't silently
+        remove Responses from the OR-chain without a test failure.
+        """
+        # Responses must be supported on api.openai.com and openai.azure.com.
+        assert (
+            self.handler._is_supported_openai_endpoint(
+                "https://api.openai.com/v1/responses"
+            )
+            is True
+        )
+        assert (
+            self.handler._is_supported_openai_endpoint(
+                "https://openai.azure.com/v1/responses"
+            )
+            is True
+        )
+        # The other supported endpoints stay supported (no regression).
+        assert (
+            self.handler._is_supported_openai_endpoint(
+                "https://api.openai.com/v1/chat/completions"
+            )
+            is True
+        )
+        assert (
+            self.handler._is_supported_openai_endpoint(
+                "https://api.openai.com/v1/images/generations"
+            )
+            is True
+        )
+        assert (
+            self.handler._is_supported_openai_endpoint(
+                "https://api.openai.com/v1/images/edits"
+            )
+            is True
+        )
+        # Unsupported OpenAI endpoints (e.g. /v1/models) still return False.
+        assert (
+            self.handler._is_supported_openai_endpoint(
+                "https://api.openai.com/v1/models"
+            )
+            is False
+        )
+
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.openai_passthrough_handler"
+    )
+    @pytest.mark.asyncio
+    async def test_success_handler_dispatches_responses_api_to_openai_handler(
+        self, mock_openai_handler
+    ):
+        """End-to-end dispatch test for the Responses API path.
+
+        Pre-fix: `_is_supported_openai_endpoint` returned False for
+        `/v1/responses` URLs, so the OpenAI handler was never called.
+        This test would fail (mock never invoked) on the un-fixed
+        success_handler — passes only when the dispatch gate accepts
+        Responses URLs.
+        """
+        mock_openai_handler.return_value = {
+            "result": {"id": "resp_abc123"},
+            "kwargs": {
+                "response_cost": 0.0001,
+                "model": "gpt-4o",
+                "custom_llm_provider": "openai",
+            },
+        }
+
+        mock_httpx_response = MagicMock(spec=httpx.Response)
+        mock_httpx_response.text = (
+            '{"id": "resp_abc123", "object": "response", '
+            '"output": [], "usage": {"input_tokens": 5, "output_tokens": 3}}'
+        )
+
+        mock_logging_obj = AsyncMock()
+        mock_logging_obj.model_call_details = {}
+        mock_logging_obj.async_success_handler = AsyncMock()
+
+        passthrough_payload = PassthroughStandardLoggingPayload(
+            url="https://api.openai.com/v1/responses",
+            request_body={"model": "gpt-4o", "input": "Hello"},
+            request_method="POST",
+        )
+
+        await self.handler.pass_through_async_success_handler(
+            httpx_response=mock_httpx_response,
+            response_body={
+                "id": "resp_abc123",
+                "object": "response",
+                "output": [],
+                "usage": {"input_tokens": 5, "output_tokens": 3},
+            },
+            logging_obj=mock_logging_obj,
+            url_route="https://api.openai.com/v1/responses",
+            result="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body={"model": "gpt-4o", "input": "Hello"},
+            passthrough_logging_payload=passthrough_payload,
+        )
+
+        # The OpenAI handler MUST have been invoked. Pre-fix the dispatch
+        # gate filtered Responses URLs out and the mock was never called.
+        mock_openai_handler.assert_called_once()
+        # And we can verify it was dispatched with the Responses URL.
+        call_kwargs = mock_openai_handler.call_args.kwargs
+        assert call_kwargs["url_route"] == "https://api.openai.com/v1/responses"
 
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.openai_passthrough_handler"

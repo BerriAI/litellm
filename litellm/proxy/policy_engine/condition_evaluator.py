@@ -49,9 +49,7 @@ class ConditionEvaluator:
                 condition=condition.model,
                 model=context.model,
             ):
-                verbose_proxy_logger.debug(
-                    f"Condition failed: model={context.model} did not match {condition.model}"
-                )
+                verbose_proxy_logger.debug(f"Condition failed: model={context.model} did not match {condition.model}")
                 return False
 
         return True
@@ -76,10 +74,7 @@ class ConditionEvaluator:
 
         # Handle list of values
         if isinstance(condition, list):
-            return any(
-                ConditionEvaluator._matches_pattern(pattern, model)
-                for pattern in condition
-            )
+            return any(ConditionEvaluator._matches_pattern(pattern, model) for pattern in condition)
 
         # Single value - check as pattern
         return ConditionEvaluator._matches_pattern(condition, model)

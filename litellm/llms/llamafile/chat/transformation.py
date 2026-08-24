@@ -15,9 +15,7 @@ class LlamafileChatConfig(OpenAIGPTConfig):
 
         If both are None, a fake API key is returned.
         """
-        return (
-            api_key or get_secret_str("LLAMAFILE_API_KEY") or "fake-api-key"
-        )  # llamafile does not require an API key
+        return api_key or get_secret_str("LLAMAFILE_API_KEY") or "fake-api-key"  # llamafile does not require an API key
 
     @staticmethod
     def _resolve_api_base(api_base: Optional[str] = None) -> Optional[str]:

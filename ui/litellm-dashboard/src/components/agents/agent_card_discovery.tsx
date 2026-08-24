@@ -1,20 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Alert,
-  Button,
-  Checkbox,
-  Collapse,
-  Empty,
-  Input,
-  Space,
-  Spin,
-  Switch,
-  Tag,
-  Tooltip,
-  Typography,
-} from "antd";
+import { Alert, Button, Checkbox, Collapse, Empty, Input, Space, Spin, Switch, Tag, Tooltip, Typography } from "antd";
 // Empty is used in the skills panel below.
 import {
   CheckCircleTwoTone,
@@ -24,10 +11,7 @@ import {
   SearchOutlined,
 } from "@ant-design/icons";
 
-import {
-  DiscoveredAgentCard,
-  discoverAgentCardCall,
-} from "../networking";
+import { DiscoveredAgentCard, discoverAgentCardCall } from "../networking";
 import {
   ALLOWED_CAPABILITY_KEYS,
   selectionsFromSavedAgentCard,
@@ -91,9 +75,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   const [editedName, setEditedName] = useState<string>("");
   const [editedDescription, setEditedDescription] = useState<string>("");
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(new Set());
-  const [selectedCapabilities, setSelectedCapabilities] = useState<
-    Record<string, boolean>
-  >({});
+  const [selectedCapabilities, setSelectedCapabilities] = useState<Record<string, boolean>>({});
 
   const onApplyRef = useRef(onApply);
   onApplyRef.current = onApply;
@@ -118,9 +100,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
 
   const resetSelections = (fresh: DiscoveredAgentCard) => {
     const saved = savedAgentCardRef.current;
-    const initial = saved
-      ? selectionsFromSavedAgentCard(fresh, saved)
-      : selectionsFromUpstreamCard(fresh);
+    const initial = saved ? selectionsFromSavedAgentCard(fresh, saved) : selectionsFromUpstreamCard(fresh);
     setEditedName(initial.editedName);
     setEditedDescription(initial.editedDescription);
     setSelectedSkillIds(initial.selectedSkillIds);
@@ -142,9 +122,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     const trimmed = effectiveUrl.trim();
     if (!trimmed) {
       setError(
-        isParentDriven
-          ? "Fill in the agent's connection details above first"
-          : "Enter the agent's base URL first",
+        isParentDriven ? "Fill in the agent's connection details above first" : "Enter the agent's base URL first",
       );
       setCard(null);
       onApplyRef.current(null);
@@ -191,13 +169,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
     // during editing), which would re-fire the auto-discover effect and
     // wipe in-progress user selections.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    accessToken,
-    effectiveUrl,
-    isParentDriven,
-    discoveryMode,
-    discoveryParamsKey,
-  ]);
+  }, [accessToken, effectiveUrl, isParentDriven, discoveryMode, discoveryParamsKey]);
 
   // Auto-discover when the URL (or parent plan) becomes available. Debounce
   // is applied uniformly so rapid changes from a watched parent form (e.g.
@@ -232,9 +204,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
   const buildSelection = useCallback((): DiscoveredAgentCardSelection | null => {
     if (!card) return null;
     const skills = card.skills ?? [];
-    const filteredSkills = skills.filter((s, i) =>
-      selectedSkillIds.has(skillId(s, i)),
-    );
+    const filteredSkills = skills.filter((s, i) => selectedSkillIds.has(skillId(s, i)));
 
     const selected_card: DiscoveredAgentCard = {
       ...card,
@@ -249,14 +219,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       selected_card,
       upstream_url: effectiveUrl.trim(),
     };
-  }, [
-    card,
-    editedDescription,
-    editedName,
-    effectiveUrl,
-    selectedCapabilities,
-    selectedSkillIds,
-  ]);
+  }, [card, editedDescription, editedName, effectiveUrl, selectedCapabilities, selectedSkillIds]);
 
   // Keep the parent form in sync as the user edits selections — no extra
   // "apply" click needed before hitting Next.
@@ -288,9 +251,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
           </Paragraph>
           <div className="bg-white border border-gray-200 rounded px-3 py-2 mb-3 font-mono text-xs text-gray-700 break-all">
             {discoveryRequest!.display_url || effectiveUrl || (
-              <span className="text-gray-400 italic">
-                Fill in the fields above first
-              </span>
+              <span className="text-gray-400 italic">Fill in the fields above first</span>
             )}
           </div>
           <div className="flex justify-end">
@@ -308,10 +269,8 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
       ) : (
         <>
           <Paragraph className="text-xs text-gray-500 mb-3">
-            Paste the upstream agent&apos;s base URL. We&apos;ll try{" "}
-            <code>/.well-known/agent-card.json</code>,{" "}
-            <code>/.well-known/agent.json</code>, and <code>/agent.json</code>{" "}
-            in order.
+            Paste the upstream agent&apos;s base URL. We&apos;ll try <code>/.well-known/agent-card.json</code>,{" "}
+            <code>/.well-known/agent.json</code>, and <code>/agent.json</code> in order.
           </Paragraph>
 
           <Space.Compact style={{ width: "100%" }}>
@@ -360,27 +319,17 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
               <CheckCircleTwoTone twoToneColor="#52c41a" />
               <Text strong>Upstream card loaded</Text>
               {card.version && <Tag color="blue">v{card.version}</Tag>}
-              {card.provider?.organization && (
-                <Tag color="purple">{card.provider.organization}</Tag>
-              )}
+              {card.provider?.organization && <Tag color="purple">{card.provider.organization}</Tag>}
             </Space>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">
-                Name (shown to API clients)
-              </label>
-              <Input
-                value={editedName}
-                onChange={(e) => setEditedName(e.target.value)}
-                placeholder="Agent name"
-              />
+              <label className="text-xs font-medium text-gray-600 block mb-1">Name (shown to API clients)</label>
+              <Input value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Agent name" />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-1">
-                Description
-              </label>
+              <label className="text-xs font-medium text-gray-600 block mb-1">Description</label>
               <Input.TextArea
                 value={editedDescription}
                 onChange={(e) => setEditedDescription(e.target.value)}
@@ -390,11 +339,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
             </div>
           </div>
 
-          <Collapse
-            defaultActiveKey={["skills", "capabilities"]}
-            ghost
-            className="bg-transparent"
-          >
+          <Collapse defaultActiveKey={["skills", "capabilities"]} ghost className="bg-transparent">
             <Panel
               key="skills"
               header={
@@ -407,10 +352,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
               }
             >
               {skillCount === 0 ? (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="Upstream card has no skills"
-                />
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Upstream card has no skills" />
               ) : (
                 <div className="space-y-2">
                   {(card.skills ?? []).map((skill, idx) => {
@@ -420,21 +362,14 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
                       <label
                         key={id}
                         className={`flex items-start gap-3 p-3 border rounded cursor-pointer transition-colors ${
-                          checked
-                            ? "border-indigo-300 bg-indigo-50"
-                            : "border-gray-200 bg-white hover:border-gray-300"
+                          checked ? "border-indigo-300 bg-indigo-50" : "border-gray-200 bg-white hover:border-gray-300"
                         }`}
                       >
-                        <Checkbox
-                          checked={checked}
-                          onChange={(e) => toggleSkill(id, e.target.checked)}
-                        />
+                        <Checkbox checked={checked} onChange={(e) => toggleSkill(id, e.target.checked)} />
                         <div className="flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <Text strong>{skill.name || id}</Text>
-                            {skill.id && (
-                              <Tag style={{ marginLeft: 0 }}>{skill.id}</Tag>
-                            )}
+                            {skill.id && <Tag style={{ marginLeft: 0 }}>{skill.id}</Tag>}
                             {(skill.tags ?? []).map((t: string) => (
                               <Tag key={t} color="geekblue">
                                 {t}
@@ -501,7 +436,6 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
               </div>
             </Panel>
           </Collapse>
-
         </div>
       )}
     </div>

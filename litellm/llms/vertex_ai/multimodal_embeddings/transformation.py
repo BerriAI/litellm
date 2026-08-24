@@ -75,11 +75,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         if self._is_gcs_uri(input_str):
             return InstanceImage(gcsUri=input_str)
         else:
-            return InstanceImage(
-                bytesBase64Encoded=(
-                    input_str.split(",")[1] if "," in input_str else input_str
-                )
-            )
+            return InstanceImage(bytesBase64Encoded=(input_str.split(",")[1] if "," in input_str else input_str))
 
     def _create_video_instance(self, input_str: str) -> InstanceVideo:
         """Create an InstanceVideo from a GCS URI."""
@@ -108,9 +104,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         else:
             return Instance(text=input_element)
 
-    def _try_merge_text_with_media(
-        self, text_str: str, next_elem: Optional[str]
-    ) -> tuple[Instance, bool]:
+    def _try_merge_text_with_media(self, text_str: str, next_elem: Optional[str]) -> tuple[Instance, bool]:
         """
         Try to merge a text element with a following media element into a single instance.
 
@@ -133,9 +127,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
         return instance_args, False
 
-    def process_openai_embedding_input(
-        self, _input: Union[list, str]
-    ) -> List[Instance]:
+    def process_openai_embedding_input(self, _input: Union[list, str]) -> List[Instance]:
         """
         Process the input for multimodal embedding requests.
 
@@ -160,9 +152,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                     i += 1
                 else:
                     # Current element is text - try to merge with next media element
-                    instance, consumed_next = self._try_merge_text_with_media(
-                        text_str=current, next_elem=next_elem
-                    )
+                    instance, consumed_next = self._try_merge_text_with_media(text_str=current, next_elem=next_elem)
                     processed_instances.append(instance)
                     i += 2 if consumed_next else 1
             elif isinstance(current, dict):
@@ -187,9 +177,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         if "instances" in optional_params:
             request_data["instances"] = optional_params["instances"]
         elif isinstance(input, list):
-            vertex_instances: List[Instance] = self.process_openai_embedding_input(
-                _input=input
-            )
+            vertex_instances: List[Instance] = self.process_openai_embedding_input(_input=input)
             request_data["instances"] = vertex_instances
 
         else:
@@ -202,9 +190,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             request_data["instances"] = [vertex_request_instance]
 
         if "outputDimensionality" in optional_params:
-            request_data["parameters"] = {
-                "dimension": optional_params["outputDimensionality"]
-            }
+            request_data["parameters"] = {"dimension": optional_params["outputDimensionality"]}
 
         return cast(dict, request_data)
 
@@ -231,9 +217,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             )
         _predictions = _json_response["predictions"]
         vertex_predictions = MultimodalPredictions(predictions=_predictions)
-        model_response.data = self.transform_embedding_response_to_openai(
-            predictions=vertex_predictions
-        )
+        model_response.data = self.transform_embedding_response_to_openai(predictions=vertex_predictions)
         model_response.model = model
 
         model_response.usage = self.calculate_usage(
@@ -291,9 +275,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             prompt_tokens_details=prompt_tokens_details,
         )
 
-    def transform_embedding_response_to_openai(
-        self, predictions: MultimodalPredictions
-    ) -> List[Embedding]:
+    def transform_embedding_response_to_openai(self, predictions: MultimodalPredictions) -> List[Embedding]:
         openai_embeddings: List[Embedding] = []
         if "predictions" in predictions:
             for idx, _prediction in enumerate(predictions["predictions"]):
@@ -322,9 +304,5 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                             openai_embeddings.append(openai_embedding_object)
         return openai_embeddings
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return VertexAIError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return VertexAIError(status_code=status_code, message=error_message, headers=headers)

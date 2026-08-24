@@ -32,6 +32,7 @@ import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/Budg
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -154,7 +155,6 @@ export const fetchUserModels = async (
   }
 };
 
-
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
@@ -171,9 +171,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: tagsData } = useTags();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
-  const tagOptions = tagsData
-    ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name }))
-    : [];
+  const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -531,7 +529,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       }
 
       // Add multi-window budget limits (filter out incomplete entries)
-      const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
+      const validWindows = budgetLimits.filter(
+        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+      );
       if (validWindows.length > 0) {
         formValues.budget_limits = validWindows;
       }
@@ -1074,10 +1074,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       </span>
                     }
                   >
-                    <BudgetWindowsEditor
-                      value={budgetLimits}
-                      onChange={setBudgetLimits}
-                    />
+                    <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"
@@ -1404,6 +1401,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           accessToken={accessToken}
                           teamId={selectedCreateKeyTeam?.team_id ?? null}
                           placeholder="Select MCP servers or access groups (optional)"
+                          allowNoMcpServers
                         />
                       </Form.Item>
 
@@ -1423,7 +1421,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <div className="mt-6">
                             <MCPToolPermissions
                               accessToken={accessToken}
-                              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []}
+                              selectedServers={(
+                                form.getFieldValue("allowed_mcp_servers_and_groups")?.servers || []
+                              ).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
                               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
                               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
                             />

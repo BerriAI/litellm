@@ -42,14 +42,7 @@ _RESPX_CONFLICTING_FILES = frozenset(
     }
 )
 
-# Files where VCR replay breaks the test:
-# - ``test_amazing_s3_logs.py``: vcrpy's boto3 stub intercepts a real S3
-#   PUT/LIST round-trip the test asserts on, so the per-run id is never found.
-_VCR_INCOMPATIBLE_FILES = frozenset(
-    {
-        "test_amazing_s3_logs.py",
-    }
-)
+_VCR_INCOMPATIBLE_FILES = frozenset()
 
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 

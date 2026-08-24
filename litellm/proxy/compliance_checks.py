@@ -68,11 +68,7 @@ class ComplianceChecker:
             check_name="Guardrails applied",
             article="Art. 9",
             passed=has_guardrails,
-            detail=(
-                f"{len(self.guardrails)} guardrail(s) applied"
-                if has_guardrails
-                else "No guardrails applied"
-            ),
+            detail=(f"{len(self.guardrails)} guardrail(s) applied" if has_guardrails else "No guardrails applied"),
         )
 
     def _check_art_5_content_screened(self) -> ComplianceCheckResult:
@@ -112,11 +108,7 @@ class ComplianceChecker:
             check_name="Audit record complete",
             article="Art. 12",
             passed=audit_complete,
-            detail=(
-                "All required audit fields present"
-                if audit_complete
-                else f"Missing: {', '.join(missing)}"
-            ),
+            detail=("All required audit fields present" if audit_complete else f"Missing: {', '.join(missing)}"),
         )
 
     # ── GDPR Helper Methods ──────────────────────────────────────────────────
@@ -179,11 +171,7 @@ class ComplianceChecker:
             check_name="Audit record complete",
             article="Art. 30",
             passed=audit_complete,
-            detail=(
-                "All required audit fields present"
-                if audit_complete
-                else f"Missing: {', '.join(missing)}"
-            ),
+            detail=("All required audit fields present" if audit_complete else f"Missing: {', '.join(missing)}"),
         )
 
     # ── Main Compliance Check Methods ────────────────────────────────────────

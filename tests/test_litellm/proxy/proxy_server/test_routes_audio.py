@@ -26,6 +26,7 @@ def patched_speech(monkeypatch):
         MagicMock(
             pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
             post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
             update_request_status=AsyncMock(),
         ),
     )
@@ -61,6 +62,7 @@ def patched_speech_error(monkeypatch):
         MagicMock(
             pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
             post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
             update_request_status=AsyncMock(),
         ),
     )

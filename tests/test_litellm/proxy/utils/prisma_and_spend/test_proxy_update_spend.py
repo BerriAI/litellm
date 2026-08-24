@@ -231,6 +231,112 @@ async def test_update_spend_logs_failure_raises_after_retries(
         )
 
 
+def _data_error(message: str) -> Any:
+    from prisma.errors import DataError
+
+    return DataError({"user_facing_error": {"message": message}})
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_isolates_poison_row_and_persists_good_rows(
+    mock_prisma_client: Any, make_spend_log_row: Any
+) -> None:
+    """One row Postgres rejects (22P05) must not drop the whole batch.
+
+    The good rows still persist and only the offending row is dropped, with no
+    exception bubbling up. On the unfixed single-shot ``create_many`` the first
+    write raises and the entire batch is lost.
+    """
+    poison_id = "r1"
+    written: List[str] = []
+
+    async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
+        ids = [row["request_id"] for row in data]
+        if poison_id in ids:
+            raise _data_error(
+                "Inconsistent column data: 22P05 invalid byte sequence for encoding UTF8: 0x00"
+            )
+        written.extend(ids)
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    logs = [make_spend_log_row(request_id=f"r{i}") for i in range(4)]
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=logs,
+    )
+    assert sorted(written) == ["r0", "r2", "r3"]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_reraises_connection_masquerade_dataerror(
+    mock_prisma_client: Any, make_spend_log_row: Any
+) -> None:
+    """A P1001 "can't reach database server" outage that prisma mislabels as a
+    ``DataError`` is transient, not a poison row: it must propagate so the batch
+    is surfaced/retried rather than bisected into silent per-row drops.
+    """
+    err = _data_error("Can't reach database server at db-host:5432")
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=err)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(type(err)):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=[
+                make_spend_log_row(request_id="a"),
+                make_spend_log_row(request_id="b"),
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
+    mock_prisma_client: Any, make_spend_log_row: Any
+) -> None:
+    """A flood of poisoned rows must not amplify one failed bulk insert into
+    unbounded failed inserts. The per-batch attempt budget hard-caps the number
+    of ``create_many`` calls regardless of how many rows are poisoned, so the DB
+    work stays bounded and well below the input row count, and the helper still
+    completes without raising.
+    """
+    import litellm.proxy.utils as utils_mod
+
+    attempt_cap = utils_mod.MAX_SPEND_LOG_ISOLATION_ATTEMPTS_PER_BATCH
+    # single create_many batch (< BATCH_SIZE) whose row count exceeds the attempt
+    # cap, so the bound bites and attempts stay below the input row count
+    n_rows = attempt_cap * 3
+
+    async def _always_poison(*, data: Any, skip_duplicates: bool) -> None:
+        raise _data_error("invalid byte sequence for encoding UTF8: 0x00")
+
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_always_poison)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    logs = [make_spend_log_row(request_id=f"r{i}") for i in range(n_rows)]
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=logs,
+    )
+
+    attempts = mock_prisma_client.db.litellm_spendlogs.create_many.await_count
+    assert attempts <= attempt_cap
+    assert attempts < n_rows
+
+
 def test_disable_spend_updates_reflects_general_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

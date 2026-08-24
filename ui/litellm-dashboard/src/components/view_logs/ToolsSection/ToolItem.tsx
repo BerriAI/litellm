@@ -46,9 +46,7 @@ export function ToolItem({ tool }: ToolItemProps) {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Tag color={tool.called ? "blue" : "default"}>
-            {tool.called ? "called" : "not called"}
-          </Tag>
+          <Tag color={tool.called ? "blue" : "default"}>{tool.called ? "called" : "not called"}</Tag>
           {expanded ? (
             <DownOutlined style={{ fontSize: 12, color: "#8c8c8c" }} />
           ) : (

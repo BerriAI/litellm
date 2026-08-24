@@ -58,9 +58,7 @@ async def get_global_activity(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
-        tzinfo=timezone.utc
-    )
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
@@ -93,9 +91,7 @@ async def get_global_activity(
                 sl."call_type",
                 sl."model"
         """
-        db_response = await prisma_client.db.query_raw(
-            sql_query, start_date_obj, end_date_obj
-        )
+        db_response = await prisma_client.db.query_raw(sql_query, start_date_obj, end_date_obj)
 
         if db_response is None:
             return []

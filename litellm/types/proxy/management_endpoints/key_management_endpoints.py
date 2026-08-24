@@ -61,12 +61,8 @@ class KeyUpdateFields(BaseModel):
     model_tpm_limit: Optional[Dict[str, Any]] = None
     model_rpm_limit: Optional[Dict[str, Any]] = None
     max_parallel_requests: Optional[int] = None
-    rpm_limit_type: Optional[
-        Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
-    ] = None
-    tpm_limit_type: Optional[
-        Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
-    ] = None
+    rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]] = None
+    tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]] = None
 
     # Temporary budget grants (auto-expire). `spend` deliberately omitted — bulk-zeroing it bypasses budget enforcement; admin-only via /key/update.
     temp_budget_increase: Optional[float] = None
@@ -83,9 +79,7 @@ class KeyUpdateFields(BaseModel):
     def validate_temp_budget(self) -> "KeyUpdateFields":
         if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
             if self.temp_budget_increase is None or self.temp_budget_expiry is None:
-                raise ValueError(
-                    "temp_budget_increase and temp_budget_expiry must be set together"
-                )
+                raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
         return self
 
     @model_validator(mode="after")
@@ -108,11 +102,7 @@ class BulkUpdateTeamKeysRequest(BaseModel):
     def validate_selection(self) -> "BulkUpdateTeamKeysRequest":
         has_key_ids = self.key_ids is not None and len(self.key_ids) > 0
         if has_key_ids and self.all_keys_in_team:
-            raise ValueError(
-                "Provide either `key_ids` or `all_keys_in_team=True`, not both."
-            )
+            raise ValueError("Provide either `key_ids` or `all_keys_in_team=True`, not both.")
         if not has_key_ids and not self.all_keys_in_team:
-            raise ValueError(
-                "Must provide either `key_ids` (non-empty) or `all_keys_in_team=True`."
-            )
+            raise ValueError("Must provide either `key_ids` (non-empty) or `all_keys_in_team=True`.")
         return self

@@ -7,11 +7,21 @@ import PolicyTable from "./policy_table";
 import { Policy } from "./types";
 
 vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() { return null; },
-  PencilIcon: function PencilIcon() { return null; },
-  SwitchVerticalIcon: function SwitchVerticalIcon() { return null; },
-  ChevronUpIcon: function ChevronUpIcon() { return null; },
-  ChevronDownIcon: function ChevronDownIcon() { return null; },
+  TrashIcon: function TrashIcon() {
+    return null;
+  },
+  PencilIcon: function PencilIcon() {
+    return null;
+  },
+  SwitchVerticalIcon: function SwitchVerticalIcon() {
+    return null;
+  },
+  ChevronUpIcon: function ChevronUpIcon() {
+    return null;
+  },
+  ChevronDownIcon: function ChevronDownIcon() {
+    return null;
+  },
 }));
 
 vi.mock("@tremor/react", async (importOriginal) => {
@@ -19,14 +29,16 @@ vi.mock("@tremor/react", async (importOriginal) => {
   return {
     ...actual,
     Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
-      React.createElement("button", { ...props, ref }, children)
+      React.createElement("button", { ...props, ref }, children),
     ),
     Icon: ({ icon: IconComp, onClick, className }: any) =>
-      React.createElement("button", { type: "button", onClick, className }, IconComp?.displayName ?? IconComp?.name ?? "icon"),
-    Tooltip: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
-    Badge: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement("span", null, children),
+      React.createElement(
+        "button",
+        { type: "button", onClick, className },
+        IconComp?.displayName ?? IconComp?.name ?? "icon",
+      ),
+    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
+    Badge: ({ children }: { children?: React.ReactNode }) => React.createElement("span", null, children),
   };
 });
 

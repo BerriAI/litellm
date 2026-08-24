@@ -1,7 +1,7 @@
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Select as AntdSelect, Card, Divider, Space, Tooltip, Typography } from "antd";
 import React from "react";
-import { ModelGroup } from "../playground/llm_calls/fetch_models";
+import { ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const { Text } = Typography;
 

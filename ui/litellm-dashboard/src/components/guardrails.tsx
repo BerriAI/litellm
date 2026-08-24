@@ -133,19 +133,14 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <Tabs
-        defaultActiveKey="submitted"
+        defaultActiveKey="guardrails"
         items={[
           ...(isAdmin
             ? [
                 {
                   key: "garden",
                   label: "Guardrail Garden",
-                  children: (
-                    <GuardrailGarden
-                      accessToken={accessToken}
-                      onGuardrailCreated={handleSuccess}
-                    />
-                  ),
+                  children: <GuardrailGarden accessToken={accessToken} onGuardrailCreated={handleSuccess} />,
                 },
                 {
                   key: "guardrails",

@@ -1,8 +1,4 @@
-import {
-  AgentCreateInfo,
-  DiscoveredAgentCard,
-  DiscoveryMode,
-} from "../networking";
+import { AgentCreateInfo, DiscoveredAgentCard, DiscoveryMode } from "../networking";
 
 export interface DiscoveryRequestPlan {
   url: string;
@@ -11,14 +7,11 @@ export interface DiscoveryRequestPlan {
   display_url?: string;
 }
 
-export const skillId = (skill: any, idx: number): string =>
-  skill?.id ?? skill?.name ?? `skill-${idx}`;
+export const skillId = (skill: any, idx: number): string => skill?.id ?? skill?.name ?? `skill-${idx}`;
 
 export const ALLOWED_CAPABILITY_KEYS = ["streaming"] as const;
 
-export const filterCapabilitiesForUI = (
-  capabilities: Record<string, any> | undefined,
-): Record<string, boolean> => {
+export const filterCapabilitiesForUI = (capabilities: Record<string, any> | undefined): Record<string, boolean> => {
   if (!capabilities) return {};
   return ALLOWED_CAPABILITY_KEYS.reduce<Record<string, boolean>>((acc, key) => {
     if (key in capabilities) acc[key] = Boolean(capabilities[key]);
@@ -42,12 +35,8 @@ export const selectionsFromSavedAgentCard = (
   const upstreamSkills = upstreamCard.skills ?? [];
   const savedSkills = savedCard?.skills ?? [];
 
-  const savedSkillIds = new Set(
-    savedSkills.map((s) => s?.id).filter(Boolean) as string[],
-  );
-  const savedSkillNames = new Set(
-    savedSkills.map((s) => s?.name).filter(Boolean) as string[],
-  );
+  const savedSkillIds = new Set(savedSkills.map((s) => s?.id).filter(Boolean) as string[]);
+  const savedSkillNames = new Set(savedSkills.map((s) => s?.name).filter(Boolean) as string[]);
 
   const selectedSkillIds = new Set<string>();
   upstreamSkills.forEach((skill, idx) => {
@@ -111,8 +100,7 @@ export const overlayDiscoveredCardParams = (
     agent_card_params: {
       ...agentData.agent_card_params,
       name: discovered.name ?? agentData.agent_card_params?.name,
-      description:
-        discovered.description ?? agentData.agent_card_params?.description,
+      description: discovered.description ?? agentData.agent_card_params?.description,
       ...(Array.isArray(discovered.skills) && {
         skills: discovered.skills,
       }),

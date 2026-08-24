@@ -49,9 +49,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
         return healthy_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-            "standard_logging_object", None
-        )
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
 
         if standard_logging_object is None:
             return

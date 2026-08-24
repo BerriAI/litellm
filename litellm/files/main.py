@@ -26,9 +26,7 @@ FileCreateProvider = Literal[
     "manus",
     "anthropic",
 ]
-FileRetrieveProvider = Literal[
-    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"
-]
+FileRetrieveProvider = Literal["openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"]
 FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
 FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
 import litellm
@@ -91,9 +89,7 @@ def _add_trusted_model_credentials_to_litellm_params(
 ) -> None:
     trusted_model_credentials = kwargs.get("_litellm_internal_model_credentials")
     if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
-        litellm_params_dict["_litellm_internal_model_credentials"] = (
-            trusted_model_credentials
-        )
+        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials
 
 
 @client
@@ -162,9 +158,7 @@ def create_file(
         _is_async = kwargs.pop("acreate_file", False) is True
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params_dict = dict(**kwargs)
-        logging_obj = cast(
-            Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
-        )
+        logging_obj = cast(Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj"))
         if logging_obj is None:
             raise ValueError("logging_obj is required")
         client = kwargs.get("client")
@@ -215,12 +209,7 @@ def create_file(
                 api_key=optional_params.api_key,
                 logging_obj=logging_obj,
                 _is_async=_is_async,
-                client=(
-                    client
-                    if client is not None
-                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
             )
         elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
@@ -403,9 +392,7 @@ def file_retrieve(
                         stream=False,
                         call_type="afile_retrieve" if _is_async else "file_retrieve",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get(
-                            "litellm_call_id", str(uuid_module.uuid4())
-                        ),
+                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
                         function_id=str(kwargs.get("id") or ""),
                     )
 
@@ -418,10 +405,7 @@ def file_retrieve(
                     logging_obj=logging_obj,
                     _is_async=_is_async,
                     client=(
-                        client
-                        if client is not None
-                        and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                        else None
+                        client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None
                     ),
                     timeout=timeout,
                 )
@@ -435,7 +419,10 @@ def file_retrieve(
                     response=httpx.Response(
                         status_code=400,
                         content="Unsupported provider",
-                        request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        request=httpx.Request(
+                            method="create_thread",
+                            url="https://github.com/BerriAI/litellm",
+                        ),  # type: ignore
                     ),
                 )
 
@@ -505,9 +492,7 @@ def file_delete(
     try:
         try:
             if model is not None:
-                _, custom_llm_provider, _, _ = get_llm_provider(
-                    model, custom_llm_provider
-                )
+                _, custom_llm_provider, _, _ = get_llm_provider(model, custom_llm_provider)
         except Exception:
             pass
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -587,9 +572,7 @@ def file_delete(
                         stream=False,
                         call_type="afile_delete" if _is_async else "file_delete",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get(
-                            "litellm_call_id", str(uuid_module.uuid4())
-                        ),
+                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
                         function_id=str(kwargs.get("id") or ""),
                     )
 
@@ -601,10 +584,7 @@ def file_delete(
                     logging_obj=logging_obj,
                     _is_async=_is_async,
                     client=(
-                        client
-                        if client is not None
-                        and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                        else None
+                        client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None
                     ),
                     timeout=timeout,
                 )
@@ -618,7 +598,10 @@ def file_delete(
                     response=httpx.Response(
                         status_code=400,
                         content="Unsupported provider",
-                        request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        request=httpx.Request(
+                            method="create_thread",
+                            url="https://github.com/BerriAI/litellm",
+                        ),  # type: ignore
                     ),
                 )
         return cast(FileDeleted, response)
@@ -723,9 +706,7 @@ def file_list(
                     stream=False,
                     call_type="afile_list" if _is_async else "file_list",
                     start_time=time.time(),
-                    litellm_call_id=kwargs.get(
-                        "litellm_call_id", str(uuid_module.uuid4())
-                    ),
+                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
                     function_id=str(kwargs.get("id", "")),
                 )
 
@@ -737,12 +718,7 @@ def file_list(
                 headers=extra_headers or {},
                 logging_obj=logging_obj,
                 _is_async=_is_async,
-                client=(
-                    client
-                    if client is not None
-                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
             )
             return response
@@ -876,9 +852,7 @@ def file_content(
 
         try:
             if model is not None:
-                _, custom_llm_provider, _, _ = get_llm_provider(
-                    model, custom_llm_provider
-                )
+                _, custom_llm_provider, _, _ = get_llm_provider(model, custom_llm_provider)
         except Exception:
             pass
 
@@ -912,9 +886,7 @@ def file_content(
                 chunk_size=chunk_size,
                 optional_params=optional_params,
                 timeout=timeout,
-                logging_obj=cast(
-                    Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
-                ),
+                logging_obj=cast(Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")),
                 _is_async=_is_async,
                 client=client,
             )
@@ -936,9 +908,7 @@ def file_content(
                     stream=False,
                     call_type="afile_content" if _is_async else "file_content",
                     start_time=time.time(),
-                    litellm_call_id=kwargs.get(
-                        "litellm_call_id", str(uuid_module.uuid4())
-                    ),
+                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
                     function_id=str(kwargs.get("id") or ""),
                 )
 
@@ -949,12 +919,7 @@ def file_content(
                 headers=extra_headers or {},
                 logging_obj=logging_obj,
                 _is_async=_is_async,
-                client=(
-                    client
-                    if client is not None
-                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None),
                 timeout=timeout,
             )
             return response
@@ -994,18 +959,12 @@ def file_content(
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
             vertex_ai_project = (
-                optional_params.vertex_project
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
+                optional_params.vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
             )
             vertex_ai_location = (
-                optional_params.vertex_location
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
+                optional_params.vertex_location or litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
             )
-            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
-                "VERTEXAI_CREDENTIALS"
-            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str("VERTEXAI_CREDENTIALS")
 
             response = vertex_ai_files_instance.file_content(
                 _is_async=_is_async,
@@ -1083,9 +1042,9 @@ def file_content_streaming(
             headers=response.headers,
         )
 
-    response: Union[
-        FileContentStreamingResult, Coroutine[Any, Any, FileContentStreamingResult]
-    ] = FileContentStreamingResult(stream_iterator=iter(()), headers={})
+    response: Union[FileContentStreamingResult, Coroutine[Any, Any, FileContentStreamingResult]] = (
+        FileContentStreamingResult(stream_iterator=iter(()), headers={})
+    )
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
         openai_creds = get_openai_credentials(
             api_base=optional_params.api_base,

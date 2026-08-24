@@ -57,9 +57,7 @@ class VertexBGEConfig:
         return model_lower.startswith("bge/") or "bge" in model_lower
 
     @staticmethod
-    def transform_request(
-        input: Union[list, str], optional_params: dict, model: str
-    ) -> VertexEmbeddingRequest:
+    def transform_request(input: Union[list, str], optional_params: dict, model: str) -> VertexEmbeddingRequest:
         """
         Transforms an OpenAI request to a Vertex BGE embedding request.
 
@@ -82,9 +80,7 @@ class VertexBGEConfig:
             input = [input]
 
         for text in input:
-            embedding_input = VertexBGEConfig._create_embedding_input(
-                prompt=text, task_type=task_type, title=title
-            )
+            embedding_input = VertexBGEConfig._create_embedding_input(prompt=text, task_type=task_type, title=title)
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
@@ -119,9 +115,7 @@ class VertexBGEConfig:
         return text_embedding_input
 
     @staticmethod
-    def transform_response(
-        response: dict, model: str, model_response: EmbeddingResponse
-    ) -> EmbeddingResponse:
+    def transform_response(response: dict, model: str, model_response: EmbeddingResponse) -> EmbeddingResponse:
         """
         Transforms a Vertex BGE embedding response to OpenAI format.
 
@@ -151,9 +145,7 @@ class VertexBGEConfig:
         _predictions = response["predictions"]
 
         if not isinstance(_predictions, list):
-            raise ValueError(
-                f"Expected 'predictions' to be a list, got {type(_predictions)}"
-            )
+            raise ValueError(f"Expected 'predictions' to be a list, got {type(_predictions)}")
 
         embedding_response = []
         # BGE models don't return token counts, so we estimate or set to 0
@@ -161,9 +153,7 @@ class VertexBGEConfig:
 
         for idx, embedding_values in enumerate(_predictions):
             if not isinstance(embedding_values, list):
-                raise ValueError(
-                    f"Expected embedding at index {idx} to be a list, got {type(embedding_values)}"
-                )
+                raise ValueError(f"Expected embedding at index {idx} to be a list, got {type(embedding_values)}")
 
             embedding_response.append(
                 {
@@ -176,8 +166,6 @@ class VertexBGEConfig:
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        usage = Usage(
-            prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
-        )
+        usage = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
         setattr(model_response, "usage", usage)
         return model_response

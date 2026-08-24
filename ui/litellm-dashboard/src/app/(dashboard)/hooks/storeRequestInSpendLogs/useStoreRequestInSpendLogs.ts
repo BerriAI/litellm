@@ -14,7 +14,7 @@ export interface StoreRequestInSpendLogsResponse {
 
 const performStoreRequestInSpendLogs = async (
   accessToken: string,
-  params: StoreRequestInSpendLogsParams
+  params: StoreRequestInSpendLogsParams,
 ): Promise<StoreRequestInSpendLogsResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/config/update` : `/config/update`;

@@ -25,7 +25,7 @@ resource "terraform_data" "migration" {
     environment = {
       JOB     = google_cloud_run_v2_job.migrations.name
       REGION  = var.region
-      PROJECT = var.project
+      PROJECT = var.project_id
     }
     command = <<-EOT
       set -euo pipefail

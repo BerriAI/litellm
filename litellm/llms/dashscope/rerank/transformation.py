@@ -22,7 +22,7 @@ as supported only for gte-rerank-v2 / qwen3-vl-rerank.
 Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 import httpx
 
@@ -59,9 +59,9 @@ class DashScopeRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
             api_base = get_secret_str("DASHSCOPE_API_BASE_RERANK") or DEFAULT_RERANK_URL
@@ -83,8 +83,8 @@ class DashScopeRerankConfig(BaseRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("DASHSCOPE_API_KEY")
@@ -105,17 +105,18 @@ class DashScopeRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         # qwen3-rerank accepts query/documents/top_n/return_documents. The
         # rest (rank_fields, max_*_per_doc) are silently dropped.
@@ -134,7 +135,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for DashScope rerank")
@@ -158,10 +159,10 @@ class DashScopeRerankConfig(BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
-        request_data: Optional[dict] = None,
-        optional_params: Optional[dict] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        request_data: dict | None = None,
+        optional_params: dict | None = None,
+        litellm_params: dict | None = None,
     ) -> RerankResponse:
         request_data = request_data or {}
         optional_params = optional_params or {}

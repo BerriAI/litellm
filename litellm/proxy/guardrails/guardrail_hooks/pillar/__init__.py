@@ -33,18 +33,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
         async_mode=_get_config_value(litellm_params, optional_params, "async_mode"),
-        persist_session=_get_config_value(
-            litellm_params, optional_params, "persist_session"
-        ),
-        include_scanners=_get_config_value(
-            litellm_params, optional_params, "include_scanners"
-        ),
-        include_evidence=_get_config_value(
-            litellm_params, optional_params, "include_evidence"
-        ),
-        fallback_on_error=_get_config_value(
-            litellm_params, optional_params, "fallback_on_error"
-        ),
+        persist_session=_get_config_value(litellm_params, optional_params, "persist_session"),
+        include_scanners=_get_config_value(litellm_params, optional_params, "include_scanners"),
+        include_evidence=_get_config_value(litellm_params, optional_params, "include_evidence"),
+        fallback_on_error=_get_config_value(litellm_params, optional_params, "fallback_on_error"),
         timeout=_get_config_value(litellm_params, optional_params, "timeout"),
     )
     litellm.logging_callback_manager.add_litellm_callback(_pillar_callback)

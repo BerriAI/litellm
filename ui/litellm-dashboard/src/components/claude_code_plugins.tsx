@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Button } from "@tremor/react";
 import { Modal } from "antd";
-import {
-  getClaudeCodePluginsList,
-  deleteClaudeCodePlugin,
-} from "./networking";
+import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "./networking";
 import AddPluginForm from "./claude_code_plugins/add_plugin_form";
 import PluginTable from "./claude_code_plugins/plugin_table";
 import SkillDetail from "./claude_code_plugins/skill_detail";
@@ -17,10 +14,7 @@ interface ClaudeCodePluginsPanelProps {
   userRole?: string;
 }
 
-const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
-  accessToken,
-  userRole,
-}) => {
+const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessToken, userRole }) => {
   const [pluginsList, setPluginsList] = useState<Plugin[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -38,10 +32,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
 
     setIsLoading(true);
     try {
-      const response: ListPluginsResponse = await getClaudeCodePluginsList(
-        accessToken,
-        false
-      );
+      const response: ListPluginsResponse = await getClaudeCodePluginsList(accessToken, false);
       setPluginsList(response.plugins);
     } catch (error) {
       console.error("Error fetching skills:", error);
@@ -90,8 +81,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
           <div className="flex flex-col gap-2 mb-4">
             <h1 className="text-2xl font-bold">Skills</h1>
             <p className="text-sm text-gray-600">
-              Register Claude Code skills. Published skills appear in the Skill Hub for all users and
-              are served via{" "}
+              Register Claude Code skills. Published skills appear in the Skill Hub for all users and are served via{" "}
               <code className="bg-gray-100 px-1 rounded">/claude-code/marketplace.json</code>.
             </p>
             <div className="mt-2 flex gap-2">
@@ -133,8 +123,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
           okButtonProps={{ danger: true }}
         >
           <p>
-            Are you sure you want to delete skill:{" "}
-            <strong>{pluginToDelete.displayName}</strong>?
+            Are you sure you want to delete skill: <strong>{pluginToDelete.displayName}</strong>?
           </p>
           <p>This action cannot be undone.</p>
         </Modal>

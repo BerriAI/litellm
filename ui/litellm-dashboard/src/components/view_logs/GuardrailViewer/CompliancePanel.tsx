@@ -113,9 +113,7 @@ const ComplianceCard = ({
             <div className="space-y-2">
               {data.checks.map((check, idx) => (
                 <div key={idx} className="flex items-start gap-2">
-                  <div className="flex-shrink-0 mt-0.5">
-                    {check.passed ? <CheckIcon /> : <CrossIcon />}
-                  </div>
+                  <div className="flex-shrink-0 mt-0.5">{check.passed ? <CheckIcon /> : <CrossIcon />}</div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-gray-900">{check.check_name}</span>
@@ -171,22 +169,10 @@ const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry
 
   return (
     <div>
-      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
-        Regulatory Compliance
-      </h4>
+      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Regulatory Compliance</h4>
       <div className="space-y-3">
-        <ComplianceCard
-          title="EU AI Act"
-          data={euAiActData}
-          loading={euAiActLoading}
-          error={euAiActError}
-        />
-        <ComplianceCard
-          title="GDPR"
-          data={gdprData}
-          loading={gdprLoading}
-          error={gdprError}
-        />
+        <ComplianceCard title="EU AI Act" data={euAiActData} loading={euAiActLoading} error={euAiActError} />
+        <ComplianceCard title="GDPR" data={gdprData} loading={gdprLoading} error={gdprError} />
       </div>
     </div>
   );

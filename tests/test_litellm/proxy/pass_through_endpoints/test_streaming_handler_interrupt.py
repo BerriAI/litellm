@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
 )
@@ -118,3 +119,105 @@ async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
 
     assert received == []
     mock_route.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_routes_logging_through_logging_worker():
+    """The spend-log coroutine must be handed to the durable logging worker, which
+    keeps a strong reference and drains on shutdown, instead of a bare
+    asyncio.create_task that the event loop only weak-references and can drop
+    under GC/load, silently losing the SpendLogs row for a successful call."""
+    chunks = [b"chunk-1", b"chunk-2"]
+    response = _make_streaming_response(chunks)
+
+    enqueued = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+        async_coroutine.close()
+
+    with (
+        patch.object(
+            PassThroughStreamingHandler,
+            "_route_streaming_logging_to_handler",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            GLOBAL_LOGGING_WORKER,
+            "ensure_initialized_and_enqueue",
+            side_effect=_capture,
+        ) as mock_enqueue,
+    ):
+        received = []
+        async for chunk in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-3-haiku"},
+            litellm_logging_obj=MagicMock(),
+            endpoint_type=EndpointType.GENERIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/bedrock/model/claude/invoke-with-response-stream",
+        ):
+            received.append(chunk)
+
+    assert received == chunks
+    mock_enqueue.assert_called_once()
+    assert asyncio.iscoroutine(enqueued[0])
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_routes_logging_through_logging_worker_on_disconnect():
+    """Even when the client disconnects mid-stream, the partial-usage log must go
+    through the durable logging worker rather than a droppable bare task."""
+    chunks = [b"event-1", b"event-2", b"event-3"]
+    response = _make_streaming_response(chunks)
+
+    enqueued = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+        async_coroutine.close()
+
+    with (
+        patch.object(
+            PassThroughStreamingHandler,
+            "_route_streaming_logging_to_handler",
+            new=AsyncMock(),
+        ),
+        patch.object(
+            GLOBAL_LOGGING_WORKER,
+            "ensure_initialized_and_enqueue",
+            side_effect=_capture,
+        ) as mock_enqueue,
+    ):
+        gen = PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-3-haiku"},
+            litellm_logging_obj=MagicMock(),
+            endpoint_type=EndpointType.GENERIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/bedrock/model/claude/invoke-with-response-stream",
+        )
+        await gen.__anext__()
+        await gen.aclose()
+
+    mock_enqueue.assert_called_once()
+    assert asyncio.iscoroutine(enqueued[0])
+
+
+def test_convert_raw_bytes_survives_truncated_multibyte_sequence():
+    """A stream cut mid-multibyte-sequence (client disconnect) must still decode
+    via errors="replace" so the usage events already received are logged, instead
+    of raising UnicodeDecodeError and dropping the whole request from SpendLogs."""
+    # the 3-byte "☃" (E2 98 83) is cut after 2 bytes, leaving an invalid sequence
+    # that strict utf-8 decode would raise on, discarding the message_delta line too
+    truncated_codepoint = "☃".encode("utf-8")[:2]
+    raw_bytes = [
+        b'data: {"text": "' + truncated_codepoint,
+        b'\ndata: {"type": "message_delta"}\n',
+    ]
+
+    lines = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+
+    assert any('"type": "message_delta"' in line for line in lines)

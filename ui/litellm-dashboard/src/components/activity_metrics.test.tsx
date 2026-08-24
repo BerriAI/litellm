@@ -37,17 +37,9 @@ vi.mock("antd", () => {
   const TableComponent = ({ dataSource, columns }: { dataSource?: unknown[]; columns?: { title: string }[] }) => (
     <table>
       <thead>
-        <tr>
-          {columns?.map((col, i) => (
-            <th key={i}>{col.title}</th>
-          ))}
-        </tr>
+        <tr>{columns?.map((col, i) => <th key={i}>{col.title}</th>)}</tr>
       </thead>
-      <tbody>
-        {dataSource?.map((_, i) => (
-          <tr key={i} />
-        ))}
-      </tbody>
+      <tbody>{dataSource?.map((_, i) => <tr key={i} />)}</tbody>
     </table>
   );
   return {

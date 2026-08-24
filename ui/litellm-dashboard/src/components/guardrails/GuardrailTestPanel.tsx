@@ -118,12 +118,7 @@ export function GuardrailTestPanel({
                 </Tooltip>
               </div>
               {inputText && (
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  icon={CopyOutlined}
-                  onClick={handleCopyInput}
-                >
+                <Button size="xs" variant="secondary" icon={CopyOutlined} onClick={handleCopyInput}>
                   Copy Input
                 </Button>
               )}
@@ -138,19 +133,17 @@ export function GuardrailTestPanel({
             />
             <div className="flex justify-between items-center mt-1">
               <Text className="text-xs text-gray-500">
-                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Enter</kbd> to submit • <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Shift+Enter</kbd> for new line
+                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Enter</kbd> to
+                submit •{" "}
+                <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Shift+Enter</kbd> for
+                new line
               </Text>
               <Text className="text-xs text-gray-500">Characters: {inputText.length}</Text>
             </div>
           </div>
 
           <div className="pt-2">
-            <Button
-              onClick={handleSubmit}
-              loading={isLoading}
-              disabled={!inputText.trim()}
-              className="w-full"
-            >
+            <Button onClick={handleSubmit} loading={isLoading} disabled={!inputText.trim()} className="w-full">
               {isLoading
                 ? `Testing ${guardrailNames.length} guardrail${guardrailNames.length > 1 ? "s" : ""}...`
                 : `Test ${guardrailNames.length} guardrail${guardrailNames.length > 1 ? "s" : ""}`}
@@ -166,4 +159,3 @@ export function GuardrailTestPanel({
 }
 
 export default GuardrailTestPanel;
-

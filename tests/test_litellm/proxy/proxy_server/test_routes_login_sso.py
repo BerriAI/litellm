@@ -16,7 +16,6 @@ import pytest
 
 from .conftest import normalize
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -49,9 +48,7 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
             "key": "sk-fake-ui-key",
         }
 
-    monkeypatch.setattr(
-        "litellm.proxy.auth.login_utils.authenticate_user", _fake_auth
-    )
+    monkeypatch.setattr("litellm.proxy.auth.login_utils.authenticate_user", _fake_auth)
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.create_ui_token_object", _fake_token_object
     )
@@ -101,6 +98,28 @@ def test_fallback_login_returns_html_form_with_ui_username_set(client, monkeypat
         "content_type_html": True,
         "has_form_or_username": True,
     }
+
+
+def test_fallback_login_shows_credentials_hint_by_default(client, monkeypatch):
+    """Control: without the flag, /fallback/login still renders the hint."""
+    monkeypatch.delenv("UI_USERNAME", raising=False)
+    monkeypatch.delenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", raising=False)
+    response = client.get("/fallback/login")
+    assert response.status_code == 200
+    assert "Default Credentials" in response.text
+    assert "MASTER_KEY" in response.text
+
+
+def test_fallback_login_hides_credentials_hint_via_env_flag(client, monkeypatch):
+    """Pin: LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT removes the hint on /fallback/login."""
+    monkeypatch.delenv("UI_USERNAME", raising=False)
+    monkeypatch.setenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "true")
+    response = client.get("/fallback/login")
+    assert response.status_code == 200
+    assert "Default Credentials" not in response.text
+    assert "MASTER_KEY" not in response.text
+    # the login form itself must still render
+    assert "username" in response.text.lower()
 
 
 def test_fallback_login_invalid_method_405(client):
@@ -261,9 +280,10 @@ def test_v3_login_success_returns_code(client, monkeypatch):
     assert response.status_code == 200
     body = response.json()
     # Strong assertion via normalize with extended volatile set ("code" is volatile)
-    assert normalize(
-        body, volatile=frozenset({"code", "expires_in"})
-    ) == {"code": "<VOLATILE>", "expires_in": "<VOLATILE>"}
+    assert normalize(body, volatile=frozenset({"code", "expires_in"})) == {
+        "code": "<VOLATILE>",
+        "expires_in": "<VOLATILE>",
+    }
     shape = {
         "has_code": isinstance(body.get("code"), str) and len(body["code"]) > 0,
         "expires_in_60": body.get("expires_in") == 60,

@@ -13,12 +13,7 @@ vi.mock("antd", () => ({
 // Mock the icon
 vi.mock("@ant-design/icons", () => ({
   LoadingOutlined: ({ style, spin, ...props }: any) => (
-    <span
-      data-testid="loading-icon"
-      data-spin={spin}
-      style={style}
-      {...props}
-    />
+    <span data-testid="loading-icon" data-spin={spin} style={style} {...props} />
   ),
 }));
 

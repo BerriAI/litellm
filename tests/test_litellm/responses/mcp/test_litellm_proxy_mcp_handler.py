@@ -401,3 +401,77 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     assert mock_get_tools.await_args is not None
     assert mock_get_tools.await_args.kwargs["log_list_tools_to_spendlogs"] is True
     assert mock_get_tools.await_args.kwargs["list_tools_log_source"] == "responses"
+
+
+def test_get_parent_request_tags_from_metadata():
+    tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(
+        {"metadata": {"tags": ["team-a", "prod"]}}
+    )
+    assert tags == ["team-a", "prod"]
+
+
+def test_get_parent_request_tags_from_nested_litellm_params():
+    tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(
+        {
+            "metadata": {"tags": ["top-level"]},
+            "litellm_params": {
+                "metadata": {"tags": ["nested"]},
+                "proxy_server_request": {"headers": {"user-agent": "client/1.0"}},
+            },
+        }
+    )
+    assert tags == ["nested", "User-Agent: client", "User-Agent: client/1.0"]
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
+    mock_get_tools = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
+        mock_get_tools,
+    )
+    fake_manager = types.SimpleNamespace(
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        user_api_key_auth=types.SimpleNamespace(api_key="k", user_id="u"),
+        mcp_tools_with_litellm_proxy=[
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}
+        ],
+        request_tags=["team-a"],
+    )
+
+    assert mock_get_tools.await_args.kwargs["request_tags"] == ["team-a"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monkeypatch):
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name = "deepwiki-read_wiki_structure"
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+        request_tags=["team-a", "prod"],
+    )
+
+    assert captured["metadata"]["tags"] == ["team-a", "prod"]

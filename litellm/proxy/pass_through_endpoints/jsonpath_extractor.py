@@ -38,9 +38,7 @@ class JsonPathExtractor:
                     else:
                         extracted_values.append(str(value))
             except Exception as e:
-                verbose_proxy_logger.debug(
-                    "Failed to extract field %s: %s", expr, str(e)
-                )
+                verbose_proxy_logger.debug("Failed to extract field %s: %s", expr, str(e))
 
         return "\n".join(extracted_values)
 

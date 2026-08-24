@@ -1,9 +1,10 @@
 name: "Unit Tests: Proxy DB Operations"
 
-# Uses DATABASE_URL secret — only runs on trusted branches, not PRs.
 on:
-  push:
-    branches: [main, "litellm_**"]
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
 
 permissions:
   contents: read
@@ -30,9 +31,6 @@ concurrency:
 #     xdist balances its 188 parametrized cases across workers instead of
 #     pinning the whole file to one worker (the default --dist=loadscope
 #     behavior for single-file targets).
-#   * test_db_schema_migration.py is isolated because one test in it
-#     (test_aaaasschema_migration_check) takes ~170s — by itself it
-#     determines the shard's wall-clock floor.
 jobs:
   # Fast guard — fails the workflow if a test_*.py file under
   # tests/proxy_unit_tests/ is not referenced by any matrix entry below.
@@ -166,18 +164,6 @@ jobs:
             dist: loadscope
             timeout: 15
 
-          # ---- db-and-spend: isolate the 170s schema-migration test ----
-          # test_db_schema_migration.py has exactly one test, and that test
-          # is mostly waiting on `prisma migrate deploy` / `prisma migrate
-          # diff` subprocesses (~170s). It does no CPU-bound Python work
-          # inside the test. Running with workers=0 (serial, no xdist)
-          # skips the 4-worker cold-start cost we'd otherwise pay for a
-          # single test, saving ~4 minutes of wall-clock.
-          - test-group: schema-migration
-            test-path: "tests/proxy_unit_tests/test_db_schema_migration.py"
-            workers: 0
-            dist: loadscope
-            timeout: 15
           - test-group: db-and-spend
             test-path: >-
               tests/proxy_unit_tests/test_prisma_client_backoff_retry.py
@@ -232,12 +218,11 @@ jobs:
             workers: 4
             dist: loadscope
             timeout: 15
-    uses: ./.github/workflows/_test-unit-services-base.yml
+    uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}
       workers: ${{ matrix.workers }}
       reruns: 2
       timeout-minutes: ${{ matrix.timeout }}
-      enable-postgres: true
       dist: ${{ matrix.dist }}
       artifact-name: proxy-db-${{ matrix.test-group }}

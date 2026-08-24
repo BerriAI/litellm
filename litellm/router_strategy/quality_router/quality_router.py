@@ -186,17 +186,10 @@ class QualityRouter(CustomLogger):
                 else:
                     # A Pydantic object of some other shape — coerce via its dict.
                     prefs = RoutingPreferences(
-                        **(
-                            raw_prefs.model_dump()
-                            if hasattr(raw_prefs, "model_dump")
-                            else dict(raw_prefs)
-                        )
+                        **(raw_prefs.model_dump() if hasattr(raw_prefs, "model_dump") else dict(raw_prefs))
                     )
             except Exception as e:
-                raise ValueError(
-                    f"QualityRouter: model '{name}' has invalid "
-                    f"litellm_routing_preferences: {e}"
-                ) from e
+                raise ValueError(f"QualityRouter: model '{name}' has invalid litellm_routing_preferences: {e}") from e
 
             tier_int = int(prefs.quality_tier)
             tier_to_models.setdefault(tier_int, []).append(name)
@@ -305,10 +298,7 @@ class QualityRouter(CustomLogger):
         if self.config.default_model:
             return self.config.default_model
 
-        raise ValueError(
-            f"QualityRouter: no model available for quality tier {tier} and "
-            f"no default_model configured"
-        )
+        raise ValueError(f"QualityRouter: no model available for quality tier {tier} and no default_model configured")
 
     def _stash_decision(
         self,
@@ -338,9 +328,7 @@ class QualityRouter(CustomLogger):
         from litellm.types.router import PreRoutingHookResponse
 
         if messages is None or len(messages) == 0:
-            verbose_router_logger.debug(
-                "QualityRouter: No messages provided, skipping routing"
-            )
+            verbose_router_logger.debug("QualityRouter: No messages provided, skipping routing")
             return None
 
         # Extract last user message and last system prompt — same rules as
@@ -353,9 +341,7 @@ class QualityRouter(CustomLogger):
             content = msg.get("content") or ""
             if isinstance(content, list):
                 text_parts = [
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
+                    part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
                 ]
                 content = " ".join(text_parts).strip()
             if isinstance(content, str) and content:
@@ -365,13 +351,9 @@ class QualityRouter(CustomLogger):
                     system_prompt = content
 
         if user_message is None:
-            verbose_router_logger.debug(
-                "QualityRouter: No user message found, routing to default model"
-            )
+            verbose_router_logger.debug("QualityRouter: No user message found, routing to default model")
             if not self.config.default_model:
-                raise ValueError(
-                    "QualityRouter: no user message and no default_model configured"
-                )
+                raise ValueError("QualityRouter: no user message and no default_model configured")
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
@@ -404,14 +386,8 @@ class QualityRouter(CustomLogger):
             )
 
         # No keyword match → complexity classification flow.
-        complexity_tier, score, signals = self._scorer.classify(
-            user_message, system_prompt
-        )
-        complexity_name = (
-            complexity_tier.value
-            if hasattr(complexity_tier, "value")
-            else str(complexity_tier)
-        )
+        complexity_tier, score, signals = self._scorer.classify(user_message, system_prompt)
+        complexity_name = complexity_tier.value if hasattr(complexity_tier, "value") else str(complexity_tier)
 
         quality_tier = self.config.complexity_to_quality.get(complexity_name)
         if quality_tier is None:

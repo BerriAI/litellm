@@ -24,17 +24,13 @@ else:
 class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
     """Vector store configuration for RAGFlow datasets."""
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         api_key = litellm_params.get("api_key")
         if api_key is None:
             # Try to get from environment variable
             api_key = get_secret_str("RAGFLOW_API_KEY")
         if api_key is None:
-            raise ValueError(
-                "api_key is required (set RAGFLOW_API_KEY env var or pass in litellm_params)"
-            )
+            raise ValueError("api_key is required (set RAGFLOW_API_KEY env var or pass in litellm_params)")
         return {
             "headers": {
                 "Authorization": f"Bearer {api_key}",
@@ -48,17 +44,13 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
             "write": [],
         }
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """Validate environment and set headers for RAGFlow API."""
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = litellm_params.api_key or get_secret_str("RAGFLOW_API_KEY")
 
         if api_key is None:
-            raise ValueError(
-                "RAGFLOW_API_KEY is required (set env var or pass in litellm_params)"
-            )
+            raise ValueError("RAGFLOW_API_KEY is required (set env var or pass in litellm_params)")
 
         headers.update(
             {
@@ -82,10 +74,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         - Default: http://localhost:9380
         """
         api_base = (
-            api_base
-            or litellm_params.get("api_base")
-            or get_secret_str("RAGFLOW_API_BASE")
-            or "http://localhost:9380"
+            api_base or litellm_params.get("api_base") or get_secret_str("RAGFLOW_API_BASE") or "http://localhost:9380"
         )
 
         # Remove trailing slashes
@@ -105,17 +94,13 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """RAGFlow vector stores are management-only, search is not supported."""
-        raise NotImplementedError(
-            "RAGFlow vector stores support dataset management only, not search/retrieval"
-        )
+        raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
     def transform_search_vector_store_response(
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         """RAGFlow vector stores are management-only, search is not supported."""
-        raise NotImplementedError(
-            "RAGFlow vector stores support dataset management only, not search/retrieval"
-        )
+        raise NotImplementedError("RAGFlow vector stores support dataset management only, not search/retrieval")
 
     def transform_create_vector_store_request(
         self,
@@ -172,9 +157,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
 
         return url, request_body
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         """
         Transform RAGFlow response to VectorStoreCreateResponse format.
 

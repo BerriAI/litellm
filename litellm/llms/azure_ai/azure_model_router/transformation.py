@@ -44,9 +44,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         # Get base model name (strips routing prefixes like model_router/)
         base_model: str = AzureFoundryModelInfo.get_base_model(model)
 
-        return super().transform_request(
-            base_model, messages, optional_params, litellm_params, headers
-        )
+        return super().transform_request(base_model, messages, optional_params, litellm_params, headers)
 
     def transform_response(
         self,
@@ -90,9 +88,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         )
         return model_response
 
-    def calculate_additional_costs(
-        self, model: str, prompt_tokens: int, completion_tokens: int
-    ) -> Optional[dict]:
+    def calculate_additional_costs(self, model: str, prompt_tokens: int, completion_tokens: int) -> Optional[dict]:
         """
         Calculate additional costs for Azure Model Router.
 
@@ -110,9 +106,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
             calculate_azure_model_router_flat_cost,
         )
 
-        flat_cost = calculate_azure_model_router_flat_cost(
-            model=model, prompt_tokens=prompt_tokens
-        )
+        flat_cost = calculate_azure_model_router_flat_cost(model=model, prompt_tokens=prompt_tokens)
 
         if flat_cost > 0:
             return {"Azure Model Router Flat Cost": flat_cost}

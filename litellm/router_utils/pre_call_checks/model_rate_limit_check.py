@@ -46,9 +46,7 @@ class ModelRateLimitingCheck(CustomLogger):
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
 
-    def _get_deployment_limits(
-        self, deployment: Dict
-    ) -> tuple[Optional[int], Optional[int]]:
+    def _get_deployment_limits(self, deployment: Dict) -> tuple[Optional[int], Optional[int]]:
         """
         Extract TPM and RPM limits from a deployment configuration.
 
@@ -131,9 +129,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
             if rpm_limit is not None:
-                current_rpm = self.dual_cache.increment_cache(
-                    key=rpm_key, value=1, ttl=RoutingArgs.ttl
-                )
+                current_rpm = self.dual_cache.increment_cache(key=rpm_key, value=1, ttl=RoutingArgs.ttl)
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
@@ -155,15 +151,11 @@ class ModelRateLimitingCheck(CustomLogger):
         except litellm.RateLimitError:
             raise
         except Exception as e:
-            verbose_router_logger.debug(
-                f"Error in ModelRateLimitingCheck.pre_call_check: {str(e)}"
-            )
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {str(e)}")
             # Don't fail the request if rate limit check fails
             return deployment
 
-    async def async_pre_call_check(
-        self, deployment: Dict, parent_otel_span: Optional[Span] = None
-    ) -> Optional[Dict]:
+    async def async_pre_call_check(self, deployment: Dict, parent_otel_span: Optional[Span] = None) -> Optional[Dict]:
         """
         Async pre-call check for model rate limits.
 
@@ -187,9 +179,7 @@ class ModelRateLimitingCheck(CustomLogger):
             # Check TPM limit
             if tpm_limit is not None:
                 # First check local cache
-                current_tpm = await self.dual_cache.async_get_cache(
-                    key=tpm_key, local_only=True
-                )
+                current_tpm = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -237,9 +227,7 @@ class ModelRateLimitingCheck(CustomLogger):
         except litellm.RateLimitError:
             raise
         except Exception as e:
-            verbose_router_logger.debug(
-                f"Error in ModelRateLimitingCheck.async_pre_call_check: {str(e)}"
-            )
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {str(e)}")
             # Don't fail the request if rate limit check fails
             return deployment
 
@@ -251,9 +239,7 @@ class ModelRateLimitingCheck(CustomLogger):
         Always tracks tokens - the pre-call check handles enforcement.
         """
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
-            )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 return
 
@@ -262,9 +248,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             total_tokens = standard_logging_object.get("total_tokens", 0)
-            model = standard_logging_object.get("hidden_params", {}).get(
-                "litellm_model_name"
-            )
+            model = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
 
             verbose_router_logger.debug(
                 f"[TPM TRACKING] model_id={model_id}, total_tokens={total_tokens}, model={model}"
@@ -277,9 +261,7 @@ class ModelRateLimitingCheck(CustomLogger):
             current_minute = dt.strftime("%H-%M")
             tpm_key = f"{model_id}:{model}:tpm:{current_minute}"
 
-            verbose_router_logger.debug(
-                f"[TPM TRACKING] Incrementing {tpm_key} by {total_tokens}"
-            )
+            verbose_router_logger.debug(f"[TPM TRACKING] Incrementing {tpm_key} by {total_tokens}")
 
             await self.dual_cache.async_increment_cache(
                 key=tpm_key,
@@ -288,9 +270,7 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(
-                f"Error in ModelRateLimitingCheck.async_log_success_event: {str(e)}"
-            )
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_success_event: {str(e)}")
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -298,9 +278,7 @@ class ModelRateLimitingCheck(CustomLogger):
         Always tracks tokens - the pre-call check handles enforcement.
         """
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object"
-            )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
             if standard_logging_object is None:
                 return
 
@@ -309,9 +287,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             total_tokens = standard_logging_object.get("total_tokens", 0)
-            model = standard_logging_object.get("hidden_params", {}).get(
-                "litellm_model_name"
-            )
+            model = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
 
             if not model or not total_tokens:
                 return
@@ -327,6 +303,4 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(
-                f"Error in ModelRateLimitingCheck.log_success_event: {str(e)}"
-            )
+            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {str(e)}")

@@ -42,9 +42,7 @@ class DataRobotConfig(OpenAILikeChatConfig):
             path += f"/api/v2/{LLMGW_PATH}"
         elif "api/v2/deployments" in path:  # Dedicated deployment, leave it
             pass
-        elif (
-            "api/v2" in path and LLMGW_PATH not in path
-        ):  # Standard ENDPOINT path, add LLMGW
+        elif "api/v2" in path and LLMGW_PATH not in path:  # Standard ENDPOINT path, add LLMGW
             path += LLMGW_PATH
 
         # Ensure the url ends with a trailing slash

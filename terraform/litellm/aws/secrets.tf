@@ -22,6 +22,8 @@ resource "aws_secretsmanager_secret" "master_key" {
   name                    = "${local.name}-master-key"
   description             = "LITELLM_MASTER_KEY for gateway + backend."
   recovery_window_in_days = 0
+
+  tags = local.tags
 }
 
 resource "aws_secretsmanager_secret_version" "master_key" {
@@ -40,6 +42,8 @@ resource "aws_secretsmanager_secret" "license" {
   name                    = "${local.name}-license"
   description             = "LITELLM_LICENSE for gateway + backend."
   recovery_window_in_days = 0
+
+  tags = local.tags
 }
 
 resource "aws_secretsmanager_secret_version" "license" {
@@ -59,6 +63,8 @@ resource "aws_secretsmanager_secret" "ui_password" {
   name                    = "${local.name}-ui-password"
   description             = "UI_PASSWORD for the backend (UI admin login)."
   recovery_window_in_days = 0
+
+  tags = local.tags
 }
 
 resource "aws_secretsmanager_secret_version" "ui_password" {
@@ -72,6 +78,8 @@ resource "aws_secretsmanager_secret" "db_master_password" {
   name                    = "${local.name}-db-master-password"
   description             = "Aurora master-user password - bootstrap only. Runtime auth is IAM-token."
   recovery_window_in_days = 0
+
+  tags = local.tags
 }
 
 resource "aws_secretsmanager_secret_version" "db_master_password" {

@@ -1,8 +1,5 @@
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
-import {
-  getGlobalLitellmHeaderName,
-  getProxyBaseUrl,
-} from "@/components/networking";
+import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
 const healthReadinessDetailsKeys = createQueryKeys("healthReadinessDetails");
@@ -18,9 +15,7 @@ export interface HealthReadinessDetailsResponse {
   is_detailed_debug?: boolean;
 }
 
-const fetchHealthReadinessDetails = async (
-  accessToken: string,
-): Promise<HealthReadinessDetailsResponse> => {
+const fetchHealthReadinessDetails = async (accessToken: string): Promise<HealthReadinessDetailsResponse> => {
   const baseUrl = getProxyBaseUrl();
   const response = await fetch(`${baseUrl}/health/readiness/details`, {
     method: "GET",
@@ -30,9 +25,7 @@ const fetchHealthReadinessDetails = async (
     },
   });
   if (!response.ok) {
-    throw new Error(
-      `Failed to fetch health readiness details: ${response.statusText}`,
-    );
+    throw new Error(`Failed to fetch health readiness details: ${response.statusText}`);
   }
   return response.json();
 };

@@ -80,9 +80,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
                 - api_base: str
                 - dynamic_api_key: str
         """
-        api_base = (
-            api_base or get_secret_str("JINA_AI_API_BASE") or "https://api.jina.ai/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("JINA_AI_API_BASE") or "https://api.jina.ai/v1"  # type: ignore
         dynamic_api_key = api_key or (
             get_secret_str("JINA_AI_API_KEY")
             or get_secret_str("JINA_AI_API_KEY")
@@ -100,11 +98,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        return (
-            f"{api_base}/embeddings"
-            if api_base
-            else "https://api.jina.ai/v1/embeddings"
-        )
+        return f"{api_base}/embeddings" if api_base else "https://api.jina.ai/v1/embeddings"
 
     def transform_embedding_request(
         self,

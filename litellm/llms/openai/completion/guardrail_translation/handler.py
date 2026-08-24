@@ -47,9 +47,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         """
         prompt = data.get("prompt")
         if prompt is None:
-            verbose_proxy_logger.debug(
-                "OpenAI Text Completion: No prompt found in request data"
-            )
+            verbose_proxy_logger.debug("OpenAI Text Completion: No prompt found in request data")
             return data
 
         if isinstance(prompt, str):
@@ -69,8 +67,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
             data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(
-                "OpenAI Text Completion: Applied guardrail to string prompt. "
-                "Original length: %d, New length: %d",
+                "OpenAI Text Completion: Applied guardrail to string prompt. Original length: %d, New length: %d",
                 len(prompt),
                 len(data["prompt"]),
             )
@@ -140,9 +137,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
             Modified response with guardrails applied to completion text
         """
         if not hasattr(response, "choices") or not response.choices:
-            verbose_proxy_logger.debug(
-                "OpenAI Text Completion: No choices in response to process"
-            )
+            verbose_proxy_logger.debug("OpenAI Text Completion: No choices in response to process")
             return response
 
         # Collect all texts to check
@@ -166,9 +161,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
             # Add user API key metadata with prefixed keys
             if "litellm_metadata" not in request_data:
-                user_metadata = self.transform_user_api_key_dict_to_metadata(
-                    user_api_key_dict
-                )
+                user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
                 if user_metadata:
                     request_data["litellm_metadata"] = user_metadata
 

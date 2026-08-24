@@ -108,9 +108,7 @@ def _load_private_key_from_env(env_var: str) -> RSAPrivateKey:
     """Load an RSA private key from an env var (PEM string or file:// path)."""
     key_material = os.environ.get(env_var, "")
     if not key_material:
-        raise ValueError(
-            f"MCPJWTSigner: environment variable '{env_var}' is set but empty."
-        )
+        raise ValueError(f"MCPJWTSigner: environment variable '{env_var}' is set but empty.")
     if key_material.startswith("file://"):
         path = key_material[len("file://") :]
         with open(path, "rb") as f:
@@ -131,11 +129,7 @@ def _generate_rsa_key_pair() -> RSAPrivateKey:
 def _int_to_base64url(n: int) -> str:
     """Encode an integer as a base64url string (no padding)."""
     byte_length = (n.bit_length() + 7) // 8
-    return (
-        base64.urlsafe_b64encode(n.to_bytes(byte_length, byteorder="big"))
-        .rstrip(b"=")
-        .decode("ascii")
-    )
+    return base64.urlsafe_b64encode(n.to_bytes(byte_length, byteorder="big")).rstrip(b"=").decode("ascii")
 
 
 def _compute_kid(public_key: Any) -> str:
@@ -253,9 +247,7 @@ class MCPJWTSigner(CustomGuardrail):
         if key_material:
             self._private_key = _load_private_key_from_env(self.SIGNING_KEY_ENV)
             self._persistent_key: bool = True
-            verbose_proxy_logger.info(
-                "MCPJWTSigner: loaded RSA key from env var %s", self.SIGNING_KEY_ENV
-            )
+            verbose_proxy_logger.info("MCPJWTSigner: loaded RSA key from env var %s", self.SIGNING_KEY_ENV)
         else:
             self._private_key = _generate_rsa_key_pair()
             self._persistent_key = False
@@ -269,23 +261,14 @@ class MCPJWTSigner(CustomGuardrail):
 
         # --- Core config ---
         self.issuer: str = (
-            issuer
-            or os.environ.get("MCP_JWT_ISSUER")
-            or os.environ.get("LITELLM_EXTERNAL_URL")
-            or "litellm"
+            issuer or os.environ.get("MCP_JWT_ISSUER") or os.environ.get("LITELLM_EXTERNAL_URL") or "litellm"
         )
-        self.audience: str = (
-            audience or os.environ.get("MCP_JWT_AUDIENCE") or self.DEFAULT_AUDIENCE
-        )
+        self.audience: str = audience or os.environ.get("MCP_JWT_AUDIENCE") or self.DEFAULT_AUDIENCE
         resolved_ttl = int(
-            ttl_seconds
-            if ttl_seconds is not None
-            else os.environ.get("MCP_JWT_TTL_SECONDS", str(self.DEFAULT_TTL))
+            ttl_seconds if ttl_seconds is not None else os.environ.get("MCP_JWT_TTL_SECONDS", str(self.DEFAULT_TTL))
         )
         if resolved_ttl <= 0:
-            raise ValueError(
-                f"MCPJWTSigner: ttl_seconds must be > 0, got {resolved_ttl}"
-            )
+            raise ValueError(f"MCPJWTSigner: ttl_seconds must be > 0, got {resolved_ttl}")
         self.ttl_seconds: int = resolved_ttl
 
         # --- FR-5: Verify + re-sign ---
@@ -311,9 +294,7 @@ class MCPJWTSigner(CustomGuardrail):
 
         # --- FR-14: Two-token model ---
         self.channel_token_audience: Optional[str] = channel_token_audience
-        self.channel_token_ttl: int = (
-            channel_token_ttl if channel_token_ttl is not None else self.ttl_seconds
-        )
+        self.channel_token_ttl: int = channel_token_ttl if channel_token_ttl is not None else self.ttl_seconds
 
         # --- FR-15: Incoming claim validation ---
         self.required_claims: List[str] = required_claims or []
@@ -336,8 +317,7 @@ class MCPJWTSigner(CustomGuardrail):
         _mcp_jwt_signer_instance = self
 
         verbose_proxy_logger.info(
-            "MCPJWTSigner initialized: issuer=%s audience=%s ttl=%ds kid=%s "
-            "verify=%s channel_token=%s debug=%s",
+            "MCPJWTSigner initialized: issuer=%s audience=%s ttl=%ds kid=%s verify=%s channel_token=%s debug=%s",
             self.issuer,
             self.audience,
             self.ttl_seconds,
@@ -395,12 +375,8 @@ class MCPJWTSigner(CustomGuardrail):
         malformed response doesn't permanently disable JWT verification.
         """
         now = time.time()
-        cache_expired = (
-            now - self._oidc_discovery_fetched_at
-        ) >= self._OIDC_DISCOVERY_TTL
-        if (
-            self._oidc_discovery_doc is None or cache_expired
-        ) and self.access_token_discovery_uri:
+        cache_expired = (now - self._oidc_discovery_fetched_at) >= self._OIDC_DISCOVERY_TTL
+        if (self._oidc_discovery_doc is None or cache_expired) and self.access_token_discovery_uri:
             doc = await _fetch_oidc_discovery(self.access_token_discovery_uri)
             if "jwks_uri" in doc:
                 self._oidc_discovery_doc = doc
@@ -473,9 +449,7 @@ class MCPJWTSigner(CustomGuardrail):
         if self.verify_issuer:
             decode_kwargs["issuer"] = self.verify_issuer
 
-        payload: Dict[str, Any] = jwt.decode(
-            raw_token, signing_jwk.key, **decode_kwargs
-        )
+        payload: Dict[str, Any] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
         return payload
 
     async def _introspect_opaque_token(self, token: str) -> Dict[str, Any]:
@@ -585,18 +559,14 @@ class MCPJWTSigner(CustomGuardrail):
                 value = str(tid) if tid else None
 
             else:
-                verbose_proxy_logger.warning(
-                    "MCPJWTSigner: unknown end_user_claim_source %r — skipping", source
-                )
+                verbose_proxy_logger.warning("MCPJWTSigner: unknown end_user_claim_source %r — skipping", source)
                 continue
 
             if value:
                 return value
 
         # Final fallback for service accounts with no user identity
-        token = getattr(user_api_key_dict, "token", None) or getattr(
-            user_api_key_dict, "api_key", None
-        )
+        token = getattr(user_api_key_dict, "token", None) or getattr(user_api_key_dict, "api_key", None)
         if token:
             return "apikey:" + hashlib.sha256(str(token).encode()).hexdigest()[:16]
         return "litellm-proxy"
@@ -626,9 +596,7 @@ class MCPJWTSigner(CustomGuardrail):
         if self.allowed_scopes is not None:
             return " ".join(self.allowed_scopes)
 
-        tool_name = (
-            re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_tool_name) if raw_tool_name else ""
-        )
+        tool_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_tool_name) if raw_tool_name else ""
         if tool_name:
             scopes = ["mcp:tools/call", f"mcp:tools/{tool_name}:call"]
         elif call_type == "call_mcp_tool":
@@ -825,18 +793,12 @@ class MCPJWTSigner(CustomGuardrail):
                         "Proceeding without incoming token verification."
                     )
             except Exception as exc:
-                verbose_proxy_logger.error(
-                    "MCPJWTSigner: incoming token verification failed: %s", exc
-                )
+                verbose_proxy_logger.error("MCPJWTSigner: incoming token verification failed: %s", exc)
                 from fastapi import HTTPException
 
                 raise HTTPException(
                     status_code=401,
-                    detail={
-                        "error": (
-                            f"MCPJWTSigner: incoming token verification failed: {exc}"
-                        )
-                    },
+                    detail={"error": (f"MCPJWTSigner: incoming token verification failed: {exc}")},
                 )
         elif not raw_token and self.access_token_discovery_uri:
             verbose_proxy_logger.debug(
@@ -856,9 +818,7 @@ class MCPJWTSigner(CustomGuardrail):
         # ------------------------------------------------------------------
         # Build outbound access token
         # ------------------------------------------------------------------
-        claims = self._build_claims(
-            user_api_key_dict, hook_data, jwt_claims, call_type=call_type
-        )
+        claims = self._build_claims(user_api_key_dict, hook_data, jwt_claims, call_type=call_type)
 
         signed_token = jwt.encode(
             claims,
@@ -892,15 +852,12 @@ class MCPJWTSigner(CustomGuardrail):
         # FR-9: Debug header
         # ------------------------------------------------------------------
         if self.debug_headers:
-            new_headers["x-litellm-mcp-debug"] = self._build_debug_header(
-                claims, self._kid
-            )
+            new_headers["x-litellm-mcp-debug"] = self._build_debug_header(claims, self._kid)
 
         hook_data["extra_headers"] = new_headers
 
         verbose_proxy_logger.debug(
-            "MCPJWTSigner: signed JWT sub=%s act=%s tool=%s exp=%d "
-            "verified=%s channel=%s call_type=%s",
+            "MCPJWTSigner: signed JWT sub=%s act=%s tool=%s exp=%d verified=%s channel=%s call_type=%s",
             claims.get("sub"),
             claims.get("act", {}).get("sub"),
             hook_data.get("mcp_tool_name"),
@@ -942,19 +899,13 @@ async def inject_mcp_jwt_headers_for_upstream(
         "incoming_bearer_token": incoming_bearer_token,
         "extra_headers": merged,
     }
-    call_type: CallTypesLiteral = (
-        "list_mcp_tools" if for_list_tools else "call_mcp_tool"
-    )
+    call_type: CallTypesLiteral = "list_mcp_tools" if for_list_tools else "call_mcp_tool"
     try:
         from litellm.proxy.proxy_server import (  # noqa: PLC0415
             proxy_logging_obj as _proxy_logging,
         )
 
-        shared_cache = (
-            _proxy_logging.internal_usage_cache.dual_cache
-            if _proxy_logging is not None
-            else DualCache()
-        )
+        shared_cache = _proxy_logging.internal_usage_cache.dual_cache if _proxy_logging is not None else DualCache()
     except Exception:
         shared_cache = DualCache()
 

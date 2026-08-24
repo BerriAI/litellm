@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import PublicModelHub from "./public_model_hub";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import PublicModelHub, { publicMCPHubColumns, MCPServerData } from "./public_model_hub";
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
@@ -184,5 +185,82 @@ describe("PublicModelHub", () => {
       expect(screen.getByTestId("navbar")).toBeInTheDocument();
       expect(screen.getByText("Model Hub")).toBeInTheDocument();
     });
+  });
+});
+
+const PUBLIC_SERVER_URL = "https://mcp.exa.ai/mcp";
+
+const mockMcpServer: MCPServerData = {
+  server_id: "server-1",
+  name: "exa_test",
+  server_name: "exa_test",
+  url: PUBLIC_SERVER_URL,
+  transport: "http",
+  auth_type: "none",
+  mcp_info: { server_name: "exa_test", description: "Fast, intelligent web search and web crawling" },
+};
+
+function PublicMcpTestTable({ data }: { data: MCPServerData[] }) {
+  const columns = publicMCPHubColumns(vi.fn());
+  const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
+
+  return (
+    <table>
+      <thead>
+        {table.getHeaderGroups().map((hg) => (
+          <tr key={hg.id}>
+            {hg.headers.map((h) => (
+              <th key={h.id}>{flexRender(h.column.columnDef.header, h.getContext())}</th>
+            ))}
+          </tr>
+        ))}
+      </thead>
+      <tbody>
+        {table.getRowModel().rows.map((row) => (
+          <tr key={row.id}>
+            {row.getVisibleCells().map((cell) => (
+              <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+describe("publicMCPHubColumns", () => {
+  it("keeps the non-sensitive columns", () => {
+    render(<PublicMcpTestTable data={[mockMcpServer]} />);
+    expect(screen.getByText("Server Name")).toBeInTheDocument();
+    expect(screen.getByText("Transport")).toBeInTheDocument();
+    expect(screen.getByText("Auth Type")).toBeInTheDocument();
+  });
+
+  it("does not expose a URL column header", () => {
+    render(<PublicMcpTestTable data={[mockMcpServer]} />);
+    expect(screen.queryByText("URL")).not.toBeInTheDocument();
+    expect(publicMCPHubColumns(vi.fn()).some((c) => c.header === "URL")).toBe(false);
+  });
+
+  it("does not render the server url anywhere in the table", () => {
+    render(<PublicMcpTestTable data={[mockMcpServer]} />);
+    expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+  });
+});
+
+describe("public hub MCP details modal", () => {
+  it("does not show the upstream url when a server is opened", async () => {
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
+
+    render(<PublicModelHub />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
+
+    // "Server Overview" only exists inside the opened MCP details modal,
+    // so finding it proves the modal rendered and the url assertion is not vacuous.
+    await screen.findByText("Server Overview");
+    expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
   });
 });

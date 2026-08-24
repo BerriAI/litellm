@@ -7,16 +7,21 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useQueryClient } from "@tanstack/react-query";
 import { DataTable } from "../view_logs/table";
-import {
-  createMCPToolset,
-  updateMCPToolset,
-  deleteMCPToolset,
-  listMCPTools,
-  getProxyBaseUrl,
-} from "../networking";
+import { createMCPToolset, updateMCPToolset, deleteMCPToolset, listMCPTools, getProxyBaseUrl } from "../networking";
 import { MCPToolset, MCPToolsetTool } from "./types";
 
 const { Text: AntdText } = Typography;
+
+// Display-only. Toolsets persist {server_id, bare tool_name}; the gateway serves
+// each tool prefixed as "{server-prefix}-{tool}". Render that qualified form so
+// the same tool name on different servers stays distinguishable. This mirrors the
+// backend default MCP_TOOL_PREFIX_SEPARATOR; overriding that env var only changes
+// this cosmetic label, never what is stored or how tools are matched.
+const MCP_TOOL_PREFIX_SEPARATOR = "-";
+
+function displayToolName(serverPrefix: string | undefined, toolName: string): string {
+  return serverPrefix ? `${serverPrefix}${MCP_TOOL_PREFIX_SEPARATOR}${toolName}` : toolName;
+}
 
 interface MCPToolsetsTabProps {
   accessToken: string | null;
@@ -86,7 +91,9 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
       {expanded && (
         <div className="p-2">
           {loading ? (
-            <div className="flex justify-center py-3"><Spin size="small" /></div>
+            <div className="flex justify-center py-3">
+              <Spin size="small" />
+            </div>
           ) : tools.length === 0 ? (
             <p className="text-xs text-gray-400 px-2 py-2">No tools found for this server.</p>
           ) : (
@@ -105,14 +112,18 @@ function MCPToolList({ serverId, serverName, accessToken, selectedTools, onToggl
                     }`}
                   >
                     <div className="min-w-0 flex-1">
-                      <p className={`text-sm font-medium leading-tight ${selected ? "text-purple-800" : "text-gray-800"}`}>
+                      <p
+                        className={`text-sm font-medium leading-tight ${selected ? "text-purple-800" : "text-gray-800"}`}
+                      >
                         {tool.name}
                       </p>
                       {tool.description && (
                         <p className="text-xs text-gray-400 mt-0.5 leading-tight line-clamp-2">{tool.description}</p>
                       )}
                     </div>
-                    {selected && <span className="text-purple-500 text-xs font-semibold ml-2 flex-shrink-0 mt-0.5">✓</span>}
+                    {selected && (
+                      <span className="text-purple-500 text-xs font-semibold ml-2 flex-shrink-0 mt-0.5">✓</span>
+                    )}
                   </button>
                 );
               })}
@@ -138,6 +149,10 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
   const [saving, setSaving] = useState(false);
   const [serverSearch, setServerSearch] = useState("");
   const { data: mcpServers = [] } = useMCPServers();
+  const serverPrefixById = React.useMemo(
+    () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
+    [mcpServers],
+  );
 
   React.useEffect(() => {
     if (open) {
@@ -172,11 +187,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
 
   const filteredServers = mcpServers.filter((s) => {
     const q = serverSearch.toLowerCase();
-    return (
-      !q ||
-      (s.alias || "").toLowerCase().includes(q) ||
-      (s.server_name || "").toLowerCase().includes(q)
-    );
+    return !q || (s.alias || "").toLowerCase().includes(q) || (s.server_name || "").toLowerCase().includes(q);
   });
 
   return (
@@ -219,7 +230,9 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
           />
           <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 300 }}>
             {filteredServers.length === 0 ? (
-              <Text className="text-gray-400 text-sm">{mcpServers.length === 0 ? "No MCP servers configured" : "No servers match your search"}</Text>
+              <Text className="text-gray-400 text-sm">
+                {mcpServers.length === 0 ? "No MCP servers configured" : "No servers match your search"}
+              </Text>
             ) : (
               filteredServers.map((server) => (
                 <MCPToolList
@@ -241,8 +254,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
         {/* Right panel: Your Toolset */}
         <div className="w-72 flex-shrink-0">
           <Text className="text-sm font-semibold text-gray-700 mb-2 block">
-            Your Toolset{" "}
-            <span className="text-xs font-normal text-gray-400">({selectedTools.length} tools)</span>
+            Your Toolset <span className="text-xs font-normal text-gray-400">({selectedTools.length} tools)</span>
           </Text>
           <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 340 }}>
             {selectedTools.length === 0 ? (
@@ -256,7 +268,9 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
                   className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 hover:bg-red-50 hover:border-red-200 group transition-colors"
                 >
                   <div className="min-w-0 text-left">
-                    <span className="text-xs font-medium text-purple-800 group-hover:text-red-600 truncate block">{tool.tool_name}</span>
+                    <span className="text-xs font-medium text-purple-800 group-hover:text-red-600 truncate block">
+                      {displayToolName(serverPrefixById.get(tool.server_id), tool.tool_name)}
+                    </span>
                     <span className="text-[10px] text-purple-400 truncate block">{tool.server_id.slice(0, 8)}…</span>
                   </div>
                   <span className="ml-2 text-purple-300 group-hover:text-red-400 text-xs flex-shrink-0">✕</span>
@@ -268,7 +282,9 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
       </div>
 
       <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-200">
-        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
         <Button onClick={handleSubmit} loading={saving}>
           {initialToolset ? "Save Changes" : "Create Toolset"}
         </Button>
@@ -281,8 +297,9 @@ function toolsetColumns(
   isAdmin: boolean,
   onEdit: (t: MCPToolset) => void,
   onDelete: (id: string) => void,
-  proxyBaseUrl: string,
+  serverPrefixById: Map<string, string>,
 ): ColumnDef<MCPToolset>[] {
+  const proxyBaseUrl = getProxyBaseUrl();
   return [
     {
       header: "Toolset ID",
@@ -319,9 +336,7 @@ function toolsetColumns(
     {
       header: "Description",
       accessorKey: "description",
-      cell: ({ row }) => (
-        <span className="text-sm text-gray-500">{row.original.description || "—"}</span>
-      ),
+      cell: ({ row }) => <span className="text-sm text-gray-500">{row.original.description || "—"}</span>,
     },
     {
       header: "Tools",
@@ -331,13 +346,14 @@ function toolsetColumns(
         return (
           <div className="flex flex-wrap gap-1 max-w-xs">
             {tools.slice(0, 4).map((t, i) => (
-              <span key={i} className="inline-flex items-center px-1.5 py-0.5 rounded bg-purple-50 border border-purple-200 text-purple-700 text-xs">
-                {t.tool_name}
+              <span
+                key={i}
+                className="inline-flex items-center px-1.5 py-0.5 rounded bg-purple-50 border border-purple-200 text-purple-700 text-xs"
+              >
+                {displayToolName(serverPrefixById.get(t.server_id), t.tool_name)}
               </span>
             ))}
-            {tools.length > 4 && (
-              <span className="text-xs text-gray-400 self-center">+{tools.length - 4} more</span>
-            )}
+            {tools.length > 4 && <span className="text-xs text-gray-400 self-center">+{tools.length - 4} more</span>}
           </div>
         );
       },
@@ -351,28 +367,32 @@ function toolsetColumns(
         </span>
       ),
     },
-    ...(isAdmin ? [{
-      header: "",
-      id: "actions",
-      cell: ({ row }: { row: { original: MCPToolset } }) => (
-        <div className="flex items-center gap-1 justify-end">
-          <button
-            type="button"
-            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors"
-            onClick={() => onEdit(row.original)}
-          >
-            <PencilIcon className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-            onClick={() => onDelete(row.original.toolset_id)}
-          >
-            <TrashIcon className="h-4 w-4" />
-          </button>
-        </div>
-      ),
-    } as ColumnDef<MCPToolset>] : []),
+    ...(isAdmin
+      ? [
+          {
+            header: "",
+            id: "actions",
+            cell: ({ row }: { row: { original: MCPToolset } }) => (
+              <div className="flex items-center gap-1 justify-end">
+                <button
+                  type="button"
+                  className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors"
+                  onClick={() => onEdit(row.original)}
+                >
+                  <PencilIcon className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                  onClick={() => onDelete(row.original.toolset_id)}
+                >
+                  <TrashIcon className="h-4 w-4" />
+                </button>
+              </div>
+            ),
+          } as ColumnDef<MCPToolset>,
+        ]
+      : []),
   ];
 }
 
@@ -403,7 +423,9 @@ function ToolsetUsageGuide() {
     <div className="mb-6 rounded-lg border border-gray-200 bg-gray-50 px-5 py-4">
       <p className="text-sm font-medium text-gray-700 mb-1">How toolsets work</p>
       <p className="text-sm text-gray-500 mb-3">
-        Create a toolset, assign it to a key via <span className="font-medium text-gray-700">API Keys → Edit Key → MCP Servers</span>, then point your MCP client at the toolset URL. The client only sees the tools you picked.
+        Create a toolset, assign it to a key via{" "}
+        <span className="font-medium text-gray-700">API Keys → Edit Key → MCP Servers</span>, then point your MCP client
+        at the toolset URL. The client only sees the tools you picked.
       </p>
       <div className="text-xs text-gray-400 mb-1">Claude Code / Cursor config</div>
       <div className="relative">
@@ -425,6 +447,7 @@ function ToolsetUsageGuide() {
 export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
   const queryClient = useQueryClient();
   const { data: toolsets = [], isLoading } = useMCPToolsets();
+  const { data: mcpServers = [] } = useMCPServers();
   const [createOpen, setCreateOpen] = useState(false);
   const [editToolset, setEditToolset] = useState<MCPToolset | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -460,8 +483,11 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     }
   };
 
-  const proxyBaseUrl = getProxyBaseUrl();
-  const columns = toolsetColumns(isAdmin, setEditToolset, setDeleteId, proxyBaseUrl);
+  const serverPrefixById = React.useMemo(
+    () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
+    [mcpServers],
+  );
+  const columns = toolsetColumns(isAdmin, setEditToolset, setDeleteId, serverPrefixById);
 
   return (
     <div className="mt-4">
@@ -469,7 +495,8 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
         <div>
           <Title>MCP Toolsets</Title>
           <Text className="text-gray-500 text-sm">
-            Curated collections of tools from one or more MCP servers. Assign toolsets to keys and teams via the MCP permissions dropdown.
+            Curated collections of tools from one or more MCP servers. Assign toolsets to keys and teams via the MCP
+            permissions dropdown.
           </Text>
         </div>
         {isAdmin && (
@@ -517,7 +544,9 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
         okButtonProps={{ danger: true, loading: deleting }}
         title="Delete Toolset"
       >
-        <p>Are you sure you want to delete this toolset? Keys and teams using it will lose access to the scoped tools.</p>
+        <p>
+          Are you sure you want to delete this toolset? Keys and teams using it will lose access to the scoped tools.
+        </p>
       </Modal>
     </div>
   );
