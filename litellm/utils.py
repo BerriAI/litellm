@@ -6528,13 +6528,6 @@ def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain ca
     return litellm.acompletion(*args, **kwargs)
 
 
-def prompt_token_calculator(model, messages):
-    text: Final = " ".join(message["content"] for message in messages)
-    if "claude" in model:
-        return token_counter(model=model, text=text)
-    return len(_get_default_encoding().encode(text))
-
-
 def valid_model(model):
     try:
         # for a given model name, check if the user has the right permissions to access the model
