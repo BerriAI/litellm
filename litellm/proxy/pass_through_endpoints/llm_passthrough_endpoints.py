@@ -1742,8 +1742,9 @@ def _bearer_stripped(value: str) -> str:
     return value
 
 
-_HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset(
-    {"content-length", "host", "x-litellm-api-key", "api-key", "x-api-key"}
+_VERTEX_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-goog-api-key"})
+_HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset({"content-length", "host"}) | (
+    SpecialHeaders.litellm_credential_header_names() - _VERTEX_UPSTREAM_CREDENTIAL_HEADERS
 )
 
 
@@ -1772,9 +1773,12 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
     branch, used when the proxy has no Vertex credential configured.
 
     No credential the proxy accepts for caller authentication is forwarded to
-    Google. Vertex only ever authenticates with an OAuth token in ``Authorization``
-    or an API key in ``x-goog-api-key``, so the proxy-only auth headers Google never
-    consumes (``x-litellm-api-key`` / ``api-key`` / ``x-api-key``) are dropped by
+    Google. ``user_api_key_auth`` reads the caller's key from every header in
+    ``SpecialHeaders.litellm_credential_header_names()``, and Vertex only ever
+    authenticates with an OAuth token in ``Authorization`` or an API key in
+    ``x-goog-api-key``. So the proxy-only auth headers Google never consumes
+    (everything in that set except those two, e.g. ``x-litellm-api-key`` /
+    ``api-key`` / ``x-api-key`` / ``Ocp-Apim-Subscription-Key``) are dropped by
     name. ``Authorization`` and ``x-goog-api-key`` may instead carry a genuine
     bring-your-own Google credential, so they are kept unless their value is one of
     the caller's LiteLLM key values, which are dropped by value (normalizing any
