@@ -141,6 +141,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    AttemptedFallbackTargets,
     _check_non_standard_fallback_format,
     get_fallback_model_group,
     run_async_fallback,
@@ -6930,6 +6931,20 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group: Final[str | None] = kwargs.get("model")
+        if not isinstance(kwargs.get("attempted_targets"), AttemptedFallbackTargets):
+            _fallback_metadata_key: Final = _get_router_metadata_variable_name(
+                function_name=getattr(kwargs.get("original_function"), "__name__", None)
+            )
+            _sibling_metadata_key: Final = (
+                "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
+            )
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict):
+                _sibling_metadata.pop("attempted_fallbacks", None)
+                _sibling_metadata.pop("original_model_group", None)
+            if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
+                _fallback_metadata["attempted_fallbacks"] = 0
+                if model_group is not None:
+                    _fallback_metadata["original_model_group"] = model_group
         include_fallback_errors: Final = kwargs.get("include_fallback_errors", False) is True
         disable_fallbacks: Final[bool | None] = kwargs.pop("disable_fallbacks", False)
         fallbacks: Final[list | None] = kwargs.get("fallbacks", self.fallbacks)
