@@ -132,14 +132,14 @@ class TestOutputConfigStructuredOutput:
     }
 
     def test_output_config_format_json_schema_converted(self):
-        """output_config.format.json_schema is converted to OpenAI text.format."""
+        """output_config.format.json_schema is converted to OpenAI text.format, defaulting strict to False."""
         req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
         assert fmt["type"] == "json_schema"
         assert fmt["schema"] == self._SCHEMA
-        assert fmt["strict"] is True
+        assert fmt["strict"] is False
         assert fmt["name"] == "structured_output"
 
     def test_output_config_without_format_does_not_set_text(self):
@@ -149,21 +149,65 @@ class TestOutputConfigStructuredOutput:
         assert "text" not in kwargs
 
     def test_output_format_still_works(self):
-        """The original output_format field still takes precedence when present."""
+        """The original output_format field still takes precedence when present, defaulting strict to False."""
         req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
+        assert kwargs["text"]["format"]["strict"] is False
+
+    def test_output_format_explicit_strict_false_is_preserved(self):
+        """output_format with an explicit strict=False is preserved as False."""
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": False})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is False
+
+    def test_output_format_explicit_strict_true_is_preserved(self):
+        """output_format with an explicit strict=True is preserved as True."""
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": True})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["strict"] is True
 
     def test_output_format_takes_precedence_over_output_config(self):
-        """output_format takes precedence over output_config.format."""
+        """output_format takes precedence over output_config.format, for both schema and strict."""
         other_schema = {"type": "object", "properties": {"id": {"type": "integer"}}}
         req = _make_request(
-            output_format={"type": "json_schema", "schema": self._SCHEMA},
-            output_config={"format": {"type": "json_schema", "schema": other_schema}},
+            output_format={"type": "json_schema", "schema": self._SCHEMA, "strict": False},
+            output_config={"format": {"type": "json_schema", "schema": other_schema, "strict": True}},
         )
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["schema"] == self._SCHEMA
+        assert kwargs["text"]["format"]["strict"] is False
+
+    def test_optional_property_stays_out_of_required_list(self):
+        """A property absent from required must stay absent from required in the translated schema."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "nickname": {"type": "string"},
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        }
+        req = _make_request(output_format={"type": "json_schema", "schema": schema})
+        kwargs = _ADAPTER.translate_request(req)
+        fmt_schema = kwargs["text"]["format"]["schema"]
+        assert fmt_schema["required"] == ["name"]
+        assert "nickname" not in fmt_schema["required"]
+        assert fmt_schema["additionalProperties"] is False
+
+    def test_translate_request_does_not_mutate_input_schema(self):
+        """translate_request must not mutate the caller's output_format or schema dicts."""
+        schema = {"type": "object", "properties": {"x": {"type": "number"}}, "required": ["x"]}
+        output_format = {"type": "json_schema", "schema": schema, "strict": False}
+        req = _make_request(output_format=output_format)
+        snapshot = json.loads(json.dumps(output_format))
+
+        _ADAPTER.translate_request(req)
+
+        assert output_format == snapshot
+        assert req["output_format"] == snapshot
 
 
 # ---------------------------------------------------------------------------
