@@ -253,7 +253,7 @@ class TestWindowsPidExists:
             last_error=Mock(return_value=0),
         )
 
-        with pytest.raises(OSError):
+        with pytest.raises(OSError, match="Invalid argument"):
             _windows_pid_exists(4321, api)
 
         close_handle.assert_called_once_with(99)
