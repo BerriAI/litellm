@@ -152,6 +152,22 @@ class A2ACompletionBridgeTransformation:
         return [openai_message]
 
     @staticmethod
+    def _model_dump(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        dump = getattr(value, "model_dump", None)
+        if callable(dump):
+            dumped = dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                return dumped
+        dump = getattr(value, "dict", None)
+        if callable(dump):
+            dumped = dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                return dumped
+        return {}
+
+    @staticmethod
     def openai_response_to_a2a_response(
         response: Any,
         request_id: str | None = None,
@@ -170,16 +186,19 @@ class A2ACompletionBridgeTransformation:
         raw_choices: Final = getattr(response, "choices", None)
         if raw_choices:
             for choice in raw_choices:
-                content: Final = (
-                    getattr(getattr(choice, "message", None), "content", None) or ""
-                )
+                raw_message = getattr(choice, "message", None)
+                message_fields: Final = A2ACompletionBridgeTransformation._model_dump(raw_message)
+                raw_content = message_fields.get("content")
+                if raw_content is None:
+                    raw_content = getattr(raw_message, "content", None)
+                content: Final = raw_content if isinstance(raw_content, str) else ""
                 message: Final = {
                     "kind": "message",
                     "role": "agent",
                     "parts": [{"kind": "text", "text": content}],
                     "messageId": uuid4().hex,
                 }
-                raw_tool_calls = getattr(getattr(choice, "message", None), "tool_calls", None)
+                raw_tool_calls = message_fields.get("tool_calls")
                 if raw_tool_calls:
                     message["tool_calls"] = [
                         call.model_dump(exclude_none=True)
@@ -189,10 +208,38 @@ class A2ACompletionBridgeTransformation:
                         else call
                         for call in raw_tool_calls
                     ]
-                finish_reason: Final = getattr(choice, "finish_reason", None)
+                for field in (
+                    "annotations",
+                    "audio",
+                    "function_call",
+                    "images",
+                    "provider_specific_fields",
+                    "reasoning_content",
+                    "reasoning_items",
+                    "thinking_blocks",
+                ):
+                    value = message_fields.get(field)
+                    if value is not None:
+                        message[field] = value
+                choice_fields: Final = A2ACompletionBridgeTransformation._model_dump(choice)
+                finish_reason: Final = choice_fields.get("finish_reason")
+                if finish_reason is None:
+                    raw_finish_reason = getattr(choice, "finish_reason", None)
+                    finish_reason = raw_finish_reason if isinstance(raw_finish_reason, str) else None
                 if finish_reason:
                     message["finish_reason"] = finish_reason
-                serialized_choices.append({"index": len(serialized_choices), "message": message})
+                choice_payload: Final[dict[str, Any]] = {
+                    "index": len(serialized_choices),
+                    "message": message,
+                }
+                logprobs = choice_fields.get("logprobs")
+                if logprobs is None:
+                    raw_logprobs = getattr(choice, "logprobs", None)
+                    logprobs = raw_logprobs if isinstance(raw_logprobs, dict) else None
+                if logprobs is not None:
+                    choice_payload["logprobs"] = logprobs
+                    message["logprobs"] = logprobs
+                serialized_choices.append(choice_payload)
 
         a2a_message: Final = (
             serialized_choices[0]["message"]

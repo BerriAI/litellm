@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.types.utils import Choices, Message, ModelResponse
+
 
 class TestA2AStreamingTransformation:
     """Test the A2A streaming transformation creates proper events."""
@@ -26,9 +28,7 @@ class TestA2AStreamingTransformation:
             "parts": [{"text": "Reply to ticket #4823"}],
             "metadata": {"skillId": "draft_reply"},
         }
-        openai_messages = (
-            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
-        )
+        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         # Metadata is forwarded on the run payload only, not duplicated on messages.
         assert "metadata" not in openai_messages[0]
 
@@ -174,10 +174,7 @@ class TestA2AStreamingTransformation:
         assert "artifactId" in event["result"]["artifact"]
         assert event["result"]["artifact"]["name"] == "response"
         assert event["result"]["artifact"]["parts"][0]["kind"] == "text"
-        assert (
-            event["result"]["artifact"]["parts"][0]["text"]
-            == "Hello, I am an AI assistant."
-        )
+        assert event["result"]["artifact"]["parts"][0]["text"] == "Hello, I am an AI assistant."
 
 
 @pytest.mark.asyncio
@@ -197,6 +194,8 @@ async def test_handle_streaming_emits_proper_events():
     mock_chunk2.choices = [MagicMock()]
     mock_chunk2.choices[0].delta = MagicMock()
     mock_chunk2.choices[0].delta.content = " world"
+    mock_chunk2.choices[0].finish_reason = "length"
+    mock_chunk2.usage = {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
 
     async def mock_streaming_response():
         yield mock_chunk1
@@ -246,6 +245,66 @@ async def test_handle_streaming_emits_proper_events():
         assert events[4]["result"]["kind"] == "status-update"
         assert events[4]["result"]["status"]["state"] == "completed"
         assert events[4]["result"]["final"] is True
+        assert events[4]["result"]["finish_reason"] == "length"
+        assert events[4]["usage"]["total_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_provider_config_receives_full_message_history():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    provider_config = MagicMock()
+    provider_config.handle_non_streaming = AsyncMock(return_value={"result": {}})
+    messages = [
+        {"role": "system", "content": "Be concise"},
+        {"role": "user", "content": "Hello"},
+    ]
+    params = {
+        "message": {"role": "user", "parts": []},
+        "messages": messages,
+    }
+
+    with patch(
+        "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",
+        return_value=provider_config,
+    ):
+        await A2ACompletionBridgeHandler.handle_non_streaming(
+            request_id="req-1",
+            params=params,
+            litellm_params={"custom_llm_provider": "langflow", "model": "flow"},
+        )
+
+    assert provider_config.handle_non_streaming.await_args.kwargs["params"]["messages"] == messages
+
+
+def test_response_transform_preserves_audio_and_logprobs():
+    from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
+        A2ACompletionBridgeTransformation,
+    )
+
+    response = ModelResponse(
+        id="resp-1",
+        model="test-model",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="hello",
+                    role="assistant",
+                    audio={"data": "abc", "expires_at": 1, "transcript": "hello"},
+                ),
+                logprobs={"content": []},
+            )
+        ],
+    )
+
+    transformed = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(response)
+
+    assert transformed["result"]["audio"]["data"] == "abc"
+    assert transformed["result"]["logprobs"] == {"content": []}
 
 
 @pytest.mark.asyncio

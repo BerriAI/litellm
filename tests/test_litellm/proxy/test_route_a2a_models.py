@@ -98,6 +98,9 @@ async def test_route_a2a_model_uses_registered_provider():
         "temperature": 0.2,
         "timeout": 12.0,
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        "output_config": {"format": "json"},
+        "prompt_cache_key": "cache-key",
+        "safety_identifier": "safety-id",
         "proxy_server_request": {
             "headers": {
                 "x-tenant": "tenant-1",
@@ -144,6 +147,9 @@ async def test_route_a2a_model_uses_registered_provider():
     assert bridge_kwargs["litellm_params"]["temperature"] == 0.2
     assert bridge_kwargs["litellm_params"]["timeout"] == 12.0
     assert bridge_kwargs["litellm_params"]["tools"] == data["tools"]
+    assert bridge_kwargs["litellm_params"]["output_config"] == data["output_config"]
+    assert bridge_kwargs["litellm_params"]["prompt_cache_key"] == data["prompt_cache_key"]
+    assert bridge_kwargs["litellm_params"]["safety_identifier"] == data["safety_identifier"]
     assert bridge_kwargs["litellm_params"]["guardrails"] == ["request-guardrail", "agent-guardrail"]
     assert bridge_kwargs["litellm_params"]["extra_headers"] == {
         "X-Tenant": "tenant-1",

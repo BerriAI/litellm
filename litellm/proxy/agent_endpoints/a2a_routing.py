@@ -52,6 +52,7 @@ _FORWARDED_REQUEST_PARAMS: Final = frozenset(
         "response_format",
         "seed",
         "service_tier",
+        "safety_identifier",
         "stop",
         "store",
         "temperature",
@@ -64,6 +65,8 @@ _FORWARDED_REQUEST_PARAMS: Final = frozenset(
         "user",
         "verbosity",
         "web_search_options",
+        "output_config",
+        "prompt_cache_key",
     }
 )
 _A2A_PRICING_PARAMS: Final = frozenset({"cost_per_query", "response_cost"}) | frozenset(
@@ -159,6 +162,7 @@ async def _route_registered_provider(
 
     logging_obj: Final = data.get("litellm_logging_obj")
     if isinstance(logging_obj, Logging):
+        provider_params["no-log"] = True
         pricing_params = {
             key: litellm_params[key]
             for key in _A2A_PRICING_PARAMS
@@ -168,7 +172,6 @@ async def _route_registered_provider(
             logging_obj.litellm_params.update(pricing_params)
             logging_obj.model_call_details["litellm_params"].update(pricing_params)
             logging_obj.custom_pricing = True
-            provider_params["no-log"] = True
 
     if stream:
         streaming_response: Final = A2ACompletionBridgeHandler.handle_streaming(
@@ -214,64 +217,80 @@ async def _route_registered_provider(
     nested_message: Final = result_dict.get("message")
     response_message: Final = nested_message if isinstance(nested_message, Mapping) else result_dict
     response_choices: Final = response.get("choices")
-    choice_payloads: Final = (
-        response_choices
-        if isinstance(response_choices, list)
-        else result_dict.get("choices")
-    )
+    choice_payloads: Final = response_choices if isinstance(response_choices, list) else result_dict.get("choices")
+
+    def _serialize_value(value: object) -> object:
+        if hasattr(value, "model_dump"):
+            return value.model_dump(exclude_none=True)
+        if hasattr(value, "dict"):
+            return value.dict(exclude_none=True)
+        return value
+
+    def _build_message(message_payload: Mapping[str, object], content: str) -> Message:
+        message_kwargs: dict[str, object] = {
+            "content": content,
+            "role": "assistant",
+        }
+        raw_tool_calls = message_payload.get("tool_calls")
+        if isinstance(raw_tool_calls, list):
+            message_kwargs["tool_calls"] = raw_tool_calls
+        for field in (
+            "audio",
+            "annotations",
+            "function_call",
+            "images",
+            "provider_specific_fields",
+            "reasoning_content",
+            "reasoning_items",
+            "thinking_blocks",
+        ):
+            value = message_payload.get(field)
+            if value is not None:
+                message_kwargs[field] = _serialize_value(value)
+        return Message(**message_kwargs)
+
     if isinstance(choice_payloads, list) and choice_payloads:
-        model_choices = [
-            Choices(
-                finish_reason=(
-                    choice.get("finish_reason")
-                    if isinstance(choice, Mapping) and isinstance(choice.get("finish_reason"), str)
-                    else choice.get("message", {}).get("finish_reason")
-                    if isinstance(choice, Mapping)
-                    and isinstance(choice.get("message"), Mapping)
-                    and isinstance(choice.get("message", {}).get("finish_reason"), str)
+        model_choices = []
+        for choice_index, choice in enumerate(choice_payloads):
+            choice_mapping: Mapping[str, object] = choice if isinstance(choice, Mapping) else {}
+            raw_message = choice_mapping.get("message")
+            message_payload: Mapping[str, object] = raw_message if isinstance(raw_message, Mapping) else choice_mapping
+            choice_kwargs: dict[str, object] = {
+                "finish_reason": (
+                    choice_mapping.get("finish_reason")
+                    if isinstance(choice_mapping.get("finish_reason"), str)
+                    else message_payload.get("finish_reason")
+                    if isinstance(message_payload.get("finish_reason"), str)
                     else "stop"
                 ),
-                index=choice.get("index", choice_index)
-                if isinstance(choice, Mapping) and isinstance(choice.get("index", choice_index), int)
+                "index": choice_mapping.get("index", choice_index)
+                if isinstance(choice_mapping.get("index", choice_index), int)
                 else choice_index,
-                message=Message(
-                    content=extract_text_from_a2a_response(
-                        {"result": choice.get("message", choice)}
-                        if isinstance(choice, Mapping)
-                        else {"result": {}}
-                    ),
-                    role="assistant",
-                    tool_calls=(
-                        choice.get("message", {}).get("tool_calls")
-                        if isinstance(choice, Mapping)
-                        and isinstance(choice.get("message"), Mapping)
-                        and isinstance(choice.get("message", {}).get("tool_calls"), list)
-                        else choice.get("tool_calls")
-                        if isinstance(choice, Mapping) and isinstance(choice.get("tool_calls"), list)
-                        else None
-                    ),
+                "message": _build_message(
+                    message_payload,
+                    extract_text_from_a2a_response({"result": message_payload}),
                 ),
-            )
-            for choice_index, choice in enumerate(choice_payloads)
-        ]
+            }
+            raw_logprobs = choice_mapping.get("logprobs", message_payload.get("logprobs"))
+            if raw_logprobs is not None:
+                choice_kwargs["logprobs"] = _serialize_value(raw_logprobs)
+            model_choices.append(Choices(**choice_kwargs))
     else:
         tool_calls: Final = response_message.get("tool_calls")
         normalized_tool_calls: Final = tool_calls if isinstance(tool_calls, list) else None
         finish_reason: Final = response_message.get("finish_reason")
         text: Final = extract_text_from_a2a_response(response)
-        model_choices = [
-            Choices(
-                finish_reason=(
-                    finish_reason
-                    if isinstance(finish_reason, str)
-                    else "tool_calls"
-                    if normalized_tool_calls
-                    else "stop"
-                ),
-                index=0,
-                message=Message(content=text, role="assistant", tool_calls=normalized_tool_calls),
-            )
-        ]
+        choice_kwargs = {
+            "finish_reason": (
+                finish_reason if isinstance(finish_reason, str) else "tool_calls" if normalized_tool_calls else "stop"
+            ),
+            "index": 0,
+            "message": _build_message(response_message, text),
+        }
+        raw_logprobs = response_message.get("logprobs")
+        if raw_logprobs is not None:
+            choice_kwargs["logprobs"] = _serialize_value(raw_logprobs)
+        model_choices = [Choices(**choice_kwargs)]
     model_response: Final = ModelResponse(
         id=str(response.get("id") or request_id),
         model=model_name,

@@ -154,7 +154,7 @@ class A2ACompletionBridgeHandler:
             if a2a_provider_config is not None:
                 verbose_logger.info("A2A: Using provider config for %s", custom_llm_provider)
 
-                provider_params: Final = {key: value for key, value in params.items() if key != "messages"}
+                provider_params: Final = dict(params)
                 provider_kwargs: Final[dict[str, Any]] = {
                     "request_id": request_id,
                     "params": provider_params,
@@ -227,7 +227,7 @@ class A2ACompletionBridgeHandler:
             if a2a_provider_config is not None:
                 verbose_logger.info("A2A: Using provider config for %s (streaming)", custom_llm_provider)
 
-                provider_params: Final = {key: value for key, value in params.items() if key != "messages"}
+                provider_params: Final = dict(params)
                 provider_kwargs: Final[dict[str, Any]] = {
                     "request_id": request_id,
                     "params": provider_params,
@@ -237,8 +237,14 @@ class A2ACompletionBridgeHandler:
                 }
                 if litellm_params.get("timeout") is not None:
                     provider_kwargs["timeout"] = litellm_params["timeout"]
-                async for chunk in a2a_provider_config.handle_streaming(**provider_kwargs):
-                    yield chunk
+                provider_stream: Final = a2a_provider_config.handle_streaming(**provider_kwargs)
+                try:
+                    async for chunk in provider_stream:
+                        yield chunk
+                finally:
+                    close_provider_stream = getattr(provider_stream, "aclose", None)
+                    if close_provider_stream is not None:
+                        await close_provider_stream()
 
                 return
 
@@ -274,26 +280,52 @@ class A2ACompletionBridgeHandler:
 
         # 3. Forward content as artifact updates
         accumulated_tool_calls: Final[list[object]] = []  # mutable-ok: collect streaming tool-call deltas
+        stream_usage: object | None = None
+        stream_finish_reason: str | None = None
         chunk_count = 0
-        async for chunk in response:
-            chunk_count += 1
+        try:
+            async for chunk in response:
+                chunk_count += 1
 
-            # Extract delta content
-            content = ""
-            if chunk is not None and hasattr(chunk, "choices") and chunk.choices:
-                choice = chunk.choices[0]
-                if hasattr(choice, "delta") and choice.delta:
-                    content = choice.delta.content or ""
-                    tool_calls = getattr(choice.delta, "tool_calls", None)
-                    if isinstance(tool_calls, (list, tuple)):
-                        accumulated_tool_calls.extend(tool_calls)
+                raw_usage = getattr(chunk, "usage", None)
+                if isinstance(raw_usage, Mapping):
+                    stream_usage = raw_usage
+                else:
+                    dump_usage = getattr(raw_usage, "model_dump", None)
+                    if callable(dump_usage):
+                        dumped_usage = dump_usage(exclude_none=True)
+                        if isinstance(dumped_usage, Mapping):
+                            stream_usage = dumped_usage
+                    else:
+                        dict_usage = getattr(raw_usage, "dict", None)
+                        if callable(dict_usage):
+                            dumped_usage = dict_usage(exclude_none=True)
+                            if isinstance(dumped_usage, Mapping):
+                                stream_usage = dumped_usage
 
-            if content:
-                artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
-                    ctx=ctx,
-                    text=content,
-                )
-                yield artifact_event
+                # Extract delta content
+                content = ""
+                if chunk is not None and hasattr(chunk, "choices") and chunk.choices:
+                    choice = chunk.choices[0]
+                    raw_finish_reason = getattr(choice, "finish_reason", None)
+                    if isinstance(raw_finish_reason, str) and raw_finish_reason:
+                        stream_finish_reason = raw_finish_reason
+                    if hasattr(choice, "delta") and choice.delta:
+                        content = choice.delta.content or ""
+                        tool_calls = getattr(choice.delta, "tool_calls", None)
+                        if isinstance(tool_calls, (list, tuple)):
+                            accumulated_tool_calls.extend(tool_calls)
+
+                if content:
+                    artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
+                        ctx=ctx,
+                        text=content,
+                    )
+                    yield artifact_event
+        finally:
+            close_response = getattr(response, "aclose", None)
+            if close_response is not None:
+                await close_response()
 
         # 4. Emit final status update (kind: "status-update", status: "completed", final: true)
         completed_event: Final = A2ACompletionBridgeTransformation.create_status_update_event(
@@ -303,6 +335,10 @@ class A2ACompletionBridgeHandler:
         )
         if accumulated_tool_calls:
             completed_event["result"]["tool_calls"] = accumulated_tool_calls
+        if stream_finish_reason:
+            completed_event["result"]["finish_reason"] = stream_finish_reason
+        if stream_usage is not None:
+            completed_event["usage"] = stream_usage
         yield completed_event
 
         verbose_logger.info(

@@ -2,8 +2,10 @@
 A2A Streaming Response Iterator
 """
 
+from collections.abc import Mapping
 from typing import Final
 
+import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
@@ -73,13 +75,14 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             # Determine finish reason
             finish_reason: Final = self._get_finish_reason(chunk)
             tool_calls: Final = self._get_tool_calls(chunk)
+            usage: Final = self._get_usage(chunk)
 
             # Return generic streaming chunk
             return GenericStreamingChunk(
                 text=text,
                 is_finished=bool(finish_reason or tool_calls),
                 finish_reason=finish_reason or ("tool_calls" if tool_calls else ""),
-                usage=None,
+                usage=usage,
                 index=0,
                 tool_use=tool_calls,
             )
@@ -105,6 +108,14 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
         # Check for task completion
         if isinstance(result, dict):
+            explicit_finish_reason: Final = result.get("finish_reason")
+            if isinstance(explicit_finish_reason, str) and explicit_finish_reason:
+                return explicit_finish_reason
+            message: Final = result.get("message")
+            if isinstance(message, dict):
+                message_finish_reason: Final = message.get("finish_reason")
+                if isinstance(message_finish_reason, str) and message_finish_reason:
+                    return message_finish_reason
             status: Final = result.get("status", {})
             if isinstance(status, dict):
                 state: Final = status.get("state")
@@ -119,16 +130,53 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
         return None
 
+    def _get_usage(self, chunk: dict) -> object | None:
+        raw_usage: object | None = chunk.get("usage")
+        result: Final = chunk.get("result", {})
+        if raw_usage is None and isinstance(result, dict):
+            raw_usage = result.get("usage")
+        if raw_usage is None:
+            return None
+        if isinstance(raw_usage, Mapping):
+            try:
+                return litellm.Usage(**raw_usage)
+            except Exception:
+                return raw_usage
+        if hasattr(raw_usage, "model_dump"):
+            try:
+                return litellm.Usage(**raw_usage.model_dump(exclude_none=True))
+            except Exception:
+                return raw_usage
+        return raw_usage
+
     def _get_tool_calls(self, chunk: dict) -> ChatCompletionToolCallChunk | None:
         result: Final = chunk.get("result", {})
         if not isinstance(result, dict):
             return None
         tool_calls = result.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
-            first_tool_call: Final = tool_calls[0]
-            return first_tool_call if isinstance(first_tool_call, dict) else None
+            return self._serialize_tool_call(tool_calls[0])
         message = result.get("message")
         if isinstance(message, dict) and isinstance(message.get("tool_calls"), list) and message["tool_calls"]:
-            first_tool_call = message["tool_calls"][0]
-            return first_tool_call if isinstance(first_tool_call, dict) else None
+            return self._serialize_tool_call(message["tool_calls"][0])
         return None
+
+    @staticmethod
+    def _serialize_tool_call(tool_call: object) -> ChatCompletionToolCallChunk | None:
+        if isinstance(tool_call, dict):
+            return tool_call
+        if hasattr(tool_call, "model_dump"):
+            return tool_call.model_dump(exclude_none=True)
+        if hasattr(tool_call, "dict"):
+            return tool_call.dict(exclude_none=True)
+        return None
+
+    async def aclose(self) -> None:
+        streaming_response = self.streaming_response
+        self.streaming_response = None
+        try:
+            await super().aclose()
+        finally:
+            close_stream = getattr(streaming_response, "aclose", None)
+            if close_stream is not None:
+                await close_stream()
