@@ -22,11 +22,16 @@ interface StatusBadgeProps {
   label: string;
   tooltip?: React.ReactNode;
   dataTestId?: string;
+  className?: string;
 }
 
-export function StatusBadge({ tone, label, tooltip, dataTestId }: StatusBadgeProps) {
+export function StatusBadge({ tone, label, tooltip, dataTestId, className }: StatusBadgeProps) {
   const badge = (
-    <Badge variant="outline" data-testid={dataTestId} className={cn("whitespace-nowrap font-normal", TONE_CLASS[tone])}>
+    <Badge
+      variant="outline"
+      data-testid={dataTestId}
+      className={cn("whitespace-nowrap font-normal", TONE_CLASS[tone], className)}
+    >
       {label}
     </Badge>
   );
