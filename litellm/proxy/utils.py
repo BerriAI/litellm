@@ -2585,9 +2585,9 @@ class ProxyLogging:
         litellm_logging_obj: Logging,
         original_exception: Exception | None,
     ) -> None:
-        """Runs the async failure handler, and the threaded sync handler only when a
-        sync-only failure callback is configured. Expected client (4xx) errors skip
-        traceback formatting unless litellm.log_client_error_tracebacks is set."""
+        """Runs the async failure handler plus the threaded sync handler. Expected
+        client (4xx) errors skip traceback formatting unless
+        litellm.log_client_error_tracebacks is set."""
         include_traceback: Final = litellm.log_client_error_tracebacks or not is_expected_client_error(
             original_exception
         )
@@ -2597,15 +2597,14 @@ class ProxyLogging:
             traceback_exception=traceback_str,
         )
 
-        if litellm_logging_obj._should_run_sync_failure_callbacks_for_async_calls():
-            threading.Thread(
-                target=litellm_logging_obj.failure_handler,
-                args=(
-                    original_exception,
-                    traceback_str,
-                ),
-                daemon=True,
-            ).start()
+        threading.Thread(
+            target=litellm_logging_obj.failure_handler,
+            args=(
+                original_exception,
+                traceback_str,
+            ),
+            daemon=True,
+        ).start()
 
     async def post_call_success_hook(
         self,
