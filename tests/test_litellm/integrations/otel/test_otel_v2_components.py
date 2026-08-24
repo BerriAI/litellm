@@ -730,6 +730,33 @@ def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():
     assert temporality[Histogram] is AggregationTemporality.CUMULATIVE
 
 
+def test_metric_reader_default_interval_is_5s(monkeypatch):
+    monkeypatch.delenv("OTEL_METRIC_EXPORT_INTERVAL", raising=False)
+    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="console"))
+    assert reader._export_interval_millis == 5000  # noqa: SLF001  # reader exposes no public accessor
+
+
+def test_metric_reader_honours_otel_metric_export_interval(monkeypatch):
+    """``OTEL_METRIC_EXPORT_INTERVAL`` is the standard knob for the export period.
+
+    The SDK reads it only when no explicit interval is passed, and litellm
+    passes one, so without this the variable is silently dead — and a 5s
+    cumulative export re-ships every series ever recorded twelve times a
+    minute regardless of traffic, which is what a per-datapoint-billed backend
+    charges for.
+    """
+    monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL", "60000")
+    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="console"))
+    assert reader._export_interval_millis == 60000  # noqa: SLF001  # reader exposes no public accessor
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "0", "-5"])
+def test_metric_reader_rejects_bad_interval(monkeypatch, raw):
+    monkeypatch.setenv("OTEL_METRIC_EXPORT_INTERVAL", raw)
+    reader = providers.build_metric_reader(OpenTelemetryV2Config(exporter="console"))
+    assert reader._export_interval_millis == 5000  # noqa: SLF001  # reader exposes no public accessor
+
+
 def test_otlp_logs_endpoint_normalization():
     norm = providers._otlp_logs_endpoint
     # A base endpoint gets the signal path appended (the common OTLP env shape).
@@ -906,8 +933,8 @@ def test_error_details_stamped_as_span_attributes_for_labels_ingest():
     attributes so backends that flatten attrs into label indexes (Elastic APM
     ``labels.*``, Datadog span tags) render them. The exception event with the
     full untruncated message stays alongside."""
-    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
     from litellm.integrations.otel.emitter import SpanEmitter
+    from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     provider, exporter = providers.in_memory_provider(cfg)
