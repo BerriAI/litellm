@@ -30,7 +30,12 @@ class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
 
 
-NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = ("thinking_blocks", "provider_specific_fields", "cache_control")
+NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
+    "thinking_blocks",
+    "reasoning_content",
+    "provider_specific_fields",
+    "cache_control",
+)
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -173,7 +178,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         - Azure AI Studio doesn't support content as a list. This handles:
             1. Strips message fields that are not part of the OpenAI chat-completions
-               schema (thinking_blocks, provider_specific_fields, cache_control).
+               schema (thinking_blocks, reasoning_content, provider_specific_fields,
+               cache_control).
                Azure AI Foundry backends set additionalProperties=false and reject
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
