@@ -27,8 +27,8 @@ class ThinkingPayload(TypedDict, total=False):
     budget_tokens: ReadOnly[int]
 
 
-class TencentExtraBody(TypedDict, total=False):
-    """`extra_body` payload for TokenHub chat requests."""
+class ThinkingExtraBody(TypedDict, total=False):
+    """`extra_body` payload carrying TokenHub's `thinking` object."""
 
     thinking: ReadOnly[Mapping[str, object]]
 
@@ -54,21 +54,17 @@ class TencentChatConfig(OpenAIGPTConfig):
 
         thinking: Final = self._resolve_thinking_payload(
             model=model,
-            thinking_value=thinking_value,
-            reasoning_effort=reasoning_effort,
+            thinking_value=thinking_value,  # pyright: ignore[reportUnknownArgumentType]  # value popped from the untyped provider params dict
+            reasoning_effort=reasoning_effort,  # pyright: ignore[reportUnknownArgumentType]  # value popped from the untyped provider params dict
         )
-        if thinking is None:
-            return mapped_params
-
-        # TokenHub expects `thinking` in the request JSON body, but the OpenAI
-        # SDK's chat.completions.create() rejects unknown top-level kwargs, so
-        # it travels via `extra_body`, which the SDK merges into the payload.
-        existing_extra_body: Final = mapped_params.pop("extra_body", None)
-        if isinstance(existing_extra_body, dict):
-            merged_extra_body: Final[TencentExtraBody] = {**existing_extra_body, "thinking": thinking}
-        else:
-            merged_extra_body: Final[TencentExtraBody] = {"thinking": thinking}
-        mapped_params["extra_body"] = merged_extra_body
+        if thinking is not None:
+            # TokenHub expects `thinking` in the request JSON body, but the
+            # OpenAI SDK's chat.completions.create() rejects unknown top-level
+            # kwargs, so it travels via `extra_body`, which the SDK merges into
+            # the payload. A plain assignment is merge-safe: get_optional_params
+            # spreads this dict into its own extra_body assembly downstream.
+            extra_body: Final[ThinkingExtraBody] = {"thinking": thinking}
+            mapped_params["extra_body"] = extra_body
         return mapped_params
 
     @classmethod
@@ -79,7 +75,7 @@ class TencentChatConfig(OpenAIGPTConfig):
         reasoning_effort: object,
     ) -> Mapping[str, object] | None:
         if isinstance(thinking_value, dict):
-            return cls._coerce_thinking_type_for_model(model=model, thinking=thinking_value)
+            return cls._coerce_thinking_type_for_model(model=model, thinking=thinking_value)  # pyright: ignore[reportUnknownArgumentType]  # isinstance narrows to dict[Unknown, Unknown] out of the untyped provider params dict
         if isinstance(reasoning_effort, str):
             # TokenHub recommends explicitly disabling thinking rather than
             # relying on per-model defaults (deepseek-v4-* default to enabled).
@@ -101,7 +97,7 @@ class TencentChatConfig(OpenAIGPTConfig):
         if thinking.get("type") != "enabled" or not TencentChatConfig._is_adaptive_thinking_model(model):
             return thinking
 
-        budget: Final = thinking.get("budget_tokens")
+        budget: Final[object] = thinking.get("budget_tokens")
         if isinstance(budget, int):
             coerced_with_budget: Final[ThinkingPayload] = {"type": "adaptive", "budget_tokens": budget}
             return coerced_with_budget
@@ -112,7 +108,7 @@ class TencentChatConfig(OpenAIGPTConfig):
     def _is_adaptive_thinking_model(model: str) -> bool:
         """Read `supports_adaptive_thinking` from the model map under tencent."""
         try:
-            model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="tencent")
+            model_info: Final[Mapping[str, object]] = litellm.get_model_info(model=model, custom_llm_provider="tencent")
         except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for unmapped models
             return False
         return model_info.get("supports_adaptive_thinking") is True

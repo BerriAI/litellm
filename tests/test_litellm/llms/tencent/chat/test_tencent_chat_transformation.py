@@ -118,7 +118,9 @@ def test_map_openai_params_extracts_thinking_and_effort_from_optional_params():
     assert "reasoning_effort" not in result
 
 
-def test_map_openai_params_merges_into_existing_extra_body():
+def test_map_openai_params_overwrites_existing_extra_body():
+    """The map layer assigns extra_body directly; get_optional_params merges it
+    with user-supplied extra params downstream (utils.py provider overrides)."""
     config = TencentChatConfig()
     result = config.map_openai_params(
         non_default_params={},
@@ -130,7 +132,28 @@ def test_map_openai_params_merges_into_existing_extra_body():
         drop_params=False,
     )
 
-    assert result["extra_body"] == {"custom_flag": True, "thinking": {"type": "enabled"}}
+    assert result["extra_body"] == {"thinking": {"type": "enabled"}}
+
+
+def test_get_optional_params_merges_thinking_with_user_extra_body():
+    """End-to-end at the get_optional_params layer: a user-supplied extra_body
+    and the mapped thinking payload must coexist in the final extra_body."""
+    from litellm.utils import get_optional_params
+
+    with patch(
+        "litellm.llms.tencent.chat.transformation.supports_reasoning",
+        return_value=True,
+    ):
+        result = get_optional_params(
+            model="tencent/deepseek-v4-pro",
+            custom_llm_provider="tencent",
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "enabled"},
+            extra_body={"custom_flag": True},
+        )
+
+    assert result["extra_body"]["thinking"] == {"type": "enabled"}
+    assert result["extra_body"]["custom_flag"] is True
 
 
 def test_transform_request_never_passes_thinking_as_top_level_kwarg():
