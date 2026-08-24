@@ -44068,10 +44068,10 @@
             "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
         }
     },
-    "runwayml/gen4_aleph": {
+    "runwayml/gen4.5": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_video_per_second": 0.15,
+        "output_cost_per_second": 0.12,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
         "supported_modalities": [
             "text",
@@ -44081,13 +44081,136 @@
             "video"
         ],
         "metadata": {
-            "comment": "15 credits per second @ $0.01 per credit = $0.15 per second"
+            "comment": "12 credits per second @ $0.01 per credit = $0.12 per second"
         }
     },
-    "runwayml/gen3a_turbo": {
+    "runwayml/aleph2": {
         "litellm_provider": "runwayml",
         "mode": "video_generation",
-        "output_cost_per_video_per_second": 0.05,
+        "output_cost_per_second": 0.28,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "28 credits per second @ $0.01 per credit = $0.28 per second; 56 credit minimum per task not modeled"
+        }
+    },
+    "runwayml/seedance2": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.36,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_4k": 1.5,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "36 credits per second at 480p/720p, 40 at 1080p, 150 at 4K @ $0.01 per credit"
+        }
+    },
+    "runwayml/seedance2_fast": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.29,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "29 credits per second at 480p/720p @ $0.01 per credit = $0.29 per second"
+        }
+    },
+    "runwayml/seedance2_mini": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.16,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "16 credits per second @ $0.01 per credit = $0.16 per second; 64 credit minimum per task not modeled"
+        }
+    },
+    "runwayml/seedance2_5": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3,
+        "output_cost_per_second_480p": 0.2,
+        "output_cost_per_second_1080p": 0.68,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "Output: 20/30/68 credits per second at 480p/720p/1080p @ $0.01 per credit; input video billed additionally at 10/15/34 credits per input second and the 80 credit minimum per task are not modeled"
+        }
+    },
+    "runwayml/hailuo3": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "10 credits per second at 768P, 15 at 2K (mapped to the 1080p tier) @ $0.01 per credit; 2 credits per reference image not modeled"
+        }
+    },
+    "runwayml/gemini_omni_flash": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "10 credits per second @ $0.01 per credit = $0.10 per second"
+        }
+    },
+    "runwayml/veo3.1": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.4,
         "source": "https://docs.dev.runwayml.com/guides/pricing/",
         "supported_modalities": [
             "text",
@@ -44097,7 +44220,23 @@
             "video"
         ],
         "metadata": {
-            "comment": "5 credits per second @ $0.01 per credit = $0.05 per second"
+            "comment": "40 credits per second with audio, 20 without @ $0.01 per credit; priced at the with-audio rate"
+        }
+    },
+    "runwayml/veo3.1_fast": {
+        "litellm_provider": "runwayml",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "source": "https://docs.dev.runwayml.com/guides/pricing/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "15 credits per second with audio, 10 without @ $0.01 per credit; priced at the with-audio rate"
         }
     },
     "runwayml/gen4_image": {
