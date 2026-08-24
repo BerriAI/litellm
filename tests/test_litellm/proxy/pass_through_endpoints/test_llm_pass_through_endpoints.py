@@ -3699,7 +3699,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert raised is not None and raised.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_virtual_key_in_pass_through_configured_header_is_stripped(self, monkeypatch):
+    async def test_virtual_key_in_pass_through_configured_header_is_dropped_and_rejected(self, monkeypatch):
         with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for pass_through_endpoints; no injection seam exists on this route
             "litellm.proxy.proxy_server.general_settings",
             {"pass_through_endpoints": [{"headers": {"litellm_user_api_key": "x-company-key"}}]},
@@ -3708,6 +3708,23 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                 monkeypatch,
                 [
                     (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert forwarded is None, "a virtual key in the pass-through key header must be dropped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_authenticated_authorization_is_stripped_over_a_lower_precedence_pass_through_header(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for pass_through_endpoints; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"pass_through_endpoints": [{"headers": {"litellm_user_api_key": "x-company-key"}}]},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"authorization", f"Bearer {self.VKEY}".encode()),
+                    (b"x-company-key", b"sk-decoy-lower-precedence-value"),
                     (b"x-goog-api-key", b"AIza-real-google-api-key"),
                     (b"content-type", b"application/json"),
                 ],
@@ -3715,6 +3732,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert raised is None
         assert forwarded is not None
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert "authorization" not in forwarded, "Authorization authenticated (higher precedence) so its key must be stripped"
         assert "x-company-key" not in forwarded
         assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 

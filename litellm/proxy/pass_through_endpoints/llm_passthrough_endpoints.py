@@ -1769,29 +1769,33 @@ _VERTEX_CALLER_KEY_HEADER_PRECEDENCE: Final = (
 )
 
 
-def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
-    """Lowercased header names the operator has configured as caller-key sources.
+def _operator_configured_caller_key_header_names() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Operator-configured caller-key header names, as (override, pass_through).
 
     ``user_api_key_auth`` accepts the caller's key from two runtime-configured
-    headers beyond the built-in ones: ``general_settings.litellm_key_header_name``,
-    and each ``general_settings.pass_through_endpoints`` entry's
-    ``headers.litellm_user_api_key``. Google never consumes either, so they are
-    both dropped by name and treated as top-precedence caller-key sources.
+    header sources beyond the built-in ones, at opposite ends of its precedence.
+    ``general_settings.litellm_key_header_name`` overrides every built-in source
+    (it replaces the resolved key after ``get_api_key`` runs), so it is highest
+    precedence. Each ``general_settings.pass_through_endpoints`` entry's
+    ``headers.litellm_user_api_key`` is checked last inside ``get_api_key``, so it
+    is lowest. Google never consumes either, so both are also dropped by name.
     """
     from litellm.proxy.proxy_server import general_settings
 
     custom_key_header: Final = general_settings.get("litellm_key_header_name")
+    override: Final = (custom_key_header.lower(),) if isinstance(custom_key_header, str) else ()
     pass_through_endpoints: Final = general_settings.get("pass_through_endpoints")
     endpoints: Final = pass_through_endpoints if isinstance(pass_through_endpoints, list) else ()
-    pass_through_key_headers: Final = tuple(
-        headers["litellm_user_api_key"]
-        for endpoint in endpoints
-        if isinstance(endpoint, dict)
-        for headers in (endpoint.get("headers"),)
-        if isinstance(headers, dict) and isinstance(headers.get("litellm_user_api_key"), str)
+    pass_through: Final = tuple(
+        dict.fromkeys(
+            headers["litellm_user_api_key"].lower()
+            for endpoint in endpoints
+            if isinstance(endpoint, dict)
+            for headers in (endpoint.get("headers"),)
+            if isinstance(headers, dict) and isinstance(headers.get("litellm_user_api_key"), str)
+        )
     )
-    configured: Final = ((custom_key_header,) if isinstance(custom_key_header, str) else ()) + pass_through_key_headers
-    return tuple(dict.fromkeys(name.lower() for name in configured))
+    return override, pass_through
 
 
 def _authenticated_caller_key_values(request: Request) -> frozenset[str]:
@@ -1799,16 +1803,19 @@ def _authenticated_caller_key_values(request: Request) -> frozenset[str]:
 
     The Vertex route authenticates through ``Depends(user_api_key_auth)``, which
     resolves the key from the first present of the credential headers in
-    ``get_api_key``'s precedence order, with the operator-configured
-    ``litellm_key_header_name`` / ``pass_through_endpoints`` headers overriding all
-    of them. Some of those headers (``Authorization``, ``x-goog-api-key``) are also
-    kept as genuine bring-your-own Google credentials, so returning only the value
-    that actually authenticated lets the filter strip that value wherever it
+    ``get_api_key``'s precedence order. That precedence is matched here exactly: an
+    operator ``litellm_key_header_name`` overrides everything so it comes first,
+    then the built-in headers in ``get_api_key`` order, then a
+    ``pass_through_endpoints`` ``litellm_user_api_key`` header which ``get_api_key``
+    checks last. Some of those headers (``Authorization``, ``x-goog-api-key``) are
+    also kept as genuine bring-your-own Google credentials, so returning only the
+    value that actually authenticated lets the filter strip that value wherever it
     appears while leaving a real Google credential in place. An empty set means no
     caller key was found, so nothing is value-stripped.
     """
     incoming: Final = _safe_get_request_headers(request)
-    ordered_names: Final = _operator_configured_caller_key_header_names() + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE
+    override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
+    ordered_names: Final = override_headers + _VERTEX_CALLER_KEY_HEADER_PRECEDENCE + pass_through_headers
     present_values: Final = (incoming[name] for name in ordered_names if incoming.get(name))
     authenticated_key: Final = next(
         (stripped for value in present_values if (stripped := _normalize_credential_value(value))),
@@ -1844,7 +1851,8 @@ def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -
     """
     incoming: Final = _safe_get_request_headers(request)
     caller_key_values: Final = _authenticated_caller_key_values(request)
-    never_forwarded: Final = _HEADERS_NEVER_FORWARDED_TO_VERTEX.union(_operator_configured_caller_key_header_names())
+    override_headers, pass_through_headers = _operator_configured_caller_key_header_names()
+    never_forwarded: Final = _HEADERS_NEVER_FORWARDED_TO_VERTEX.union(override_headers).union(pass_through_headers)
     forwarded: Final = MappingProxyType(
         {
             name: value
