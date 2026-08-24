@@ -1,15 +1,12 @@
 import asyncio
 import json
 import logging
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
@@ -24,7 +21,10 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
+    _collect_ws_project_quota_callbacks,
     _google_genai_streaming_hidden_params,
+    _has_pre_call_deployment_hook,
+    _rust_responses_websocket_enabled,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -1738,6 +1738,74 @@ async def test_realtime_backend_open_does_not_retry_auth_failure(rejection):
     assert fake.attempts == 1
 
 
+class _FakeClientWebSocket:
+    def __init__(self, send_error=None):
+        self.events = []
+        self._send_error = send_error
+
+    async def send_text(self, payload):
+        if self._send_error is not None:
+            raise self._send_error
+        self.events.append(("send_text", payload))
+
+    async def close(self, code=None, reason=None):
+        self.events.append(("close", (code, reason)))
+
+
+async def _run_async_realtime_with_backend_failure(client_ws):
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    handler = BaseLLMHTTPHandler()
+    provider_config = Mock()
+    provider_config.get_complete_url.return_value = "wss://backend.example/live"
+    provider_config.validate_environment.return_value = {}
+
+    with patch.object(
+        handler,
+        "_open_realtime_backend_ws",
+        AsyncMock(side_effect=Exception("vertex token refresh exploded")),
+    ):
+        await handler.async_realtime(
+            model="gemini-live-2.5-flash",
+            websocket=client_ws,
+            logging_obj=Mock(),
+            provider_config=provider_config,
+            headers={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_generic_failure_sends_error_event_then_reasoned_close():
+    """Regression for the realtime accept-then-silence hang: a generic backend
+    failure used to close the client socket without any error event, so callers
+    only saw a bare 1011. The client must receive an OpenAI-style error event
+    before the reasoned close."""
+    client_ws = _FakeClientWebSocket()
+
+    await _run_async_realtime_with_backend_failure(client_ws)
+
+    assert [name for name, _ in client_ws.events] == ["send_text", "close"]
+
+    error_event = json.loads(client_ws.events[0][1])
+    assert error_event["type"] == "error"
+    assert error_event["error"]["type"] == "server_error"
+    assert "vertex token refresh exploded" in error_event["error"]["message"]
+
+    assert client_ws.events[1][1] == (1011, "Internal server error: vertex token refresh exploded")
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_error_event_send_failure_still_closes():
+    """A client socket that already dropped must not turn the loud-failure path
+    into a new exception: the error-event send may fail, but the reasoned close
+    must still be attempted."""
+    client_ws = _FakeClientWebSocket(send_error=RuntimeError("client already disconnected"))
+
+    await _run_async_realtime_with_backend_failure(client_ws)
+
+    assert client_ws.events == [("close", (1011, "Internal server error: vertex token refresh exploded"))]
+
+
 class _JSONBodyAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(self, model):
         return []
@@ -2301,3 +2369,158 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
 
     unconfigured_deployment = await logging_obj_after_handler(GenericLiteLLMParams())
     assert "vertex_location" not in unconfigured_deployment.litellm_params
+
+
+_GENERIC_STREAM_SSE = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,'
+    b'"model":"test-model","choices":[{"index":0,"delta":{"content":"hi"},'
+    b'"finish_reason":null}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+def _generic_stream_upstream_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={
+            "x-request-id": "generic-req-123",
+            "x-ratelimit-remaining-requests": "42",
+        },
+        content=_GENERIC_STREAM_SSE,
+        request=httpx.Request("POST", "https://fake-vllm.test/v1/chat/completions"),
+    )
+
+
+def test_generic_http_handler_sync_streaming_forwards_provider_response_headers():
+    """
+    Regression test for the generic BaseLLMHTTPHandler streaming path used by
+    ~30 providers (deepseek, groq, hosted_vllm, databricks, openrouter, ...).
+
+    The sync `completion()` streaming branch builds the CustomStreamWrapper from
+    `make_sync_call`, which returns the upstream response headers alongside the
+    stream. Those headers must reach the caller as `llm_provider-*` entries in
+    `_hidden_params["additional_headers"]`, which is what the proxy merges into
+    the client-facing response headers.
+    """
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post = Mock(return_value=_generic_stream_upstream_response())
+
+    response = litellm.completion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in response]) == "hi"
+
+
+@pytest.mark.asyncio
+async def test_generic_http_handler_async_streaming_forwards_provider_response_headers():
+    """
+    Companion to the sync test above for `acompletion_stream_function`, which
+    builds its CustomStreamWrapper from `make_async_call_stream_helper`.
+    """
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=_generic_stream_upstream_response())
+
+    response = await litellm.acompletion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    collected = [chunk async for chunk in response]
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, litellm_params, expected",
+    [
+        ("openai", GenericLiteLLMParams(rust=True), True),
+        ("openai", GenericLiteLLMParams(), False),
+        ("openai", GenericLiteLLMParams(rust=False), False),
+        ("azure", GenericLiteLLMParams(rust=True), False),
+        ("hosted_vllm", GenericLiteLLMParams(rust=True), False),
+        (None, GenericLiteLLMParams(rust=True), False),
+    ],
+)
+def test_the_rust_responses_websocket_needs_both_openai_and_the_rust_flag(
+    custom_llm_provider, litellm_params, expected
+):
+    assert _rust_responses_websocket_enabled(custom_llm_provider, litellm_params) is expected
+
+
+def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _PlainLogger(CustomLogger):
+        pass
+
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    assert _has_pre_call_deployment_hook(logging_obj) is False
+
+    monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
+    assert _has_pre_call_deployment_hook(logging_obj) is False
+
+
+def test_a_callback_that_overrides_the_deployment_hook_is_detected(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _DeploymentHookLogger(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            return None
+
+    class _InheritsTheHook(_DeploymentHookLogger):
+        pass
+
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    monkeypatch.setattr(litellm, "callbacks", [_DeploymentHookLogger()])
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+    monkeypatch.setattr(litellm, "callbacks", [_InheritsTheHook()])
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj.dynamic_success_callbacks = [_DeploymentHookLogger()]
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+
+def test_only_callbacks_that_can_charge_a_frame_are_collected_for_ws_quota(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _PlainLogger(CustomLogger):
+        pass
+
+    class _QuotaLogger(CustomLogger):
+        async def enforce_project_io_token_quota_for_frame(self, *args, **kwargs):
+            return None
+
+    class _NotCallableAttribute:
+        enforce_project_io_token_quota_for_frame = "not a method"
+
+    plain, quota, decoy = _PlainLogger(), _QuotaLogger(), _NotCallableAttribute()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, decoy])
+    assert _collect_ws_project_quota_callbacks() == ()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, quota, decoy])
+    assert _collect_ws_project_quota_callbacks() == (quota,)

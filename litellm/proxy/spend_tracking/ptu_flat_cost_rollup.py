@@ -324,7 +324,6 @@ class _LoadedDeployments:
 
     models: tuple[PTUModel, ...]
     scanned_ids: frozenset[str]
-    config_sourced: bool
 
 
 def _running_router() -> object | None:
@@ -371,7 +370,6 @@ async def _load_ptu_models(prisma_client: "PrismaClient") -> _LoadedDeployments:
     )
     return _LoadedDeployments(
         models=models,
-        config_sourced=bool(config_records),
         scanned_ids=db_ids
         | frozenset(record.model_id for record in config_records)
         | frozenset(model.model_id for model in models),
@@ -385,9 +383,11 @@ async def run_ptu_flat_cost_rollup(
 ) -> RollupResult:
     """Rollup one UTC day of flat PTU cost across all PTU-configured model deployments.
 
-    Defaults to yesterday UTC. Authoritative for the day: it upserts the current charges
-    first, then deletes the day's sentinel rows this run did not refresh, so a
-    since-removed, invalidated, or now-out-of-window deployment leaves no stale charge.
+    Defaults to yesterday UTC. It upserts the current charges first, then deletes the
+    day's sentinel rows it scanned and did not refresh, so an invalidated or
+    now-out-of-window deployment leaves no stale charge. A deployment it cannot see is
+    left alone, since its charge records capacity that was reserved and this run has no
+    grounds to retract it.
 
     The prune predicate is ``updated_at < run_started`` rather than "not in the charge
     set I computed", which matters under concurrency: whether a row is garbage becomes a
@@ -436,7 +436,7 @@ async def run_ptu_flat_cost_rollup(
             prisma_client,
             date_str=date_str,
             run_started=run_started,
-            scanned_ids=loaded.scanned_ids if loaded.config_sourced else None,
+            scanned_ids=loaded.scanned_ids,
         )
 
     verbose_proxy_logger.info(
@@ -724,8 +724,8 @@ async def _deliver_alert(alert: "Callable[[str], Awaitable[None]] | None", messa
         verbose_proxy_logger.error("PTU rollup: could not deliver the failed-charge alert: %s", exc)
 
 
-def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...] | None") -> "Mapping[str, object]":
-    """One delete statement's predicate. An absent chunk leaves the sweep unbounded.
+def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...]") -> "Mapping[str, object]":
+    """One delete statement's predicate, bounded to the deployments in ``chunk``.
 
     Returns a plain dict because the query builder serialises the mapping it is handed and
     rejects a read-only view of one.
@@ -734,7 +734,7 @@ def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...] | 
         "date": date_str,
         "api_key": PTU_SENTINEL_API_KEY,
         "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
-        **({} if chunk is None else {"model": {"in": chunk}}),  # mutable-ok: prisma membership filter
+        "model": {"in": chunk},  # mutable-ok: prisma membership filter
     }
 
 
@@ -743,7 +743,7 @@ async def _prune_unrefreshed_sentinel_rows(
     *,
     date_str: str,
     run_started: datetime,
-    scanned_ids: frozenset[str] | None,
+    scanned_ids: frozenset[str],
 ) -> None:
     """Delete the day's PTU sentinel rows this run looked at and did not refresh.
 
@@ -754,25 +754,22 @@ async def _prune_unrefreshed_sentinel_rows(
     different hosts, and the grace separates a row that is hours old from one written
     seconds ago without waiting on clocks agreeing.
 
-    A run that priced a deployment only its own host declares must also name the
-    deployments it scanned. Staleness alone is sufficient while every run derives its
-    charges from the same table, because then any two runs compute the same set, so a
-    database-only run still sweeps by timestamp exactly as it always has. Once one host's
-    charges come from a file the others cannot read, a row it never considered is not
-    evidence of anything, and deleting it drops a charge that host is responsible for.
+    It must also be a deployment this run could see. A charge already written is a record
+    of capacity that was reserved, so the only rows a run may retract are the ones it can
+    reassess: a deployment it scanned and then declined to charge, because the window
+    closed or the PTU config was removed. A row whose deployment is absent from every
+    source the run reads is not evidence that the reservation never happened, only that
+    this host cannot account for it. A deployment the router refused to register is in that
+    same bucket as one that was removed, because neither reaches the scan.
 
-    Where the bound applies the ids go out in chunks, because each is one bind variable and
-    the server rejects a statement carrying more than 32767 of them, which a proxy holding
-    that many deployments would otherwise hit every night with no handler above here.
+    The ids go out in chunks, because each is one bind variable and the server rejects a
+    statement carrying more than 32767 of them, which a proxy holding that many
+    deployments would otherwise hit every night with no handler above here.
     """
     cutoff: Final = run_started - timedelta(seconds=PTU_PRUNE_SKEW_GRACE_SECONDS)
-    ordered: Final = () if scanned_ids is None else tuple(sorted(scanned_ids))
-    chunks: Final = (
-        (None,)
-        if scanned_ids is None
-        else tuple(
-            ordered[start : start + _PRUNE_ID_CHUNK_SIZE] for start in range(0, len(ordered), _PRUNE_ID_CHUNK_SIZE)
-        )
+    ordered: Final = tuple(sorted(scanned_ids))
+    chunks: Final = tuple(
+        ordered[start : start + _PRUNE_ID_CHUNK_SIZE] for start in range(0, len(ordered), _PRUNE_ID_CHUNK_SIZE)
     )
     filters: Final = tuple(_prune_filter(date_str=date_str, cutoff=cutoff, chunk=chunk) for chunk in chunks)
     deletions: Final = tuple(
@@ -781,10 +778,10 @@ async def _prune_unrefreshed_sentinel_rows(
     deleted: Final = sum(deletions)
     if deleted:
         verbose_proxy_logger.info(
-            "PTU rollup for %s: pruned %s stale sentinel row(s) across %s deployment(s)",
+            "PTU rollup for %s: pruned %s stale sentinel row(s) of %s deployment(s) considered",
             date_str,
             deleted,
-            "every" if scanned_ids is None else len(scanned_ids),
+            len(ordered),
         )
 
 

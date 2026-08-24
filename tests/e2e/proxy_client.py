@@ -65,16 +65,14 @@ from models import (
 )
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
-    FIXTURE_DIR,
-    FIXTURE_MODE_RAW,
     MASTER_KEY,
     POLL_INTERVAL,
     POLL_TIMEOUT,
     PROXY_BASE_URL,
     REQUEST_TIMEOUT,
+    SLOW_PROVIDER_TIMEOUT_SECONDS,
     settle_propagation,
 )
-from fixture_transport import select_transport
 from transport import HttpTransport, SplitTransport, Transport
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
@@ -428,6 +426,7 @@ class ProxyClient:
             headers=self.transport.bearer(key),
             json=body,
             response_type=OcrResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
@@ -547,9 +546,9 @@ def build_proxy_client(
     pass all three together, since a caller that overrides only the data plane
     would leave management calls pointed at the env default.
 
-    E2E_FIXTURE_MODE wraps (record) or replaces (replay) the transport here, so
-    every client built from this seam records or replays without changing shape;
-    unset it stays the plain SplitTransport (see fixture_transport.py)."""
+    Test-to-proxy traffic always goes over the wire, in every E2E_FIXTURE_MODE:
+    record and replay scope to the proxy's provider-bound calls via the
+    provider edge (see provider_edge.py), never to this transport."""
     split = SplitTransport(
         data=HttpTransport(
             base_url=base_url,
@@ -563,12 +562,7 @@ def build_proxy_client(
         ),
     )
     return ProxyClient(
-        transport=select_transport(
-            split,
-            mode_raw=FIXTURE_MODE_RAW,
-            bundle_dir=FIXTURE_DIR,
-            master_key=master_key,
-        ),
+        transport=split,
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,
     )

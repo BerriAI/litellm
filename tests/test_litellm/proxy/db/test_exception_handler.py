@@ -1,12 +1,11 @@
 import asyncio
 import json
-import os
 import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request
 from prisma import errors as prisma_errors
 from prisma.errors import (
     ClientNotConnectedError,
@@ -21,9 +20,6 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -117,6 +113,8 @@ def test_is_database_connection_generic_errors():
         TimeoutError("timed out"),
         OSError("network is unreachable"),
         asyncio.TimeoutError(),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
         HTTPClientClosedError(),
         ClientNotConnectedError(),
         PrismaError("can't reach database server"),
@@ -264,10 +262,10 @@ def test_is_prisma_engine_internal_error_excludes_data_layer_prisma_error():
     data_layer_error = UniqueViolationError(
         data={"user_facing_error": {"meta": {"table": "t"}}}
     )
-    try:
+    with pytest.raises(UniqueViolationError) as exc_info:
         raise data_layer_error
-    except UniqueViolationError as e:
-        assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
+    e = exc_info.value
+    assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
 
 
 @pytest.mark.parametrize(
@@ -333,7 +331,6 @@ def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     """asyncpg connection/interface errors map to service-unavailable. asyncpg
     is not a hard dependency, so inject a stand-in module to exercise the
     branch deterministically regardless of the install environment."""
-    import sys
     import types
 
     fake_asyncpg = types.ModuleType("asyncpg")

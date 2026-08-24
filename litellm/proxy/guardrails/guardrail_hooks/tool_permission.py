@@ -527,7 +527,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             if not is_allowed and message is not None:
                 verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
-                    raise GuardrailRaisedException(guardrail_name=self.guardrail_name, message=message)
+                    raise GuardrailRaisedException(
+                        guardrail_name=self.guardrail_name, message=message, blocked_content=True
+                    )
 
         return tuple(
             (

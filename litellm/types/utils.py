@@ -11,6 +11,7 @@ from typing import (
     get_args,
 )
 
+import httpx
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
@@ -49,7 +50,7 @@ from litellm.types.llms.base import (
 )
 from litellm.types.mcp import MCPServerCostInfo
 
-from ..litellm_core_utils.core_helpers import map_finish_reason
+from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -141,6 +142,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_tool_choice: bool | None
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
+    supports_prompt_cache_breakpoint: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_embedding_image_input: bool | None
@@ -152,6 +154,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
@@ -1915,6 +1918,10 @@ class ModelResponseBase(OpenAIObject):
 
     _response_headers: dict | None = None
 
+    def set_provider_response_headers(self, headers: httpx.Headers) -> None:
+        """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
+        self._hidden_params["additional_headers"] = process_response_headers(headers)
+
     def model_dump(self, **kwargs):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
         if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
@@ -2839,7 +2846,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_cost: float
     escalated: bool
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
-    reasoning_override_min_score: ReadOnly[float]
+    reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
@@ -3186,6 +3193,7 @@ class StandardLoggingPayload(TypedDict):
     stream: bool | None
     response_cost: float
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown
+    autorouter_savings: ReadOnly[float | None]  # None = not an auto-routed caller request; 0.0 is a real figure
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
@@ -3291,6 +3299,11 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     dd_site: str | None
     dd_agent_host: str | None
     dd_agent_port: str | None
+
+    # New Relic dynamic params (proxy-stamped team/key callback vars only;
+    # request-supplied values are blocked)
+    newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+    newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
@@ -3781,6 +3794,8 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    COGNITION = "cognition"
+    SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"

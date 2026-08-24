@@ -9,6 +9,16 @@ import { ApiError } from "@/lib/http/client";
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
 vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
+vi.mock("@/components/shared/advanced_date_picker", () => ({
+  __esModule: true,
+  default: ({ onValueChange }: { onValueChange: (value: { from?: Date; to?: Date }) => void }) => (
+    <button
+      type="button"
+      data-testid="date-picker"
+      onClick={() => onValueChange({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) })}
+    />
+  ),
+}));
 
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
@@ -112,12 +122,28 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
 });
 
 const renderTab = () => {
+  const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
+  const onDateChange = vi.fn();
+  const activity = {
+    dateValue,
+    onDateChange,
+    results: [],
+    loading: false,
+    isFetchingMore: false,
+    progress: { currentPage: 1, totalPages: 1 },
+    cancelled: false,
+    cancel: vi.fn(),
+  };
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <AutoRouterBenchmarksTab accessToken="sk-test" />
-    </QueryClientProvider>,
-  );
+  return {
+    dateValue,
+    onDateChange,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <AutoRouterBenchmarksTab accessToken="sk-test" activity={activity} />
+      </QueryClientProvider>,
+    ),
+  };
 };
 
 describe("AutoRouterBenchmarksTab", () => {
@@ -304,20 +330,15 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.queryByText("-0%")).not.toBeInTheDocument();
   });
 
-  it("requests the default thirty day window and widens or narrows it from the picker", () => {
+  it("queries the shared picker's range and pushes picker changes back to the shared state", () => {
     mockHook({ data: response([group()]) });
-    renderTab();
+    const { dateValue, onDateChange } = renderTab();
 
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "30d");
-    expect(screen.getByText("Last 30 days")).toBeInTheDocument();
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue);
+    expect(screen.getByText("Jul 6 – Aug 5 (UTC)")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "7d" }));
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "7d");
-    expect(screen.getByText("Last 7 days")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("tab", { name: "24h" }));
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "24h");
-    expect(screen.getByText("Last 24 hours")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("date-picker"));
+    expect(onDateChange).toHaveBeenCalledWith({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) });
   });
 
   it("shows usage by default and mounts shadow evals only when its sub-tab is selected", () => {
@@ -347,11 +368,11 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
   });
 
-  it("keeps the window picker reachable while a window has no sessions", () => {
+  it("keeps the range picker reachable while a window has no sessions", () => {
     mockHook({ data: response([], zeroTotals) });
     renderTab();
 
-    expect(screen.getByRole("tab", { name: "30d" })).toBeInTheDocument();
+    expect(screen.getByTestId("date-picker")).toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
   });
 });

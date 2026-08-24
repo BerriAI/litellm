@@ -2,15 +2,13 @@
 Unit tests for auto router management endpoints
 """
 
-import os
-import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LitellmUserRoles,
@@ -481,7 +479,6 @@ class TestAutoRouterBenchmarks:
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-from fastapi import HTTPException
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
@@ -489,7 +486,7 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
     start_shadow_eval,
     stop_shadow_eval_job,
 )
-from litellm.types.management_endpoints.auto_router_endpoints import StartShadowEvalRequest
+from litellm.types.management_endpoints.auto_router_endpoints import SHADOW_EVAL_TURN_VALVE, StartShadowEvalRequest
 
 VIEWER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_key="sk-view", user_id="viewer")
 NON_ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user")
@@ -519,6 +516,7 @@ def _leg_record(**overrides: object) -> MagicMock:
         "judge_model": "anthropic/claude-sonnet-5",
         "shadow_percentage": 10.0,
         "max_turns": 200,
+        "max_budget": None,
         "created_at": datetime(2026, 8, 11, tzinfo=timezone.utc),
         "ends_at": datetime.now(timezone.utc) + timedelta(days=7),
         "stopped_at": None,
@@ -548,11 +546,18 @@ def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-ha
     group read that matched on a leg id would come back empty."""
     prisma = MagicMock()
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[_key_record(token) for token in known_keys])
+
     async def execute_raw(sql: str, *params: object):
         if "SET stopped_by" in sql:
             group = [row for row in stored if row.group_id == params[0]]
             counts = {row["job_id"]: row["attempt_count"] for row in prisma.attempt_rows}
-            sampling = any(row.stopped_at is None and counts.get(row.id, 0) < row.max_turns for row in group)
+            spends = {row["job_id"]: row["spend"] for row in prisma.attempt_rows}
+            sampling = any(
+                row.stopped_at is None
+                and counts.get(row.id, 0) < row.max_turns
+                and (row.max_budget is None or spends.get(row.id, 0.0) < row.max_budget)
+                for row in group
+            )
             window_open = bool(group) and group[0].ends_at > datetime.now(timezone.utc)
             claimable = [row for row in group if row.stopped_by is None]
             if not (claimable and sampling and window_open):
@@ -601,6 +606,7 @@ def _shadow_prisma(legs=(), agg_rows=None, by_leg_rows=None, known_keys=("key-ha
             "judge_model",
             "shadow_percentage",
             "max_turns",
+            "max_budget",
             "created_at",
             "ends_at",
             "stopped_at",
@@ -638,7 +644,7 @@ def _start_request(**overrides: object) -> StartShadowEvalRequest:
         "shadow_percentage": 10.0,
         "judge_model": "anthropic/claude-sonnet-5",
         "duration_days": 7,
-        "max_turns": 200,
+        "max_budget": 5.0,
     }
     payload.update(overrides)
     return StartShadowEvalRequest.model_validate(payload)
@@ -662,6 +668,9 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     assert "j.ends_at <= (NOW() AT TIME ZONE 'utc')" in sweep_sql
     assert "SET stopped_at = (NOW() AT TIME ZONE 'utc')" in sweep_sql
     assert ">= j.max_turns" in sweep_sql
+    assert "j.max_budget IS NOT NULL" in sweep_sql
+    assert ">= j.max_budget" in sweep_sql
+    assert "SUM(a.judge_cost + a.shadow_cost)" in sweep_sql
     assert "j.api_key_id = ANY($1::text[])" in sweep_sql
     assert sweep_keys == ["key-hash", "key-hash-2"]
     prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
@@ -669,15 +678,17 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     assert [row["api_key_id"] for row in rows] == ["key-hash", "key-hash-2"]
     assert len({frozenset((k, v) for k, v in row.items() if k != "api_key_id") for row in rows}) == 1
     assert len({row["group_id"] for row in rows}) == 1
-    assert all(row["max_turns"] == 200 and row["created_by"] == "admin" for row in rows)
+    assert all(row["max_turns"] == SHADOW_EVAL_TURN_VALVE and row["created_by"] == "admin" for row in rows)
+    assert all(row["max_budget"] == 5.0 for row in rows)
     assert all("status" not in row and "id" not in row for row in rows)
     assert response.job_id == rows[0]["group_id"]
     assert response.status == "running"
     assert response.judged_count is None
-    assert [(key.api_key_id, key.max_turns, key.key_alias) for key in response.keys] == [
-        ("key-hash", 200, "prod-alpha"),
-        ("key-hash-2", 200, "prod-alpha"),
+    assert [(key.api_key_id, key.max_budget, key.key_alias) for key in response.keys] == [
+        ("key-hash", 5.0, "prod-alpha"),
+        ("key-hash-2", 5.0, "prod-alpha"),
     ]
+    assert all(key.max_turns == SHADOW_EVAL_TURN_VALVE for key in response.keys)
 
 
 @pytest.mark.asyncio
@@ -1040,10 +1051,10 @@ async def test_list_reads_completed_once_every_key_spends_its_budget(monkeypatch
         ]
     )
     prisma.attempt_rows = [
-        {"job_id": "leg-1", "attempt_count": 5},
-        {"job_id": "leg-2", "attempt_count": 6},
-        {"job_id": "leg-3", "attempt_count": 5},
-        {"job_id": "leg-4", "attempt_count": 3},
+        {"job_id": "leg-1", "attempt_count": 5, "spend": 0.0},
+        {"job_id": "leg-2", "attempt_count": 6, "spend": 0.0},
+        {"job_id": "leg-3", "attempt_count": 5, "spend": 0.0},
+        {"job_id": "leg-4", "attempt_count": 3, "spend": 0.0},
     ]
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
@@ -1064,7 +1075,7 @@ async def test_recorded_operator_stop_outranks_budget_arithmetic(monkeypatch: py
 
     stamp = datetime.now(timezone.utc)
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=5, stopped_at=stamp, stopped_by="admin")])
-    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 6}]
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 6, "spend": 0.0}]
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
@@ -1084,7 +1095,7 @@ async def test_backfilled_legacy_stop_never_reads_as_completion(monkeypatch: pyt
     prisma = _shadow_prisma(
         legs=[_leg_record(max_turns=5, stopped_at=datetime.now(timezone.utc), stopped_by="unknown")]
     )
-    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 6}]
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 6, "spend": 0.0}]
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
@@ -1107,12 +1118,39 @@ def test_stopped_by_migration_backfills_every_job_that_displayed_stopped():
     assert "WHERE stopped_at IS NOT NULL AND ends_at > (NOW() AT TIME ZONE 'utc')" in sql
 
 
+def test_a_start_request_still_sending_max_turns_is_rejected_not_silently_defaulted():
+    """Pydantic ignores unknown fields, so without the explicit rejection a caller still
+    sending the retired turn budget would silently run on the default dollar budget."""
+    with pytest.raises(ValidationError, match="max_budget"):
+        _start_request(max_turns=200)
+
+
+def test_max_budget_migration_is_additive_and_leaves_legacy_rows_null():
+    """max_budget stays NULL on pre-migration rows so they keep the turn budget they were
+    configured with, and shadow_cost defaults to 0 so old rows price as judge-only."""
+    import litellm_proxy_extras
+
+    sql = (
+        Path(litellm_proxy_extras.__file__).parent
+        / "migrations"
+        / "20260819000000_shadow_eval_max_budget"
+        / "migration.sql"
+    ).read_text()
+    assert 'ALTER TABLE "LiteLLM_ShadowEvalJob" ADD COLUMN     "max_budget" DOUBLE PRECISION' in sql
+    assert (
+        'ALTER TABLE "LiteLLM_ShadowEvalAttempt" ADD COLUMN     "shadow_cost" DOUBLE PRECISION NOT NULL DEFAULT 0'
+        in sql
+    )
+    assert "UPDATE" not in sql
+    assert "DROP" not in sql
+
+
 @pytest.mark.asyncio
 async def test_stop_rejects_a_job_that_already_spent_its_budget(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=3)])
-    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 3}]
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 3, "spend": 0.0}]
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     with pytest.raises(HTTPException) as exhausted:
@@ -1120,6 +1158,71 @@ async def test_stop_rejects_a_job_that_already_spent_its_budget(monkeypatch: pyt
     assert exhausted.value.status_code == 400
     assert "completed" in exhausted.value.detail
     prisma.db.litellm_shadowevaljob.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_reads_completed_once_every_key_spends_its_dollar_budget(monkeypatch: pytest.MonkeyPatch):
+    """A spend-budgeted job completes on dollars, not turns: every key's recorded shadow
+    plus judge spend reaching max_budget reads completed long before the turn valve, while
+    one key with budget left keeps the whole job running."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(
+        legs=[
+            _leg_record(max_turns=SHADOW_EVAL_TURN_VALVE, max_budget=1.0),
+            _leg_record(id="leg-2", api_key_id="key-hash-2", max_turns=SHADOW_EVAL_TURN_VALVE, max_budget=1.0),
+            _leg_record(
+                id="leg-3", group_id="job-2", api_key_id="key-hash", max_turns=SHADOW_EVAL_TURN_VALVE, max_budget=1.0
+            ),
+        ]
+    )
+    prisma.attempt_rows = [
+        {"job_id": "leg-1", "attempt_count": 40, "spend": 1.0},
+        {"job_id": "leg-2", "attempt_count": 55, "spend": 1.25},
+        {"job_id": "leg-3", "attempt_count": 40, "spend": 0.99},
+    ]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+
+    by_id = {job.job_id: job for job in jobs}
+    assert by_id["job-1"].status == "completed"
+    assert by_id["job-2"].status == "running"
+    assert {key.api_key_id: key.spend for key in by_id["job-1"].keys} == {"key-hash": 1.0, "key-hash-2": 1.25}
+    assert all(key.max_budget == 1.0 for key in by_id["job-1"].keys)
+
+
+@pytest.mark.asyncio
+async def test_stop_rejects_a_job_whose_dollar_budget_is_spent(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(max_turns=SHADOW_EVAL_TURN_VALVE, max_budget=0.5)])
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 7, "spend": 0.5}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as exhausted:
+        await stop_shadow_eval_job("job-1", ADMIN)
+    assert exhausted.value.status_code == 400
+    assert "completed" in exhausted.value.detail
+    prisma.db.litellm_shadowevaljob.update_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_jobs_without_a_dollar_budget_stay_turn_gated(monkeypatch: pytest.MonkeyPatch):
+    """A job from before spend budgets existed carries max_budget NULL: recorded spend
+    can never complete it, only its own max_turns can, so migration changes nothing about
+    what it was configured to do."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(max_turns=200, max_budget=None)])
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 40, "spend": 250.0}]
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    jobs = await list_shadow_eval_jobs(VIEWER, api_key_id=None, limit=50)
+
+    assert jobs[0].status == "running"
+    assert jobs[0].keys[0].max_budget is None
+    assert jobs[0].keys[0].spend == 250.0
 
 
 @pytest.mark.asyncio
@@ -1166,6 +1269,9 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     assert "WHERE group_id = $1 AND stopped_by IS NULL" in stop_sql
     assert "ends_at > (NOW() AT TIME ZONE 'utc')" in stop_sql
     assert ") < k.max_turns" in stop_sql
+    assert "k.max_budget IS NULL" in stop_sql
+    assert ") < k.max_budget" in stop_sql
+    assert "SUM(a.judge_cost + a.shadow_cost)" in stop_sql
     assert (stop_group, stop_operator) == ("job-1", "admin")
     assert datetime.fromisoformat(stop_stamp).tzinfo is None
     assert prisma.db.execute_raw.await_count == 1
@@ -1186,6 +1292,149 @@ async def test_stop_shadow_eval_stops_every_unstopped_leg_and_rejects_non_runnin
     with pytest.raises(HTTPException) as forbidden:
         await stop_shadow_eval_job("job-1", VIEWER)
     assert forbidden.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_validate_config_returns_the_write_gates_verdict_without_saving():
+    """The dry-run endpoint must agree with the write gate exactly, so a form showing its
+    verdict inline can never pass a config the save would then reject."""
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        validate_complexity_router_config,
+    )
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        ComplexityRouterConfigValidationRequest,
+    )
+
+    valid = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(
+            complexity_router_config={
+                "tiers": {"CASUAL": "m1", "AUDIT": "m2"},
+                "tier_definitions": [
+                    {"name": "CASUAL", "description": "casual chat"},
+                    {"name": "AUDIT", "description": "security audits"},
+                ],
+                "fallback_tier": "AUDIT",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "clf"},
+            }
+        ),
+        ADMIN,
+    )
+    assert valid.valid is True
+    assert valid.error is None
+
+    rejected = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(
+            complexity_router_config={
+                "tiers": {"CASUAL": "m1", "AUDIT": "m2"},
+                "tier_definitions": [
+                    {"name": "CASUAL", "description": "casual chat"},
+                    {"name": "AUDIT", "description": "security\naudits"},
+                ],
+                "fallback_tier": "AUDIT",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "clf"},
+            }
+        ),
+        ADMIN,
+    )
+    assert rejected.valid is False
+    assert rejected.error is not None and "newline" in rejected.error
+
+
+@pytest.mark.asyncio
+async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypatch: pytest.MonkeyPatch):
+    """routed_model_configured must not be an existence oracle for the whole proxy: a team
+    admin probing a guessed global model name reads False unless the named team could
+    actually use that model, and True once the team grants it."""
+    from litellm.proxy import proxy_server
+
+    def _team_prisma(team_id: str, models: list[str]) -> MagicMock:
+        row_data = {
+            "team_id": team_id,
+            "members_with_roles": [{"role": "admin", "user_id": "team-admin"}],
+            "models": models,
+        }
+        team_row = MagicMock()
+        team_row.model_dump.return_value = row_data
+        team_row.dict.return_value = row_data
+        prisma = MagicMock()
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        return prisma
+
+    def _request(team_id: str) -> AutoRouterRoutingTestRequest:
+        return AutoRouterRoutingTestRequest.model_validate(
+            {
+                "prompt": "what is 2+2",
+                "complexity_router_config": {"tiers": TIERS, "classifier_type": "heuristic"},
+                "team_id": team_id,
+            }
+        )
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+
+    team_admin: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-team", user_id="team-admin"
+    )
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-probe", models=["mid-model"]))
+    probing = await preview_auto_router_routing(data=_request("team-probe"), user_api_key_dict=team_admin)
+    assert probing.routed_model == "cheap-model"
+    assert probing.routed_model_configured is False
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-grant", models=["cheap-model"]))
+    granted = await preview_auto_router_routing(data=_request("team-grant"), user_api_key_dict=team_admin)
+    assert granted.routed_model == "cheap-model"
+    assert granted.routed_model_configured is True
+
+
+@pytest.mark.asyncio
+async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: pytest.MonkeyPatch):
+    """A caller who could not save the router must not get the dry run either: matching
+    /model/new, a team admin passes only when naming their own team, and a caller who is
+    neither proxy admin nor team admin is rejected before validation runs."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        validate_complexity_router_config,
+    )
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        ComplexityRouterConfigValidationRequest,
+    )
+
+    config: Final = {"tiers": {"SIMPLE": "m1"}, "classifier_type": "heuristic"}
+
+    with pytest.raises(HTTPException) as forbidden:
+        await validate_complexity_router_config(
+            ComplexityRouterConfigValidationRequest(complexity_router_config=config), VIEWER
+        )
+    assert forbidden.value.status_code == 403
+
+    team_row: Final = MagicMock()
+    team_row.model_dump.return_value = {
+        "team_id": "team-1",
+        "members_with_roles": [{"role": "admin", "user_id": "team-admin"}],
+    }
+    prisma: Final = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+
+    team_admin: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-team", user_id="team-admin"
+    )
+    verdict = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(complexity_router_config=config, team_id="team-1"),
+        team_admin,
+    )
+    assert verdict.valid is True
+
+    with pytest.raises(HTTPException) as not_their_team:
+        await validate_complexity_router_config(
+            ComplexityRouterConfigValidationRequest(complexity_router_config=config, team_id="team-1"),
+            UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-other", user_id="someone-else"),
+        )
+    assert not_their_team.value.status_code == 403
 
 
 def test_every_shadow_eval_sql_constant_speaks_naive_utc():
@@ -1213,7 +1462,7 @@ async def test_a_stop_racing_the_last_budgeted_attempt_reports_completed_not_sto
     import litellm.proxy.proxy_server as proxy_server
 
     prisma = _shadow_prisma(legs=[_leg_record(max_turns=2)])
-    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 2}]
+    prisma.attempt_rows = [{"job_id": "leg-1", "attempt_count": 2, "spend": 0.0}]
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
     with pytest.raises(HTTPException) as exc:

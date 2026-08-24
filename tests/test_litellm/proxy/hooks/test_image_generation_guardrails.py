@@ -9,14 +9,11 @@ These tests verify:
 3. A guardrail that raises blocks the response (exception propagates).
 """
 
-import os
-import sys
 from typing import Any, Optional
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache

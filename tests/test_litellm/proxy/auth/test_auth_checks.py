@@ -1,19 +1,18 @@
 import asyncio
 import json
-import os
-import sys
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from fastapi import status
+from fastapi import Request, status
 
 import litellm
 from litellm.proxy._types import (
@@ -264,7 +263,7 @@ def test_get_experimental_ui_login_jwt_auth_token_invalid(
     invalid_sso_user_defined_values,
 ):
     """Test generating JWT token with missing user role"""
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='User role is required for experimental UI login') as exc_info:
         ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
             invalid_sso_user_defined_values
         )
@@ -879,7 +878,7 @@ async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context(
     mock_cache.async_set_cache = AsyncMock()
 
     with patch("litellm.proxy.auth.auth_checks._should_check_db", return_value=True):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="User doesn't exist in db\\.") as exc_info:
             await get_user_object(
                 user_id="outage-contract-probe-user",
                 prisma_client=mock_prisma_client,
@@ -2456,6 +2455,53 @@ async def test_get_team_object_raises_404_when_not_found():
     assert "Team doesn't exist in db" in str(exc_info.value.detail)
 
 
+def _mock_prisma_for_team_lookup(find_unique):
+    from unittest.mock import MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
+    """A deleted team and a database that would not answer both surface as a 404,
+    which leaves callers unable to tell a definitive answer from a degraded read.
+    Only the row being positively absent raises the subclass; anything else keeps
+    the plain 404 so every existing caller is unaffected."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_object
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    # The database answered, and the row is not there.
+    with pytest.raises(TeamNotFoundError) as absent_info:
+        await get_team_object(
+            team_id="absent-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(return_value=None)),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert absent_info.value.status_code == 404
+    assert "Team doesn't exist in db" in str(absent_info.value.detail)
+
+    # The database did not answer. Same status and detail, but not the subclass,
+    # so a caller keying on it does not read this as proof the team is gone.
+    with pytest.raises(HTTPException) as unreadable_info:
+        await get_team_object(
+            team_id="unreadable-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(side_effect=ConnectionError("db unreachable"))),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert unreadable_info.value.status_code == 404
+    assert not isinstance(unreadable_info.value, TeamNotFoundError)
+
+
 # Reject Client-Side Metadata Tags Tests
 
 
@@ -2760,11 +2806,9 @@ async def test_common_checks_metadata_route_keeps_key_tags_out_of_provider_metad
     assert "metadata" not in request_body
 
 
-def _pass_through_request() -> "Request":
+def _pass_through_request() -> Request:
     """A Request whose FastAPI-resolved endpoint carries the pass-through marker,
     i.e. the request was dispatched to a user-defined pass-through handler."""
-    from fastapi import Request
-
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
         LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     )
@@ -2776,10 +2820,9 @@ def _pass_through_request() -> "Request":
     return Request(scope={"type": "http", "headers": [], "endpoint": pass_through_endpoint})
 
 
-def _builtin_request() -> "Request":
+def _builtin_request() -> Request:
     """A Request dispatched to a built-in (non-pass-through) handler, e.g. what a
     custom path colliding with a core route actually resolves to."""
-    from fastapi import Request
 
     def chat_completions():
         ...
@@ -5699,6 +5742,64 @@ async def test_get_default_end_user_budget_db_fetch_returns_validated_budget(mon
 
 
 @pytest.mark.asyncio
+async def test_get_team_member_default_budget_caches_json_safe_payload():
+    """The Redis layer json.dumps() the cached value, so datetime columns on the budget row
+    must be dumped to ISO strings before the write, and the read side must give back a model.
+    """
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    budget_row = MagicMock()
+    budget_row.dict = lambda: {
+        "budget_id": "tm-budget-1",
+        "max_budget": 25.0,
+        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        "updated_at": datetime(2026, 1, 2, tzinfo=timezone.utc),
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+
+    class _JsonOnlyRedis:
+        """Stands in for RedisCache, which serializes with a bare json.dumps()."""
+
+        def __init__(self):
+            self.writes = []
+
+        async def async_set_cache(self, key, value, **kwargs):
+            self.writes.append((key, json.dumps(value)))
+
+        async def async_get_cache(self, key, **kwargs):
+            return None
+
+    redis_cache = _JsonOnlyRedis()
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+
+    budget = await get_team_member_default_budget(
+        budget_id="tm-budget-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert isinstance(budget, LiteLLM_BudgetTable)
+    assert budget.max_budget == 25.0
+    assert len(redis_cache.writes) == 1
+    written_key, written_payload = redis_cache.writes[0]
+    assert written_key == "team_member_default_budget:tm-budget-1"
+    assert json.loads(written_payload)["max_budget"] == 25.0
+
+    cached = await get_team_member_default_budget(
+        budget_id="tm-budget-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert isinstance(cached, LiteLLM_BudgetTable)
+    assert cached.max_budget == 25.0
+    mock_prisma_client.db.litellm_budgettable.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     from litellm.proxy.auth.auth_checks import get_end_user_object
 
@@ -6557,3 +6658,284 @@ def test_can_object_call_model_team_scoped_wildcard_accepts_bare_model_name():
             )
             is True
         )
+
+
+UNPRICED_UNDERLYING_MODEL = "openai/unpriced-model-lit4984-xyz"
+
+
+def _router_with_priced_and_unpriced_models() -> "Router":
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "priced-group",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+            },
+            {
+                "model_name": "unpriced-group",
+                "litellm_params": {"model": UNPRICED_UNDERLYING_MODEL, "api_key": "sk-test"},
+            },
+        ]
+    )
+
+
+def test_model_has_no_cost_mapping_priced_model_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_priced_and_unpriced_models()
+
+    assert model_has_no_cost_mapping(model="priced-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_unpriced_model_is_true():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_priced_and_unpriced_models()
+
+    assert model_has_no_cost_mapping(model="unpriced-group", llm_router=router) is True
+
+
+def test_model_has_no_cost_mapping_no_model_or_router_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_priced_and_unpriced_models()
+
+    assert model_has_no_cost_mapping(model=None, llm_router=router) is False
+    assert model_has_no_cost_mapping(model="unpriced-group", llm_router=None) is False
+
+
+@pytest.mark.parametrize(
+    "underlying_model",
+    [
+        "azure/speech/azure-tts",
+        "mistral/mistral-ocr-latest",
+        "vertex_ai/imagen-3.0-generate-001",
+        "dashscope/qwen-flash",
+    ],
+)
+def test_model_has_no_cost_mapping_non_token_priced_model_is_false(underlying_model):
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "non-token-priced-group",
+                "litellm_params": {"model": underlying_model, "api_key": "sk-test"},
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="non-token-priced-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_non_token_price_from_litellm_params_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "custom-tts",
+                "litellm_params": {
+                    "model": f"{UNPRICED_UNDERLYING_MODEL}-per-second",
+                    "api_key": "sk-test",
+                    "input_cost_per_second": 0.0001,
+                },
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="custom-tts", llm_router=router) is False
+
+
+@pytest.mark.parametrize("cost_field", ["input_cost_per_second", "input_cost_per_token"])
+def test_model_has_no_cost_mapping_explicit_zero_price_is_false(cost_field):
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group",
+                "litellm_params": {
+                    "model": f"{UNPRICED_UNDERLYING_MODEL}-{cost_field}",
+                    "api_key": "sk-test",
+                    cost_field: 0,
+                },
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="free-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_tiered_pricing_only_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tiered-group",
+                "litellm_params": {
+                    "model": f"{UNPRICED_UNDERLYING_MODEL}-tiered",
+                    "api_key": "sk-test",
+                    "tiered_pricing": [
+                        {"range": [0, 128000], "input_cost_per_token": 2e-7, "output_cost_per_token": 6e-7},
+                        {"range": [128000, 256000], "input_cost_per_token": 4e-7, "output_cost_per_token": 12e-7},
+                    ],
+                },
+            }
+        ]
+    )
+
+    assert model_has_no_cost_mapping(model="tiered-group", llm_router=router) is False
+
+
+async def _run_common_checks(
+    model: Optional[str], llm_router: Optional["Router"], route: str = "/chat/completions"
+) -> bool:
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    return await common_checks(
+        request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=llm_router,
+        proxy_logging_obj=MagicMock(),
+        valid_token=UserAPIKeyAuth(token="test-token"),
+        request=MagicMock(spec=Request),
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_blocks_unpriced_model_when_enabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_common_checks(model="unpriced-group", llm_router=router)
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
+    assert exc_info.value.param == "model"
+    assert "unpriced-group" in exc_info.value.message
+    assert "pricing" in exc_info.value.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_unpriced_model_when_disabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", False)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(model="unpriced-group", llm_router=router)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_priced_model_when_enabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(model="priced-group", llm_router=router)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_ignores_non_llm_route_when_enabled(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(
+        model="unpriced-group", llm_router=router, route="/model/new"
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_blocks_alias_resolving_to_unpriced_model(monkeypatch):
+    from litellm.router import Router
+
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "billed-underlying-group",
+                "litellm_params": {"model": UNPRICED_UNDERLYING_MODEL, "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={"public-alias": "billed-underlying-group"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_common_checks(model="public-alias", llm_router=router)
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
+    assert "public-alias" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_common_checks_blocks_comma_separated_request_carrying_an_unpriced_model(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_common_checks(model="priced-group,unpriced-group", llm_router=router)
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.model_cost_map_missing
+    assert "'unpriced-group'" in exc_info.value.message
+    assert "'priced-group'" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_comma_separated_request_when_every_model_is_priced(monkeypatch):
+    monkeypatch.setattr(litellm, "block_requests_for_models_without_pricing", True)
+    router = _router_with_priced_and_unpriced_models()
+
+    result = await _run_common_checks(model="priced-group,priced-group", llm_router=router)
+
+    assert result is True
+
+
+def _router_with_a_group_priced_through_model_info() -> "Router":
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "model-info-priced-group",
+                "litellm_params": {"model": f"{UNPRICED_UNDERLYING_MODEL}-model-info", "api_key": "sk-test"},
+                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            }
+        ],
+        model_group_alias={"model-info-priced-alias": "model-info-priced-group"},
+    )
+
+
+def test_model_has_no_cost_mapping_group_priced_through_model_info_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_a_group_priced_through_model_info()
+
+    assert model_has_no_cost_mapping(model="model-info-priced-group", llm_router=router) is False
+
+
+def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is_false():
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router = _router_with_a_group_priced_through_model_info()
+
+    assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False

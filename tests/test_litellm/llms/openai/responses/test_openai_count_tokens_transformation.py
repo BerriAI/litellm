@@ -1,9 +1,6 @@
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+import pytest
+
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
@@ -175,21 +172,19 @@ def test_validate_request_valid():
 def test_validate_request_missing_model():
     """Test that missing model raises ValueError."""
     config = OpenAICountTokensConfig()
-    try:
+    with pytest.raises(ValueError, match="model") as exc_info:
         config.validate_request(model="", input="Hello")
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "model" in str(e)
+    e = exc_info.value
+    assert "model" in str(e)
 
 
 def test_validate_request_missing_input():
     """Test that missing input raises ValueError."""
     config = OpenAICountTokensConfig()
-    try:
+    with pytest.raises(ValueError, match="input") as exc_info:
         config.validate_request(model="gpt-4o", input="")
-        assert False, "Should have raised ValueError"
-    except ValueError as e:
-        assert "input" in str(e)
+    e = exc_info.value
+    assert "input" in str(e)
 
 
 def test_get_endpoint_default():

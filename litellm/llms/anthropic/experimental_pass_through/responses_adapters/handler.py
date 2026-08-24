@@ -19,6 +19,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
+from ..utils import local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -105,7 +106,8 @@ def _build_responses_kwargs(
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
     excluded: Final = {"anthropic_messages"}
-    for key, value in _forwarded_kwargs(extra_kwargs).items():
+    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
                 Logging as LiteLLMLoggingObject,
@@ -120,6 +122,10 @@ def _build_responses_kwargs(
             responses_kwargs[key] = value
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
+
+    explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
+    if explicit_prompt_cache_key is not None:
+        responses_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
 
     return responses_kwargs
 
@@ -174,7 +180,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         result: Final = await litellm.aresponses(**responses_kwargs)
 
         if stream:
-            wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=result, model=model)
+            wrapper: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=result, model=local_model_name(model, kwargs.get("custom_llm_provider"))
+            )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
@@ -252,7 +260,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         result: Final = litellm.responses(**responses_kwargs)
 
         if stream:
-            wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=result, model=model)
+            wrapper: Final = AnthropicResponsesStreamWrapper(
+                responses_stream=result, model=local_model_name(model, kwargs.get("custom_llm_provider"))
+            )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):

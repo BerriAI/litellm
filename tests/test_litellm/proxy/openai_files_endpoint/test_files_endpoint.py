@@ -1,8 +1,6 @@
 import json
-import os
-import sys
-from typing import List
-from unittest.mock import ANY, AsyncMock
+from typing import Final, List, Optional
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 import respx
@@ -10,9 +8,6 @@ import httpx
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router
@@ -24,7 +19,11 @@ from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import 
     FileContentStreamingHandler,
 )
 from litellm.proxy.proxy_server import app
-from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
+from litellm.types.llms.openai import (
+    FileListPage,
+    HttpxBinaryResponseContent,
+    OpenAIFileObject,
+)
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
@@ -330,7 +329,15 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -904,7 +911,15 @@ def test_create_file_with_expires_after(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1067,7 +1082,15 @@ def test_create_file_with_expires_after_valid_values(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1155,7 +1178,15 @@ def test_create_file_without_expires_after(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1252,7 +1283,15 @@ def test_managed_files_with_loadbalancing(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1369,7 +1408,15 @@ def test_create_file_with_nested_litellm_metadata(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1473,7 +1520,15 @@ def test_create_file_with_deep_nested_litellm_metadata(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError("Not implemented for test")
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError("Not implemented for test")
 
         async def afile_delete(
@@ -1569,7 +1624,15 @@ def _make_capturing_managed_files():
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
@@ -2052,7 +2115,15 @@ def test_require_managed_files_allows_managed_file_upload(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
@@ -2176,7 +2247,15 @@ def test_require_managed_files_accepts_target_model_names_bracket_form(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
@@ -2256,7 +2335,15 @@ def test_require_managed_files_accepts_repeated_target_model_names_bracket_form(
         async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
             raise NotImplementedError
 
-        async def afile_list(self, purpose, litellm_parent_otel_span):
+        async def afile_list(
+            self,
+            purpose,
+            litellm_parent_otel_span,
+            user_api_key_dict,
+            limit=None,
+            after=None,
+            **data,
+        ):
             raise NotImplementedError
 
         async def afile_delete(
@@ -2466,6 +2553,403 @@ def test_list_files_without_target_model_names_uses_team_openai_deployment(
     assert captured_kwargs.get("api_key") == "team-openai-key"
     assert captured_kwargs.get("custom_llm_provider") == "openai"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_unscoped_list_files_uses_managed_file_store(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    managed_file = OpenAIFileObject(
+        id="unified-file-id",
+        object="file",
+        bytes=100,
+        created_at=1700000000,
+        filename="output.jsonl",
+        purpose="batch_output",
+        status="processed",
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_list = mocker.AsyncMock(
+        return_value={
+            "object": "list",
+            "data": [managed_file],
+            "first_id": managed_file.id,
+            "last_id": managed_file.id,
+            "has_more": False,
+        }
+    )
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    provider_list = mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"][0]["id"] == "unified-file-id"
+    managed_files.afile_list.assert_awaited_once()
+    assert managed_files.afile_list.await_args.kwargs["user_api_key_dict"].user_id == "test-user"
+    assert managed_files.afile_list.await_args.kwargs["limit"] is None
+    assert managed_files.afile_list.await_args.kwargs["after"] is None
+    provider_list.assert_not_awaited()
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_unscoped_list_files_forwards_limit_and_after_to_the_managed_file_store(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    second_page_file = OpenAIFileObject(
+        id="unified-file-id-2",
+        object="file",
+        bytes=100,
+        created_at=1700000000,
+        filename="output.jsonl",
+        purpose="batch",
+        status="processed",
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_list = mocker.AsyncMock(
+        return_value={
+            "object": "list",
+            "data": [second_page_file],
+            "first_id": second_page_file.id,
+            "last_id": second_page_file.id,
+            "has_more": True,
+        }
+    )
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    provider_list = mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files?limit=2&after=unified-file-id-1&purpose=batch",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"][0]["id"] == "unified-file-id-2"
+    assert response.json()["has_more"] is True
+    call_kwargs = managed_files.afile_list.await_args.kwargs
+    assert call_kwargs["limit"] == 2
+    assert call_kwargs["after"] == "unified-file-id-1"
+    assert call_kwargs["purpose"] == "batch"
+    provider_list.assert_not_awaited()
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router: Router, afile_list):
+    """Wire GET /v1/files to the managed file store, with afile_list as the store."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_list = mocker.AsyncMock(side_effect=afile_list)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+    return managed_files
+
+
+def _get_list_files(path: str):
+    try:
+        return client.get(path, headers={"Authorization": "Bearer test-key"})
+    finally:
+        import litellm.proxy.proxy_server as ps
+
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _get_unscoped_list_files(query: str):
+    return _get_list_files(f"/v1/files{query}")
+
+
+_EMPTY_FILE_LIST_PAGE: Final = {
+    "object": "list",
+    "data": [],
+    "first_id": None,
+    "last_id": None,
+    "has_more": False,
+}
+
+
+async def _validating_afile_list(**kwargs):
+    """Stand in for the managed file store, applying the real request validation."""
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        validate_file_list_limit,
+        validate_file_list_purpose,
+    )
+
+    validate_file_list_limit(kwargs.get("limit"))
+    validate_file_list_purpose(kwargs.get("purpose"))
+    return FileListPage(**_EMPTY_FILE_LIST_PAGE)
+
+
+async def _permissive_afile_list(**kwargs):
+    """Stand in for a file store that validates nothing, so only the route can reject."""
+    return FileListPage(**_EMPTY_FILE_LIST_PAGE)
+
+
+@pytest.mark.parametrize(
+    "limit, bound, expected_range",
+    [
+        (0, "below minimum", ">= 1"),
+        (-1, "below minimum", ">= 1"),
+        (10001, "above maximum", "<= 10000"),
+    ],
+)
+def test_unscoped_list_files_returns_400_for_a_limit_outside_the_openai_range(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, limit, bound, expected_range
+):
+    """An out-of-range limit is the caller's mistake, so it must not read as a 500 the SDK retries."""
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _validating_afile_list)
+
+    response = _get_unscoped_list_files(f"?limit={limit}")
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "error": {
+            "message": (
+                f"Invalid 'limit': integer {bound} value. "
+                f"Expected a value {expected_range}, but got {limit} instead."
+            ),
+            "type": "invalid_request_error",
+            "param": "limit",
+            "code": "400",
+        }
+    }
+
+
+@pytest.mark.parametrize("limit", [1, 10000])
+def test_unscoped_list_files_accepts_the_ends_of_the_openai_limit_range(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, limit
+):
+    managed_files = _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _validating_afile_list)
+
+    response = _get_unscoped_list_files(f"?limit={limit}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == []
+    assert managed_files.afile_list.await_args.kwargs["limit"] == limit
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/files?limit=0",
+        "/v1/files?limit=0&target_model_names=gpt-3.5-turbo",
+        "/openai/v1/files?limit=0",
+    ],
+    ids=["managed-file-store", "target-model-names", "provider-route"],
+)
+def test_list_files_validates_the_limit_on_every_branch(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, path
+):
+    """The limit is a route-level contract, so the scoped and provider branches reject it too."""
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _permissive_afile_list)
+
+    response = _get_list_files(path)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["param"] == "limit"
+    assert response.json()["error"]["message"] == (
+        "Invalid 'limit': integer below minimum value. Expected a value >= 1, but got 0 instead."
+    )
+
+
+def test_unscoped_list_files_returns_400_for_an_unknown_after_cursor(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    from litellm.proxy._types import ProxyException
+
+    async def _unknown_cursor(**kwargs):
+        raise ProxyException(
+            message=f"Invalid 'after' cursor: no file found with id '{kwargs['after']}'.",
+            type="invalid_request_error",
+            param="after",
+            code=400,
+            openai_code="invalid_value",
+        )
+
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _unknown_cursor)
+
+    response = _get_unscoped_list_files("?after=file-does-not-exist-xyz")
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "error": {
+            "message": "Invalid 'after' cursor: no file found with id 'file-does-not-exist-xyz'.",
+            "type": "invalid_request_error",
+            "param": "after",
+            "code": "400",
+        }
+    }
+
+
+def _managed_file(file_id: str) -> OpenAIFileObject:
+    return OpenAIFileObject(
+        id=file_id,
+        bytes=17,
+        created_at=1700000000,
+        filename="batch_input.jsonl",
+        object="file",
+        purpose="batch",
+        status="uploaded",
+    )
+
+
+def test_unscoped_list_files_hands_post_call_hooks_a_page_object(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Logging callbacks read ``response.data`` off a listing, so the managed
+    branch has to hand them the same page shape the provider branch does. A bare
+    mapping turns every registered callback into a 500 on this route."""
+    import litellm.proxy.proxy_server as ps
+
+    seen_by_callback: list[list[str]] = []
+
+    async def _reads_response_data(data, user_api_key_dict, response):
+        seen_by_callback.append([file.id for file in response.data])
+        return None
+
+    async def _one_managed_file(**kwargs):
+        return FileListPage(
+            data=[_managed_file("unified-file-id")],
+            first_id="unified-file-id",
+            last_id="unified-file-id",
+        )
+
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _one_managed_file)
+    ps.proxy_logging_obj.post_call_success_hook = _reads_response_data
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 200, response.text
+    assert seen_by_callback == [["unified-file-id"]]
+    body = response.json()
+    assert list(body) == ["object", "data", "first_id", "last_id", "has_more"]
+    assert body["object"] == "list"
+    assert [file["id"] for file in body["data"]] == ["unified-file-id"]
+    assert body["has_more"] is False
+
+
+@pytest.mark.parametrize("purpose", ["nonexistent_purpose", "EVALS", "batch "])
+def test_unscoped_list_files_returns_400_for_a_purpose_the_api_never_accepts(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, purpose
+):
+    """An unknown purpose matches nothing, so reporting an empty page would dress
+    a bad request up as a successful one. The provider-backed branches reject the
+    same values, and so does the upload route."""
+    from urllib.parse import quote
+
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _validating_afile_list)
+
+    response = _get_list_files(f"/v1/files?purpose={quote(purpose)}")
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["param"] == "purpose"
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert response.json()["error"]["message"].startswith(f"Invalid purpose: {purpose}. Must be one of: ")
+
+
+@pytest.mark.parametrize("purpose", ["batch", "assistants", "fine-tune"])
+def test_unscoped_list_files_accepts_every_documented_purpose(
+    mocker: MockerFixture, monkeypatch, llm_router: Router, purpose
+):
+    managed_files = _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _validating_afile_list)
+
+    response = _get_list_files(f"/v1/files?purpose={purpose}")
+
+    assert response.status_code == 200, response.text
+    assert managed_files.afile_list.await_args.kwargs["purpose"] == purpose
+
+
+def test_list_files_reports_a_bad_target_model_names_as_a_400(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """The exception tail reports an HTTPException with its own status and error
+    type rather than relabelling it, so a client that branches on either keeps
+    reading the same thing off a bad request."""
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _permissive_afile_list)
+
+    response = _get_list_files("/v1/files?target_model_names=gpt-3.5-turbo,gpt-4o")
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {
+        "error": {
+            "message": "target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
+            "type": "None",
+            "param": "None",
+            "code": "400",
+        }
+    }
+
+
+def test_list_files_reports_an_unexpected_file_store_error_as_a_500(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    async def _blows_up(**kwargs):
+        raise RuntimeError("managed file table is unreachable")
+
+    _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _blows_up)
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 500, response.text
+    assert response.json()["error"]["message"] == "managed file table is unreachable"
 
 
 def test_list_files_restricted_team_does_not_leak_global_openai_credentials(
@@ -3516,3 +4000,479 @@ def test_create_file_non_batch_purpose_skips_batch_validation(monkeypatch, llm_r
 
     assert response.status_code == 200, response.text
     assert len(forwarded_calls) == 1
+
+
+def _batch_upload(client_, content: bytes, purpose: str = "batch"):
+    return client_.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", content, "application/jsonl")},
+        data={"purpose": purpose},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+
+@pytest.mark.parametrize(
+    "content, purpose, expected_status, expected_fragment",
+    [
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"hi"}]}}\n',
+            "batch",
+            200,
+            None,
+        ),
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
+            "batch",
+            200,
+            None,
+        ),
+        (
+            b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+            b'"body":{"model":"gpt-3.5-turbo","messages":[{"role":"user","content":"leak me"}]}}\n',
+            "assistants",
+            200,
+            None,
+        ),
+        (b"{ not json\n", "batch", 400, "line 1"),
+    ],
+)
+def test_batch_upload_runs_guardrails_on_each_record(
+    monkeypatch, llm_router: Router, content, purpose, expected_status, expected_fragment
+):
+    """POST /v1/files with purpose=batch must reach the guardrail chain; other purposes must not."""
+    import litellm
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if isinstance(message.get("content"), str) and "leak" in message["content"]:
+                    message["content"] = "***"
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    async def fake_route_create_file(**kwargs):
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    try:
+        resp = _batch_upload(client, content, purpose)
+        assert resp.status_code == expected_status, resp.text
+        if expected_fragment is not None:
+            assert expected_fragment in resp.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def test_batch_upload_redacts_per_record(monkeypatch, llm_router: Router):
+    """An offending record is submitted masked, matching what the online path does per request."""
+    expected_custom_ids = ["keep-1", "dirty", "keep-2"]
+    import json as _json
+
+    import litellm
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if isinstance(message.get("content"), str) and "leak" in message["content"]:
+                    message["content"] = message["content"].replace("leak", "***")
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    uploaded = {}
+
+    async def fake_route_create_file(**kwargs):
+        handle = kwargs["_create_file_request"]["file"][1]
+        uploaded["body"] = handle.read() if hasattr(handle, "read") else handle
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    def _row(custom_id, content):
+        return _json.dumps(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": content}]},
+            }
+        )
+
+    content = ("\n".join([_row("keep-1", "fine"), _row("dirty", "please leak this"), _row("keep-2", "fine")])).encode()
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", content, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        rows = [_json.loads(line) for line in uploaded["body"].decode().splitlines()]
+        assert [row["custom_id"] for row in rows] == expected_custom_ids
+        assert rows[1]["body"]["messages"][0]["content"] == "please *** this"
+        report = resp.json()["litellm_batch_guardrail"]
+        assert report["submitted_records"] == 3
+        assert report["modified_records"] == [
+            {"line": 2, "custom_id": "dirty", "action": "redacted", "guardrail": None}
+        ]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+PLAIN_UPLOAD_RESPONSE_BODY = {
+    "id": "dummy-id",
+    "object": "file",
+    "bytes": 0,
+    "created_at": 1234567890,
+    "filename": "batch.jsonl",
+    "purpose": "batch",
+    "status": "uploaded",
+    "expires_at": None,
+    "status_details": None,
+}
+
+
+def test_create_file_omits_batch_guardrail_field_when_no_guardrail_configured(monkeypatch, llm_router: Router):
+    """An upload no guardrail is configured for serialises the plain OpenAI file shape."""
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+    assert response.json() == PLAIN_UPLOAD_RESPONSE_BODY
+
+
+def test_create_file_omits_batch_guardrail_field_when_guardrail_made_no_changes(monkeypatch, llm_router: Router):
+    """A guardrail that runs and changes nothing leaves the response the plain OpenAI file shape."""
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Passthrough(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            return data
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Passthrough(guardrail_name="noop", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+    assert response.json() == PLAIN_UPLOAD_RESPONSE_BODY
+
+
+def test_batch_upload_closes_the_spools_it_opened(monkeypatch, llm_router: Router):
+    """The scan and the rewrite each open a spool; the request owns both and must not leak them."""
+    import json as _json
+
+    import litellm
+    import litellm.proxy.openai_files_endpoints.batch_guardrails as bg
+    import litellm.proxy.openai_files_endpoints.files_endpoints as fe
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.utils import ProxyLogging
+
+    class _Redactor(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            for message in data.get("messages") or []:
+                if "leak" in (message.get("content") or ""):
+                    message["content"] = message["content"].replace("leak", "***")
+            return data
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "callbacks", [_Redactor(guardrail_name="g", default_on=True)])
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    spools = []
+    real = bg.tempfile.SpooledTemporaryFile
+
+    def _tracking(*args, **kwargs):
+        handle = real(*args, **kwargs)
+        spools.append(handle)
+        return handle
+
+    monkeypatch.setattr(bg.tempfile, "SpooledTemporaryFile", _tracking)
+
+    async def fake_route_create_file(**kwargs):
+        return OpenAIFileObject(
+            id="dummy-id",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(fe, "route_create_file", fake_route_create_file)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+
+    def _row(custom_id, content):
+        return _json.dumps(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": content}]},
+            }
+        )
+
+    content = ("\n".join([_row("keep", "fine"), _row("dirty", "please leak this")])).encode()
+    try:
+        resp = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", content, "application/jsonl")},
+            data={"purpose": "batch"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(spools) == 2, f"expected a scan spool and a rewrite spool, saw {len(spools)}"
+        assert all(handle.closed for handle in spools), "the request must close every spool it opened"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _managed_file_row(
+    unified_file_id: str,
+    stored_file_id: Optional[str] = None,
+    created_by: str = "test-user",
+    team_id: Optional[str] = None,
+) -> MagicMock:
+    file_object = OpenAIFileObject(
+        id=stored_file_id or unified_file_id,
+        bytes=100,
+        created_at=1700000000,
+        filename="batch.jsonl",
+        object="file",
+        purpose="batch",
+        status="processed",
+    )
+    return MagicMock(
+        unified_file_id=unified_file_id,
+        file_object=file_object.model_dump(),
+        created_by=created_by,
+        team_id=team_id,
+    )
+
+
+def _row_matches_where(row, where) -> bool:
+    for field, expected in where.items():
+        if field == "OR":
+            if not any(_row_matches_where(row, clause) for clause in expected):
+                return False
+        elif getattr(row, field) != expected:
+            return False
+    return True
+
+
+class _ManagedFileTableOverRows:
+    """Enough of the Prisma table for the real hook's owner-scoped keyset query."""
+
+    def __init__(self, rows):
+        self.rows = list(rows)
+
+    def _owned_rows(self, where):
+        return [row for row in self.rows if _row_matches_where(row, where)]
+
+    async def find_first(self, where):
+        return next(iter(self._owned_rows(where)), None)
+
+    async def find_many(self, where, take=None, order=None, cursor=None, skip=0):
+        rows = self._owned_rows(where)
+        if cursor is not None:
+            start = next(
+                index
+                for index, row in enumerate(rows)
+                if row.unified_file_id == cursor["unified_file_id"]
+            )
+            rows = rows[start + skip :]
+        return rows if take is None else rows[:take]
+
+
+def _setup_unscoped_list_files_route_over_real_hook(
+    mocker, monkeypatch, llm_router: Router, rows
+):
+    """Wire GET /v1/files to a real managed-files hook over `rows`, with no provider
+    credentials in the process. The neighbouring setup stubs the hook with a
+    MagicMock, so it cannot see anything past the route's argument plumbing."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    for env_var in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_ORGANIZATION"):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None, raising=False)
+    monkeypatch.setattr(litellm, "openai_key", None, raising=False)
+
+    managed_files = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(), prisma_client=MagicMock()
+    )
+    managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    provider_list = mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+    return proxy_logging_obj, provider_list
+
+
+def test_unscoped_list_files_reads_the_store_without_any_provider_key(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """The exact shape `client.files.list()` produces, with no target_model_names, no
+    provider and no OPENAI_API_KEY in the process, must return the caller's managed
+    files instead of falling through to a keyless provider client (#35362)."""
+    proxy_logging_obj, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, [_managed_file_row("unified-file-1")]
+    )
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-file-1"]
+    provider_list.assert_not_awaited()
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_unscoped_list_files_returns_unified_ids_for_rows_storing_a_raw_provider_id(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Batch output rows store the provider's file object, whose id is a raw `file-`
+    the caller cannot act on. The listing hands back the row's unified id so
+    files.retrieve and files.content work on what it returned."""
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [_managed_file_row("unified-batch-output", stored_file_id="file-raw-provider-123")],
+    )
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-batch-output"]
+    assert response.json()["data"][0]["filename"] == "batch.jsonl"
+
+
+def test_unscoped_list_files_does_not_leak_another_callers_files(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """Listing without a model pinned is still owner-scoped."""
+    _setup_unscoped_list_files_route_over_real_hook(
+        mocker,
+        monkeypatch,
+        llm_router,
+        [
+            _managed_file_row("unified-mine"),
+            _managed_file_row("unified-theirs", created_by="other-user"),
+        ],
+    )
+
+    response = _get_unscoped_list_files("")
+
+    assert response.status_code == 200, response.text
+    assert [file["id"] for file in response.json()["data"]] == ["unified-mine"]
+
+
+def test_scoped_list_files_still_resolves_deployment_credentials(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """target_model_names keeps routing to the provider on deployment credentials, so
+    the unscoped path does not swallow that route."""
+    _, provider_list = _setup_unscoped_list_files_route_over_real_hook(
+        mocker, monkeypatch, llm_router, [_managed_file_row("unified-file-1")]
+    )
+    provider_list.return_value = []
+
+    response = _get_unscoped_list_files("?target_model_names=gpt-3.5-turbo")
+
+    assert response.status_code == 200, response.text
+    provider_list.assert_awaited_once()
+    assert provider_list.await_args.kwargs["custom_llm_provider"] == "openai"
+    assert provider_list.await_args.kwargs["api_key"] == "openai_api_key"
