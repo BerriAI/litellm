@@ -814,6 +814,10 @@ class ProxyLogging:
 
             self.proxy_hook_mapping[hook] = proxy_hook_obj
 
+    def _add_proxy_hooks(self, llm_router: Router | None = None):
+        """Backward-compatible entry point for existing proxy setup callers."""
+        self.add_missing_proxy_hooks(llm_router)
+
     def get_proxy_hook(self, hook: str) -> CustomLogger | None:
         """
         Get a proxy hook from the proxy_hook_mapping
