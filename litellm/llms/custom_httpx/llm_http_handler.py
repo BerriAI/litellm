@@ -7061,7 +7061,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             elif video_generation_provider_config.use_multipart_form_data():
-                response = sync_httpx_client.post(
+                response = sync_httpx_client.post(  # rebind-ok: one of three mutually-exclusive branches
                     url=api_base,
                     headers=headers,
                     files=serialize_multipart_form_fields(data),
@@ -7168,7 +7168,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             elif video_generation_provider_config.use_multipart_form_data():
-                response = await async_httpx_client.post(
+                response = await async_httpx_client.post(  # rebind-ok: one of three mutually-exclusive branches
                     url=api_base,
                     headers=headers,
                     files=serialize_multipart_form_fields(data),
