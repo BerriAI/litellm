@@ -281,6 +281,56 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
         litellm.model_cost.pop(custom_model_id, None)
 
 
+def test_response_cost_calculator_uses_deployment_model_for_router_alias():
+    """A streamed router alias must not hide the provider-qualified deployment model."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    alias_model = "vertex/claude-alias-cost-test"
+    deployment_model = "vertex_ai/claude-alias-cost-test"
+    input_cost = 2.0
+    output_cost = 3.0
+
+    litellm.register_model(
+        model_cost={
+            deployment_model: {
+                "input_cost_per_token": input_cost,
+                "output_cost_per_token": output_cost,
+                "max_tokens": 128000,
+                "max_input_tokens": 128000,
+                "max_output_tokens": 16384,
+                "litellm_provider": "vertex_ai",
+            }
+        }
+    )
+
+    try:
+        logging_obj = LiteLLMLoggingObj(
+            model=alias_model,
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="test-router-alias-cost",
+            function_id="test-fn",
+        )
+        logging_obj.optional_params = {}
+        logging_obj.model_call_details["model"] = deployment_model
+        logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+
+        response_obj = ModelResponse(
+            id="chatcmpl-router-alias-cost",
+            model=alias_model,
+            choices=[],
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+
+        cost = logging_obj._response_cost_calculator(result=response_obj)
+
+        assert cost == pytest.approx((10 * input_cost) + (5 * output_cost))
+    finally:
+        litellm.model_cost.pop(deployment_model, None)
+
+
 class TestGetRouterModelId:
     """Tests for the get_router_model_id helper method."""
 

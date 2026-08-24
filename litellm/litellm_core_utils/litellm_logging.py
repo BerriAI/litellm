@@ -1609,9 +1609,10 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit = self.model_call_details.get("cache_hit", False)
 
         try:
+            model_for_cost: Final = litellm_model_name or self.get_deployment_model_for_cost()
             response_cost_calculator_kwargs: Final = {
                 "response_object": result,
-                "model": litellm_model_name or self.model,
+                "model": model_for_cost,
                 "cache_hit": cache_hit,
                 "custom_llm_provider": self.model_call_details.get("custom_llm_provider", None),
                 "base_model": _get_base_model_from_metadata(model_call_details=self.model_call_details),
@@ -1632,7 +1633,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     custom_llm_provider=self.model_call_details.get("custom_llm_provider", None),
                     litellm_params=(self.litellm_params if hasattr(self, "litellm_params") else None),
                     optional_params=self.optional_params,
-                    model=litellm_model_name or self.model,
+                    model=model_for_cost,
                 ),
             }
         except Exception as e:  # error creating kwargs for cost calculation
