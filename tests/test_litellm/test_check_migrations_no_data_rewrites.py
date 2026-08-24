@@ -521,6 +521,14 @@ class TestStoredRoutines:
         sql = self.DEFINITION + 'SELECT public . "backfill" ();\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
+    def test_a_schema_qualified_call_in_an_index_expression_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE INDEX ON "Bar" (public."backfill"("a"));\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
+    def test_a_spaced_schema_qualified_call_in_an_index_expression_still_counts(self, tmp_path):
+        sql = self.DEFINITION + 'CREATE INDEX ON "Bar" (public . "backfill" ("a"));\n'
+        assert _keywords(tmp_path, sql) == ("UPDATE",)
+
     def test_a_trigger_wiring_the_function_up_counts_as_a_call(self, tmp_path):
         sql = self.DEFINITION + 'CREATE TRIGGER t AFTER INSERT ON "Foo" EXECUTE FUNCTION backfill();\n'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
