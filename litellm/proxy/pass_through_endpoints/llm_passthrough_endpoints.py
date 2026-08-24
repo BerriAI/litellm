@@ -1747,31 +1747,49 @@ _HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset(
 )
 
 
+def _credentialless_caller_key_values(request: Request) -> frozenset[str]:
+    """Every header value the proxy would accept as this caller's LiteLLM key.
+
+    Beyond the built-in ``x-litellm-api-key`` / ``Authorization`` that
+    ``get_litellm_virtual_key`` reads, ``user_api_key_auth`` also authenticates a
+    caller from the operator-configured ``general_settings.litellm_key_header_name``
+    when one is set, reading that header straight off the request. Any of those
+    values equals the virtual key and must never be forwarded to Google.
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    custom_key_header_name: Final = general_settings.get("litellm_key_header_name") or ""
+    candidates: Final = (
+        get_litellm_virtual_key(request),
+        request.headers.get(custom_key_header_name, "") if custom_key_header_name else "",
+    )
+    return frozenset(_bearer_stripped(value) for value in candidates if _bearer_stripped(value))
+
+
 def _forwarded_headers_for_credentialless_vertex_passthrough(request: Request) -> Mapping[str, str]:
     """
     Header set to forward on the bring-your-own-credentials Vertex passthrough
     branch, used when the proxy has no Vertex credential configured.
 
     No credential the proxy accepts for caller authentication is forwarded to
-    Google. LiteLLM reads the caller's virtual key from ``x-litellm-api-key``,
-    ``api-key``, ``x-api-key``, ``Authorization``, and ``x-goog-api-key``. Vertex
-    only ever authenticates with an OAuth token in ``Authorization`` or an API key
-    in ``x-goog-api-key``, so ``x-litellm-api-key`` / ``api-key`` / ``x-api-key``
-    can only carry caller auth material and are dropped by name. ``Authorization``
-    and ``x-goog-api-key`` may instead carry a genuine bring-your-own Google
-    credential, so they are kept unless their value is the caller's virtual key,
-    which is dropped by value (normalizing any ``Bearer`` prefix). When neither a
-    surviving ``Authorization`` nor ``x-goog-api-key`` remains the request is
-    rejected so the virtual key cannot leak upstream.
+    Google. Vertex only ever authenticates with an OAuth token in ``Authorization``
+    or an API key in ``x-goog-api-key``, so the proxy-only auth headers Google never
+    consumes (``x-litellm-api-key`` / ``api-key`` / ``x-api-key``) are dropped by
+    name. ``Authorization`` and ``x-goog-api-key`` may instead carry a genuine
+    bring-your-own Google credential, so they are kept unless their value is one of
+    the caller's LiteLLM key values, which are dropped by value (normalizing any
+    ``Bearer`` prefix). Dropping by value also covers a virtual key sent in the
+    operator-configured ``litellm_key_header_name``, whatever that header is named.
+    When neither a surviving ``Authorization`` nor ``x-goog-api-key`` remains the
+    request is rejected so the virtual key cannot leak upstream.
     """
     incoming: Final = _safe_get_request_headers(request)
-    caller_virtual_key: Final = _bearer_stripped(get_litellm_virtual_key(request))
+    caller_key_values: Final = _credentialless_caller_key_values(request)
     forwarded: Final = MappingProxyType(
         {
             name: value
             for name, value in incoming.items()
-            if name not in _HEADERS_NEVER_FORWARDED_TO_VERTEX
-            and not (caller_virtual_key and _bearer_stripped(value) == caller_virtual_key)
+            if name not in _HEADERS_NEVER_FORWARDED_TO_VERTEX and _bearer_stripped(value) not in caller_key_values
         }
     )
     if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:
