@@ -4,6 +4,7 @@ Mocked transport — no real network. Verifies the response-envelope
 parser, pre-call hook behavior (allow / block / approval), fail-mode
 handling, and session-ID resolution chain.
 """
+
 from __future__ import annotations
 
 import os
@@ -27,16 +28,12 @@ class TestGuardDecisionParse:
         assert GuardDecision.parse(raw).verdict == "allow"
 
     def test_blocked_extracts_rule_id(self) -> None:
-        d = GuardDecision.parse(
-            "BLOCKED — command touches /etc/passwd  [rule: no-etc-passwd]"
-        )
+        d = GuardDecision.parse("BLOCKED — command touches /etc/passwd  [rule: no-etc-passwd]")
         assert d.verdict == "block"
         assert d.rule_id == "no-etc-passwd"
 
     def test_pending_approval_treated_as_block(self) -> None:
-        d = GuardDecision.parse(
-            "PENDING approval — HITL required [rule: prod-deploy-gate]"
-        )
+        d = GuardDecision.parse("PENDING approval — HITL required [rule: prod-deploy-gate]")
         assert d.verdict == "approval"
         assert d.rule_id == "prod-deploy-gate"
 
@@ -89,24 +86,18 @@ class TestPreCallHook:
 
     async def test_pending_approval_also_raises(self) -> None:
         g = _guard()
-        g._check = AsyncMock(
-            return_value=GuardDecision(verdict="approval", raw="PENDING approval — review")
-        )
+        g._check = AsyncMock(return_value=GuardDecision(verdict="approval", raw="PENDING approval — review"))
         with pytest.raises(ConductGuardrailBlocked):
             await g.async_pre_call_hook(None, None, {}, "completion")
 
 
 class TestConfig:
-    def test_missing_token_raises_at_construction(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_token_raises_at_construction(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CONDUCT_AGENT_TOKEN", raising=False)
         with pytest.raises(ValueError, match="agent token"):
             ConductGuardrail()
 
-    def test_config_api_key_wins_over_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_config_api_key_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CONDUCT_AGENT_TOKEN", "env-token")
         g = ConductGuardrail(api_key="config-token")
         assert g._agent_token == "config-token"
@@ -119,4 +110,5 @@ class TestConfig:
 if __name__ == "__main__":
     import subprocess
     import sys
+
     raise SystemExit(subprocess.call([sys.executable, "-m", "pytest", __file__, "-v"]))

@@ -93,7 +93,7 @@ class GuardDecision:
 
 
 def _strip_prefix(text: str, prefix: str) -> str | None:
-    remainder = text[len(prefix):].strip()
+    remainder = text[len(prefix) :].strip()
     return remainder.lstrip(":—- ").strip() or None
 
 
@@ -102,7 +102,7 @@ def _extract_rule_id(text: str) -> str | None:
     idx = text.find(marker)
     if idx < 0:
         return None
-    tail = text[idx + len(marker):]
+    tail = text[idx + len(marker) :]
     end = tail.find("]")
     return tail[:end].strip() if end >= 0 else None
 
@@ -145,9 +145,7 @@ class ConductGuardrail(CustomGuardrail):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
-        self._api_url = (
-            api_base or os.environ.get("CONDUCT_API_URL", "https://api.conductai.ai")
-        ).rstrip("/")
+        self._api_url = (api_base or os.environ.get("CONDUCT_API_URL", "https://api.conductai.ai")).rstrip("/")
         token = api_key or os.environ.get("CONDUCT_AGENT_TOKEN")
         if not token:
             raise ValueError(
@@ -232,9 +230,7 @@ class ConductGuardrail(CustomGuardrail):
 
             if "error" in body:
                 err = body["error"]
-                verbose_proxy_logger.warning(
-                    "conduct_guard: eval error %s — applying %s", err, self._fail_mode
-                )
+                verbose_proxy_logger.warning("conduct_guard: eval error %s — applying %s", err, self._fail_mode)
                 if self._fail_mode == "fail_closed":
                     return GuardDecision(
                         verdict="block",
@@ -249,9 +245,7 @@ class ConductGuardrail(CustomGuardrail):
                     return GuardDecision.parse(item.get("text", ""))
             return GuardDecision(verdict="allow", raw="")
         except Exception as e:
-            verbose_proxy_logger.warning(
-                "conduct_guard: transport error %s — applying %s", e, self._fail_mode
-            )
+            verbose_proxy_logger.warning("conduct_guard: transport error %s — applying %s", e, self._fail_mode)
             if self._fail_mode == "fail_closed":
                 return GuardDecision(
                     verdict="block",
@@ -290,10 +284,7 @@ def _extract_prompt_text(data: dict[str, Any]) -> str | None:
             if isinstance(content, str):
                 return content[:4000]
             if isinstance(content, list):
-                parts = [
-                    p.get("text", "") for p in content
-                    if isinstance(p, dict) and p.get("type") == "text"
-                ]
+                parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
                 return " ".join(parts)[:4000] or None
     return None
 
