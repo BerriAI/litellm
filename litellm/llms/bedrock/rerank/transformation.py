@@ -22,6 +22,7 @@ from litellm.types.rerank import (
     RerankBilledUnits,
     RerankRequest,
     RerankResponse,
+    RerankResponseDocument,
     RerankResponseMeta,
     RerankResponseResult,
     RerankTokens,
@@ -77,12 +78,29 @@ class BedrockRerankConfig:
             sources=_sources,
         )
 
-    def _transform_response(self, response: dict) -> RerankResponse:
+    @staticmethod
+    def _document_text(document: str | dict) -> str | None:
+        """Text of an input document, in either shape the API accepts."""
+        if isinstance(document, str):
+            return document
+        if isinstance(document, dict):
+            text = document.get("text")
+            if isinstance(text, str):
+                return text
+        return None
+
+    def _transform_response(self, response: dict, request_data: RerankRequest | None = None) -> RerankResponse:
         """
         Transform the response from Bedrock into the RerankResponse format.
 
         example input:
         {"results":[{"index":0,"relevanceScore":0.6847912669181824},{"index":1,"relevanceScore":0.5980774760246277}]}
+
+        Bedrock never echoes document text, so `document` is back-filled from
+        the request's documents by index — the same thing the HuggingFace
+        rerank config does for the identical provider limitation. Without
+        `request_data` there is nothing to back-fill from, so the response is
+        left as-is.
         """
         _billed_units = RerankBilledUnits(**response.get("usage", {"search_units": 1}))  # by default 1 search unit
         _tokens: Final = RerankTokens(**response.get("usage", {}))
@@ -92,13 +110,22 @@ class BedrockRerankConfig:
 
         bedrock_results: Final = response.get("results")
         if bedrock_results:
-            _results = [
-                RerankResponseResult(
-                    index=result.get("index"),
+            # Cohere-compatible default: back-fill unless the caller opted out.
+            should_return_documents: Final = request_data is not None and request_data.return_documents is not False
+            original_documents: Final = request_data.documents if request_data is not None else []
+
+            _results = []
+            for result in bedrock_results:
+                index = result.get("index")
+                _result = RerankResponseResult(
+                    index=index,
                     relevance_score=result.get("relevanceScore"),
                 )
-                for result in bedrock_results
-            ]
+                if should_return_documents and isinstance(index, int) and 0 <= index < len(original_documents):
+                    text = self._document_text(original_documents[index])
+                    if text is not None:
+                        _result["document"] = RerankResponseDocument(text=text)
+                _results.append(_result)
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")

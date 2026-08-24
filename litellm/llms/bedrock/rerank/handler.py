@@ -31,6 +31,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         prepared_request: BedrockPreparedRequest,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
+        request_data: RerankRequest | None = None,
     ):
         if client is None:
             client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
@@ -48,7 +49,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig()._transform_response(response.json())
+        return BedrockRerankConfig()._transform_response(response.json(), request_data)
 
     def rerank(
         self,
@@ -98,6 +99,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         if _is_async:
             return self.arerank(
                 prepared_request,
+                request_data=request_data,
                 timeout=timeout,
                 client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None,
             )
@@ -125,7 +127,7 @@ class BedrockRerankHandler(BaseAWSLLM):
 
         response_json: Final = response.json()
 
-        return BedrockRerankConfig()._transform_response(response_json)
+        return BedrockRerankConfig()._transform_response(response_json, request_data)
 
     def _prepare_request(
         self,
