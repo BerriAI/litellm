@@ -4076,6 +4076,8 @@ class TestPassthroughRouterModelBudgetReservation:
             user_id="u1",
             team_id="t1",
             budget_reservation=reservation,
+            agent_id="agent-xyz",
+            end_user_max_budget=42.0,
         )
 
     def _request(self) -> MagicMock:
@@ -4106,11 +4108,17 @@ class TestPassthroughRouterModelBudgetReservation:
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
         assert len(captured) == 1, "the router-model branch must dispatch exactly once"
-        metadata = captured[0]["metadata"]
-        assert metadata["user_api_key"] == user_api_key_dict.api_key
-        assert metadata["user_api_key_budget_reservation"] is user_api_key_dict.budget_reservation
-        assert metadata["user_api_key_user_id"] == user_api_key_dict.user_id
-        assert metadata["user_api_key_team_id"] == user_api_key_dict.team_id
+        assert captured[0].get("metadata") is None, (
+            "attribution must ride the litellm_metadata bucket the router canonicalizes on; "
+            "the plain metadata bucket is dropped for every non-user_api_key field"
+        )
+        litellm_metadata = captured[0]["litellm_metadata"]
+        assert litellm_metadata["user_api_key"] == user_api_key_dict.api_key
+        assert litellm_metadata["user_api_key_budget_reservation"] is user_api_key_dict.budget_reservation
+        assert litellm_metadata["user_api_key_user_id"] == user_api_key_dict.user_id
+        assert litellm_metadata["user_api_key_team_id"] == user_api_key_dict.team_id
+        assert litellm_metadata["agent_id"] == user_api_key_dict.agent_id
+        assert litellm_metadata["user_api_end_user_max_budget"] == user_api_key_dict.end_user_max_budget
 
     @pytest.mark.asyncio
     async def test_vllm_router_model_threads_key_metadata(self, monkeypatch):
