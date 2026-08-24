@@ -1,8 +1,5 @@
 import io
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import json
@@ -10,9 +7,7 @@ import logging
 import tempfile
 from litellm._uuid import uuid
 
-import json
 from datetime import datetime, timedelta, timezone
-from datetime import datetime
 
 import pytest
 

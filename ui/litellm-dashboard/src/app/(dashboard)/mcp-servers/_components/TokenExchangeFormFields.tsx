@@ -1,24 +1,33 @@
+import { Info } from "lucide-react";
 import React from "react";
-import { Input, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { useWatch } from "react-hook-form";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
-import { selectControl, textControl } from "./mcpFieldRules";
+import { requiredRule } from "@/components/common_components/formRules";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
+import { selectControl, selectTriggerControl, tagsControl, textControl } from "./mcpFieldRules";
 
 interface TokenExchangeFormFieldsProps {
   isEditing?: boolean;
 }
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
+
+const TOKEN_EXCHANGE_PROFILE_ITEMS = [
+  { value: "rfc8693", label: "RFC 8693 (standard)" },
+  { value: "entra_obo", label: "Microsoft Entra OBO" },
+];
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
-    <Tooltip title={tooltip}>
-      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-    </Tooltip>
+    <SimpleTooltip content={tooltip}>
+      <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+    </SimpleTooltip>
   </span>
 );
 
@@ -26,7 +35,7 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
   const isEntraObo = useWatch({ name: "token_exchange_profile" }) === "entra_obo";
   const requiredWhenCreating = (message: string) =>
-    isEditing ? undefined : { validate: { required: antdRequired(message) } };
+    isEditing ? undefined : { validate: { required: requiredRule(message) } };
 
   return (
     <>
@@ -41,13 +50,17 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
         {...(isEditing ? {} : { defaultValue: "rfc8693" })}
       >
         {(control) => (
-          <Select {...selectControl(control)} className="rounded-lg" size="large">
-            <Select.Option value="rfc8693">
-              <span className="font-medium">RFC 8693 (standard)</span>
-            </Select.Option>
-            <Select.Option value="entra_obo">
-              <span className="font-medium">Microsoft Entra OBO</span>
-            </Select.Option>
+          <Select {...selectControl<string>(control)} items={TOKEN_EXCHANGE_PROFILE_ITEMS}>
+            <SelectTrigger {...selectTriggerControl(control)} className="w-full rounded-lg">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TOKEN_EXCHANGE_PROFILE_ITEMS.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  <span className="font-medium">{item.label}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         )}
       </MountedFormField>
@@ -80,10 +93,10 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
         rules={requiredWhenCreating("Client ID is required for token exchange")}
       >
         {(control) => (
-          <Input.Password
+          <PasswordInput
             {...textControl(control)}
             placeholder={`Enter OAuth client ID${placeholderSuffix}`}
-            className={fieldClassName}
+            groupClassName={fieldClassName}
           />
         )}
       </MountedFormField>
@@ -99,10 +112,10 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
         rules={requiredWhenCreating("Client Secret is required for token exchange")}
       >
         {(control) => (
-          <Input.Password
+          <PasswordInput
             {...textControl(control)}
             placeholder={`Enter OAuth client secret${placeholderSuffix}`}
-            className={fieldClassName}
+            groupClassName={fieldClassName}
           />
         )}
       </MountedFormField>
@@ -157,20 +170,17 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
           isEntraObo
             ? {
                 validate: {
-                  required: antdRequired("Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default"),
+                  required: requiredRule("Microsoft Entra OBO requires a scope, e.g. api://<app-id>/.default"),
                 },
               }
             : undefined
         }
       >
         {(control) => (
-          <Select
-            {...selectControl(control)}
-            mode="tags"
-            tokenSeparators={[","]}
+          <MultiSelect
+            {...tagsControl(control)}
             placeholder={isEntraObo ? "api://<app-id>/.default" : "Add scopes"}
             className="rounded-lg"
-            size="large"
           />
         )}
       </MountedFormField>

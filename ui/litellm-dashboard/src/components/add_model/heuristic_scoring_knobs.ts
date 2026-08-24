@@ -44,5 +44,12 @@ export const hydrateTokenThresholds = (raw: unknown): TokenThresholds | undefine
 
 export const hydrateDimensionWeights = (raw: unknown): DimensionWeights | undefined => hydrateNumericMap(raw);
 
+/**
+ * The scalar counterpart of hydrateNumericMap: absent hydrates to undefined so an untouched save keeps the
+ * floor tracking tier_boundaries.simple_medium, while a stored 0 hydrates to 0, which is a real floor.
+ */
+export const hydrateReasoningOverrideMinScore = (raw: unknown): number | undefined =>
+  typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+
 export const weightTotal = (weights: DimensionWeights): number =>
   Math.round(Object.values(weights).reduce((total, weight) => total + weight, 0) * 100) / 100;

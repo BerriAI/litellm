@@ -9,18 +9,6 @@ vi.mock("@/components/networking", () => ({
   searchToolQueryCall: vi.fn(),
 }));
 
-vi.mock("antd", async () => {
-  const actual = await vi.importActual("antd");
-  return {
-    ...actual,
-    message: {
-      warning: vi.fn(),
-      success: vi.fn(),
-      error: vi.fn(),
-    },
-  };
-});
-
 const mockSearchResults = {
   results: [
     {

@@ -1,17 +1,18 @@
 "use client";
 
-import { Modal } from "antd";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { z } from "zod/v4";
 
 import type { MemoryRow } from "@/components/networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 const memorySchema = z.object({
   key: z.string().min(1, "Key is required"),
@@ -68,63 +69,78 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, in
   });
 
   return (
-    <Modal
+    <Dialog
       open={open}
-      title={mode === "create" ? "Create memory" : `Edit ${initialRow?.key ?? ""}`}
-      onCancel={() => {
-        form.reset(EMPTY_MEMORY);
-        onClose();
+      onOpenChange={(open) => {
+        if (!open) {
+          form.reset(EMPTY_MEMORY);
+          onClose();
+        }
       }}
-      onOk={handleOk}
-      okText={mode === "create" ? "Create" : "Save"}
-      confirmLoading={submitting}
-      width={640}
-      destroyOnClose
     >
-      <form onSubmit={(event) => event.preventDefault()} noValidate>
-        <TooltipProvider>
-          <FieldGroup>
-            <FormField
-              control={form.control}
-              name="key"
-              label={labelWithHint(
-                "Key",
-                "Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes).",
-              )}
-            >
-              {({ ref, ...field }) => (
-                <Input {...field} ref={ref} placeholder="e.g. user_role" disabled={mode === "edit"} />
-              )}
-            </FormField>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>{mode === "create" ? "Create memory" : `Edit ${initialRow?.key ?? ""}`}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <TooltipProvider>
+            <FieldGroup>
+              <FormField
+                control={form.control}
+                name="key"
+                label={labelWithHint(
+                  "Key",
+                  "Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes).",
+                )}
+              >
+                {({ ref, ...field }) => (
+                  <Input {...field} ref={ref} placeholder="e.g. user_role" disabled={mode === "edit"} />
+                )}
+              </FormField>
 
-            <FormField
-              control={form.control}
-              name="value"
-              label={labelWithHint("Value", "Markdown/text injected into LLM context. Plain strings are fine.")}
-            >
-              {({ ref, ...field }) => (
-                <Textarea {...field} ref={ref} rows={8} placeholder="What the agent should remember…" />
-              )}
-            </FormField>
+              <FormField
+                control={form.control}
+                name="value"
+                label={labelWithHint("Value", "Markdown/text injected into LLM context. Plain strings are fine.")}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea {...field} ref={ref} rows={8} placeholder="What the agent should remember…" />
+                )}
+              </FormField>
 
-            <FormField
-              control={form.control}
-              name="metadata"
-              label={labelWithHint(
-                <span>
-                  Metadata <span className="text-muted-foreground">(optional JSON)</span>
-                </span>,
-                "Optional structured metadata — must be valid JSON if provided.",
-              )}
-            >
-              {({ ref, ...field }) => (
-                <Textarea {...field} ref={ref} rows={4} placeholder='{"tags": ["example"]}' className="font-mono" />
-              )}
-            </FormField>
-          </FieldGroup>
-        </TooltipProvider>
-      </form>
-    </Modal>
+              <FormField
+                control={form.control}
+                name="metadata"
+                label={labelWithHint(
+                  <span>
+                    Metadata <span className="text-muted-foreground">(optional JSON)</span>
+                  </span>,
+                  "Optional structured metadata — must be valid JSON if provided.",
+                )}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea {...field} ref={ref} rows={4} placeholder='{"tags": ["example"]}' className="font-mono" />
+                )}
+              </FormField>
+            </FieldGroup>
+          </TooltipProvider>
+        </form>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              form.reset(EMPTY_MEMORY);
+              onClose();
+            }}
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleOk} disabled={submitting} aria-busy={submitting}>
+            {mode === "create" ? "Create" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

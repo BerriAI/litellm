@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
@@ -55,10 +55,10 @@ describe("CreateSearchTools submit payload", () => {
     renderModal();
     await screen.findByLabelText(/Search Tool Name/);
 
-    await user.type(screen.getByLabelText(/Search Tool Name/), "my-search");
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "my-search" } });
     await pickProvider(user, "Perplexity AI");
-    await user.type(screen.getByLabelText(/API Key/), "sk-secret");
-    await user.type(screen.getByLabelText(/Description/), "finds things");
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk-secret" } });
+    fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "finds things" } });
     await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
 
     await waitFor(() => expect(networking.createSearchTool).toHaveBeenCalledTimes(1));
@@ -85,7 +85,7 @@ describe("CreateSearchTools submit payload", () => {
     renderModal();
     await screen.findByLabelText(/Search Tool Name/);
 
-    await user.type(screen.getByLabelText(/Search Tool Name/), "minimal");
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "minimal" } });
     await pickProvider(user, "Tavily Search");
     await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
 
@@ -113,9 +113,9 @@ describe("CreateSearchTools submit payload", () => {
     renderModal();
     await screen.findByLabelText(/Search Tool Name/);
 
-    await user.type(screen.getByLabelText(/Search Tool Name/), "probe-tool");
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "probe-tool" } });
     await pickProvider(user, "Perplexity AI");
-    await user.type(screen.getByLabelText(/API Key/), "sk-secret");
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk-secret" } });
     await user.click(screen.getByRole("button", { name: "Test Connection" }));
 
     await waitFor(() => expect(networking.createSearchTool).toHaveBeenCalledTimes(1));
@@ -139,7 +139,7 @@ describe("CreateSearchTools submit payload", () => {
     renderModal();
     await screen.findByLabelText(/Search Tool Name/);
 
-    await user.type(screen.getByLabelText(/Search Tool Name/), "bad name!");
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "bad name!" } });
     await pickProvider(user, "Perplexity AI");
     await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
 

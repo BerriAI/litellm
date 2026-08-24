@@ -1,12 +1,21 @@
 """Tests for MCP OAuth discoverable endpoints"""
 
+import hashlib
 import json
+import time
+from base64 import urlsafe_b64encode
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.types.mcp import MCPAuth
+
+if TYPE_CHECKING:
+    import httpx
+
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 # Fixture to mock IP address check for all MCP tests
@@ -2689,13 +2698,6 @@ async def test_token_endpoint_respects_x_forwarded_host():
         (
             "http://localhost:4000/",
             "https",
-            "proxy.example.com",
-            "8443",
-            "https://proxy.example.com:8443",
-        ),
-        (
-            "http://localhost:4000/",
-            "https",
             "proxy.example.com:443",
             None,
             "https://proxy.example.com",
@@ -2953,6 +2955,55 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(caplog, monk
     assert "https://litellm.example.com/ui/mcp/oauth/callback" in msg
     assert "litellm-internal:4000" in msg
     assert "X-Forwarded-Host" in msg
+
+
+@pytest.mark.parametrize(
+    "direct_ip,expect_accepted",
+    [
+        ("10.0.0.7", True),
+        ("203.0.113.5", False),
+    ],
+)
+def test_validate_trusted_redirect_uri_follows_the_xff_trust_gate(direct_ip, expect_accepted, monkeypatch):
+    try:
+        from fastapi import HTTPException, Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = direct_ip
+
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "proxy.example.com",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+    mock_request.headers.__contains__ = lambda self_, name: name in headers
+
+    redirect_uri = "https://proxy.example.com/callback"
+    general_settings = {
+        "use_x_forwarded_for": True,
+        "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+    }
+
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings, create=True):
+        if expect_accepted:
+            validate_trusted_redirect_uri(mock_request, redirect_uri)
+            return
+        with pytest.raises(HTTPException) as exc_info:
+            validate_trusted_redirect_uri(mock_request, redirect_uri)
+
+    assert exc_info.value.status_code == 400
+    assert "proxy.example.com" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -5197,11 +5248,18 @@ async def test_interactive_bridge_gateway_code_for_another_server_is_rejected_40
 async def test_interactive_bridge_authorize_seals_sso_user_into_state():
     """On the short-circuit bridge oauth_delegate arm, authorize captures the SSO user from the UI
     session cookie and seals it (and the target server) into the encrypted OAuth state, so the
-    callback can later mint a user-bound gateway code; it still proceeds to the upstream redirect."""
+    callback can later mint a user-bound gateway code; it still proceeds to the upstream redirect.
+    The access gate runs for real against a granted resolver, so its interface stays exercised."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import MCPAuth
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="admin-client", registration_url=None)
+    admitted = UserAPIKeyAuth(user_id="sso-user-42")
+    admitted.mcp_admitted_user_subject = True
     captured: dict = {}
 
     def _capture(**kwargs):
@@ -5212,6 +5270,15 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
         patch(
             "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
             return_value="sso-user-42",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+            new=AsyncMock(return_value=admitted),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server.server_id]),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encode_state_with_base_url",
@@ -5231,6 +5298,147 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
     assert captured["litellm_user_id"] == "sso-user-42"
     assert captured["mcp_server_id"] == server.server_id
     assert "/sso/key/generate" not in response.headers["location"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_can_reach_server", [True, False])
+async def test_bridge_authorize_gates_on_the_egress_server_access_resolver(user_can_reach_server):
+    """The interactive dcr_bridge oauth_delegate authorize admits the signed-in user the way MCP
+    egress will and refuses with an RFC 6749 access_denied redirect when that admitted subject
+    cannot reach the target server, instead of minting an envelope whose every tool request would
+    fail-closed to an empty list (#36358). A user the resolver grants proceeds upstream unchanged."""
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="upstream-app", registration_url=None)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    admitted = UserAPIKeyAuth(user_id="bridge-user-1")
+    admitted.mcp_admitted_user_subject = True
+    allowed = [server.server_id] if user_can_reach_server else []
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    client_redirect = "http://127.0.0.1:60108/callback"
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+                return_value="bridge-user-1",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                new=AsyncMock(return_value=admitted),
+            ) as mock_reload,
+            patch.object(
+                global_mcp_server_manager,
+                "get_allowed_mcp_servers",
+                new=AsyncMock(return_value=allowed),
+            ) as mock_allowed,
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper",
+                return_value="mocked_encrypted_state",
+            ),
+        ):
+            response = await authorize(
+                request=mock_request,
+                client_id="dcr_client_id",
+                mcp_server_name="bridge_srv",
+                redirect_uri=client_redirect,
+                state="client-state-1",
+                code_challenge="a" * 43,
+                code_challenge_method="S256",
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    mock_reload.assert_awaited_once_with("bridge-user-1")
+    mock_allowed.assert_awaited_once_with(admitted)
+    location = response.headers["location"]
+    if user_can_reach_server:
+        assert response.status_code == 307
+        assert location.startswith("https://provider.com/oauth/authorize")
+    else:
+        assert response.status_code == 302
+        assert location.startswith(client_redirect)
+        query = parse_qs(urlparse(location).query)
+        assert query["error"] == ["access_denied"]
+        assert query["state"] == ["client-state-1"]
+        assert "bridge_srv" in query["error_description"][0]
+        assert "provider.com" not in location
+        assert "set-cookie" not in {k.lower() for k in response.headers}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reload_status,expect_denial", [(401, True), (500, False), (503, False)])
+async def test_bridge_authorize_reload_failure_denies_or_stays_retryable(reload_status, expect_denial):
+    """An unknown or deactivated signed-in user denies like a missing grant (fail closed); a DB
+    outage keeps its retryable 503 instead of masquerading as an access denial."""
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="upstream-app", registration_url=None)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+                return_value="bridge-user-1",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                new=AsyncMock(side_effect=HTTPException(status_code=reload_status, detail="x")),
+            ),
+        ):
+            if expect_denial:
+                response = await authorize(
+                    request=mock_request,
+                    client_id="dcr_client_id",
+                    mcp_server_name="bridge_srv",
+                    redirect_uri="http://127.0.0.1:60108/callback",
+                    state="client-state-1",
+                    code_challenge="a" * 43,
+                    code_challenge_method="S256",
+                )
+                assert response.status_code == 302
+                query = parse_qs(urlparse(response.headers["location"]).query)
+                assert query["error"] == ["access_denied"]
+            else:
+                with pytest.raises(HTTPException) as exc_info:
+                    await authorize(
+                        request=mock_request,
+                        client_id="dcr_client_id",
+                        mcp_server_name="bridge_srv",
+                        redirect_uri="http://127.0.0.1:60108/callback",
+                        state="client-state-1",
+                        code_challenge="a" * 43,
+                        code_challenge_method="S256",
+                    )
+                assert exc_info.value.status_code == reload_status
+    finally:
+        global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio
@@ -9432,3 +9640,229 @@ async def test_upstream_resource_sent_on_dcr_bridge_relay_authorize():
     query = await _authorize_query(server)
     assert query["resource"] == ["https://mcp.example.com/mcp"]
     assert query["client_id"] == ["caller-client"]
+
+
+def _s256(verifier: str) -> str:
+    return urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+
+
+_NATIVE_CLIENT_MASTER_KEY = "sk-test-salt-for-LIT-5874"
+
+
+def _native_client_app(monkeypatch):
+    """The unauthenticated discoverable router served over TestClient with a signed UI session
+    cookie available, plus fakes for the two database-backed hooks the native-client flow calls."""
+    import jwt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import ConsentTeam, MintedProxyCredential
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", _NATIVE_CLIENT_MASTER_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _NATIVE_CLIENT_MASTER_KEY, raising=False)
+    minted = []
+
+    async def fake_mint(user_id, team_id):
+        minted.append((user_id, team_id))
+        return MintedProxyCredential(key=f"sk-cli-{len(minted)}", expires_in=3600, user_id=user_id, team_id=team_id)
+
+    async def fake_lookup(user_id):
+        return (ConsentTeam(team_id="team-a", team_alias="Team A"), ConsentTeam(team_id="team-b"))
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.mint_proxy_credential", fake_mint
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.lookup_consent_teams", fake_lookup
+    )
+    global_mcp_server_manager.registry.clear()
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    session_cookie = jwt.encode(
+        {"user_id": "u1", "login_method": "username_password", "exp": int(time.time()) + 600},
+        _NATIVE_CLIENT_MASTER_KEY,
+        algorithm="HS256",
+    )
+    return client, session_cookie, minted
+
+
+def _consent_flow_handle(page: str) -> str:
+    import re
+
+    match = re.search(r'name="flow" value="([^"]+)"', page)
+    assert match is not None, page
+    return match.group(1)
+
+
+def test_native_client_login_walks_discovery_consent_token_refresh_and_revoke(monkeypatch):
+    """The whole ``lite login --pkce`` server side over the real router: a Go CLI reads the versioned
+    discovery document, registers a loopback public client, the signed-in user consents to a team,
+    the code redeems for the ``lite login`` credential, the refresh token rotates, and revocation
+    kills it."""
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    client, session_cookie, minted = _native_client_app(monkeypatch)
+    redirect_uri = "http://127.0.0.1:51234/callback"
+
+    discovery = client.get("/.well-known/litellm-cli-auth")
+    assert discovery.status_code == 200
+    assert discovery.headers["cache-control"] == "no-store"
+    contract = discovery.json()
+    assert contract["contract_version"] == 1
+    assert contract["resource"] == "http://testserver"
+    assert contract["code_challenge_methods_supported"] == ["S256"]
+    assert contract["token_endpoint_auth_methods_supported"] == ["none"]
+    for endpoint in ("authorization_endpoint", "token_endpoint", "registration_endpoint", "revocation_endpoint"):
+        assert contract[endpoint].startswith("http://testserver/")
+
+    registered = client.post(
+        contract["registration_endpoint"],
+        json={
+            "client_name": "litellm-cli",
+            "redirect_uris": [redirect_uri],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        },
+    )
+    assert registered.status_code == 201
+    client_id = registered.json()["client_id"]
+    verifier = "v" * 43
+    authorize_params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "state": "cli-state",
+        "code_challenge": _s256(verifier),
+        "code_challenge_method": "S256",
+        "resource": contract["resource"],
+    }
+
+    anonymous = client.get(contract["authorization_endpoint"], params=authorize_params, follow_redirects=False)
+    assert anonymous.status_code == 303
+    login_target = urlparse(anonymous.headers["location"])
+    assert login_target.path == "/sso/key/generate"
+    assert parse_qs(login_target.query)["return_to"][0].startswith("/authorize?")
+
+    client.cookies.set("token", session_cookie)
+    consent = client.get(contract["authorization_endpoint"], params=authorize_params, follow_redirects=False)
+    assert consent.status_code == 200
+    assert consent.headers["x-frame-options"] == "DENY"
+    assert consent.headers["cache-control"] == "no-store"
+    assert "http://127.0.0.1:51234" in consent.text
+    assert '<option value="team-b">team-b</option>' in consent.text
+    jar = SimpleCookie()
+    jar.load(consent.headers["set-cookie"])
+    assert all(morsel["httponly"] for morsel in jar.values())
+
+    denied = client.post(
+        "/authorize/complete",
+        data={"flow": _consent_flow_handle(consent.text), "decision": "deny", "team_id": "team-a"},
+        follow_redirects=False,
+    )
+    assert denied.status_code == 303
+    denied_query = parse_qs(urlparse(denied.headers["location"]).query)
+    assert denied.headers["location"].startswith(redirect_uri)
+    assert denied_query["error"] == ["access_denied"]
+    assert denied_query["state"] == ["cli-state"]
+    assert minted == []
+
+    consent_again = client.get(contract["authorization_endpoint"], params=authorize_params, follow_redirects=False)
+    approved = client.post(
+        "/authorize/complete",
+        data={"flow": _consent_flow_handle(consent_again.text), "decision": "approve", "team_id": "team-b"},
+        follow_redirects=False,
+    )
+    assert approved.status_code == 303
+    assert approved.headers["location"].startswith(redirect_uri)
+    approved_query = parse_qs(urlparse(approved.headers["location"]).query)
+    assert approved_query["state"] == ["cli-state"]
+    code = approved_query["code"][0]
+
+    token = client.post(
+        contract["token_endpoint"],
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": verifier,
+            "resource": contract["resource"],
+        },
+    )
+    assert token.status_code == 200, token.text
+    assert token.headers["cache-control"] == "no-store"
+    body = token.json()
+    assert body["access_token"] == "sk-cli-1"
+    assert body["token_type"] == "Bearer"
+    assert body["expires_in"] == 3600
+    assert body["user_id"] == "u1"
+    assert body["team_id"] == "team-b"
+    assert body["refresh_token"].startswith("llm_srefresh_")
+    assert minted == [("u1", "team-b")]
+
+    refreshed = client.post(
+        contract["token_endpoint"],
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": body["refresh_token"],
+            "client_id": client_id,
+            "resource": contract["resource"],
+        },
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["access_token"] == "sk-cli-2"
+    assert refreshed.json()["team_id"] == "team-b"
+    assert refreshed.json()["refresh_token"] != body["refresh_token"]
+    assert minted == [("u1", "team-b"), ("u1", "team-b")]
+
+    revoked = client.post(
+        contract["revocation_endpoint"],
+        data={"token": refreshed.json()["refresh_token"], "token_type_hint": "refresh_token", "client_id": client_id},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json() == {}
+
+    after_revoke = client.post(
+        contract["token_endpoint"],
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": refreshed.json()["refresh_token"],
+            "client_id": client_id,
+            "resource": contract["resource"],
+        },
+    )
+    assert after_revoke.status_code == 400
+    assert after_revoke.json()["error"] == "invalid_grant"
+
+    stranger = client.post(
+        contract["revocation_endpoint"], data={"token": "whatever", "client_id": "llm_dcrc_not_a_client"}
+    )
+    assert stranger.status_code == 401
+    assert stranger.json()["error"] == "invalid_client"
+
+
+def test_native_client_authorize_without_the_proxy_resource_keeps_the_mcp_flow(monkeypatch):
+    """A registered client asking for the MCP resource (or no resource) never sees the consent
+    page, so existing MCP clients are untouched by the native-client arm."""
+    client, session_cookie, minted = _native_client_app(monkeypatch)
+    registered = client.post("/register", json={"redirect_uris": ["http://127.0.0.1:51234/callback"]})
+    client.cookies.set("token", session_cookie)
+    for resource in (None, "http://testserver/mcp"):
+        params = {
+            "response_type": "code",
+            "client_id": registered.json()["client_id"],
+            "redirect_uri": "http://127.0.0.1:51234/callback",
+            "state": "s",
+            "code_challenge": _s256("v" * 43),
+            "code_challenge_method": "S256",
+            **({"resource": resource} if resource else {}),
+        }
+        response = client.get("/authorize", params=params, follow_redirects=False)
+        assert 'name="decision"' not in response.text
+        assert "team-b" not in response.text
+    assert minted == []

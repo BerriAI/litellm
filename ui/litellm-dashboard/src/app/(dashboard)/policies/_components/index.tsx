@@ -409,22 +409,22 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   return (
     <div className="m-8 mx-auto w-full flex-auto overflow-y-auto p-2">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="templates" className="flex-none">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="templates" className="flex-none rounded-none px-4 py-2">
             Templates
           </TabsTrigger>
-          <TabsTrigger value="policies" className="flex-none">
+          <TabsTrigger value="policies" className="flex-none rounded-none px-4 py-2">
             Policies
           </TabsTrigger>
-          <TabsTrigger value="attachments" className="flex-none">
+          <TabsTrigger value="attachments" className="flex-none rounded-none px-4 py-2">
             Attachments
           </TabsTrigger>
-          <TabsTrigger value="simulator" className="flex-none">
+          <TabsTrigger value="simulator" className="flex-none rounded-none px-4 py-2">
             Policy Simulator
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="templates">
+        <TabsContent value="templates" keepMounted>
           <AboutPoliciesAlert />
           <PolicyTemplates
             onUseTemplate={handleUseTemplate}
@@ -434,7 +434,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
           />
         </TabsContent>
 
-        <TabsContent value="policies">
+        <TabsContent value="policies" keepMounted>
           <AboutPoliciesAlert />
 
           <div className="mb-4 flex items-center justify-between">
@@ -503,7 +503,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
           />
         </TabsContent>
 
-        <TabsContent value="attachments">
+        <TabsContent value="attachments" keepMounted>
           <DismissibleAlert title="About Policy Attachments" icon={<Info />}>
             <p className="mb-3">
               Policy attachments control where your policies apply. Policies don&apos;t do anything until you attach
@@ -571,7 +571,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
           />
         </TabsContent>
 
-        <TabsContent value="simulator">
+        <TabsContent value="simulator" keepMounted>
           <PolicyTestPanel accessToken={accessToken} />
         </TabsContent>
       </Tabs>

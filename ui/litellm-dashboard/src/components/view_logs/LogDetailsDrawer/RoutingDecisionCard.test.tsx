@@ -59,7 +59,11 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Heuristic, REASONING override (2 or more reasoning markers, score of at least the Simple to Medium boundary)",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("0.20")).toBeInTheDocument();
     // The score did not decide this tier, so NO band explanation may render at all.
     // Asserting the absence of one specific band would pass vacuously: 0.20 sits in
@@ -188,7 +192,11 @@ describe("RoutingDecisionCard", () => {
     // `signals` is gone under redaction; the cause alone must suppress the band.
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", signals: undefined }} />);
     expect(screen.queryByText(/SIMPLE|MEDIUM|COMPLEX|at or above/)).not.toBeInTheDocument();
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Heuristic, REASONING override (2 or more reasoning markers, score of at least the Simple to Medium boundary)",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows the operator's tier name on the badge instead of the canonical one", () => {
@@ -212,7 +220,40 @@ describe("RoutingDecisionCard", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, tier_label: "Deep" }} />,
     );
-    expect(screen.getByText("Heuristic, Deep override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Heuristic, Deep override (2 or more reasoning markers, score of at least the Simple to Medium boundary)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("states the floor the override actually cleared", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, reasoning_override_min_score: 0.05 }}
+      />,
+    );
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score of at least 0.05)"),
+    ).toBeInTheDocument();
+  });
+
+  // A floor of 0 is an unconditional override, so a falsy check here would print the "before this change"
+  // wording on a row that recorded a real floor.
+  it("states a recorded floor of 0 rather than treating it as unrecorded", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, reasoning_override_min_score: 0 }}
+      />,
+    );
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score of at least 0)"),
+    ).toBeInTheDocument();
+  });
+
+  it("never prints undefined on a row logged before the floor was recorded", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", score: 0.2 }} />);
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
   });
 
   it("falls back to the raw cause for a value this build does not know", () => {

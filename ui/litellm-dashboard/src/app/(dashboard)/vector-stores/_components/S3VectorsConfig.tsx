@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Alert } from "antd";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import { Field, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import {
   Combobox,
   ComboboxContent,
@@ -72,9 +72,10 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
 
   return (
     <TooltipProvider>
-      <Alert
-        message="AWS S3 Vectors Setup"
-        description={
+      <Alert variant="info" className="mb-4">
+        <Info />
+        <AlertTitle>AWS S3 Vectors Setup</AlertTitle>
+        <AlertDescription>
           <div>
             <p>AWS S3 Vectors allows you to store and query vector embeddings directly in S3:</p>
             <ul style={{ marginLeft: "16px", marginTop: "8px" }}>
@@ -93,11 +94,8 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({ accessToken, provider
               </li>
             </ul>
           </div>
-        }
-        type="info"
-        showIcon
-        style={{ marginBottom: "16px" }}
-      />
+        </AlertDescription>
+      </Alert>
 
       <Field data-invalid={bucketNameError !== undefined || undefined}>
         <FieldLabel htmlFor="s3-vector-bucket-name">

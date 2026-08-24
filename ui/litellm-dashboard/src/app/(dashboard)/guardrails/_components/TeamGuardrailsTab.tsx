@@ -17,7 +17,6 @@ import {
   InfoIcon,
   CircleHelp,
 } from "lucide-react";
-import { Modal } from "antd";
 import { z } from "zod/v4";
 import {
   listGuardrailSubmissions,
@@ -31,14 +30,16 @@ import TeamDropdown from "@/components/common_components/team_dropdown";
 import { useRegisterGuardrail } from "@/app/(dashboard)/hooks/guardrails/useRegisterGuardrail";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { isAntdUrl } from "@/lib/forms/antdUrl";
+import { isValidUrl } from "@/lib/forms/urlValidation";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 const GUARDRAIL_MODES = [
   { value: "pre_call", label: "Pre Call" },
@@ -50,7 +51,7 @@ const submitGuardrailSchema = z.object({
   team_id: z.string().min(1, "Select a team"),
   guardrail_name: z.string().min(1, "Enter a guardrail name"),
   mode: z.string().min(1, "Select a mode"),
-  api_base: z.string().min(1, "Enter the API base URL").refine(isAntdUrl, "Must be a valid URL"),
+  api_base: z.string().min(1, "Enter the API base URL").refine(isValidUrl, "Must be a valid URL"),
   extra_litellm_params: z.string().superRefine((value, ctx) => {
     if (!value) return;
     try {
@@ -179,31 +180,31 @@ function submissionToTeamGuardrail(item: GuardrailSubmissionItem): TeamGuardrail
 const STATUS_CONFIG: Record<GuardrailStatus, { label: string; bg: string; text: string; dot: string }> = {
   active: {
     label: "Active",
-    bg: "bg-green-50 dark:bg-green-950",
-    text: "text-green-700 dark:text-green-300",
-    dot: "bg-green-500",
+    bg: "bg-success/10",
+    text: "text-success",
+    dot: "bg-success",
   },
   pending: {
     label: "Pending Review",
-    bg: "bg-yellow-50 dark:bg-yellow-950",
-    text: "text-yellow-700 dark:text-yellow-300",
-    dot: "bg-yellow-500",
+    bg: "bg-warning/10",
+    text: "text-warning",
+    dot: "bg-warning",
   },
   rejected: {
     label: "Rejected",
-    bg: "bg-red-50 dark:bg-red-950",
-    text: "text-red-700 dark:text-red-300",
-    dot: "bg-red-500",
+    bg: "bg-destructive/10",
+    text: "text-destructive",
+    dot: "bg-destructive",
   },
 };
 
 const TEAM_COLORS: Record<string, string> = {
-  "ML Platform": "bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300",
-  "Data Science": "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300",
-  Security: "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300",
-  "Customer Success": "bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300",
+  "ML Platform": "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
+  "Data Science": "bg-info/15 text-info",
+  Security: "bg-destructive/15 text-destructive",
+  "Customer Success": "bg-warning/15 text-warning",
   Legal: "bg-muted text-foreground",
-  Finance: "bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300",
+  Finance: "bg-success/15 text-success",
 };
 
 function buildEquivalentConfigYaml(g: TeamGuardrail): string {
@@ -269,12 +270,12 @@ function Toggle({
       role="switch"
       aria-checked={enabled}
       disabled={disabled}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 ${
-        enabled ? "bg-blue-500" : "bg-muted"
+      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-1 ${
+        enabled ? "bg-info" : "bg-muted"
       } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
     >
       <span
-        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-card shadow transition-transform ${
           enabled ? "translate-x-4" : "translate-x-0.5"
         }`}
       />
@@ -310,7 +311,7 @@ function GuardrailCard({
   return (
     <div
       className={`bg-card border rounded-lg p-4 transition-all ${
-        isSelected ? "border-blue-400 ring-1 ring-blue-200 dark:ring-blue-800" : "border-border"
+        isSelected ? "border-info ring-1 ring-info/30" : "border-border"
       }`}
     >
       <div className="flex items-start justify-between gap-4">
@@ -357,14 +358,14 @@ function GuardrailCard({
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="text-xs bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Approve
                 </button>
                 <button
                   type="button"
                   onClick={onReject}
-                  className="text-xs border border-red-300 dark:border-red-800 text-red-600 hover:bg-red-50 dark:hover:bg-red-950 dark:bg-red-950 px-3 py-1.5 rounded-md transition-colors font-medium"
+                  className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-md transition-colors font-medium"
                 >
                   Reject
                 </button>
@@ -486,7 +487,7 @@ function DetailPanel({
                 href={g.endpoint}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-muted-foreground hover:text-blue-500 shrink-0"
+                className="text-muted-foreground hover:text-info shrink-0"
               >
                 <ExternalLinkIcon className="h-3.5 w-3.5" />
               </a>
@@ -497,19 +498,19 @@ function DetailPanel({
               {g.method}
             </span>
           </ConfigRow>
-          <div className="border border-blue-100 dark:border-blue-900 bg-blue-50 dark:bg-blue-950 rounded-lg p-3">
+          <div className="border border-info/15 bg-info/10 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-1.5">
-                <KeyIcon className="h-3.5 w-3.5 text-blue-500" />
-                <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">Forward LiteLLM API Key</span>
+                <KeyIcon className="h-3.5 w-3.5 text-info" />
+                <span className="text-xs font-semibold text-info">Forward LiteLLM API Key</span>
               </div>
               <Toggle enabled={g.forwardKey} onToggle={onToggleForwardKey} disabled={!isAdmin} />
             </div>
-            <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+            <p className="text-xs text-info leading-relaxed">
               When enabled, the caller&apos;s LiteLLM API key is forwarded as an{" "}
-              <code className="font-mono bg-blue-100 dark:bg-blue-900 px-1 rounded-sm">Authorization</code> header to
-              your guardrail endpoint. This allows your guardrail to authenticate model calls using the original
-              caller&apos;s credentials.
+              <code className="font-mono bg-info/15 px-1 rounded-sm">Authorization</code> header to your guardrail
+              endpoint. This allows your guardrail to authenticate model calls using the original caller&apos;s
+              credentials.
             </p>
           </div>
           <div>
@@ -538,7 +539,7 @@ function DetailPanel({
                       <button
                         type="button"
                         onClick={() => onUpdateCustomHeaders(g.customHeaders.filter((_, idx) => idx !== i))}
-                        className="text-muted-foreground hover:text-red-600 shrink-0"
+                        className="text-muted-foreground hover:text-destructive shrink-0"
                         aria-label={`Remove ${h.key}`}
                       >
                         <XIcon className="h-3.5 w-3.5" />
@@ -555,7 +556,7 @@ function DetailPanel({
                   value={newStaticHeaderKey}
                   onChange={(e) => setNewStaticHeaderKey(e.target.value)}
                   placeholder="Header name (e.g. X-API-Key)"
-                  className="flex-1 min-w-0 text-xs font-mono border border-border rounded-sm px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  className="flex-1 min-w-0 text-xs font-mono border border-border rounded-sm px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -574,7 +575,7 @@ function DetailPanel({
                   value={newStaticHeaderValue}
                   onChange={(e) => setNewStaticHeaderValue(e.target.value)}
                   placeholder="Value"
-                  className="flex-1 min-w-0 text-xs font-mono border border-border rounded-sm px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  className="flex-1 min-w-0 text-xs font-mono border border-border rounded-sm px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -599,7 +600,7 @@ function DetailPanel({
                       setNewStaticHeaderValue("");
                     }
                   }}
-                  className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:hover:text-blue-300 dark:text-blue-300 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 dark:bg-blue-900 px-2 py-1.5 rounded-sm transition-colors shrink-0"
+                  className="text-xs font-medium text-info border border-info/20 bg-info/10 hover:bg-info/15 px-2 py-1.5 rounded-sm transition-colors shrink-0"
                 >
                   Add
                 </button>
@@ -632,7 +633,7 @@ function DetailPanel({
                       <button
                         type="button"
                         onClick={() => onUpdateExtraHeaders(g.extraHeaders.filter((_, idx) => idx !== i))}
-                        className="text-muted-foreground hover:text-red-600 shrink-0"
+                        className="text-muted-foreground hover:text-destructive shrink-0"
                         aria-label={`Remove ${name}`}
                       >
                         <XIcon className="h-3.5 w-3.5" />
@@ -649,7 +650,7 @@ function DetailPanel({
                   value={newExtraHeader}
                   onChange={(e) => setNewExtraHeader(e.target.value)}
                   placeholder="e.g. x-request-id"
-                  className="flex-1 min-w-0 text-xs font-mono border border-border rounded-sm px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                  className="flex-1 min-w-0 text-xs font-mono border border-border rounded-sm px-2 py-1.5 text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -670,7 +671,7 @@ function DetailPanel({
                       setNewExtraHeader("");
                     }
                   }}
-                  className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:hover:text-blue-300 dark:text-blue-300 border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 dark:bg-blue-900 px-2 py-1.5 rounded-sm transition-colors"
+                  className="text-xs font-medium text-info border border-info/20 bg-info/10 hover:bg-info/15 px-2 py-1.5 rounded-sm transition-colors"
                 >
                   Add
                 </button>
@@ -681,7 +682,7 @@ function DetailPanel({
             <button
               type="button"
               onClick={() => setConfigExpanded(!configExpanded)}
-              className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-semibold text-foreground bg-muted hover:bg-muted transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-semibold text-foreground bg-muted hover:bg-border transition-colors"
             >
               <span>Equivalent config</span>
               {configExpanded ? (
@@ -705,7 +706,7 @@ function DetailPanel({
                 href="https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-500 hover:underline"
+                className="text-info hover:underline"
               >
                 LiteLLM Generic Guardrail API docs
               </a>{" "}
@@ -726,7 +727,7 @@ function DetailPanel({
               <button
                 type="button"
                 onClick={onApprove}
-                className="flex-1 flex items-center justify-center gap-1.5 bg-green-500 hover:bg-green-600 text-white text-sm font-medium py-2 rounded-md transition-colors"
+                className="flex-1 flex items-center justify-center gap-1.5 bg-success hover:bg-success/80 text-success-foreground text-sm font-medium py-2 rounded-md transition-colors"
               >
                 <CheckIcon className="h-4 w-4" />
                 Approve
@@ -734,7 +735,7 @@ function DetailPanel({
               <button
                 type="button"
                 onClick={onReject}
-                className="flex-1 flex items-center justify-center gap-1.5 border border-red-300 dark:border-red-800 text-red-600 hover:bg-red-50 dark:hover:bg-red-950 dark:bg-red-950 text-sm font-medium py-2 rounded-md transition-colors"
+                className="flex-1 flex items-center justify-center gap-1.5 border border-destructive/30 text-destructive hover:bg-destructive/10 text-sm font-medium py-2 rounded-md transition-colors"
               >
                 <XIcon className="h-4 w-4" />
                 Reject
@@ -761,13 +762,13 @@ function ConfirmDialog({ action, guardrailName, onConfirm, onCancel }: ConfirmDi
       <div className="bg-card rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
         <div
           className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${
-            isApprove ? "bg-green-100 dark:bg-green-900" : "bg-red-100 dark:bg-red-900"
+            isApprove ? "bg-success/15" : "bg-destructive/15"
           }`}
         >
           {isApprove ? (
-            <CheckIcon className="h-5 w-5 text-green-600" />
+            <CheckIcon className="h-5 w-5 text-success" />
           ) : (
-            <AlertCircleIcon className="h-5 w-5 text-red-600" />
+            <AlertCircleIcon className="h-5 w-5 text-destructive" />
           )}
         </div>
         <h3 className="text-base font-semibold text-foreground mb-1">
@@ -791,8 +792,10 @@ function ConfirmDialog({ action, guardrailName, onConfirm, onCancel }: ConfirmDi
           <button
             type="button"
             onClick={onConfirm}
-            className={`flex-1 text-white text-sm font-medium py-2 rounded-md transition-colors ${
-              isApprove ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600"
+            className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors ${
+              isApprove
+                ? "bg-success text-success-foreground hover:bg-success/80"
+                : "bg-destructive text-destructive-foreground hover:bg-destructive/80"
             }`}
           >
             {isApprove ? "Approve" : "Reject"}
@@ -985,9 +988,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       <div className={`flex-1 min-w-0 p-6 overflow-auto ${selected ? "border-r border-border" : ""}`}>
         <div className="grid grid-cols-4 gap-4 mb-6">
           <StatCard label="Total Submitted" value={totalCount} color="text-foreground" />
-          <StatCard label="Pending Review" value={pendingCount} color="text-yellow-600" />
-          <StatCard label="Active" value={activeCount} color="text-green-600" />
-          <StatCard label="Rejected" value={rejectedCount} color="text-red-600" />
+          <StatCard label="Pending Review" value={pendingCount} color="text-warning" />
+          <StatCard label="Active" value={activeCount} color="text-success" />
+          <StatCard label="Rejected" value={rejectedCount} color="text-destructive" />
         </div>
         <div className="flex items-center gap-3 mb-5">
           <div className="relative flex-1 max-w-xs">
@@ -997,13 +1000,14 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
               placeholder="Search guardrails..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full pl-9 pr-4 py-2 border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info"
             />
           </div>
           <select
+            aria-label="Filter by status"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-            className="border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-background"
+            className="border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-hidden focus:ring-1 focus:ring-ring focus:border-info bg-background"
           >
             <option value="all">All Status</option>
             <option value="pending">Pending Review</option>
@@ -1013,7 +1017,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           <button
             type="button"
             onClick={() => setIsSubmitModalOpen(true)}
-            className="ml-auto flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
+            className="ml-auto flex items-center gap-2 bg-info hover:bg-info/80 text-info-foreground text-sm font-medium px-4 py-2 rounded-md transition-colors"
           >
             <PlusIcon className="h-4 w-4" />
             Add Guardrail
@@ -1021,7 +1025,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         </div>
         <div className="space-y-3">
           {isLoading && <div className="text-center py-12 text-muted-foreground text-sm">Loading submissions…</div>}
-          {error && <div className="text-center py-12 text-red-600 text-sm">{error}</div>}
+          {error && <div className="text-center py-12 text-destructive text-sm">{error}</div>}
           {!isLoading && !error && filtered.length === 0 && (
             <div className="text-center py-12 text-muted-foreground text-sm">No guardrails match your filters.</div>
           )}
@@ -1066,92 +1070,108 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
         />
       )}
 
-      <Modal
-        title="Submit Guardrail for Review"
+      <Dialog
         open={isSubmitModalOpen}
-        onCancel={() => {
-          setIsSubmitModalOpen(false);
-          submitForm.reset();
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsSubmitModalOpen(false);
+            submitForm.reset();
+          }
         }}
-        onOk={handleSubmitGuardrail}
-        okText="Submit for Review"
       >
-        <div className="rounded-md bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-900 px-4 py-3 text-sm text-blue-800 dark:text-blue-200 mb-4">
-          Your guardrail will be sent for admin review before it becomes active.
-        </div>
-        <TooltipProvider>
-          <form onSubmit={handleSubmitGuardrail}>
-            <FieldGroup>
-              <FormField control={submitForm.control} name="team_id" label="Team">
-                {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
-              </FormField>
-              <FormField control={submitForm.control} name="guardrail_name" label="Guardrail Name">
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. pii-detection" />}
-              </FormField>
-              <FormField control={submitForm.control} name="mode" label="Mode">
-                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <Select items={GUARDRAIL_MODES} value={value} onValueChange={onChange}>
-                    <SelectTrigger
-                      id={id}
-                      aria-invalid={ariaInvalid}
-                      aria-describedby={ariaDescribedBy}
-                      className="w-full"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      {GUARDRAIL_MODES.map((mode) => (
-                        <SelectItem key={mode.value} value={mode.value} title={mode.label}>
-                          {mode.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </FormField>
-              <FormField control={submitForm.control} name="api_base" label="API Base URL">
-                {({ ref, ...field }) => (
-                  <Input
-                    {...field}
-                    ref={ref}
-                    placeholder="https://your-guardrail-api.com/v1/check"
-                    className="font-mono"
-                  />
-                )}
-              </FormField>
-              <FormField
-                control={submitForm.control}
-                name="extra_litellm_params"
-                label={labelWithHint(
-                  "Additional litellm_params (optional)",
-                  "JSON object merged into litellm_params. e.g. forward_api_key, headers, model, unreachable_fallback",
-                )}
-              >
-                {({ ref, ...field }) => (
-                  <Textarea
-                    {...field}
-                    ref={ref}
-                    rows={3}
-                    className="font-mono text-xs"
-                    placeholder='{"forward_api_key": true, "headers": {"X-Custom": "value"}}'
-                  />
-                )}
-              </FormField>
-              <FormField control={submitForm.control} name="guardrail_info" label="Guardrail Info (optional)">
-                {({ ref, ...field }) => (
-                  <Textarea
-                    {...field}
-                    ref={ref}
-                    rows={3}
-                    className="font-mono text-xs"
-                    placeholder='{"description": "Detects PII in requests"}'
-                  />
-                )}
-              </FormField>
-            </FieldGroup>
-          </form>
-        </TooltipProvider>
-      </Modal>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Submit Guardrail for Review</DialogTitle>
+          </DialogHeader>
+          <div className="rounded-md bg-info/10 border border-info/20 px-4 py-3 text-sm text-info mb-4">
+            Your guardrail will be sent for admin review before it becomes active.
+          </div>
+          <TooltipProvider>
+            <form onSubmit={handleSubmitGuardrail}>
+              <FieldGroup>
+                <FormField control={submitForm.control} name="team_id" label="Team">
+                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+                </FormField>
+                <FormField control={submitForm.control} name="guardrail_name" label="Guardrail Name">
+                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g. pii-detection" />}
+                </FormField>
+                <FormField control={submitForm.control} name="mode" label="Mode">
+                  {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                    <Select items={GUARDRAIL_MODES} value={value} onValueChange={onChange}>
+                      <SelectTrigger
+                        id={id}
+                        aria-invalid={ariaInvalid}
+                        aria-describedby={ariaDescribedBy}
+                        className="w-full"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        {GUARDRAIL_MODES.map((mode) => (
+                          <SelectItem key={mode.value} value={mode.value} title={mode.label}>
+                            {mode.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </FormField>
+                <FormField control={submitForm.control} name="api_base" label="API Base URL">
+                  {({ ref, ...field }) => (
+                    <Input
+                      {...field}
+                      ref={ref}
+                      placeholder="https://your-guardrail-api.com/v1/check"
+                      className="font-mono"
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  control={submitForm.control}
+                  name="extra_litellm_params"
+                  label={labelWithHint(
+                    "Additional litellm_params (optional)",
+                    "JSON object merged into litellm_params. e.g. forward_api_key, headers, model, unreachable_fallback",
+                  )}
+                >
+                  {({ ref, ...field }) => (
+                    <Textarea
+                      {...field}
+                      ref={ref}
+                      rows={3}
+                      className="font-mono text-xs"
+                      placeholder='{"forward_api_key": true, "headers": {"X-Custom": "value"}}'
+                    />
+                  )}
+                </FormField>
+                <FormField control={submitForm.control} name="guardrail_info" label="Guardrail Info (optional)">
+                  {({ ref, ...field }) => (
+                    <Textarea
+                      {...field}
+                      ref={ref}
+                      rows={3}
+                      className="font-mono text-xs"
+                      placeholder='{"description": "Detects PII in requests"}'
+                    />
+                  )}
+                </FormField>
+              </FieldGroup>
+            </form>
+          </TooltipProvider>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsSubmitModalOpen(false);
+                submitForm.reset();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSubmitGuardrail}>Submit for Review</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

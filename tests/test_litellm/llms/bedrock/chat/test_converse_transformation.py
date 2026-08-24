@@ -1,14 +1,10 @@
 import asyncio
 import json
 import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -678,10 +674,10 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
-def test_parallel_tool_calls_config_kept_for_sonnet_5():
+def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -708,7 +704,7 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
@@ -3003,7 +2999,7 @@ def test_request_metadata_validation():
     # Test too many items (max 16)
     too_many_items = {f"key_{i}": f"value_{i}" for i in range(17)}
 
-    try:
+    with pytest.raises(Exception, match="maximum of 16 items") as exc_info:
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3011,9 +3007,8 @@ def test_request_metadata_validation():
             litellm_params={},
             headers={},
         )
-        assert False, "Should have raised validation error for too many items"
-    except Exception as e:
-        assert "maximum of 16 items" in str(e).lower()
+    e = exc_info.value
+    assert "maximum of 16 items" in str(e).lower()
 
 
 def test_request_metadata_key_constraints():
@@ -3026,7 +3021,7 @@ def test_request_metadata_key_constraints():
     long_key = "a" * 257
     invalid_metadata = {long_key: "value"}
 
-    try:
+    with pytest.raises(Exception, match=r"(?i)key length|256 characters"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3034,14 +3029,11 @@ def test_request_metadata_key_constraints():
             litellm_params={},
             headers={},
         )
-        assert False, "Should have raised validation error for key too long"
-    except Exception as e:
-        assert "key length" in str(e).lower() or "256 characters" in str(e).lower()
 
     # Test empty key
     invalid_metadata = {"": "value"}
 
-    try:
+    with pytest.raises(Exception, match=r"(?i)key length|empty"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3049,9 +3041,6 @@ def test_request_metadata_key_constraints():
             litellm_params={},
             headers={},
         )
-        assert False, "Should have raised validation error for empty key"
-    except Exception as e:
-        assert "key length" in str(e).lower() or "empty" in str(e).lower()
 
 
 def test_request_metadata_value_constraints():
@@ -3064,7 +3053,7 @@ def test_request_metadata_value_constraints():
     long_value = "a" * 257
     invalid_metadata = {"key": long_value}
 
-    try:
+    with pytest.raises(Exception, match=r"(?i)value length|256 characters"):
         config.transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -3072,9 +3061,6 @@ def test_request_metadata_value_constraints():
             litellm_params={},
             headers={},
         )
-        assert False, "Should have raised validation error for value too long"
-    except Exception as e:
-        assert "value length" in str(e).lower() or "256 characters" in str(e).lower()
 
     # Test empty value (should be allowed)
     valid_metadata = {"key": ""}
@@ -3585,7 +3571,7 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
         litellm.modify_params = original_modify_params
 
 
-def test_supports_native_structured_outputs():
+def test_supports_native_structured_outputs(monkeypatch):
     """Test model detection for native structured outputs support.
 
     Support is driven by the ``supports_native_structured_output`` flag in the
@@ -3593,7 +3579,7 @@ def test_supports_native_structured_outputs():
     """
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -3655,7 +3641,7 @@ def test_supports_native_structured_outputs():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_create_output_config_for_response_format():
@@ -3693,11 +3679,11 @@ def test_create_output_config_for_response_format():
     assert parsed_schema == expected
 
 
-def test_translate_response_format_native_output_config():
+def test_translate_response_format_native_output_config(monkeypatch):
     """For supported models, _translate_response_format_param should produce outputConfig."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -3753,7 +3739,7 @@ def test_translate_response_format_native_output_config():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_translate_response_format_fallback_tool_call():
@@ -3788,11 +3774,11 @@ def test_translate_response_format_fallback_tool_call():
     assert result["json_mode"] is True
 
 
-def test_native_structured_output_no_fake_stream():
+def test_native_structured_output_no_fake_stream(monkeypatch):
     """When using native structured outputs with streaming, fake_stream should NOT be set."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -3838,7 +3824,7 @@ def test_native_structured_output_no_fake_stream():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_transform_request_with_output_config():
@@ -4126,7 +4112,7 @@ def test_add_additional_properties_definitions():
     )
 
 
-def test_json_object_no_schema_skips_tool_injection():
+def test_json_object_no_schema_skips_tool_injection(monkeypatch):
     """response_format: {type: json_object} with no schema should NOT inject
     the synthetic json_tool_call tool.
 
@@ -4136,7 +4122,7 @@ def test_json_object_no_schema_skips_tool_injection():
     the model respond naturally with the JSON the caller asked for."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -4162,7 +4148,7 @@ def test_json_object_no_schema_skips_tool_injection():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_output_config_applies_additional_properties():
@@ -4815,7 +4801,7 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     assert all("cachePoint" not in tool for tool in tools)
 
 
-def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
+def test_cache_control_injection_tool_config_honors_ttl_for_supported_model(monkeypatch):
     """
     Regression test: cache_control_injection_points with location=tool_config
     must honor the requested `control.ttl`, mirroring the message/system
@@ -4829,7 +4815,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
     """
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         config = AmazonConverseConfig()
@@ -4868,10 +4854,10 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacking_own_pricing():
+def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacking_own_pricing(monkeypatch):
     """
     Regression test: a regional pricing entry that omits
     `cache_creation_input_token_cost_above_1hr` (e.g. `jp.anthropic.claude-opus-4-7`)
@@ -4880,7 +4866,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
     """
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
@@ -4921,7 +4907,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacki
         if old_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
@@ -6005,6 +5991,87 @@ def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():
     assert "thinking" not in optional_params
 
 
+def test_converse_usage_reports_unknown_split_for_signature_only_thinking():
+    config = AmazonConverseConfig()
+
+    usage = config.transform_usage(
+        ConverseTokenUsageBlock(inputTokens=32, outputTokens=581, totalTokens=613),
+        reasoning_content="",
+        thinking_ran=True,
+    )
+
+    assert usage.completion_tokens == 581
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens is None
+
+
+def test_converse_usage_estimates_split_for_visible_thinking():
+    config = AmazonConverseConfig()
+
+    usage = config.transform_usage(
+        ConverseTokenUsageBlock(inputTokens=32, outputTokens=581, totalTokens=613),
+        reasoning_content="Let me think about how many primes there are under thirty.",
+        thinking_ran=True,
+    )
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+    assert (
+        usage.completion_tokens_details.reasoning_tokens + usage.completion_tokens_details.text_tokens
+        == usage.completion_tokens
+    )
+
+
+def test_converse_usage_without_thinking_reports_all_output_as_text():
+    config = AmazonConverseConfig()
+
+    usage = config.transform_usage(ConverseTokenUsageBlock(inputTokens=32, outputTokens=171, totalTokens=203))
+
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 171
+
+
+def test_converse_transform_response_signature_only_thinking_reports_unknown_split():
+    config = AmazonConverseConfig()
+    raw_response = MagicMock(status_code=200)
+    raw_response.text = json.dumps(
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "", "signature": "sig"}}},
+                        {"text": "10"},
+                    ],
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 32, "outputTokens": 581, "totalTokens": 613},
+        }
+    )
+    raw_response.json.return_value = json.loads(raw_response.text)
+
+    response = config._transform_response(
+        model="bedrock/global.anthropic.claude-opus-4-8",
+        response=raw_response,
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data={},
+        messages=[],
+        encoding=None,
+    )
+
+    assert response.choices[0].message.reasoning_content == ""
+
+    assert response.usage.completion_tokens_details.reasoning_tokens is None
+    assert response.usage.completion_tokens_details.text_tokens is None
+
+
 def test_is_converse_usage_shape_distinguishes_camel_case_from_anthropic():
     config = AmazonConverseConfig()
     assert config.is_converse_usage_shape({"inputTokens": 1, "outputTokens": 2}) is True
@@ -6052,3 +6119,34 @@ def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_cras
         non_default_params={"thinking": True}, optional_params=optional_params
     )
     assert "maxTokens" not in optional_params
+
+
+
+@pytest.mark.parametrize(
+    "model, expected_dropped",
+    [
+        ("anthropic.claude-fable-5", True),
+        ("us.anthropic.claude-fable-5", True),
+        ("us.anthropic.claude-opus-4-8", False),
+    ],
+)
+def test_disabled_thinking_omitted_for_always_on_models_converse(
+    local_model_cost_map, model, expected_dropped
+):
+    """Bedrock Converse: ``thinking={"type": "disabled"}`` is omitted for always-on-thinking
+    models and forwarded verbatim for models that accept it."""
+    config = AmazonConverseConfig()
+
+    result = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"maxTokens": 64, "thinking": {"type": "disabled"}},
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    if expected_dropped:
+        assert "thinking" not in additional
+    else:
+        assert additional.get("thinking") == {"type": "disabled"}

@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useEffect, useMemo } from "react";
-import { Modal } from "antd";
 import { useWatch } from "react-hook-form";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import {
   Combobox,
@@ -31,6 +30,8 @@ import {
   toRoutingGroupFormValues,
 } from "./routingGroupPayload";
 import type { RoutingGroup } from "./types";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 interface RoutingGroupModalProps {
   open: boolean;
@@ -102,120 +103,125 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   };
 
   return (
-    <Modal
-      title={mode === "create" ? "Create Routing Group" : `Edit ${initialValue?.group_name ?? ""}`}
-      open={open}
-      onCancel={onClose}
-      onOk={() => void form.handleSubmit(handleSubmit)()}
-      okText={mode === "create" ? "Create Group" : "Save Changes"}
-      cancelText="Cancel"
-      confirmLoading={saving}
-      destroyOnClose
-      width={560}
-    >
-      <form onSubmit={(event) => event.preventDefault()} noValidate>
-        <FieldGroup>
-          <FormField
-            control={form.control}
-            name="group_name"
-            label="Group Name"
-            description="Use this name as the model in API calls — LiteLLM routes the request to one of the group's models."
-          >
-            {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="fast-chat" disabled={mode === "edit"} />}
-          </FormField>
-
-          <FormField
-            control={form.control}
-            name="models"
-            label="Models"
-            description="Models from your model list that this group routes between."
-          >
-            {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-              <Combobox multiple items={modelOptions} value={value} onValueChange={onChange}>
-                <ComboboxChips render={<div ref={modelsAnchor} />}>
-                  <ComboboxValue>
-                    {(selected: string[]) => (
-                      <>
-                        {selected.map((model) => (
-                          <ComboboxChip key={model} aria-label={model}>
-                            {model}
-                          </ComboboxChip>
-                        ))}
-                        <ComboboxChipsInput
-                          id={id}
-                          aria-invalid={ariaInvalid}
-                          aria-describedby={ariaDescribedBy}
-                          placeholder="Select models"
-                        />
-                      </>
-                    )}
-                  </ComboboxValue>
-                </ComboboxChips>
-                <ComboboxContent anchor={modelsAnchor}>
-                  <ComboboxEmpty>No models found</ComboboxEmpty>
-                  <ComboboxList>
-                    {(model: string) => (
-                      <ComboboxItem key={model} value={model}>
-                        {model}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-            )}
-          </FormField>
-
-          <FormField
-            control={form.control}
-            name="routing_strategy"
-            label="Routing Strategy"
-            description={strategyDescriptions[selectedStrategy]}
-          >
-            {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-              <Select
-                items={strategyItems}
-                value={value}
-                onValueChange={(next: string | null) => {
-                  onChange(next ?? "");
-                  form.setValue(
-                    "routing_strategy_args",
-                    argsForStrategy(next ?? "", form.getValues("routing_strategy_args")),
-                  );
-                }}
-              >
-                <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-                  <SelectValue placeholder="Select strategy" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableStrategies.map((strategy) => (
-                    <SelectItem key={strategy} value={strategy}>
-                      {strategy}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </FormField>
-
-          {STRATEGIES_WITH_ARGS.has(selectedStrategy) && (
+    <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>
+            {mode === "create" ? "Create Routing Group" : `Edit ${initialValue?.group_name ?? ""}`}
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <FieldGroup>
             <FormField
               control={form.control}
-              name="routing_strategy_args"
-              label="Strategy Arguments (JSON)"
-              description={ARGS_EXAMPLES[selectedStrategy] ?? 'Example: { "ttl": 60 }'}
+              name="group_name"
+              label="Group Name"
+              description="Use this name as the model in API calls — LiteLLM routes the request to one of the group's models."
             >
-              {({ ref, ...field }) => (
-                <Textarea {...field} ref={ref} rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="fast-chat" disabled={mode === "edit"} />}
+            </FormField>
+
+            <FormField
+              control={form.control}
+              name="models"
+              label="Models"
+              description="Models from your model list that this group routes between."
+            >
+              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <Combobox multiple items={modelOptions} value={value} onValueChange={onChange}>
+                  <ComboboxChips render={<div ref={modelsAnchor} />}>
+                    <ComboboxValue>
+                      {(selected: string[]) => (
+                        <>
+                          {selected.map((model) => (
+                            <ComboboxChip key={model} aria-label={model}>
+                              {model}
+                            </ComboboxChip>
+                          ))}
+                          <ComboboxChipsInput
+                            id={id}
+                            aria-invalid={ariaInvalid}
+                            aria-describedby={ariaDescribedBy}
+                            placeholder="Select models"
+                          />
+                        </>
+                      )}
+                    </ComboboxValue>
+                  </ComboboxChips>
+                  <ComboboxContent anchor={modelsAnchor}>
+                    <ComboboxEmpty>No models found</ComboboxEmpty>
+                    <ComboboxList>
+                      {(model: string) => (
+                        <ComboboxItem key={model} value={model}>
+                          {model}
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
               )}
             </FormField>
-          )}
 
-          <p className="text-xs text-muted-foreground">
-            Models not claimed by an explicit group fall through to the proxy&apos;s top-level routing strategy.
-          </p>
-        </FieldGroup>
-      </form>
-    </Modal>
+            <FormField
+              control={form.control}
+              name="routing_strategy"
+              label="Routing Strategy"
+              description={strategyDescriptions[selectedStrategy]}
+            >
+              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <Select
+                  items={strategyItems}
+                  value={value}
+                  onValueChange={(next: string | null) => {
+                    onChange(next ?? "");
+                    form.setValue(
+                      "routing_strategy_args",
+                      argsForStrategy(next ?? "", form.getValues("routing_strategy_args")),
+                    );
+                  }}
+                >
+                  <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
+                    <SelectValue placeholder="Select strategy" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableStrategies.map((strategy) => (
+                      <SelectItem key={strategy} value={strategy}>
+                        {strategy}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FormField>
+
+            {STRATEGIES_WITH_ARGS.has(selectedStrategy) && (
+              <FormField
+                control={form.control}
+                name="routing_strategy_args"
+                label="Strategy Arguments (JSON)"
+                description={ARGS_EXAMPLES[selectedStrategy] ?? 'Example: { "ttl": 60 }'}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea {...field} ref={ref} rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
+                )}
+              </FormField>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+              Models not claimed by an explicit group fall through to the proxy&apos;s top-level routing strategy.
+            </p>
+          </FieldGroup>
+        </form>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => void form.handleSubmit(handleSubmit)()} disabled={saving} aria-busy={saving}>
+            {mode === "create" ? "Create Group" : "Save Changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

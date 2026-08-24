@@ -1,23 +1,27 @@
+import { Info } from "lucide-react";
 import React from "react";
-import { Input, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
-import { requiredUnlessSiblingSet, selectControl, textControl } from "./mcpFieldRules";
+import { requiredRule } from "@/components/common_components/formRules";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { requiredUnlessSiblingSet, tagsControl, textControl } from "./mcpFieldRules";
 
 interface IdJagFormFieldsProps {
   isEditing?: boolean;
 }
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
-    <Tooltip title={tooltip}>
-      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-    </Tooltip>
+    <SimpleTooltip content={tooltip}>
+      <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+    </SimpleTooltip>
   </span>
 );
 
@@ -26,7 +30,7 @@ const PRIVATE_KEY_PATH = ["credentials", "client_private_key"] as const;
 const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
   const requiredWhenCreating = (message: string) =>
-    isEditing ? undefined : { validate: { required: antdRequired(message) } };
+    isEditing ? undefined : { validate: { required: requiredRule(message) } };
 
   return (
     <>
@@ -75,10 +79,10 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         rules={requiredWhenCreating("Client ID is required for ID-JAG")}
       >
         {(control) => (
-          <Input.Password
+          <PasswordInput
             {...textControl(control)}
             placeholder={`Enter OAuth client ID${placeholderSuffix}`}
-            className={fieldClassName}
+            groupClassName={fieldClassName}
           />
         )}
       </MountedFormField>
@@ -105,10 +109,10 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         }
       >
         {(control) => (
-          <Input.Password
+          <PasswordInput
             {...textControl(control)}
             placeholder={`Enter OAuth client secret${placeholderSuffix}`}
-            className={fieldClassName}
+            groupClassName={fieldClassName}
           />
         )}
       </MountedFormField>
@@ -122,7 +126,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         name={PRIVATE_KEY_PATH}
       >
         {(control) => (
-          <Input.TextArea
+          <Textarea
             {...textControl(control)}
             rows={3}
             placeholder={`-----BEGIN PRIVATE KEY-----${placeholderSuffix}`}
@@ -199,16 +203,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         label={<FieldLabel label="Scopes (optional)" tooltip="Scopes requested on leg 1 of the exchange." />}
         name={["credentials", "scopes"]}
       >
-        {(control) => (
-          <Select
-            {...selectControl(control)}
-            mode="tags"
-            tokenSeparators={[","]}
-            placeholder="Add scopes"
-            className="rounded-lg"
-            size="large"
-          />
-        )}
+        {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
       </MountedFormField>
     </>
   );

@@ -1,9 +1,8 @@
-import React, { useState } from "react";
-import { Upload, Alert } from "antd";
+import React, { useId, useState } from "react";
 import { toast } from "@/lib/toast";
-import { InboxOutlined } from "@ant-design/icons";
-import type { UploadProps } from "antd";
-import { CircleHelp } from "lucide-react";
+import { CircleCheck, CircleHelp, Inbox, X } from "lucide-react";
+import { v4 as uuidv4 } from "uuid";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ragIngestCall } from "@/components/networking";
 import { DocumentUpload, RAGIngestResponse } from "@/components/vector_store_management/types";
 import DocumentsTable from "./DocumentsTable";
@@ -15,7 +14,7 @@ import {
   VectorStoreFieldConfig,
 } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,7 +24,17 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import S3VectorsConfig from "./S3VectorsConfig";
 
-const { Dragger } = Upload;
+const ACCEPTED_DOCUMENT_EXTENSIONS = ".pdf,.txt,.docx,.md,.doc";
+
+const ACCEPTED_DOCUMENT_TYPES = [
+  "application/pdf",
+  "text/plain",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+  "text/markdown",
+];
+
+const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 
 const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey"]);
 
@@ -37,6 +46,36 @@ const providerItems = Object.entries(VectorStoreProviders)
   }));
 
 const asText = (value: unknown): string => (typeof value === "string" ? value : "");
+
+const IngestSuccessAlert: React.FC<{ ingestResults: RAGIngestResponse[] }> = ({ ingestResults }) => {
+  const [dismissed, setDismissed] = useState(false);
+
+  if (dismissed) {
+    return null;
+  }
+
+  return (
+    <Alert variant="success">
+      <CircleCheck />
+      <AlertTitle>Vector Store Created Successfully</AlertTitle>
+      <AlertDescription>
+        <div>
+          <p>
+            <strong>Vector Store ID:</strong> {ingestResults[0]?.vector_store_id}
+          </p>
+          <p>
+            <strong>Documents Ingested:</strong> {ingestResults.length}
+          </p>
+        </div>
+      </AlertDescription>
+      <AlertAction>
+        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setDismissed(true)}>
+          <X className="size-4" />
+        </Button>
+      </AlertAction>
+    </Alert>
+  );
+};
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -61,53 +100,33 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
   const [vectorStoreDescription, setVectorStoreDescription] = useState<string>("");
   const [ingestResults, setIngestResults] = useState<RAGIngestResponse[]>([]);
   const [providerParams, setProviderParams] = useState<Record<string, unknown>>({});
+  const documentsInputId = useId();
 
-  const uploadProps: UploadProps = {
-    name: "file",
-    multiple: true,
-    accept: ".pdf,.txt,.docx,.md,.doc",
-    beforeUpload: (file) => {
-      const isValidType = [
-        "application/pdf",
-        "text/plain",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/msword",
-        "text/markdown",
-      ].includes(file.type);
+  const isSupportedDocument = (file: File): boolean => {
+    if (!ACCEPTED_DOCUMENT_TYPES.includes(file.type)) {
+      toast.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
+      return false;
+    }
+    if (file.size >= MAX_DOCUMENT_BYTES) {
+      toast.error(`${file.name} must be smaller than 50MB!`);
+      return false;
+    }
+    return true;
+  };
 
-      if (!isValidType) {
-        toast.error(`${file.name} is not a supported file type. Please upload PDF, TXT, DOCX, or MD files.`);
-        return Upload.LIST_IGNORE;
-      }
+  const handleAddDocuments = (files: readonly File[]) => {
+    const accepted: DocumentUpload[] = files.filter(isSupportedDocument).map((file) => ({
+      uid: uuidv4(),
+      name: file.name,
+      status: "done",
+      size: file.size,
+      type: file.type,
+      originFileObj: file,
+    }));
 
-      const isLt50M = file.size / 1024 / 1024 < 50;
-      if (!isLt50M) {
-        toast.error(`${file.name} must be smaller than 50MB!`);
-        return Upload.LIST_IGNORE;
-      }
-
-      const newDoc: DocumentUpload = {
-        uid: file.uid,
-        name: file.name,
-        status: "done",
-        size: file.size,
-        type: file.type,
-        originFileObj: file,
-      };
-
-      setDocuments((prev) => [...prev, newDoc]);
-      return false; // Prevent auto upload
-    },
-    onRemove: (file) => {
-      setDocuments((prev) => prev.filter((doc) => doc.uid !== file.uid));
-    },
-    fileList: documents.map((doc) => ({
-      uid: doc.uid,
-      name: doc.name,
-      status: doc.status,
-      size: doc.size,
-    })),
-    showUploadList: false, // We'll use our custom table
+    if (accepted.length > 0) {
+      setDocuments((prev) => [...prev, ...accepted]);
+    }
   };
 
   const handleRemoveDocument = (uid: string) => {
@@ -234,15 +253,32 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.
               </p>
             </div>
-            <Dragger {...uploadProps}>
-              <p className="ant-upload-drag-icon">
-                <InboxOutlined style={{ fontSize: "48px", color: "#1890ff" }} />
-              </p>
-              <p className="ant-upload-text">Click or drag files to this area to upload</p>
-              <p className="ant-upload-hint">
+            <label
+              htmlFor={documentsInputId}
+              className="flex cursor-pointer flex-col items-center gap-2 rounded-md border border-dashed border-input bg-muted/30 px-6 py-10 text-center transition-colors hover:border-primary hover:bg-muted/50 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                handleAddDocuments(Array.from(event.dataTransfer.files));
+              }}
+            >
+              <Inbox className="size-12 text-primary" />
+              <span className="text-base">Click or drag files to this area to upload</span>
+              <span className="text-sm text-muted-foreground">
                 Support for single or bulk upload. Supported formats: PDF, TXT, DOCX, MD
-              </p>
-            </Dragger>
+              </span>
+              <input
+                id={documentsInputId}
+                type="file"
+                multiple
+                accept={ACCEPTED_DOCUMENT_EXTENSIONS}
+                className="sr-only"
+                onChange={(event) => {
+                  handleAddDocuments(Array.from(event.target.files ?? []));
+                  event.target.value = "";
+                }}
+              />
+            </label>
           </CardContent>
         </Card>
 
@@ -358,24 +394,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
         </Card>
 
         {/* Success Message */}
-        {ingestResults.length > 0 && (
-          <Alert
-            message="Vector Store Created Successfully"
-            description={
-              <div>
-                <p>
-                  <strong>Vector Store ID:</strong> {ingestResults[0]?.vector_store_id}
-                </p>
-                <p>
-                  <strong>Documents Ingested:</strong> {ingestResults.length}
-                </p>
-              </div>
-            }
-            type="success"
-            showIcon
-            closable
-          />
-        )}
+        {ingestResults.length > 0 && <IngestSuccessAlert ingestResults={ingestResults} />}
       </div>
     </TooltipProvider>
   );

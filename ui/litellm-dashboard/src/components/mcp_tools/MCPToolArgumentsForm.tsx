@@ -1,10 +1,10 @@
 import React, { forwardRef, useImperativeHandle, useMemo } from "react";
-import { Select } from "antd";
 import { CircleHelp } from "lucide-react";
 import { useForm, type Resolver } from "react-hook-form";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
@@ -12,6 +12,11 @@ import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
 type ToolFormValues = Record<string, unknown>;
 
 const STRING_SCHEMA_MESSAGES: Readonly<Record<string, string>> = { input: "Please enter input for this tool" };
+
+const BOOLEAN_ITEMS = [
+  { value: true, label: "True" },
+  { value: false, label: "False" },
+];
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
 
@@ -325,33 +330,43 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                   {(field) => {
                     if (prop.type === "string" && prop.enum) {
                       return (
-                        <Select
-                          id={field.id}
-                          value={field.value as string | undefined}
-                          onChange={field.onChange}
-                          onBlur={field.onBlur}
-                          placeholder={`Select ${key}`}
-                          allowClear={!required}
-                          options={prop.enum.map((v) => ({ value: v, label: v }))}
-                          className="w-full"
-                        />
+                        <Select value={field.value ?? ""} onValueChange={field.onChange}>
+                          <SelectTrigger
+                            id={field.id}
+                            onBlur={field.onBlur}
+                            aria-invalid={field["aria-invalid"]}
+                            className="w-full"
+                          >
+                            <SelectValue placeholder={`Select ${key}`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {!required && <SelectItem value="">Select {key}</SelectItem>}
+                            {prop.enum.map((v) => (
+                              <SelectItem key={v} value={v}>
+                                {v}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       );
                     }
                     if (prop.type === "boolean") {
                       return (
-                        <Select
-                          id={field.id}
-                          value={field.value as boolean | undefined}
-                          onChange={field.onChange}
-                          onBlur={field.onBlur}
-                          placeholder={`Select ${key}`}
-                          allowClear={!required}
-                          options={[
-                            { value: true, label: "True" },
-                            { value: false, label: "False" },
-                          ]}
-                          className="w-full"
-                        />
+                        <Select items={BOOLEAN_ITEMS} value={field.value ?? ""} onValueChange={field.onChange}>
+                          <SelectTrigger
+                            id={field.id}
+                            onBlur={field.onBlur}
+                            aria-invalid={field["aria-invalid"]}
+                            className="w-full"
+                          >
+                            <SelectValue placeholder={`Select ${key}`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {!required && <SelectItem value="">Select {key}</SelectItem>}
+                            <SelectItem value={true}>True</SelectItem>
+                            <SelectItem value={false}>False</SelectItem>
+                          </SelectContent>
+                        </Select>
                       );
                     }
                     if (prop.type === "number" || prop.type === "integer") {

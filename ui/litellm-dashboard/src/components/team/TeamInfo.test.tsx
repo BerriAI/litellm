@@ -3,7 +3,7 @@ import * as networking from "@/components/networking";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import TeamInfoView from "./TeamInfo";
 
 const authState = vi.hoisted(() => ({ userRole: "Admin" }));
@@ -317,6 +317,34 @@ describe("TeamInfoView", () => {
       });
       expect(screen.getByText("$250.50")).toBeInTheDocument();
       expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
+    });
+
+    it("renders a tpm/rpm/budget limit of 0 as 0 in the overview and settings tabs, never as Unlimited or No Limit", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          tpm_limit: 0,
+          rpm_limit: 0,
+          team_member_budget_table: { max_budget: 0, budget_duration: null, tpm_limit: 0, rpm_limit: 0 },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      const overview = await screen.findByRole("tabpanel", { name: "Overview" });
+      expect(within(overview).getByText("TPM: 0")).toBeInTheDocument();
+      expect(within(overview).getByText("RPM: 0")).toBeInTheDocument();
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByText("TPM: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("TPM Limit: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("RPM Limit: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("Max Budget: 0")).toBeInTheDocument();
+      expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
+      expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+      expect(screen.queryByText("TPM Limit: No Limit")).not.toBeInTheDocument();
+      expect(screen.queryByText("RPM Limit: No Limit")).not.toBeInTheDocument();
     });
 
     it("should display guardrails in overview when present", async () => {
@@ -993,8 +1021,7 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
 
-      await user.click(resetBudgetSelect);
-      await user.click(await screen.findByText("Never resets"));
+      await chooseSelectOption(user, resetBudgetSelect, "Never resets");
 
       await waitFor(() => {
         expect(resetBudgetSelect).toHaveTextContent("Never resets");
@@ -1028,8 +1055,7 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: null });
 
-      await user.click(resetBudgetSelect);
-      await user.click(await screen.findByText("weekly"));
+      await chooseSelectOption(user, resetBudgetSelect, "weekly");
 
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1236,7 +1262,7 @@ describe("TeamInfoView", () => {
       expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
 
       await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      await user.type(screen.getAllByPlaceholderText("Value")[0], "CC-NEW");
+      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

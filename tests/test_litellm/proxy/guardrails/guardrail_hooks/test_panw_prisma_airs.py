@@ -5652,7 +5652,7 @@ class TestPanwAirsTimeoutCoercion:
         assert isinstance(params.timeout, float)
 
     def test_litellm_params_rejects_garbage_timeout(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='validation error for LitellmParams'):
             LitellmParams(
                 guardrail="panw_prisma_airs",
                 mode="pre_call",
@@ -5902,7 +5902,7 @@ class TestPanwAirsBlockedErrorDetailPassthrough:
         with patch.object(
             base_handler, "_call_panw_api", return_value=copy.deepcopy(self._FULL_BLOCK_RESPONSE)
         ):
-            with pytest.raises(HTTPException) as exc_info:
+            async def _call_hook():
                 if is_response:
                     await base_handler.async_post_call_success_hook(
                         data=safe_prompt_data,
@@ -5916,6 +5916,9 @@ class TestPanwAirsBlockedErrorDetailPassthrough:
                         data=safe_prompt_data,
                         call_type="completion",
                     )
+
+            with pytest.raises(HTTPException) as exc_info:
+                await _call_hook()
 
         error = exc_info.value.detail["error"]
         for field, value in self._FULL_BLOCK_RESPONSE.items():

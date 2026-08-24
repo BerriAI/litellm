@@ -1,5 +1,5 @@
 import type { ColumnFiltersState, PaginationState } from "@tanstack/react-table";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -135,7 +135,7 @@ describe("AuditLogsTable", () => {
     renderTable({ onColumnFiltersChange });
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
-    await user.type(await screen.findByPlaceholderText("Enter object ID…"), "obj-9");
+    fireEvent.change(await screen.findByPlaceholderText("Enter object ID…"), { target: { value: "obj-9" } });
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
     expect(onColumnFiltersChange).toHaveBeenCalledTimes(1);

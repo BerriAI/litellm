@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import KeywordModal from "./KeywordModal";
 
@@ -35,7 +35,9 @@ describe("KeywordModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(await screen.findByPlaceholderText("Enter sensitive keyword or phrase"), "s");
+    fireEvent.change(await screen.findByPlaceholderText("Enter sensitive keyword or phrase"), {
+      target: { value: "s" },
+    });
 
     expect(handlers.onKeywordChange).toHaveBeenCalledWith("s");
   });
@@ -44,7 +46,9 @@ describe("KeywordModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(await screen.findByPlaceholderText("Explain why this keyword is sensitive"), "x");
+    fireEvent.change(await screen.findByPlaceholderText("Explain why this keyword is sensitive"), {
+      target: { value: "x" },
+    });
 
     expect(handlers.onDescriptionChange).toHaveBeenCalledWith("x");
   });

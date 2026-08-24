@@ -2,7 +2,6 @@
 
 from typing import Any, Final
 
-import orjson
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
@@ -20,6 +19,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    video_reference_to_id,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
@@ -451,9 +451,7 @@ async def video_remix(
         version,
     )
 
-    # Read request body
-    body: Final = await request.body()
-    data: Final = orjson.loads(body)
+    data: Final = await _read_request_body(request=request)
     data["video_id"] = video_id
 
     decoded: Final = decode_video_id_with_provider(video_id)
@@ -760,15 +758,10 @@ async def video_edit(
         version,
     )
 
-    body: Final = await request.body()
-    data: Final = orjson.loads(body)
+    data: Final = await _read_request_body(request=request)
+    data["video_id"] = video_reference_to_id(data.pop("video", None))
 
-    # Extract video_id from nested video object
-    video_ref: Final = data.pop("video", {})
-    video_id: Final = video_ref.get("id", "") if isinstance(video_ref, dict) else ""
-    data["video_id"] = video_id
-
-    decoded: Final = decode_video_id_with_provider(video_id)
+    decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")
     model_id_from_decoded: Final = decoded.get("model_id")
 
@@ -860,15 +853,10 @@ async def video_extension(
         version,
     )
 
-    body: Final = await request.body()
-    data: Final = orjson.loads(body)
+    data: Final = await _read_request_body(request=request)
+    data["video_id"] = video_reference_to_id(data.pop("video", None))
 
-    # Extract video_id from nested video object
-    video_ref: Final = data.pop("video", {})
-    video_id: Final = video_ref.get("id", "") if isinstance(video_ref, dict) else ""
-    data["video_id"] = video_id
-
-    decoded: Final = decode_video_id_with_provider(video_id)
+    decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")
     model_id_from_decoded: Final = decoded.get("model_id")
 

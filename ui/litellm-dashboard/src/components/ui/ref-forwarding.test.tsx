@@ -138,15 +138,13 @@ describe("ui primitives forward refs to their DOM node", () => {
   });
 });
 
-describe("setupTests ref tripwire", () => {
-  it("records a violation when a ref is passed to a plain function component", () => {
-    const Plain = (props: React.ComponentPropsWithoutRef<"span">) => <span {...props} />;
+describe("plain function components", () => {
+  it("receives a ref as a prop instead of dropping it", () => {
+    const Plain = (props: React.ComponentPropsWithoutRef<"span"> & { ref?: React.Ref<HTMLSpanElement> }) => (
+      <span {...props} />
+    );
     const ref = React.createRef<HTMLSpanElement>();
-    render(React.createElement(Plain as never, { ref }));
-    const consume = (globalThis as { __consumePendingRefWarnings?: () => string[] }).__consumePendingRefWarnings;
-    expect(consume).toBeDefined();
-    const violations = consume!();
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain("Function components cannot be given refs");
+    render(<Plain ref={ref}>ok</Plain>);
+    expect(ref.current).toBeInstanceOf(HTMLSpanElement);
   });
 });

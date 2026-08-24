@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { Alert, Empty } from "antd";
+import { CircleAlert, Inbox } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -258,7 +259,10 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
       {hasSearched && result && (
         <div className="bg-card border border-border rounded-lg p-6">
           {result.matched_policies.length === 0 ? (
-            <Empty description="No policies matched this context" />
+            <div className="py-6 text-center">
+              <Inbox className="mx-auto mb-2 size-8 text-muted-foreground" aria-hidden="true" />
+              <p className="text-sm text-muted-foreground">No policies matched this context</p>
+            </div>
           ) : (
             <>
               <div className="mb-4">
@@ -266,10 +270,7 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
                 <div className="flex flex-wrap gap-1">
                   {result.effective_guardrails.length > 0 ? (
                     result.effective_guardrails.map((g) => (
-                      <Badge
-                        key={g}
-                        className="border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300"
-                      >
+                      <Badge key={g} className="border-success/20 bg-success/10 text-success">
                         {g}
                       </Badge>
                     ))
@@ -294,18 +295,13 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
                       <tr key={p.policy_name} className="border-b border-border last:border-0">
                         <td className="py-2 pr-4 font-medium">{p.policy_name}</td>
                         <td className="py-2 pr-4">
-                          <Badge className="border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                            {p.matched_via}
-                          </Badge>
+                          <Badge className="border-info/20 bg-info/10 text-info">{p.matched_via}</Badge>
                         </td>
                         <td className="py-2">
                           {p.guardrails_added.length > 0 ? (
                             <div className="flex flex-wrap gap-1">
                               {p.guardrails_added.map((g) => (
-                                <Badge
-                                  key={g}
-                                  className="border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300"
-                                >
+                                <Badge key={g} className="border-success/20 bg-success/10 text-success">
                                   {g}
                                 </Badge>
                               ))}
@@ -325,7 +321,11 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
       )}
 
       {hasSearched && !result && !isLoading && (
-        <Alert message="Error" description="Failed to resolve policies. Check the proxy logs." type="error" showIcon />
+        <Alert variant="error">
+          <CircleAlert />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>Failed to resolve policies. Check the proxy logs.</AlertDescription>
+        </Alert>
       )}
     </div>
   );

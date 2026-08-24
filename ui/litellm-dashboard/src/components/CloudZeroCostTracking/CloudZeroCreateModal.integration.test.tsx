@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -41,9 +41,9 @@ describe("CloudZeroCreateModal submit payload", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("CloudZero API Key"), "cz-secret-key");
-    await user.type(screen.getByLabelText("Connection ID"), "conn-42");
-    await user.type(screen.getByLabelText("Timezone"), "America/New_York");
+    fireEvent.change(screen.getByLabelText("CloudZero API Key"), { target: { value: "cz-secret-key" } });
+    fireEvent.change(screen.getByLabelText("Connection ID"), { target: { value: "conn-42" } });
+    fireEvent.change(screen.getByLabelText("Timezone"), { target: { value: "America/New_York" } });
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await vi.waitFor(() =>
@@ -59,8 +59,8 @@ describe("CloudZeroCreateModal submit payload", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("CloudZero API Key"), "cz-secret-key");
-    await user.type(screen.getByLabelText("Connection ID"), "conn-42");
+    fireEvent.change(screen.getByLabelText("CloudZero API Key"), { target: { value: "cz-secret-key" } });
+    fireEvent.change(screen.getByLabelText("Connection ID"), { target: { value: "conn-42" } });
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await vi.waitFor(() =>
@@ -87,7 +87,7 @@ describe("CloudZeroCreateModal submit payload", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("CloudZero API Key"), "cz-secret-key");
+    fireEvent.change(screen.getByLabelText("CloudZero API Key"), { target: { value: "cz-secret-key" } });
     await user.type(screen.getByLabelText("Connection ID"), "conn-42{Enter}");
 
     expect(mutate).not.toHaveBeenCalled();

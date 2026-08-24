@@ -652,3 +652,80 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
     assert captured["resolver_credential"] == {"Authorization": OPENAPI_PER_SERVER_TOKEN}
     assert captured["injected"] == OPENAPI_PER_SERVER_TOKEN
     assert _request_auth_header.get() is None
+
+
+@pytest.mark.parametrize("failure", ["auth", "other"])
+@pytest.mark.asyncio
+async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: str):
+    """A failing local handler must never be reported as a successful tool result, and only an auth
+    failure may propagate.
+
+    `_handle_local_mcp_tool` used to catch every exception and return it as TextContent, and both of
+    its callers then stamped `isError=False`, so an upstream rejection was served as tool output and
+    `extract_mcp_tool_result_error_message` logged the request as a success.
+
+    The two kinds are split by consequence. `MCPUpstreamAuthError` propagates because both renderers
+    know it: the streamable path names the status and the REST path relays a real 401 with the
+    upstream's WWW-Authenticate. Anything else is reported as `isError=True` right here, because
+    `call_tool_rest_api` turns an unrecognized exception into HTTP 500 and an upstream 403 or 429 is
+    not a gateway crash.
+    """
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.exceptions import (
+        MCPOpenApiUpstreamError,
+        MCPUpstreamAuthError,
+    )
+
+    error = (
+        MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name="report_api")
+        if failure == "auth"
+        else MCPOpenApiUpstreamError(429, "report_api")
+    )
+
+    async def raising_handler(**_kwargs):
+        raise error
+
+    fake_tool = MagicMock()
+    fake_tool.name = "list_reports"
+    fake_tool.handler = raising_handler
+    server = MCPServer(
+        server_id="srv-openapi",
+        name="report_api",
+        server_name="report_api",
+        url="https://api.example.com",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+        spec_path="https://api.example.com/openapi.json",
+    )
+    user = UserAPIKeyAuth(api_key="sk-user", user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value)
+
+    with (
+        patch.object(mcp_module.global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(mcp_module.global_mcp_server_manager, "pre_call_tool_check", new=AsyncMock(return_value={})),
+        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "resolve_openapi_upstream_auth",
+            new=AsyncMock(return_value=(None, None)),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        call = mcp_module.execute_mcp_tool(
+            name="list_reports",
+            arguments={},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(timezone.utc),
+            user_api_key_auth=user,
+        )
+        if failure == "auth":
+            with pytest.raises(MCPUpstreamAuthError):
+                await call
+            return
+        result = await call
+
+    # A non-auth upstream failure stays a 200 with isError, so REST does not report it as a gateway 500
+    assert result.isError is True
+    assert "upstream returned HTTP 429" in result.content[0].text

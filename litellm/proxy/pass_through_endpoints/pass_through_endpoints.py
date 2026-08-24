@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping
 from datetime import datetime
 from itertools import groupby
 from typing import Any, Final, TypedDict, cast
@@ -32,11 +32,15 @@ from websockets.exceptions import (
     ConnectionClosedOK,
     InvalidStatus,
 )
+from websockets.frames import Close, CloseCode
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import (
+    MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    WEBSOCKET_CLOSE_REASON_MAX_BYTES,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -60,6 +64,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import request_dispatched_to_pass_through_endpoint
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -465,7 +470,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         ``items()`` collapses duplicate keys to the last value. Files go out as a
         list of ``(field_name, (filename, content, content_type))`` tuples and
         repeated non-file fields are grouped into list values, both of which httpx
-        encodes as separate multipart parts.
+        encodes as separate multipart parts. A form with no file parts is sent
+        entirely through ``files`` as ``(field_name, (None, value))`` tuples,
+        because httpx downgrades a file-less ``data=`` payload to
+        application/x-www-form-urlencoded.
         """
         form_items: Final = (await request.form()).multi_items()
 
@@ -495,6 +503,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             )
         }
 
+        multipart_files: Final = (
+            files if files else tuple((field_name, (None, field_value)) for field_name, field_value in non_file_items)
+        )
+        multipart_data: Final = form_data_dict if files else None
+
         # Remove content-type header - httpx will set it correctly with the new boundary
         # when it creates the multipart body from files/data parameters
         headers_copy: Final = headers.copy()
@@ -507,8 +520,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 url,
                 headers=headers_copy,
                 params=requested_query_params,
-                files=files,
-                data=form_data_dict,
+                files=multipart_files,
+                data=multipart_data,
             )
             return await async_client.send(req, stream=True)
 
@@ -517,8 +530,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             url=url,
             headers=headers_copy,
             params=requested_query_params,
-            files=files,
-            data=form_data_dict,
+            files=multipart_files,
+            data=multipart_data,
         )
 
     @staticmethod
@@ -564,6 +577,22 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
+        # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
+        # the post-call increment finds nothing and every passthrough request goes untracked and
+        # unenforced. Set after the client merge so a request body cannot supply its own budget.
+        #
+        # Only for the built-in provider routes. `get_model_from_request` returns
+        # None for a user-defined pass-through, deliberately: its body is forwarded
+        # verbatim, so `model` there names an UPSTREAM model rather than a
+        # LiteLLM-managed one. Enforcement is therefore skipped on those routes, and
+        # charging a counter anyway would track spend that nothing can refuse, and
+        # would attribute it to a budget the operator scoped to a LiteLLM model that
+        # merely shares the name.
+        if not request_dispatched_to_pass_through_endpoint(request):
+            _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
+            _metadata["user_api_key_user_model_max_budget"] = user_api_key_dict.user_model_max_budget
+            _metadata["user_api_key_end_user_model_max_budget"] = user_api_key_dict.end_user_model_max_budget
         _metadata.update(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
@@ -1890,6 +1919,72 @@ def create_websocket_passthrough_route(
     return websocket_endpoint_func
 
 
+def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Callable[[str], str] | None) -> str:
+    """
+    Rewrite the model of a Vertex AI Live ``setup`` frame, leaving every other frame byte-identical
+    """
+    if setup_model_rewriter is None:
+        return text_data
+    try:
+        message: Final = json.loads(text_data)
+    except json.JSONDecodeError:
+        return text_data
+    if not isinstance(message, dict):
+        return text_data
+    setup: Final = message.get("setup")
+    if not isinstance(setup, dict):
+        return text_data
+    setup_model: Final = setup.get("model")
+    if not isinstance(setup_model, str):
+        return text_data
+    rewritten_model: Final = setup_model_rewriter(setup_model)
+    if rewritten_model == setup_model:
+        return text_data
+    return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})  # mutable-ok: one-shot json payload
+
+
+def _truncated_close_reason(reason: str) -> str:
+    """
+    Fit a close reason inside the byte budget a WebSocket close frame allows, without splitting a character
+    """
+    encoded: Final = reason.encode("utf-8")
+    if len(encoded) <= WEBSOCKET_CLOSE_REASON_MAX_BYTES:
+        return reason
+    return encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
+
+
+SENDABLE_CLOSE_CODES: Final = frozenset(CloseCode) - frozenset(
+    {CloseCode.NO_STATUS_RCVD, CloseCode.ABNORMAL_CLOSURE, CloseCode.TLS_HANDSHAKE}
+)
+
+
+def _client_socket_is_open(websocket: WebSocket) -> bool:
+    """
+    Starlette tracks the two halves separately and raises on a second close, so both have to still be live
+    """
+    return (
+        websocket.client_state != WebSocketState.DISCONNECTED
+        and websocket.application_state != WebSocketState.DISCONNECTED
+    )
+
+
+def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
+    """
+    The upstream close worth telling the client about: anything other than a plain, reasonless normal close.
+
+    Codes outside ``SENDABLE_CLOSE_CODES`` and the private range never travel on the wire (1006 for a socket that
+    died without a close frame, 1005 for one that sent no code), so relaying them would build an invalid frame
+    """
+    upstream_close: Final = next((result for result in task_results if isinstance(result, Close)), None)
+    if upstream_close is None:
+        return None
+    if upstream_close.code == 1000 and upstream_close.reason == "":
+        return None
+    if upstream_close.code not in SENDABLE_CLOSE_CODES and not 3000 <= upstream_close.code < 5000:
+        return None
+    return upstream_close
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -1899,6 +1994,7 @@ async def websocket_passthrough_request(
     endpoint: str | None = None,
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
+    setup_model_rewriter: Callable[[str], str] | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -1911,6 +2007,7 @@ async def websocket_passthrough_request(
         forward_headers: Whether to forward incoming headers
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
+        setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -2100,7 +2197,7 @@ async def websocket_passthrough_request(
                                     )
                                     # Not a JSON message or doesn't contain setup data
 
-                            await upstream_ws.send(text_data)
+                            await upstream_ws.send(_rewrite_vertex_live_setup_model(text_data, setup_model_rewriter))
                         elif bytes_data is not None:
                             await upstream_ws.send(bytes_data)
                 except asyncio.CancelledError:
@@ -2111,8 +2208,8 @@ async def websocket_passthrough_request(
                     )
                     await upstream_ws.close()
 
-            async def forward_upstream_to_client() -> None:
-                """Forward messages from upstream to client WebSocket"""
+            async def forward_upstream_to_client() -> Close | None:
+                """Forward messages from upstream to client WebSocket, returning the upstream's close frame"""
                 try:
                     # Wait for the first response from upstream
                     raw_response = await upstream_ws.recv(decode=False)
@@ -2177,6 +2274,7 @@ async def websocket_passthrough_request(
 
                 except (ConnectionClosedOK, ConnectionClosedError) as e:
                     verbose_proxy_logger.debug("Upstream WebSocket connection closed: %s", e)
+                    return e.rcvd
                 except asyncio.CancelledError:
                     verbose_proxy_logger.debug("asyncio.CancelledError in forward_upstream_to_client")
                     raise
@@ -2208,6 +2306,13 @@ async def websocket_passthrough_request(
                 exception = task.exception()
                 if exception is not None:
                     raise exception
+
+            upstream_close: Final = _upstream_close_to_relay(task.result() for task in done)
+            if upstream_close is not None and _client_socket_is_open(websocket):
+                await websocket.close(
+                    code=upstream_close.code,
+                    reason=_truncated_close_reason(upstream_close.reason),
+                )
 
             end_time: Final = datetime.now()
 
@@ -2294,7 +2399,7 @@ async def websocket_passthrough_request(
             ),
         )
 
-        if websocket.client_state != WebSocketState.DISCONNECTED:
+        if _client_socket_is_open(websocket):
             await websocket.close(
                 code=getattr(exc, "status_code", 1011),
                 reason="Upstream connection rejected",
@@ -2322,10 +2427,10 @@ async def websocket_passthrough_request(
             ),
         )
 
-        if websocket.client_state != WebSocketState.DISCONNECTED:
+        if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
-        if websocket.client_state != WebSocketState.DISCONNECTED:
+        if _client_socket_is_open(websocket):
             await websocket.close()
 
 

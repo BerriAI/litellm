@@ -27,7 +27,7 @@ const ALL_FAMILY_MODELS: ModelGroup[] = [
 const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
 
 const openTemplateDropdown = (): void => {
-  fireEvent.mouseDown(within(screen.getByTestId("template-selector")).getByRole("combobox"));
+  fireEvent.click(screen.getByTestId("template-selector"));
 };
 
 // Detailed Configuration is collapsed by default, so any test reaching into it (a tier select, an
@@ -36,15 +36,32 @@ const expandDetailedConfiguration = (): void => {
   fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
 };
 
-const visibleOptions = (): HTMLElement[] =>
-  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list of raw values; the visible options carry no role, no aria-disabled, and only a tooltip in title
-  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
+const visibleOptions = (): HTMLElement[] => screen.queryAllByRole("option");
 
 const optionByLabel = (label: string): HTMLElement | undefined =>
   visibleOptions().find((el) => el.textContent?.startsWith(label));
 
-// eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class
-const isOptionDisabled = (option: HTMLElement): boolean => option.classList.contains("ant-select-item-option-disabled");
+const isOptionDisabled = (option: HTMLElement): boolean => option.getAttribute("aria-disabled") === "true";
+
+const selectTemplate = async (label: string): Promise<void> => {
+  await userEvent.click(optionByLabel(label)!);
+};
+
+// Opens the dropdown only when it is closed, since openTemplateDropdown toggles: waiting on a
+// second preset in the same test would otherwise close the list out from under the poll.
+const waitForPresetEnabled = async (label: string) => {
+  if (visibleOptions().length === 0) openTemplateDropdown();
+  await waitFor(() => {
+    expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
+  });
+};
+
+// The keyword field is a combobox that offers whatever is typed as a "Create ..." entry, so a
+// keyword only lands on the rule once that entry is picked.
+const addKeyword = async (user: ReturnType<typeof userEvent.setup>, field: HTMLElement, keyword: string) => {
+  await user.type(within(field).getByRole("combobox"), keyword);
+  await user.click(await screen.findByText(`Create "${keyword}"`));
+};
 
 const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(() => ({
   mockFetchAvailableModels: vi.fn(),
@@ -202,10 +219,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
 
-    await user.type(
-      within(screen.getByText("Keywords 1").closest("div") as HTMLElement).getByRole("combobox"),
-      "invoice{enter}",
-    );
+    await addKeyword(user, screen.getByText("Keywords 1").closest("div") as HTMLElement, "invoice");
 
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
     expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
@@ -221,10 +235,7 @@ describe("AddAutoRouterTab", () => {
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
-    await user.type(
-      within(screen.getByText("Keywords 1").closest("div") as HTMLElement).getByRole("combobox"),
-      "invoice{enter}",
-    );
+    await addKeyword(user, screen.getByText("Keywords 1").closest("div") as HTMLElement, "invoice");
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
 
     expect(await screen.findAllByText("At least one keyword is required")).toHaveLength(1);
@@ -242,7 +253,7 @@ describe("AddAutoRouterTab", () => {
     await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
     await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
     const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
-    await user.type(within(keywordsField).getByRole("combobox"), "invoice{enter}");
+    await addKeyword(user, keywordsField, "invoice");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -282,6 +293,28 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: false,
+    });
+  });
+
+  // The scalar floor is the one scorer knob with no group dict behind it, so its wiring into the create
+  // payload is only proven end to end. 0 is the case a truthy check would silently drop.
+  it("carries a reasoning override floor of 0 through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "override-floor-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByText("Advanced scoring"));
+    fireEvent.change(await screen.findByLabelText("Minimum score"), { target: { value: "0" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      reasoning_override_min_score: 0,
     });
   });
 
@@ -352,7 +385,7 @@ describe("AddAutoRouterTab", () => {
 
     const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
 
-    expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+    expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
   });
 
   describe("routing test", () => {
@@ -385,7 +418,7 @@ describe("AddAutoRouterTab", () => {
       await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
       await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
       const keywordsField = screen.getByText("Keywords 1").closest("div") as HTMLElement;
-      await user.type(within(keywordsField).getByRole("combobox"), "invoice{enter}");
+      await addKeyword(user, keywordsField, "invoice");
 
       await user.click(screen.getByTestId("auto-router-test-routing-btn"));
       await user.type(await screen.findByTestId("auto-router-routing-test-prompt"), "reconcile this invoice");
@@ -430,17 +463,6 @@ describe("AddAutoRouterTab", () => {
   });
 
   describe("template presets", () => {
-    // Opens the dropdown once, then waits out the useQuery load: an open antd Select re-renders its
-    // already-mounted options in place as state changes, so polling only re-reads the DOM here.
-    // Re-firing the open/close mousedown on every poll (calling openTemplateDropdown inside the
-    // waitFor callback) fights the dropdown's own open/close animation and hangs the test.
-    const waitForPresetEnabled = async (label: string) => {
-      openTemplateDropdown();
-      await waitFor(() => {
-        expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
-      });
-    };
-
     it("disables every preset while the model list is loading", async () => {
       let resolveModels: (models: ModelGroup[]) => void = () => {};
       mockFetchAvailableModels.mockImplementation(
@@ -515,7 +537,7 @@ describe("AddAutoRouterTab", () => {
       renderWithProviders(<Harness />);
       await waitForPresetEnabled("Anthropic Family");
 
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
 
       expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
       expect(
@@ -526,11 +548,11 @@ describe("AddAutoRouterTab", () => {
       ).toBeInTheDocument();
     });
 
-    it("expands detailed configuration when Custom Configuration is chosen", () => {
+    it("expands detailed configuration when Custom Configuration is chosen", async () => {
       renderWithProviders(<Harness />);
       openTemplateDropdown();
 
-      fireEvent.click(optionByLabel("Custom Configuration")!);
+      await selectTemplate("Custom Configuration");
 
       expect(screen.getByText("Advanced: Keyword/Semantic Matching")).toBeInTheDocument();
     });
@@ -539,7 +561,7 @@ describe("AddAutoRouterTab", () => {
       mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
       renderWithProviders(<Harness />);
       await waitForPresetEnabled("Anthropic Family");
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
       expect(screen.queryByText("Advanced: Keyword/Semantic Matching")).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByTestId("detailed-configuration-toggle"));
@@ -556,7 +578,7 @@ describe("AddAutoRouterTab", () => {
 
       renderWithProviders(<Harness />);
       await waitForPresetEnabled("Anthropic Family");
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -578,7 +600,7 @@ describe("AddAutoRouterTab", () => {
 
       const { container } = renderWithProviders(<Harness />);
       await waitForPresetEnabled("Anthropic Family");
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
       fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "stale-model-router" } });
       expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
 
@@ -600,26 +622,16 @@ describe("AddAutoRouterTab", () => {
   describe("default model pin", () => {
     const PINNED_MODEL = "pinned-default-model";
 
-    const waitForPresetEnabled = async (label: string) => {
-      openTemplateDropdown();
-      await waitFor(() => {
-        expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
-      });
-    };
-
     const applyPresetAndPin = async (user: ReturnType<typeof userEvent.setup>) => {
       await waitForPresetEnabled("Anthropic Family");
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
 
       // Applying a preset collapses Detailed Configuration, so the default model row is behind it.
       expandDetailedConfiguration();
       const defaultModel = screen.getByRole("combobox", { name: "Default model" });
       await user.click(defaultModel);
-      // antd virtualizes the option list and jsdom gives every row zero height, so options past
-      // the first window never render. Typing filters the list down to the pin instead of relying
-      // on its index, which adding a preset to the bundled JSON shifts.
       await user.type(defaultModel, PINNED_MODEL);
-      await user.click((await screen.findAllByTitle(PINNED_MODEL)).slice(-1)[0]);
+      await user.click(await screen.findByRole("option", { name: PINNED_MODEL }));
     };
 
     beforeEach(() => {
@@ -670,19 +682,12 @@ describe("AddAutoRouterTab", () => {
       mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     });
 
-    const waitForPresetEnabled = async (label: string) => {
-      openTemplateDropdown();
-      await waitFor(() => {
-        expect(isOptionDisabled(optionByLabel(label)!)).toBe(false);
-      });
-    };
-
     it("omits plan_mode_min_tier from the payload when never touched", async () => {
       const user = userEvent.setup();
       renderWithProviders(<Harness />);
 
       await waitForPresetEnabled("Anthropic Family");
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
       await user.type(screen.getByPlaceholderText(/smart_router/i), "no-plan-router");
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -697,7 +702,7 @@ describe("AddAutoRouterTab", () => {
       renderWithProviders(<Harness />);
 
       await waitForPresetEnabled("Anthropic Family");
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
       expandDetailedConfiguration();
       await user.click(screen.getByText("Advanced: Plan-Mode Override"));
       await user.click(await screen.findByRole("switch", { name: "Route plan-mode requests to a minimum tier" }));
@@ -751,7 +756,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
 
       expect(screen.getByText("Advanced: Keyword/Semantic Matching")).toBeInTheDocument();
 
@@ -783,7 +788,7 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
-      expect(labels).toEqual(["Anthropic Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+      expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
     });
 
     it.each([
@@ -840,7 +845,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
-      fireEvent.click(optionByLabel("Anthropic Family")!);
+      await selectTemplate("Anthropic Family");
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "wildcard-router");
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
