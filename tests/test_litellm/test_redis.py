@@ -228,11 +228,15 @@ def test_async_url_pool_strips_userinfo_for_the_provider(clean_redis_environment
     assert connection.db == 3
 
 
-def test_sync_cluster_preserves_credential_provider_identity(clean_redis_environment):
+def test_sync_cluster_preserves_credential_provider_identity(  # test-quality-ok: constructor kwargs are the only seam
+    clean_redis_environment,
+):
     provider = _StubCredentialProvider()
     startup_nodes = [{"host": "cluster-node", "port": 6379}]
 
-    with patch("litellm._redis.redis.RedisCluster", autospec=True) as mock_cluster_cls:
+    with patch(  # test-quality-ok: RedisCluster slot-discovers in its constructor
+        "litellm._redis.redis.RedisCluster", autospec=True
+    ) as mock_cluster_cls:
         get_redis_client(startup_nodes=startup_nodes, credential_provider=provider)
 
     mock_cluster_cls.assert_called_once()
@@ -243,7 +247,9 @@ def test_async_cluster_preserves_credential_provider_identity(clean_redis_enviro
     provider = _StubCredentialProvider()
     startup_nodes = [{"host": "cluster-node", "port": 6379}]
 
-    with patch("litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class") as mock_class:
+    with patch(  # test-quality-ok: the async cluster class is the only injection point here
+        "litellm.caching.redis_cluster_node_isolation.get_litellm_async_redis_cluster_class"
+    ) as mock_class:
         get_redis_async_client(startup_nodes=startup_nodes, credential_provider=provider)
 
     call_kwargs = mock_class.return_value.call_args[1]
@@ -256,8 +262,12 @@ def test_explicit_provider_skips_automatic_auth_and_callback(clean_redis_environ
     monkeypatch.setenv("REDIS_AZURE_AD_TOKEN", "true")
 
     with (
-        patch("litellm._redis.create_gcp_iam_redis_connect_func") as mock_gcp,
-        patch("litellm._redis.create_azure_ad_redis_connect_func") as mock_azure,
+        patch(  # test-quality-ok: the assertion is that this builder is never reached
+            "litellm._redis.create_gcp_iam_redis_connect_func"
+        ) as mock_gcp,
+        patch(  # test-quality-ok: the assertion is that this builder is never reached
+            "litellm._redis.create_azure_ad_redis_connect_func"
+        ) as mock_azure,
     ):
         redis_kwargs = _get_redis_client_logic(
             host="redis-host",
@@ -323,8 +333,12 @@ def test_async_direct_explicit_provider_is_preserved_when_normalization_is_bypas
     }
 
     with (
-        patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs),
-        patch("litellm._redis.async_redis.Redis", autospec=True) as mock_redis,
+        patch(  # test-quality-ok: bypassing normalization is what this test pins
+            "litellm._redis._get_redis_client_logic", return_value=redis_kwargs
+        ),
+        patch(  # test-quality-ok: the constructor kwargs are the only observable
+            "litellm._redis.async_redis.Redis", autospec=True
+        ) as mock_redis,
     ):
         get_redis_async_client()
 
@@ -343,8 +357,12 @@ def test_async_pool_explicit_provider_is_preserved_when_normalization_is_bypasse
     }
 
     with (
-        patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs),
-        patch("litellm._redis.async_redis.BlockingConnectionPool", autospec=True) as mock_pool,
+        patch(  # test-quality-ok: bypassing normalization is what this test pins
+            "litellm._redis._get_redis_client_logic", return_value=redis_kwargs
+        ),
+        patch(  # test-quality-ok: the constructor kwargs are the only observable
+            "litellm._redis.async_redis.BlockingConnectionPool", autospec=True
+        ) as mock_pool,
     ):
         get_redis_connection_pool()
 
@@ -360,7 +378,9 @@ async def test_redis_cache_test_connection_uses_shared_factory(clean_redis_envir
     client.ping = AsyncMock(return_value=True)
     client.aclose = AsyncMock()
 
-    with patch("litellm._redis.get_redis_async_client", return_value=client) as mock_factory:
+    with patch(  # test-quality-ok: the factory call is what routing through it means
+        "litellm._redis.get_redis_async_client", return_value=client
+    ) as mock_factory:
         cache = RedisCache(host="redis-host", port=6379, credential_provider=provider)
         result = await cache.test_connection()
 
@@ -376,8 +396,12 @@ async def test_redis_cluster_cache_test_connection_uses_shared_factory(clean_red
     client.ping = AsyncMock(return_value=True)
     client.aclose = AsyncMock()
 
-    with patch("litellm._redis.get_redis_async_client", return_value=client) as mock_factory:
-        with patch("litellm._redis.get_redis_client", return_value=MagicMock(spec=redis.RedisCluster)):
+    with patch(  # test-quality-ok: the factory call is what routing through it means
+        "litellm._redis.get_redis_async_client", return_value=client
+    ) as mock_factory:
+        with patch(  # test-quality-ok: a real RedisCluster would slot-discover here
+            "litellm._redis.get_redis_client", return_value=MagicMock(spec=redis.RedisCluster)
+        ):
             cache = RedisClusterCache(
                 startup_nodes=[{"host": "redis-host", "port": 6379}], credential_provider=provider
             )
@@ -395,8 +419,12 @@ def test_redis_cache_key_does_not_inspect_provider(clear_llm_client_cache):
     async_pool = MagicMock(spec=async_redis.BlockingConnectionPool)
 
     with (
-        patch("litellm._redis.get_redis_client", return_value=sync_client),
-        patch("litellm._redis.get_redis_connection_pool", return_value=async_pool),
+        patch(  # test-quality-ok: the hostile provider must not reach a real client
+            "litellm._redis.get_redis_client", return_value=sync_client
+        ),
+        patch(  # test-quality-ok: the hostile provider must not reach a real pool
+            "litellm._redis.get_redis_connection_pool", return_value=async_pool
+        ),
     ):
         cache = RedisCache(host="redis-host", port=6379, credential_provider=provider)
         second_cache = RedisCache(host="redis-host", port=6379, credential_provider=second_provider)
@@ -903,7 +931,7 @@ def test_sync_sentinel_uses_sentinel_password_and_master_password(mock_sentinel_
     )
 
 
-@patch("litellm._redis.redis.Sentinel")
+@patch("litellm._redis.redis.Sentinel")  # test-quality-ok: sentinel discovery needs live sentinels
 def test_sync_sentinel_keeps_provider_off_monitors_and_on_master(mock_sentinel_cls):
     provider = _StubCredentialProvider()
     mock_sentinel = MagicMock()
