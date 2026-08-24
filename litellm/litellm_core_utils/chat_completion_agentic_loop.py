@@ -87,16 +87,36 @@ def _check_agentic_loop_safety(
     return fingerprint
 
 
-def _wrap_response_as_fake_stream(response: object) -> object:
-    if getattr(response, "object", None) == "chat.completion.chunk":
+def _wrap_response_as_fake_stream(
+    response: object,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: object,
+) -> object:
+    """
+    Present a non-streamed response as something the streaming path can consume.
+
+    Interception downgrades `stream: true` to a single non-streamed call so the
+    agentic loop can run, then has to hand a stream back. Returning the bare
+    converted chunk made callers fail with `TypeError: 'async for' requires an
+    object with __aiter__ method, got ModelResponseStream`, and put a
+    `chat.completion.chunk`-shaped object where a full `chat.completion` was
+    expected — which is how a malformed entry reaches the response cache and
+    later raises `KeyError: 'message'`.
+    """
+    if isinstance(response, CustomStreamWrapper):
         return response
     if not hasattr(response, "choices"):
         return response
-    from litellm.llms.base_llm.base_model_iterator import (
-        convert_model_response_to_streaming,
-    )
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
-    return convert_model_response_to_streaming(cast(ModelResponse, response))
+    return CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=cast(ModelResponse, response)),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
 
 
 def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
@@ -178,7 +198,12 @@ async def _execute_chat_completion_agentic_plan(
                     str(e),
                 )
         if kwargs.get("_code_interpreter_interception_converted_stream") and not depth:
-            return _wrap_response_as_fake_stream(response_followup)
+            return _wrap_response_as_fake_stream(
+                response_followup,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            )
         return response_followup
     finally:
         try:
@@ -305,6 +330,11 @@ async def maybe_run_chat_completion_agentic_loop(
     if kwargs.get("_code_interpreter_interception_converted_stream") and not depth and hasattr(response, "choices"):
         return cast(
             "ModelResponse | CustomStreamWrapper",
-            _wrap_response_as_fake_stream(response),
+            _wrap_response_as_fake_stream(
+                response,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging_obj,
+            ),
         )
     return None
