@@ -35,7 +35,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -3607,6 +3607,28 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert self.VKEY not in forwarded_blob
         assert "azure-style-caller-secret" not in forwarded_blob
         assert "anthropic-style-caller-secret" not in forwarded_blob
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "credential_header",
+        sorted(SpecialHeaders.litellm_credential_header_names() - {"authorization", "x-goog-api-key"}),
+    )
+    async def test_every_non_google_credential_header_is_dropped_by_name(self, monkeypatch, credential_header):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                (credential_header.encode(), b"some-distinct-caller-secret-value"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert credential_header not in forwarded
+        assert "some-distinct-caller-secret-value" not in " ".join(
+            f"{name}:{value}" for name, value in forwarded.items()
+        )
 
     @pytest.mark.asyncio
     async def test_virtual_key_in_operator_configured_header_is_stripped(self, monkeypatch):
