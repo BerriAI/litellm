@@ -3660,3 +3660,16 @@ def test_anthropic_messages_pt_system_string_content_becomes_text_block():
 
     assert result[1] == {"role": "system", "content": [{"type": "text", "text": "Answer in one word."}]}
 
+
+def test_anthropic_messages_pt_drops_a_system_message_with_no_text():
+    """Anthropic rejects empty text blocks, so a text-less system message must
+    vanish rather than reach the wire as an empty system turn."""
+    messages = [
+        {"role": "user", "content": "First question"},
+        {"role": "system", "content": ""},
+        {"role": "assistant", "content": "Yes"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-opus-4-8", llm_provider="anthropic")
+
+    assert [m["role"] for m in result] == ["user", "assistant"]

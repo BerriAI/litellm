@@ -6237,7 +6237,7 @@ REMINDER_TEXT = "<system-reminder>Answer with exactly one word.</system-reminder
 CACHED_SYSTEM_BLOCK = {"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}
 
 
-def _chat_request(config, model, messages):
+def _chat_request(config: AnthropicConfig, model: str, messages: list[dict]) -> dict:
     return config.transform_request(
         model=model,
         messages=messages,
@@ -6247,7 +6247,7 @@ def _chat_request(config, model, messages):
     )
 
 
-def _reminder_conversation():
+def _reminder_conversation() -> list[dict]:
     """The shape Claude Code sends mid-session: cached system prompt, turns, a
     reminder right after a user turn, an assistant turn, a fresh user turn."""
     return [
@@ -6261,7 +6261,7 @@ def _reminder_conversation():
     ]
 
 
-def _texts(message):
+def _texts(message: dict) -> list[str]:
     return [block["text"] for block in message["content"] if block.get("type") == "text"]
 
 
@@ -6418,7 +6418,7 @@ def test_chat_mid_conversation_system_keeps_earlier_turns_a_prefix_of_the_next_r
     assert len(later_blocks) > len(earlier_blocks)
 
 
-def _role_block_pairs(messages):
+def _role_block_pairs(messages: list[dict]) -> list[tuple[str, object]]:
     return [
         (message["role"], block)
         for message in messages

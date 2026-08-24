@@ -544,7 +544,7 @@ def test_output_format_removed_from_bedrock_invoke_request():
     ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
 
 
-def _mid_conversation_system_conversation():
+def _mid_conversation_system_conversation() -> list[dict]:
     return [
         {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "First question"},

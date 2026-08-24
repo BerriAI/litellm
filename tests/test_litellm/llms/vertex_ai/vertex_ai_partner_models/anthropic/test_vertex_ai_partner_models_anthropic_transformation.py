@@ -729,7 +729,7 @@ def test_sanitize_strips_effort_for_haiku_45():
     assert data["output_config"] == {"effort": "high"}
 
 
-def _mid_conversation_system_conversation():
+def _mid_conversation_system_conversation() -> list[dict]:
     return [
         {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "First question"},
