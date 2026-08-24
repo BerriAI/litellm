@@ -445,6 +445,9 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     """
     Update the litellm params for health check.
 
+    - merges `model_info.health_check_params` into the probe request, so a deployment whose provider
+      requires a payload field litellm does not synthesize (e.g. `mediaSource` for Bedrock TwelveLabs
+      Pegasus) can supply it. The dedicated knobs below are applied afterwards and win on conflict.
     - gets a short `messages` param for health check
     - adds a bounded `max_tokens` when the deployment is a chat-style mode
       (`chat`, `completion`, `responses`) or the operator explicitly opts in
@@ -459,6 +462,16 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
         model_info,
         litellm_params,  # any-ok: untyped router config dict
     )
+    _health_check_params: Final = model_info.get("health_check_params", None)
+    if isinstance(_health_check_params, dict):
+        litellm_params.update(_health_check_params)
+    elif _health_check_params is not None:
+        logger.warning(
+            "health_check_params for model %s is a %s, expected a dict. Ignoring it.",
+            litellm_params.get("model"),
+            type(_health_check_params).__name__,
+        )
+
     litellm_params["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
         model_info,
