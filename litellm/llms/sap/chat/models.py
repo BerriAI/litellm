@@ -24,9 +24,53 @@ def validate_different_content(v: str | dict | list) -> str:
     raise ValueError("Content must be a string")
 
 
+def _has_cache_control(v: str | dict | list) -> bool:
+    """True if any content block carries a ``cache_control`` breakpoint."""
+    if isinstance(v, dict):
+        return v.get("cache_control") is not None
+    if isinstance(v, list):
+        return any(isinstance(item, dict) and item.get("cache_control") is not None for item in v)
+    return False
+
+
+def validate_cacheable_content(v: str | dict | list) -> str | list:
+    """Flatten content to a string, keeping the block form when it is cached.
+
+    SAP Orchestration accepts either a plain string or a list of ``text`` blocks for
+    system/developer messages. Flattening unconditionally drops any ``cache_control``
+    breakpoint set on a block, so prompt caching never activates on the ``sap/`` route.
+    Keep the block form only when a breakpoint is present, leaving every other request
+    byte-for-byte unchanged.
+    """
+    if not _has_cache_control(v):
+        return validate_different_content(v)
+
+    blocks: Final = [v] if isinstance(v, dict) else v
+    kept: Final[list] = []
+    for item in blocks:
+        if isinstance(item, str):
+            if item:
+                kept.append({"type": "text", "text": item})
+        elif isinstance(item, dict) and item.get("text"):
+            kept.append(item)
+    return kept
+
+
+class CacheControl(BaseModel):
+    """Prompt-cache breakpoint forwarded to the model provider.
+
+    SAP Orchestration passes this through to Bedrock-hosted Anthropic Claude and
+    Amazon Nova models, which use it to mark where the cached prefix ends.
+    """
+
+    type_: Literal["ephemeral"] = Field(default="ephemeral", alias="type")
+    ttl: str | None = None
+
+
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: CacheControl | None = None
 
 
 class ImageURLContent(BaseModel):
@@ -88,9 +132,9 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
+    content: str | list[TextContent]
 
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    _content_validator = field_validator("content", mode="before")(validate_cacheable_content)
 
 
 class SAPUserMessage(BaseModel):
