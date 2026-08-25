@@ -623,12 +623,23 @@ async def list_vector_stores(
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
             in_memory_vector_stores: Final = copy.deepcopy(litellm.vector_store_registry.vector_stores)
+            # Vector stores loaded from config.yaml have no DB row; they must be
+            # returned alongside DB-sourced entries and MUST NOT be pruned by the
+            # "in memory but not in DB → deleted" reconciliation below.
+            config_loaded_ids: Final = litellm.vector_store_registry.config_loaded_vector_store_ids
 
             vector_stores_to_delete_from_memory: Final[list[str]] = []
 
             for vector_store in in_memory_vector_stores:
                 vector_store_id = vector_store.get("vector_store_id", None)
                 if not vector_store_id:
+                    continue
+
+                # Config-loaded stores: surface them in the response but never
+                # treat them as "deleted from DB" — they never had a DB row.
+                if vector_store_id in config_loaded_ids:
+                    if vector_store_id not in vector_store_map:
+                        vector_store_map[vector_store_id] = vector_store
                     continue
 
                 # If vector store is in memory but NOT in database, it was deleted
