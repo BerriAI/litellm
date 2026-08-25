@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from unittest.mock import MagicMock
 
 import httpx
@@ -283,7 +284,7 @@ PRESERVED_THINKING_MESSAGES = [
 ]
 
 
-def _assert_internal_fields_stripped_reasoning_kept(transformed_messages: list):
+def _assert_internal_fields_stripped_reasoning_kept(transformed_messages: Sequence[Mapping[str, object]]):
     assistant_message = transformed_messages[1]
     assert assistant_message["reasoning_content"] == REPLAYED_ASSISTANT_MESSAGE["reasoning_content"]
     assert "thinking_blocks" not in assistant_message
@@ -320,7 +321,7 @@ async def test_async_transform_request_keeps_reasoning_content_strips_internal_f
 def test_completion_sends_chat_template_kwargs_and_preserved_reasoning():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    captured_requests = []
+    captured_requests: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
