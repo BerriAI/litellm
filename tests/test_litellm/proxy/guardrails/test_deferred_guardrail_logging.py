@@ -15,14 +15,11 @@ Streaming: CSW.__anext__ stores args on logging_obj at stream end.
 """
 
 import asyncio
-import os
-import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -625,7 +622,7 @@ class TestDeferredStreamingClosure:
         """If a guardrail raises HTTPException, the production
         _run_deferred_stream_guardrails must still fire logging
         and set guardrail_blocked in metadata."""
-        from fastapi import HTTPException  # noqa: local import for test isolation
+        from fastapi import HTTPException  # local import for test isolation
 
         logging_called = False
 

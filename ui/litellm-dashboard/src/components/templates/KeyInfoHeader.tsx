@@ -100,7 +100,7 @@ function UserField({ userAlias, userEmail, userId }: { userAlias?: string | null
         { label: "User ID", value: userId || null },
       ].map(({ label, value }) => (
         <div key={label} className="flex flex-col min-w-0">
-          <span className="text-muted-foreground/70">{label}</span>
+          <span className="text-muted-foreground">{label}</span>
           {value ? (
             <div className="flex min-w-0 items-center gap-1">
               <span className="min-w-0 flex-1 truncate font-mono text-xs" title={value}>

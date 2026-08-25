@@ -1,9 +1,11 @@
 """Tests for scripts/test_quality_gate.py.
 
-The gate's whole value is that it blames a change only for what it adds, and that a
-limit can never rise. Both properties live in pure functions, so they are tested
-directly: `evaluate` for the blame rule, `ratcheted_budget` for the one-way ratchet,
-and `parse_changed_lines` for the diff scan that turns a breach into file:line.
+The gate's whole value is that it blames a change only for what it adds, that a limit
+can never rise, and that a limit cannot stay above a count the branch pushed below it.
+All three live in pure functions, so they are tested directly: `evaluate` for the blame
+rule, `ratcheted_budget` for the one-way ratchet, `unratcheted` for the ceiling a branch
+left behind, and `parse_changed_lines` for the diff scan that turns a breach into
+file:line.
 """
 
 import importlib.util
@@ -66,11 +68,32 @@ def test_ratchet_never_goes_below_zero():
     assert updated["TQ001"]["limit"] == 0
 
 
-def test_ratchet_leaves_a_rule_seeded_on_this_branch_untouched():
-    updated = gate.ratcheted_budget(
-        _BUDGET, {"TQ001": 0}, {"TQ001": 10}, seeded=frozenset({"TQ001"})
-    )
-    assert updated["TQ001"]["limit"] == 10
+def test_ratchet_lowers_a_rule_introduced_on_this_branch_like_any_other():
+    updated = gate.ratcheted_budget(_BUDGET, {"TQ001": 4}, {"TQ001": 10})
+    assert updated["TQ001"]["limit"] == 4
+
+
+def test_a_branch_that_cleared_violations_must_lower_the_ceiling():
+    stale = gate.unratcheted({"TQ001": 6}, {"TQ001": 10}, _BUDGET)
+    assert [(b.rule, b.total, b.cap, b.added) for b in stale] == [("TQ001", 6, 10, -4)]
+
+
+def test_headroom_already_in_the_base_is_not_blamed_on_this_branch():
+    assert gate.unratcheted({"TQ001": 6}, {"TQ001": 6}, _BUDGET) == ()
+
+
+def test_a_branch_that_cleared_down_to_the_ceiling_exactly_is_clean():
+    assert gate.unratcheted({"TQ001": 10}, {"TQ001": 12}, _BUDGET) == ()
+
+
+def test_a_branch_that_added_violations_is_not_a_ratchet_finding():
+    assert gate.unratcheted({"TQ001": 14}, {"TQ001": 10}, _BUDGET) == ()
+
+
+def test_the_ratchet_finding_survives_the_update_that_answers_it():
+    cleared = {"TQ001": 6}
+    updated = gate.ratcheted_budget(_BUDGET, cleared, {"TQ001": 10})
+    assert gate.unratcheted(cleared, {"TQ001": 10}, updated) == ()
 
 
 def test_parse_changed_lines_groups_hunks_under_their_own_file():
@@ -121,5 +144,5 @@ def test_the_shipped_budget_covers_every_rule_the_checker_can_emit():
     import json
 
     budget = json.loads((_REPO_ROOT / "test-quality-budget.json").read_text())
-    assert set(budget) == {"TQ001", "TQ002", "TQ003", "TQ004", "TQ005"}
+    assert set(budget) == {"TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ008"}
     assert all(spec["limit"] >= 0 for spec in budget.values())

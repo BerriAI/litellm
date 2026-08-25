@@ -12,9 +12,15 @@ Every rule is seeded at exactly its count on the day the gate landed, so the
 suite's existing debt is grandfathered and any net-new violation trips the gate
 immediately. ``--update`` ratchets a limit down by the violations this branch
 fixed relative to its branch point (the merge-base), so the ceilings only ever
-fall. A rule absent from the budget at the merge-base was seeded on this branch;
-``--update`` leaves its limit untouched, because the base tree predates the rule
-and its whole grandfathered count would otherwise be misread as "fixed".
+fall. Base counts are measured with the *current* checker, so a rule introduced
+on this branch is counted at the base too and ratchets like every other one.
+
+Only ever falling is not the same as always falling, so the gate enforces the
+second half: a branch that clears violations and leaves the ceiling above its
+new count fails, naming the rules and telling the author to run
+``make lint-budget-update``. Without that, a removed violation could come back
+later under a ceiling nobody lowered. Drift already in the base is never
+blamed, so this fires only on the branch that did the clearing.
 
 The deliberate difference from its sibling: this gate has no headroom anywhere.
 Type discipline seeded LIT010/LIT011 at 1.5x to leave room for an in-flight
@@ -138,6 +144,21 @@ def over_ceiling(head: Mapping[str, int], budget: Mapping[str, Mapping[str, int]
     )
 
 
+def unratcheted(
+    head: Mapping[str, int],
+    base: Mapping[str, int],
+    budget: Mapping[str, Mapping[str, int]],
+) -> tuple[Breach, ...]:
+    """Rules this branch cleared without lowering the ceiling behind them. Requires
+    both `head < base`, so drift already in the base is never blamed on this change,
+    and `head < limit`, so a ceiling already at the count is left alone."""
+    return tuple(sorted(
+        Breach(rule, head.get(rule, 0), spec["limit"], head.get(rule, 0) - base.get(rule, 0))
+        for rule, spec in budget.items()
+        if head.get(rule, 0) < base.get(rule, 0) and head.get(rule, 0) < spec["limit"]
+    ))
+
+
 def evaluate(
     head: Mapping[str, int],
     base: Mapping[str, int],
@@ -177,15 +198,39 @@ def introduced(
     return tuple(v for v in violations if v.line in changed.get(v.file, frozenset()))
 
 
+def touches_measured_tree(base_point: str) -> bool:
+    """Whether this branch changed anything that can move a count. A branch that
+    touches neither the test tree nor the checker cannot have cleared a violation,
+    so the base scan is skipped and the gate stays cheap on the common change."""
+    changed: Final = _run(
+        ["git", "diff", "--name-only", base_point, "--", TARGET, str(CHECKER.relative_to(REPO_ROOT))]
+    )
+    return bool(changed.strip())
+
+
 def cmd_check(base: str) -> None:
     budget: Final = json.loads(BUDGET_PATH.read_text())
     head: Final = head_violations()
     head_counts: Final = count_by_rule(head)
-    if not over_ceiling(head_counts, budget):
+    base_point: Final = resolve_base_point(base)
+    if not over_ceiling(head_counts, budget) and not touches_measured_tree(base_point):
         print(f"OK: every TQ rule is within its test-suite ceiling (base {base})")
         return
-    base_point: Final = resolve_base_point(base)
-    breaches: Final = evaluate(head_counts, base_counts(base_point), budget)
+    base_at_point: Final = base_counts(base_point)
+    stale: Final = unratcheted(head_counts, base_at_point, budget)
+    if stale:
+        print(f"FAIL: TQ-rule limits were left above the count this branch reached (base {base}):")
+        for breach in stale:
+            print(
+                f"  {breach.rule}: this branch cleared {-breach.added} down to {breach.total}, "
+                f"but the limit is still {breach.cap}"
+            )
+        print(
+            "Run `make lint-budget-update` and commit the lowered limits, so the "
+            "violations you cleared cannot come back under a ceiling nobody moved."
+        )
+        raise SystemExit(1)
+    breaches: Final = evaluate(head_counts, base_at_point, budget)
     if not breaches:
         print(f"OK: every TQ rule is within its test-suite ceiling (base {base})")
         return
@@ -216,46 +261,25 @@ def ratcheted_budget(
     budget: Mapping[str, Mapping[str, int]],
     current: Mapping[str, int],
     base: Mapping[str, int],
-    seeded: frozenset[str] = frozenset(),
 ) -> Mapping[str, Mapping[str, int]]:
     """Each rule's limit lowered by the violations `current` fixed vs `base`. The drop
-    is clamped to what was actually cleared, so a limit only ever falls. Rules in
-    `seeded` were introduced on this branch and pass through untouched."""
+    is clamped to what was actually cleared, so a limit only ever falls."""
     return MappingProxyType({
-        rule: {
-            "limit": spec["limit"] if rule in seeded
-            else max(0, spec["limit"] - max(0, base.get(rule, 0) - current.get(rule, 0)))
-        }
+        rule: {"limit": max(0, spec["limit"] - max(0, base.get(rule, 0) - current.get(rule, 0)))}
         for rule, spec in sorted(budget.items())
     })
-
-
-def _base_budget_rules(base_point: str) -> frozenset[str]:
-    proc: Final = subprocess.run(
-        ["git", "show", f"{base_point}:{BUDGET_PATH.name}"],
-        cwd=REPO_ROOT, capture_output=True, text=True,
-    )
-    if proc.returncode != 0:
-        return frozenset()
-    return frozenset(json.loads(proc.stdout))
 
 
 def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
     """Ratchet each rule's limit down by the violations this branch fixed."""
     budget: Final = json.loads(BUDGET_PATH.read_text())
     base_point: Final = resolve_base_point(base_ref)
-    seeded: Final = frozenset(budget) - _base_budget_rules(base_point)
     updated: Final = ratcheted_budget(
-        budget, count_by_rule(head_violations()), base_counts(base_point), seeded
+        budget, count_by_rule(head_violations()), base_counts(base_point)
     )
     BUDGET_PATH.write_text(json.dumps(dict(updated), indent=2, sort_keys=True) + "\n")
     cleared: Final = sum(budget[rule]["limit"] - updated[rule]["limit"] for rule in updated)
     print(f"Ratcheted TQ-rule limits down by {cleared} violations this branch fixed")
-    if seeded:
-        print(
-            "Left untouched (seeded on this branch, absent from the base budget): "
-            + ", ".join(sorted(seeded))
-        )
 
 
 def cmd_seed() -> None:

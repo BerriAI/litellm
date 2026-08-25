@@ -10,8 +10,6 @@ strips them at the boundary; an opt-in key/team flag preserves the override
 for operators who actually want it.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,7 +25,6 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.utils import CustomPricingLiteLLMParams
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 def _make_request_mock() -> Request:

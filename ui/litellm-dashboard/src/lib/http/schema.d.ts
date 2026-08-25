@@ -777,6 +777,11 @@ export interface paths {
          *     overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
+         *
+         *     The rollup supplies the measures, never the list. Which routers appear comes from the
+         *     model registry, so one shows up as soon as it is configured and reads zero until it
+         *     serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+         *     window recorded.
          */
         get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
         put?: never;
@@ -849,11 +854,12 @@ export interface paths {
          *     serve and duplicates them against baseline_model. A key can hold one active job per
          *     direction, so both questions can run at once.
          *
-         *     Shadow responses are never served to users. Each key samples until it has judged
-         *     max_turns turns of its own traffic, the job's window ends, or the job is stopped, so one
-         *     key running out of budget does not end sampling for the others; sampling changes
-         *     propagate to pods within about 10 seconds. Shadow and judge calls bill to the shadowed
-         *     key but are excluded from request counts and auto-router adoption metrics.
+         *     Shadow responses are never served to users. Each key samples until its recorded eval
+         *     spend, the shadow and judge calls' own cost, reaches max_budget dollars, the job's
+         *     window ends, or the job is stopped, so one key running out of budget does not end
+         *     sampling for the others; sampling changes propagate to pods within about 10 seconds.
+         *     Shadow and judge calls bill to the shadowed key but are excluded from request counts
+         *     and auto-router adoption metrics.
          */
         post: operations["start_shadow_eval_auto_router_shadow_eval_start_post"];
         delete?: never;
@@ -939,6 +945,31 @@ export interface paths {
          *     ```
          */
         post: operations["preview_auto_router_routing_auto_router_test_routing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/validate_complexity_router_config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Complexity Router Config
+         * @description Validate a complexity-router config without saving it.
+         *
+         *     Runs the same check every write path runs (the router's own pydantic model), so a form can
+         *     show the backend's exact verdict while the operator is still editing rather than after a
+         *     rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+         *     naming their own team. Nothing is created, routed, or billed.
+         */
+        post: operations["validate_complexity_router_config_auto_router_validate_complexity_router_config_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2118,6 +2149,24 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/config/block_requests_for_models_without_pricing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Block Requests For Models Without Pricing */
+        get: operations["get_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Block Requests For Models Without Pricing */
+        patch: operations["update_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_patch"];
         trace?: never;
     };
     "/config/callback/delete": {
@@ -14887,6 +14936,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/{team_id}/member/{user_id}/reset_spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Team Member Spend Fn
+         * @description Reset a team member's tracked spend against their per-member budget.
+         *
+         *     A member's spend is tracked separately from both their own personal
+         *     budget and the team's own budget (LiteLLM_TeamMembership.spend), so
+         *     neither /user/update nor /team/update can clear it: this is the only
+         *     endpoint that does. The cross-pod spend counter and cached membership
+         *     reads are invalidated so the reset takes effect on the member's next
+         *     request rather than waiting on the membership cache's TTL.
+         */
+        post: operations["reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/{team_id}/members/me": {
         parameters: {
             query?: never;
@@ -21921,9 +21997,15 @@ export interface components {
              * @description Window end day, YYYY-MM-DD UTC, inclusive
              */
             end_date: string;
-            /** Groups */
+            /**
+             * Groups
+             * @description One entry per auto-router, listed from the model registry rather than from the rollup, so a router appears as soon as it is configured and reads zero until it serves traffic. Semantic auto-routers are absent: they record no routing decision, so no session can ever be attributed to them
+             */
             groups: components["schemas"]["AutoRouterBenchmarkGroup"][];
-            /** Routers In Scope */
+            /**
+             * Routers In Scope
+             * @description How many groups this response carries. Every auto-router configured on the proxy counts, whether or not it served anything in the window. To count only the routers that did serve traffic, filter `groups` to the entries whose `sessions` is above zero
+             */
             routers_in_scope: number;
             /**
              * Start Date
@@ -22058,7 +22140,7 @@ export interface components {
             routed_model: string;
             /**
              * Routed Model Configured
-             * @description Whether routed_model is a model group this proxy actually serves
+             * @description Whether routed_model is a model group available to the caller, scoped to team_id when given. Never confirms models the caller could not use
              */
             routed_model_configured: boolean;
             /** @description The decision record this request would have written to its log row */
@@ -22430,6 +22512,16 @@ export interface components {
         BlockTeamRequest: {
             /** Team Id */
             team_id: string;
+        };
+        /** BlockUnpricedModelsRequest */
+        BlockUnpricedModelsRequest: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** BlockUnpricedModelsResponse */
+        BlockUnpricedModelsResponse: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** BlockUsers */
         BlockUsers: {
@@ -22944,6 +23036,17 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityErrorBucket */
+        CacheActivityErrorBucket: {
+            /** Call Type */
+            call_type: string;
+            /** Count */
+            count: number;
+            /** Error Class */
+            error_class: string;
+            /** Error Code */
+            error_code: string;
+        };
         /** CacheActivityFilterOptions */
         CacheActivityFilterOptions: {
             /** Key Aliases */
@@ -22968,6 +23071,8 @@ export interface components {
         };
         /** CacheActivityResponse */
         CacheActivityResponse: {
+            /** Error Breakdown */
+            error_breakdown: components["schemas"]["CacheActivityErrorBucket"][];
             filter_options: components["schemas"]["CacheActivityFilterOptions"];
             /** Groups */
             groups: components["schemas"]["CacheActivityGroup"][];
@@ -23088,7 +23193,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -23613,16 +23718,16 @@ export interface components {
         };
         /**
          * ClassificationRubric
-         * @description Which calibration examples the built-in classifier rubric carries.
+         * @description Which calibration examples, and for BUSINESS which tier criteria, the built-in classifier rubric carries.
          * @enum {string}
          */
-        ClassificationRubric: "legacy" | "agentic" | "chat";
+        ClassificationRubric: "legacy" | "agentic" | "chat" | "business";
         /**
          * ClassifierLLMConfig
          * @description Configuration for the LLM-based complexity classifier.
          */
         ClassifierLLMConfig: {
-            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
+            /** @description Which calibration examples the built-in rubric carries. 'agentic' anchors routine installs, builds, multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive with system_prompt, which replaces the rubric this would select. Only applies when classifier_type is 'llm'. */
             classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
             /**
              * Model
@@ -23772,6 +23877,29 @@ export interface components {
              * @description Timezone for date handling
              */
             timezone?: string | null;
+        };
+        /**
+         * ComplexityRouterConfigValidationRequest
+         * @description A complexity-router config to validate without saving, so a form can surface the
+         *     backend's own verdict inline instead of a raw 400 at write time.
+         */
+        ComplexityRouterConfigValidationRequest: {
+            /** Complexity Router Config */
+            complexity_router_config: {
+                [key: string]: unknown;
+            };
+            /**
+             * Team Id
+             * @description Team the router is being created for. Required for a team admin, who may only validate their own team's routers
+             */
+            team_id?: string | null;
+        };
+        /** ComplexityRouterConfigValidationResponse */
+        ComplexityRouterConfigValidationResponse: {
+            /** Error */
+            error?: string | null;
+            /** Valid */
+            valid: boolean;
         };
         /**
          * ComplexityScorerDefaults
@@ -24086,6 +24214,11 @@ export interface components {
              * @description Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.
              */
             maximum_autorouter_session_retention_period?: string | null;
+            /**
+             * Maximum Health Check Retention Period
+             * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
+             */
+            maximum_health_check_retention_period?: string | null;
             /**
              * Maximum Spend Logs Cleanup Batch Size
              * @description Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.
@@ -27542,6 +27675,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -29440,6 +29577,8 @@ export interface components {
              * @default []
              */
             supported_openai_params: string[] | null;
+            /** Supported Reasoning Efforts */
+            supported_reasoning_efforts?: string[] | null;
             /**
              * Supports Function Calling
              * @default false
@@ -32378,17 +32517,22 @@ export interface components {
              */
             classification_prompt?: string | null;
             /**
+             * Classifier Context Budget Chars
+             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and the caller's system prompt sit outside this budget and are always sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @default 8000
+             */
+            classifier_context_budget_chars: number;
+            /**
              * Classifier Context Include Assistant Turns
-             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
              */
             classifier_context_include_assistant_turns: boolean;
             /**
              * Classifier Context Per Turn Chars
-             * @description Maximum character length for each prior turn's text in the classifier context window. Turns exceeding this are truncated. Only applies when classifier_type is 'llm'.
-             * @default 200
+             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Only applies when classifier_type is 'llm'.
              */
-            classifier_context_per_turn_chars: number;
+            classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
              * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call already carries the current user ask and the caller's system prompt in full. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
@@ -33258,10 +33402,20 @@ export interface components {
              */
             key_name?: string | null;
             /**
+             * Max Budget
+             * @description This key's own USD budget for the eval's shadow and judge spend, independent of its siblings'; None on jobs created before spend budgets existed, which max_turns alone bounds
+             */
+            max_budget?: number | null;
+            /**
              * Max Turns
-             * @description This key's own sample budget, independent of its siblings'
+             * @description This key's sample-count ceiling: the whole budget for jobs created before max_budget existed, and the error-loop safety valve otherwise
              */
             max_turns: number;
+            /**
+             * Spend
+             * @description This key's recorded shadow plus judge spend in USD, the same figure the sampler budgets against max_budget; populated on list and detail responses and frozen at stopped_at exactly like attempt_count
+             */
+            spend?: number | null;
             /**
              * Stopped At
              * @description When this key's slot was stamped free, whether its own budget ran out, the window closed, or an operator stopped the job; status is derived, so a spent budget reads completed even while this is still unset
@@ -33578,7 +33732,7 @@ export interface components {
         StartShadowEvalRequest: {
             /**
              * Api Key Ids
-             * @description The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these keys' traffic; requests made with any other key are not sampled. Each key carries its own max_turns budget, so one key exhausting its budget leaves the others sampling. At most 100 keys per job, which also bounds every read the job's endpoints make.
+             * @description The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these keys' traffic; requests made with any other key are not sampled. Each key carries its own max_budget spend budget, so one key exhausting its budget leaves the others sampling. At most 100 keys per job, which also bounds every read the job's endpoints make.
              */
             api_key_ids: string[];
             /**
@@ -33606,11 +33760,11 @@ export interface components {
              */
             judge_model: string;
             /**
-             * Max Turns
-             * @description Per-key sample budget: the job judges at most this many turns of EACH scoped key's traffic, so a job over N keys judges at most N times max_turns turns. This is also the spend bound; expected judge cost is roughly that turn ceiling times one judge call
-             * @default 200
+             * Max Budget
+             * @description Per-key USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped key samples until its recorded eval spend reaches this, so a job over N keys spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window
+             * @default 10
              */
-            max_turns: number;
+            max_budget: number;
             /**
              * Router Name
              * @description The auto-router under evaluation, in either direction
@@ -34691,6 +34845,11 @@ export interface components {
              * @description URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL
              */
             logo_url?: string | null;
+            /**
+             * Logo Url Dark
+             * @description URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. Leave unset to reuse logo_url in dark mode
+             */
+            logo_url_dark?: string | null;
         };
         /**
          * UIThemeSettingsResponse
@@ -35989,6 +36148,10 @@ export interface components {
             user_id?: string | null;
             /** User Max Budget */
             user_max_budget?: number | null;
+            /** User Model Max Budget */
+            user_model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
             user_role?: components["schemas"]["LitellmUserRoles"] | null;
             /** User Rpm Limit */
             user_rpm_limit?: number | null;
@@ -36091,6 +36254,14 @@ export interface components {
             max_budget?: number | null;
             /** Metadata */
             metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Max Budget Usage */
+            model_max_budget_usage?: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -36724,6 +36895,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -38152,6 +38327,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterRoutingTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_complexity_router_config_auto_router_validate_complexity_router_config_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComplexityRouterConfigValidationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComplexityRouterConfigValidationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -40058,6 +40266,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockUnpricedModelsResponse"];
+                };
+            };
+        };
+    };
+    update_block_requests_for_models_without_pricing_config_block_requests_for_models_without_pricing_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockUnpricedModelsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockUnpricedModelsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -42949,6 +43210,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -43633,7 +43896,9 @@ export interface operations {
     };
     get_image_get_image_get: {
         parameters: {
-            query?: never;
+            query?: {
+                theme?: ("light" | "dark") | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -43647,6 +43912,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -54838,6 +55112,42 @@ export interface operations {
             };
         };
     };
+    reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetSpendRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     team_member_me_team__team_id__members_me_get: {
         parameters: {
             query?: never;
@@ -55688,6 +55998,8 @@ export interface operations {
                 user_id?: string | null;
                 /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
                 timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
             };
             header?: never;
             path?: never;
@@ -57807,6 +58119,8 @@ export interface operations {
                 provider?: string | null;
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path?: never;
@@ -64060,6 +64374,8 @@ export interface operations {
             query?: {
                 target_model_names?: string | null;
                 purpose?: string | null;
+                limit?: number | null;
+                after?: string | null;
             };
             header?: never;
             path: {

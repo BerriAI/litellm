@@ -76,7 +76,7 @@ const UserPopoverCell = ({
         { label: "User ID", value: userId },
       ].map(({ label, value }) => (
         <div key={label} className="flex flex-col min-w-0">
-          <span className="text-muted-foreground/70">{label}</span>
+          <span className="text-muted-foreground">{label}</span>
           {value ? (
             <IdCell value={value} variant="plain" copyable className="max-w-full" />
           ) : (
@@ -119,7 +119,7 @@ const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
   <span className="flex items-center gap-1">
     {label}
     <HoverCard>
-      <HoverCardTrigger render={<Info className="size-3 text-muted-foreground/70 cursor-help" />} />
+      <HoverCardTrigger render={<Info className="size-3 text-muted-foreground cursor-help" />} />
       <HoverCardContent className="w-auto">{tooltip}</HoverCardContent>
     </HoverCard>
   </span>

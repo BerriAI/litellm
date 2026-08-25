@@ -149,7 +149,7 @@ const ScopedValueOrDescription: React.FC<{ index: number }> = ({ index }) => {
             <InputGroupInput
               {...textControl(control)}
               placeholder="e.g. Your DB username"
-              className="text-muted-foreground/70"
+              className="text-muted-foreground"
             />
           </InputGroup>
         )}

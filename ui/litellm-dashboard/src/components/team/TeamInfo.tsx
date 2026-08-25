@@ -31,7 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -971,8 +971,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           <Card className="block p-6">
             <p>Rate Limits</p>
             <div className="mt-2">
-              <p>TPM: {info.tpm_limit || "Unlimited"}</p>
-              <p>RPM: {info.rpm_limit || "Unlimited"}</p>
+              <p>TPM: {info.tpm_limit ?? "Unlimited"}</p>
+              <p>RPM: {info.rpm_limit ?? "Unlimited"}</p>
               {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
               {(() => {
                 const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
@@ -1048,7 +1048,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <div key={index} className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary">{policy}</Badge>
-                      {loadingPolicies && <p className="text-xs text-muted-foreground/70">Loading guardrails...</p>}
+                      {loadingPolicies && <p className="text-xs text-muted-foreground">Loading guardrails...</p>}
                     </div>
                     {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
                       <div className="ml-4 pl-3 border-l-2 border-border">
@@ -1743,14 +1743,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 {(() => {
                   const aliasEntries = Object.entries(info.litellm_model_table?.model_aliases ?? {});
                   if (aliasEntries.length === 0) {
-                    return <div className="text-muted-foreground/70">No model aliases configured</div>;
+                    return <div className="text-muted-foreground">No model aliases configured</div>;
                   }
                   return (
                     <div className="mt-1 space-y-1">
                       {aliasEntries.map(([alias, target]) => (
                         <div key={alias} className="text-sm">
                           <span className="font-mono">{alias}</span>
-                          <span className="text-muted-foreground/70">{" -> "}</span>
+                          <span className="text-muted-foreground">{" -> "}</span>
                           <span className="font-mono">{target}</span>
                         </div>
                       ))}
@@ -1760,8 +1760,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </div>
               <div>
                 <p className="font-medium">Rate Limits</p>
-                <div>TPM: {info.tpm_limit || "Unlimited"}</div>
-                <div>RPM: {info.rpm_limit || "Unlimited"}</div>
+                <div>TPM: {info.tpm_limit ?? "Unlimited"}</div>
+                <div>RPM: {info.rpm_limit ?? "Unlimited"}</div>
                 {(() => {
                   const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                   const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
@@ -1811,11 +1811,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </p>
-                <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
+                <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
-                <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
-                <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
+                <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>
+                <div>RPM Limit: {info.team_member_budget_table?.rpm_limit ?? "No Limit"}</div>
               </div>
               <div>
                 <p className="font-medium">Router Settings</p>
@@ -1850,7 +1850,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     {info.router_settings.enable_tag_filtering && <div>Tag Filtering: Enabled</div>}
                   </div>
                 ) : (
-                  <div className="text-muted-foreground/70">No router settings configured</div>
+                  <div className="text-muted-foreground">No router settings configured</div>
                 )}
               </div>
               <div>

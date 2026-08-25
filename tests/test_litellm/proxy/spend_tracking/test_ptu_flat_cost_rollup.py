@@ -196,10 +196,12 @@ async def test_rollup_writes_sentinel_row_with_hourly_cost():
 
 
 @pytest.mark.asyncio
-async def test_rollup_prunes_stale_row_when_config_is_gone():
+async def test_rollup_prunes_a_scanned_deployment_whose_ptu_config_is_gone():
+    """A deployment the run can still see, and can therefore judge, is the one case where
+    retracting the charge is justified."""
     prisma, table = _prisma_with_models(
-        [_model_row(model_info={"team_id": "team_x"})],
-        existing_sentinel_rows=[_sentinel_row("stale-1", "team_x", "gpt-4o-mini-ptu")],
+        [_model_row(model_id="m1", model_info={"team_id": "team_x"})],
+        existing_sentinel_rows=[_sentinel_row("stale-1", "team_x", "m1")],
     )
 
     result = await run_ptu_flat_cost_rollup(prisma, target_date=DAY)
@@ -210,10 +212,8 @@ async def test_rollup_prunes_stale_row_when_config_is_gone():
     where = table.delete_many.await_args.kwargs["where"]
     assert where["date"] == DAY.isoformat()
     assert where["api_key"] == PTU_SENTINEL_API_KEY
-    # the row is garbage because this run did not refresh it, and it is reachable at all
-    # because the run scanned the deployment it belongs to
     assert "lt" in where["updated_at"]
-    assert "model" not in where, "a database-only run has no reason to bound the sweep"
+    assert where["model"]["in"] == ("m1",)
 
 
 @pytest.mark.asyncio
@@ -1812,9 +1812,10 @@ async def test_a_deployment_deleted_from_the_table_keeps_the_day_it_was_charged(
 
 
 @pytest.mark.asyncio
-async def test_a_database_only_run_sweeps_exactly_as_it_did_before():
-    """The bound exists for charges another host declares. A deployment nobody declares any
-    more still has its leftover row swept, which is what the table-only sweep always did."""
+async def test_a_charge_the_run_cannot_reassess_is_left_alone():
+    """A written charge records capacity that was reserved. A deployment absent from every
+    source this run reads cannot be reassessed, and another host may be the one declaring
+    it, so retracting the charge would drop money the provider still invoiced."""
     table = _FakeSentinelTable()
     table.seed("t", DAY, "dep-gone", 480.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
     prisma = _prisma_for(
@@ -1824,7 +1825,7 @@ async def test_a_database_only_run_sweeps_exactly_as_it_did_before():
 
     await run_scheduled_ptu_rollup(prisma, pod_lock_manager=_pod_lock(acquired=True), target_date=DAY)
 
-    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-gone") not in table.rows
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-gone") in table.rows
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-live") in table.rows
 
 
@@ -2047,19 +2048,29 @@ def test_the_router_lookup_returns_none_outside_a_proxy():
             sys.modules["litellm.proxy.proxy_server"] = real
 
 
-@pytest.mark.parametrize("chunk", [None, ("dep-a", "dep-b")], ids=["unbounded", "bounded"])
-def test_the_prune_filter_is_a_plain_dict(chunk):
+def test_the_prune_filter_is_a_plain_dict():
     """The query builder serialises the mapping it is handed and rejects a read-only view of
     one, which the in-memory table in these tests accepts happily. Only a live run caught it."""
+    chunk = ("dep-a", "dep-b")
     predicate = ptu_rollup._prune_filter(date_str=DAY.isoformat(), cutoff=datetime.now(timezone.utc), chunk=chunk)
 
     assert type(predicate) is dict
     assert type(predicate["updated_at"]) is dict
-    if chunk is None:
-        assert "model" not in predicate
-    else:
-        assert type(predicate["model"]) is dict
-        assert predicate["model"]["in"] == chunk
+    assert type(predicate["model"]) is dict
+    assert predicate["model"]["in"] == chunk
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_scanned_nothing_issues_no_delete_statements():
+    """The window where a master-key rotation wipes and recreates the model table. A run that
+    can see no deployment can reassess none of them, so it must not reach for the day's rows."""
+    table = _FakeSentinelTable()
+    table.seed("t", DAY, "dep-orphan", 240.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+    await run_ptu_flat_cost_rollup(_prisma_for([], table), target_date=DAY)
+
+    assert table.delete_many_calls == []
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-orphan") in table.rows
 
 
 @pytest.mark.asyncio

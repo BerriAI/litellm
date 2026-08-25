@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
 import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -352,7 +352,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
-    classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
+    classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
     classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
@@ -368,6 +368,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
     adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
     returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
+    tierModelParams: complexityRouterConfig.tier_model_params,
     tierBoundaries: complexityRouterConfig.tier_boundaries,
     tokenThresholds: complexityRouterConfig.token_thresholds,
     dimensionWeights: complexityRouterConfig.dimension_weights,

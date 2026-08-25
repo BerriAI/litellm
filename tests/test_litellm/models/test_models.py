@@ -39,6 +39,7 @@ from litellm.models.verification_token import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_VerificationToken,
 )
+from pydantic import ValidationError
 
 
 class TestBudget:
@@ -421,7 +422,7 @@ class TestBudgetTableFull:
         assert budget.max_budget == 10.0
 
     def test_full_requires_created_at(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_BudgetTableFull(budget_id="b1")
 
 
@@ -480,7 +481,7 @@ class TestMCPServerTable:
         assert server.env == {}
 
     def test_mcp_server_requires_transport(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_MCPServerTable(server_id="s1")
 
 
@@ -538,7 +539,7 @@ class TestManagedTables:
         assert table.flat_model_file_ids == ["file-abc"]
 
     def test_managed_object_table_requires_purpose(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LiteLLM_ManagedObjectTable(
                 unified_object_id="o1", model_object_id="m1", file_object={}
             )

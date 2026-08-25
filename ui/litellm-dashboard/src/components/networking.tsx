@@ -58,6 +58,7 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -1045,6 +1046,8 @@ export interface UserInfoV2Response {
   sso_user_id: string | null;
   teams: string[];
   object_permission?: ObjectPermission | null;
+  model_max_budget?: ModelMaxBudget | null;
+  model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
 }
 
 /**
@@ -1407,6 +1410,7 @@ export const userDailyActivityCall = async (
   page: number = 1,
   userId: string | null = null,
   includeCurrentUtcDay: boolean = false,
+  apiKey: string | null = null,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1420,6 +1424,7 @@ export const userDailyActivityCall = async (
     extraQueryParams: {
       user_id: userId,
       include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+      api_key: apiKey,
     },
   });
 };
@@ -2502,11 +2507,12 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  userId: string | null = null,
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
+  const [userId = null, includeCurrentUtcDay = false, apiKey = null] = options;
   try {
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -2520,7 +2526,12 @@ export const userDailyActivityAggregatedCall = async (
         start_date: formatDate(startTime),
         end_date: formatDate(endTime),
         timezone: new Date().getTimezoneOffset().toString(),
-        user_id: userId || undefined,
+        // Passed raw, matching the paginated caller: both serializers drop null and undefined,
+        // and both keep "". An empty filter must not vanish, or a request scoped to one user or
+        // key would silently widen into an unscoped, proxy-wide read.
+        user_id: userId,
+        include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+        api_key: apiKey,
       },
     });
   } catch (error) {

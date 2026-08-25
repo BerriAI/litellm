@@ -16,7 +16,8 @@ import {
   ClassifierFallback,
   ClassifierType,
   ComplexityRouterConfigValue,
-  DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+  DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
+  MIN_QUOTED_CONTEXT_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
@@ -149,6 +150,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const classifierModelMissing =
     showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
+  const contextBudget = value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS;
+  const contextBudgetQuotesNothing = contextBudget > 0 && contextBudget < MIN_QUOTED_CONTEXT_TURN_CHARS;
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
@@ -167,9 +170,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         classifierType === "llm"
           ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
           : undefined,
-      classifier_context_per_turn_chars:
+      classifier_context_budget_chars:
         classifierType === "llm"
-          ? value.classifier_context_per_turn_chars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS
+          ? value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS
           : undefined,
       classifier_context_include_assistant_turns:
         classifierType === "llm" ? value.classifier_context_include_assistant_turns : undefined,
@@ -235,10 +238,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
-  const handleClassifierContextPerTurnCharsChange = (perTurnChars: number | null) => {
+  const handleClassifierContextBudgetCharsChange = (budgetChars: number | null) => {
     onChange({
       ...value,
-      classifier_context_per_turn_chars: perTurnChars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+      classifier_context_budget_chars: budgetChars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
     });
   };
 
@@ -309,8 +312,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div>
             <div className="flex items-center gap-2 mb-1">
               <strong className="font-semibold">Classification Rubric</strong>
-              <SimpleTooltip content="Every rubric uses the same four tiers and the same tier definitions. They differ only in the worked examples that show the classifier where the boundary between tiers sits.">
-                <Info className="size-4 text-muted-foreground/70" />
+              <SimpleTooltip content="Every rubric uses the same four tiers. They differ in the worked examples that show the classifier where the boundary between tiers sits, and the Business rubric also rewrites the tier definitions for business traffic.">
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <SimpleTooltip
@@ -411,17 +414,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             </span>
           </div>
           <div>
-            <strong className="block mb-1 font-semibold">Context Per-Turn Character Limit</strong>
+            <strong className="block mb-1 font-semibold">Context Character Budget</strong>
             <Input
               type="number"
-              value={value.classifier_context_per_turn_chars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS}
+              value={value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS}
               onChange={(event) =>
-                handleClassifierContextPerTurnCharsChange(event.target.value === "" ? null : event.target.valueAsNumber)
+                handleClassifierContextBudgetCharsChange(event.target.value === "" ? null : event.target.valueAsNumber)
               }
-              min={1}
+              min={0}
               className="w-full"
             />
-            <span className="text-xs text-muted-foreground">Prior turns longer than this are truncated.</span>
+            <span className="text-xs text-muted-foreground">
+              Total characters of prior conversation sent to the classifier. Turns are taken newest first and quoted
+              whole while they fit, so a short conversation is never cut.
+            </span>
+            {contextBudgetQuotesNothing && (
+              <span className="block text-xs text-destructive">
+                Under {MIN_QUOTED_CONTEXT_TURN_CHARS} characters there is no room to quote a turn that does not already
+                fit, so a long conversation reaches the classifier with no context at all. Set Context Window Size to 0
+                to turn context off deliberately.
+              </span>
+            )}
           </div>
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -433,7 +446,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               />
               <strong className="font-semibold">Include Assistant Turns</strong>
               <SimpleTooltip content="Off by default. Enabling it changes tier decisions, and therefore spend, for an existing router, and sends assistant text to the classifier model, which may be a different provider than the routed model.">
-                <Info className="size-4 text-muted-foreground/70" />
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <span className="text-xs text-muted-foreground">
@@ -451,7 +464,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div className="flex items-center gap-2 mb-1">
             <strong className="font-semibold">Custom Technical Keywords</strong>
             <SimpleTooltip content="Domain-specific terms appended to the built-in technical keyword list. Prompts containing these terms score higher on the technical dimension and route to more capable models.">
-              <Info className="size-4 text-muted-foreground/70" />
+              <Info className="size-4 text-muted-foreground" />
             </SimpleTooltip>
           </div>
           <span className="block mb-2 text-xs text-muted-foreground">

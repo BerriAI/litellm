@@ -14,7 +14,8 @@ export type ComplexityTier = "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
 export interface KeywordTierRule {
   id: string;
   keywords: string[];
-  tier: ComplexityTier;
+  /** A built-in tier name, or with a custom tier set, one of the defined tier names. */
+  tier: string;
 }
 
 interface KeywordTierRulesProps {
@@ -51,7 +52,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
         <div className="flex items-center gap-2">
           <h4 className="m-0 text-xl font-semibold text-foreground">Keyword Tier Overrides</h4>
           <SimpleTooltip content="Match known terms and force the request straight to a chosen complexity tier, bypassing rule-based scoring.">
-            <Info className="size-4 text-muted-foreground/70" />
+            <Info className="size-4 text-muted-foreground" />
           </SimpleTooltip>
         </div>
         <Button variant="outline" onClick={addRule}>
@@ -99,7 +100,7 @@ const KeywordTierRules: React.FC<KeywordTierRulesProps> = ({ rules, onChange, ti
                     <Select
                       items={tierOptions(tierLabels)}
                       value={rule.tier}
-                      onValueChange={(tier: ComplexityTier | null) => tier && updateRule(rule.id, { tier })}
+                      onValueChange={(tier: string | null) => tier && updateRule(rule.id, { tier })}
                     >
                       <SelectTrigger aria-label={`Route keyword rule ${index + 1} to tier`} className="w-full">
                         <SelectValue />

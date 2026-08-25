@@ -2,6 +2,7 @@
 AUTO ROUTER MANAGEMENT ENDPOINTS
 
 POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
+POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
 from collections.abc import Mapping, Sequence
@@ -35,7 +36,9 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    SHADOW_EVAL_TURN_VALVE,
     AutoRouterBenchmarkGroup,
     AutoRouterBenchmarksResponse,
     AutoRouterBenchmarkTotals,
@@ -43,6 +46,8 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    ComplexityRouterConfigValidationRequest,
+    ComplexityRouterConfigValidationResponse,
     RequestComplexityRouterConfig,
     ShadowEvalDirection,
     ShadowEvalJobKeyResponse,
@@ -130,12 +135,13 @@ async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -
     return await prisma_client.db.query_raw(query, *args)
 
 
-async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
+async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> None:
     """Allow exactly the callers who could create this router.
 
-    Routing a prompt can spend money (an `llm` classifier config calls its classifier, a
-    semantic config embeds the prompt), so this is gated like a write rather than a read:
-    a proxy admin, or a team admin naming their own team, matching /model/new.
+    Both dry runs are gated like the write they rehearse rather than as reads: a proxy
+    admin, or a team admin naming their own team, matching /model/new. Routing a test
+    prompt can also spend money (an `llm` classifier config calls its classifier, a
+    semantic config embeds the prompt), so a read-level gate would be too loose anyway.
     """
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
@@ -149,7 +155,7 @@ async def _authorize_routing_test(user_api_key_dict: UserAPIKeyAuth, team_id: st
         raise HTTPException(
             status_code=403,
             detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
-                "error": f"User does not have permission to test an auto router. Your role={user_api_key_dict.user_role}. Test as a PROXY_ADMIN, or as a team admin by specifying a team_id."
+                "error": f"User does not have permission to dry-run an auto router. Your role={user_api_key_dict.user_role}. Call as a PROXY_ADMIN, or as a team admin by specifying a team_id."
             },
         )
 
@@ -239,6 +245,35 @@ async def _authorize_models_this_test_can_call(
 
 
 @router.post(
+    "/auto_router/validate_complexity_router_config",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    response_model=ComplexityRouterConfigValidationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def validate_complexity_router_config(
+    data: ComplexityRouterConfigValidationRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ComplexityRouterConfigValidationResponse:
+    """
+    Validate a complexity-router config without saving it.
+
+    Runs the same check every write path runs (the router's own pydantic model), so a form can
+    show the backend's exact verdict while the operator is still editing rather than after a
+    rejected save. Gated exactly like the save it rehearses: a proxy admin, or a team admin
+    naming their own team. Nothing is created, routed, or billed.
+    """
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+
+    from litellm.router_utils.auto_router_model_naming import (
+        validate_complexity_router_config_write,
+    )
+
+    error: Final = validate_complexity_router_config_write(data.complexity_router_config)
+    return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+@router.post(
     "/auto_router/test_routing",
     tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
@@ -270,9 +305,17 @@ async def preview_auto_router_routing(
     }
     ```
     """
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+        user_model,
+    )
+    from litellm.proxy.utils import get_available_models_for_user
 
-    await _authorize_routing_test(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
     if llm_router is None:
         raise HTTPException(
@@ -327,9 +370,19 @@ async def preview_auto_router_routing(
             },
         )
 
+    available_models: Final = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=data.team_id,
+        user_api_key_cache=user_api_key_cache,
+    )
     return AutoRouterRoutingTestResponse(
         routed_model=hook_response.model,
-        routed_model_configured=hook_response.model in frozenset(llm_router.get_model_names()),
+        routed_model_configured=hook_response.model in frozenset(available_models),
         routing_decision=hook_response.routing_decision,
     )
 
@@ -458,6 +511,53 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     )
 
 
+def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
+    """``(model_name, kind)`` for a deployment whose routing the session rollup records.
+
+    Kinds come from ``classify_strategy_router_model``, the same rule the Router registers a
+    deployment by, so this arm cannot disagree with the arm that stamped ``router_type`` onto
+    the session rows. Semantic auto-routers return None: they record no routing decision, so
+    they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
+    value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
+    """
+    if not isinstance(deployment, Mapping):
+        return None
+    litellm_params: Final = deployment.get("litellm_params")
+    router_name: Final = deployment.get("model_name")
+    if not (isinstance(litellm_params, Mapping) and isinstance(router_name, str) and router_name):
+        return None
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str):
+        return None
+    kind: Final = classify_strategy_router_model(model)
+    return None if kind is None or kind == "semantic" else (router_name, kind)
+
+
+def _idle_router_groups(
+    llm_router: "Router | None", covered: frozenset[tuple[str, str]]
+) -> tuple[AutoRouterBenchmarkGroup, ...]:
+    """Zeroed groups for configured strategy routers the window's traffic did not cover.
+
+    The dashboard's router picker has to list a router the moment it is created rather than
+    once it has spent something, so the registry drives the list and the rollup only supplies
+    the measures. ``_summed_agg_row`` over no sessions is already the zero element of the
+    fold, so a group with every measure at zero costs one relabel rather than a literal that
+    would go stale the next time the response grows a field.
+    """
+    if llm_router is None:
+        return ()
+    zero: Final = _summed_agg_row(())
+    idle: Final = frozenset(
+        key
+        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        if key is not None and key not in covered
+    )
+    return tuple(
+        _benchmark_group(zero.model_copy(update=MappingProxyType({"router_name": name, "router_type": kind})))
+        for name, kind in sorted(idle)
+    )
+
+
 @router.get(
     "/auto_router/benchmarks",
     tags=("auto router",),
@@ -480,8 +580,13 @@ async def get_auto_router_benchmarks(
     overlaps it: its last turn is on or after start_date and its first turn is on or before
     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
+
+    The rollup supplies the measures, never the list. Which routers appear comes from the
+    model registry, so one shows up as soon as it is configured and reads zero until it
+    serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+    window recorded.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     _require_admin_viewer(user_api_key_dict, "view auto-router benchmarks across the deployment")
     if prisma_client is None:
@@ -503,11 +608,14 @@ async def get_auto_router_benchmarks(
         (end_day + timedelta(days=1)).isoformat(),
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
-    groups: Final = tuple(_benchmark_group(row) for row in rows)
+    groups: Final = (
+        *(_benchmark_group(row) for row in rows),
+        *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
+    )
     return AutoRouterBenchmarksResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
         end_date=end_day.strftime("%Y-%m-%d"),
-        routers_in_scope=len(rows),
+        routers_in_scope=len(groups),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
     )
@@ -611,12 +719,19 @@ _ATTEMPT_AGG_BY_TIER_SQL: Final = "SELECT COALESCE(tier, 'UNCLASSIFIED') AS grp,
 _ATTEMPT_AGG_BY_MODEL_SQL: Final = "SELECT COALESCE(real_model, 'unknown') AS grp," + _ATTEMPT_AGG_SELECT
 _ATTEMPT_AGG_BY_LEG_SQL: Final = "SELECT job_id AS grp," + _ATTEMPT_AGG_SELECT
 
+# These guards derive spend from attempt rows, the cross-pod authority; the sampler also
+# reads the live counter, so admission can stop before a row-based guard would fire (safe
+# direction, and mid-deploy rows from old pods price as judge-only until the deploy ends).
 _SWEEP_FINISHED_JOBS_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob" j SET stopped_at = (NOW() AT TIME ZONE 'utc')
 WHERE j.api_key_id = ANY($1::text[]) AND j.stopped_at IS NULL
   AND (
     j.ends_at <= (NOW() AT TIME ZONE 'utc')
     OR (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_turns
+    OR (
+      j.max_budget IS NOT NULL
+      AND (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_budget
+    )
   )
 """
 
@@ -630,7 +745,7 @@ WHERE job_id = ANY($1::text[])
 """
 
 _ATTEMPT_COUNTS_SQL: Final = """
-SELECT a.job_id, COUNT(*)::int AS attempt_count
+SELECT a.job_id, COUNT(*)::int AS attempt_count, COALESCE(SUM(a.judge_cost + a.shadow_cost), 0)::float AS spend
 FROM "LiteLLM_ShadowEvalAttempt" a
 JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
 WHERE a.job_id = ANY($1::text[]) AND (j.stopped_at IS NULL OR a.created_at <= j.stopped_at)
@@ -646,6 +761,10 @@ WHERE group_id = $1 AND stopped_by IS NULL
     SELECT 1 FROM "LiteLLM_ShadowEvalJob" k
     WHERE k.group_id = $1 AND k.stopped_at IS NULL
       AND (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_turns
+      AND (
+        k.max_budget IS NULL
+        OR (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_budget
+      )
   )
 """
 
@@ -653,6 +772,7 @@ WHERE group_id = $1 AND stopped_by IS NULL
 class _AttemptCountRow(BaseModel):
     job_id: str
     attempt_count: int
+    spend: float
 
 
 _ATTEMPT_COUNT_ROWS: Final = TypeAdapter(list[_AttemptCountRow])
@@ -719,6 +839,7 @@ class _LegRow(BaseModel):
     judge_model: str
     shadow_percentage: float
     max_turns: int
+    max_budget: float | None = None
     created_at: datetime
     ends_at: datetime
     stopped_at: datetime | None = None
@@ -738,22 +859,25 @@ class _LegRow(BaseModel):
 _LEG_ROWS: Final = TypeAdapter(list[_LegRow])
 
 
-async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_LegRow]) -> Mapping[str, int]:
-    """Each leg's attempt count by leg id, judged and errored alike, in one grouped read.
-    It is the same count the sampler budgets against max_turns, so the derived status
-    flips to completed exactly when sampling actually ends. A stamped leg's count freezes
-    at its stopped_at: in-flight attempts that land after the stamp are excluded, so they
-    can never reclassify a leg that was stopped under budget as budget-spent."""
+async def _leg_attempt_counts(prisma_client: "PrismaClient", legs: Sequence[_LegRow]) -> Mapping[str, _AttemptCountRow]:
+    """Each leg's attempt count and recorded spend by leg id, judged and errored alike, in
+    one grouped read. They are the same figures the sampler budgets against max_turns and
+    max_budget, so the derived status flips to completed exactly when sampling actually
+    ends. A stamped leg's figures freeze at its stopped_at: in-flight attempts that land
+    after the stamp are excluded, so they can never reclassify a leg that was stopped
+    under budget as budget-spent."""
     if not legs:
         return MappingProxyType({})
     rows: Final = _ATTEMPT_COUNT_ROWS.validate_python(
         await _query_raw(prisma_client, _ATTEMPT_COUNTS_SQL, [leg.id for leg in legs])  # mutable-ok: query param
         or ()
     )
-    return MappingProxyType({row.job_id: row.attempt_count for row in rows})
+    return MappingProxyType({row.job_id: row for row in rows})
 
 
-def _group_response(group_id: str, legs: Sequence[_LegRow], attempt_counts: Mapping[str, int]) -> ShadowEvalJobResponse:
+def _group_response(
+    group_id: str, legs: Sequence[_LegRow], attempt_counts: Mapping[str, _AttemptCountRow]
+) -> ShadowEvalJobResponse:
     """The one constructor of a job response: the caller names the group and passes that
     group's legs. Config is read off the first leg because every leg carries the same copy,
     written by one create_many. No caller may serialize a raw row (that would leak a leg id
@@ -765,8 +889,10 @@ def _group_response(group_id: str, legs: Sequence[_LegRow], attempt_counts: Mapp
             ShadowEvalJobKeyResponse(
                 api_key_id=leg.api_key_id,
                 max_turns=leg.max_turns,
+                max_budget=leg.max_budget,
                 stopped_at=leg.stopped_at,
-                attempt_count=attempt_counts.get(leg.id, 0),
+                attempt_count=stats.attempt_count if (stats := attempt_counts.get(leg.id)) else 0,
+                spend=round(stats.spend, 6) if stats else 0.0,
             )
             for leg in sorted(legs, key=lambda leg: leg.api_key_id)
         ),
@@ -872,11 +998,12 @@ async def start_shadow_eval(
     serve and duplicates them against baseline_model. A key can hold one active job per
     direction, so both questions can run at once.
 
-    Shadow responses are never served to users. Each key samples until it has judged
-    max_turns turns of its own traffic, the job's window ends, or the job is stopped, so one
-    key running out of budget does not end sampling for the others; sampling changes
-    propagate to pods within about 10 seconds. Shadow and judge calls bill to the shadowed
-    key but are excluded from request counts and auto-router adoption metrics.
+    Shadow responses are never served to users. Each key samples until its recorded eval
+    spend, the shadow and judge calls' own cost, reaches max_budget dollars, the job's
+    window ends, or the job is stopped, so one key running out of budget does not end
+    sampling for the others; sampling changes propagate to pods within about 10 seconds.
+    Shadow and judge calls bill to the shadowed key but are excluded from request counts
+    and auto-router adoption metrics.
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
@@ -901,7 +1028,7 @@ async def start_shadow_eval(
             ),
         )
 
-    # A job whose window passed or whose turn budget ran out stopped sampling on its own,
+    # A job whose window passed or whose budget ran out stopped sampling on its own,
     # but its legs still hold their slots in the per-key, per-direction partial unique index
     # until stamped; free them so a new eval can start. Sweeping both directions is deliberate.
     requested: Final = list(data.api_key_ids)  # mutable-ok: query param
@@ -932,7 +1059,8 @@ async def start_shadow_eval(
         "baseline_model": data.baseline_model,
         "judge_model": data.judge_model,
         "shadow_percentage": data.shadow_percentage,
-        "max_turns": data.max_turns,
+        "max_turns": SHADOW_EVAL_TURN_VALVE,
+        "max_budget": data.max_budget,
         "created_by": user_api_key_dict.user_id,
         "created_at": now,
         "ends_at": ends_at,
@@ -956,7 +1084,8 @@ async def start_shadow_eval(
         keys=tuple(
             ShadowEvalJobKeyResponse(
                 api_key_id=api_key_id,
-                max_turns=data.max_turns,
+                max_turns=SHADOW_EVAL_TURN_VALVE,
+                max_budget=data.max_budget,
                 key_alias=labels[api_key_id].key_alias,
                 key_name=labels[api_key_id].key_name,
             )

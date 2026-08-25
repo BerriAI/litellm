@@ -38,6 +38,28 @@ TQ005   `litellm.<attr> = ...` module-global mutation. The SDK's module globals 
         process-wide, so this is the same leak as TQ004 one level up, and it is
         what the 491-line save/restore conftest exists to paper over. Inject the
         dependency or use a fixture that restores it.
+TQ006   A `pytest.skip` reached only when a credential-shaped environment variable is
+        absent. On a runner that does not hold that credential the guard fires every
+        time, so the test reports green having executed nothing and is indistinguishable
+        from coverage that exists. Fake the provider at the HTTP boundary, or fail
+        loudly, so a missing credential shows up as a missing credential. Absence is
+        what the condition has to say -- `not key`, `key is None`, `"KEY" not in
+        os.environ` -- since a skip taken when the credential is present is somebody's
+        deliberate branch. The gate follows one local or module-level binding, which is
+        the `key = os.getenv(...)` then `if not key: pytest.skip(...)` shape most of
+        these use.
+TQ008   A `patch(...)` whose target is a `litellm.` internal. Patching the SDK's own
+        functions pins the test to the current wiring instead of the behaviour, and it
+        is the idiom the suite reaches for instead of faking the HTTP boundary. Mocking
+        a third-party client, a transport, or anything outside `litellm.` is untouched.
+TQ007   A module global that a conftest saves before every test and restores after it.
+        The save/restore list is a hand-maintained inventory of the leaks the suite
+        already knows about, so it is allowed to shrink and never to grow: a new entry
+        means one more global whose lifetime the tests manage instead of the code owning
+        it. Give the consumers an injection seam rather than another snapshot line. The
+        names are read from the keys the conftest assigns directly and from whatever the
+        save loop iterates, including a module-level tuple or dict it names rather than
+        spells out.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -84,11 +106,13 @@ from __future__ import annotations
 
 import ast
 import io
+import os
 import re
 import sys
 import tokenize
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from multiprocessing import Pool
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, NamedTuple
@@ -109,6 +133,16 @@ MOCK_INSPECTION_ATTRIBUTES: Final = frozenset((
 MOCK_ASSERTION_PREFIX: Final = "assert_"
 
 PATCH_MEMBERS: Final = frozenset(("object", "dict", "multiple"))
+
+ENVIRON_READERS: Final = frozenset(("os.environ.get", "environ.get", "os.getenv", "getenv"))
+ENVIRON_MAPPINGS: Final = frozenset(("os.environ", "environ"))
+SKIP_CALLS: Final = frozenset(("pytest.skip", "skip"))
+CONFTEST_NAME: Final = "conftest.py"
+SDK_MODULE: Final = "litellm"
+
+CREDENTIAL_NAME_RE: Final = re.compile(
+    r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
+)
 
 FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -439,6 +473,257 @@ def iter_global_mutation_violations(path: Path, tree: ast.Module) -> Iterator[Vi
                 )
 
 
+def _is_sdk_internal(dotted: str) -> bool:
+    return dotted == SDK_MODULE or dotted.startswith(f"{SDK_MODULE}.")
+
+
+def _sdk_import_bindings(tree: ast.Module) -> Iterator[tuple[str, str]]:
+    """(local name, dotted path) for every import that binds something under `litellm`."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            yield from (
+                (alias.asname, alias.name) if alias.asname else (root, root)
+                for alias in node.names
+                if _is_sdk_internal(alias.name)
+                for root in (alias.name.partition(".")[0],)
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module and _is_sdk_internal(node.module):
+            yield from ((alias.asname or alias.name, f"{node.module}.{alias.name}") for alias in node.names)
+
+
+def _sdk_aliases(tree: ast.Module) -> Mapping[str, str]:
+    """Local names bound to something under `litellm`, mapped to the path they stand for.
+
+    `from litellm.llms.openai.chat import handler` then `patch.object(handler.X, ...)`
+    reaches the same internal as the dotted string form and has to read the same way.
+    """
+    return MappingProxyType({name: dotted for name, dotted in _sdk_import_bindings(tree)})
+
+
+def _resolved(dotted: str, aliases: Mapping[str, str]) -> str:
+    root, _, rest = dotted.partition(".")
+    base: Final = aliases.get(root, root)
+    return f"{base}.{rest}" if rest else base
+
+
+def _patch_targets(call: ast.Call, aliases: Mapping[str, str]) -> Iterator[str]:
+    """What a patch installer is replacing: the dotted string it names, or the
+    attribute chain handed to `patch.object` / `patch.dict`, resolved through the
+    module's imports so a locally bound SDK object reads as its full path."""
+    for first in call.args[:1]:
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            yield first.value
+        elif dotted := _dotted_name(first):
+            yield _resolved(dotted, aliases)
+
+
+def iter_internal_patch_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    aliases: Final = _sdk_aliases(tree)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _is_patch_installer(_dotted_name(node.func))):
+            continue
+        for target in _patch_targets(node, aliases):
+            if _is_sdk_internal(target):
+                yield Violation(
+                    path,
+                    node.lineno,
+                    "TQ008",
+                    f"patches `{target}`, an SDK internal, so the test is pinned to how the code is "
+                    "wired rather than what it does; fake the HTTP boundary (respx / MockTransport) "
+                    f"or inject the collaborator (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+                )
+
+
+def _environ_keys(node: ast.AST) -> Iterator[str]:
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Call) and _dotted_name(inner.func) in ENVIRON_READERS:
+            yield from (
+                argument.value
+                for argument in inner.args[:1]
+                if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+            )
+        elif isinstance(inner, ast.Subscript) and _dotted_name(inner.value) in ENVIRON_MAPPINGS:
+            if isinstance(inner.slice, ast.Constant) and isinstance(inner.slice.value, str):
+                yield inner.slice.value
+        elif isinstance(inner, ast.Compare) and any(isinstance(op, (ast.In, ast.NotIn)) for op in inner.ops):
+            if any(_dotted_name(right) in ENVIRON_MAPPINGS for right in inner.comparators):
+                if isinstance(inner.left, ast.Constant) and isinstance(inner.left.value, str):
+                    yield inner.left.value
+
+
+def _credential_bindings(tree: ast.Module) -> Mapping[str, str]:
+    return MappingProxyType({
+        target.id: key
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for key in tuple(k for k in _environ_keys(node.value) if CREDENTIAL_NAME_RE.search(k))[:1]
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    })
+
+
+def _absence_operands(test: ast.expr) -> Iterator[ast.expr]:
+    """The subtrees of an `if` condition that are true when what they name is missing."""
+    for node in ast.walk(test):
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            yield node.operand
+        elif isinstance(node, ast.Compare) and _is_absent_from_environ(node):
+            yield node
+        elif isinstance(node, ast.Compare) and _is_compared_to_none(node):
+            yield node.left
+
+
+def _is_absent_from_environ(node: ast.Compare) -> bool:
+    return any(isinstance(op, ast.NotIn) for op in node.ops) and any(
+        _dotted_name(right) in ENVIRON_MAPPINGS for right in node.comparators
+    )
+
+
+def _is_compared_to_none(node: ast.Compare) -> bool:
+    return all(isinstance(op, (ast.Is, ast.Eq)) for op in node.ops) and any(
+        isinstance(right, ast.Constant) and right.value is None for right in node.comparators
+    )
+
+
+def _gating_credential(test: ast.expr, bindings: Mapping[str, str]) -> str | None:
+    return next(
+        (
+            credential
+            for operand in _absence_operands(test)
+            for credential in _named_credentials(operand, bindings)
+        ),
+        None,
+    )
+
+
+def _named_credentials(node: ast.expr, bindings: Mapping[str, str]) -> Iterator[str]:
+    yield from (key for key in _environ_keys(node) if CREDENTIAL_NAME_RE.search(key))
+    yield from (
+        bindings[inner.id] for inner in ast.walk(node) if isinstance(inner, ast.Name) and inner.id in bindings
+    )
+
+
+def iter_credential_skip_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    bindings: Final = _credential_bindings(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        credential: Final = _gating_credential(node.test, bindings)
+        if credential is None:
+            continue
+        for statement in node.body:
+            for inner in ast.walk(statement):
+                if isinstance(inner, ast.Call) and _dotted_name(inner.func) in SKIP_CALLS:
+                    yield Violation(
+                        path,
+                        inner.lineno,
+                        "TQ006",
+                        f"this test skips itself when {credential} is absent, so a run without "
+                        "that credential reports green having executed nothing; fake the provider at "
+                        "the HTTP boundary, or fail loudly so the missing credential is visible "
+                        f"(suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+                    )
+
+
+def _reads_sdk_attribute(node: ast.AST) -> bool:
+    return any(
+        (
+            isinstance(inner, ast.Call)
+            and _dotted_name(inner.func) == "getattr"
+            and bool(inner.args)
+            and _dotted_name(inner.args[0]) == SDK_MODULE
+        )
+        or (isinstance(inner, ast.Attribute) and _dotted_name(inner.value) == SDK_MODULE)
+        for inner in ast.walk(node)
+    )
+
+
+def _subscript_targets(node: ast.AST) -> Iterator[ast.Subscript]:
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Assign):
+            yield from (target for target in inner.targets if isinstance(target, ast.Subscript))
+
+
+def _saves_sdk_attribute_by_key(node: ast.AST) -> Iterator[ast.Subscript]:
+    """Every `<dict>["name"] = <something read off litellm>`, whatever the dict is called.
+
+    Matching on the shape rather than on a list of blessed dict names is what reaches
+    the conftest that builds its snapshot inside a helper and calls the dict `state`.
+    """
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Assign) and _reads_sdk_attribute(inner.value):
+            yield from (target for target in inner.targets if isinstance(target, ast.Subscript))
+
+
+def _saves_sdk_attributes_in_loop(node: ast.For) -> bool:
+    """A save loop reads the SDK and stores under the loop variable, in either order.
+
+    The read is often bound to a local first (`val = getattr(litellm, attr)`) and only
+    then stored, so the read and the store are separate statements and cannot be
+    required of the same assignment.
+    """
+    if not isinstance(node.target, ast.Name):
+        return False
+    stores_by_key: Final = any(
+        isinstance(subscript.slice, ast.Name) and subscript.slice.id == node.target.id
+        for statement in node.body
+        for subscript in _subscript_targets(statement)
+    )
+    return stores_by_key and any(_reads_sdk_attribute(statement) for statement in node.body)
+
+
+def _module_constants(tree: ast.Module) -> Mapping[str, ast.expr]:
+    return MappingProxyType({
+        target.id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    })
+
+
+def _string_members(node: ast.expr) -> Iterator[tuple[str, int]]:
+    """The string names a collection literal holds: a tuple/list's items, a dict's keys."""
+    elements: Final = (
+        node.elts if isinstance(node, (ast.Tuple, ast.List)) else node.keys if isinstance(node, ast.Dict) else ()
+    )
+    yield from (
+        (element.value, element.lineno)
+        for element in elements
+        if isinstance(element, ast.Constant) and isinstance(element.value, str)
+    )
+
+
+def _snapshotted_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
+    constants: Final = _module_constants(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            yield from (
+                (subscript.slice.value, subscript.lineno)
+                for subscript in _saves_sdk_attribute_by_key(node)
+                if isinstance(subscript.slice, ast.Constant) and isinstance(subscript.slice.value, str)
+            )
+        elif isinstance(node, ast.For) and _saves_sdk_attributes_in_loop(node):
+            iterable: Final = constants.get(node.iter.id) if isinstance(node.iter, ast.Name) else node.iter
+            if iterable is not None:
+                yield from _string_members(iterable)
+
+
+def iter_conftest_inventory_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    if path.name != CONFTEST_NAME:
+        return
+    seen: Final = dict(reversed(tuple(_snapshotted_names(tree))))
+    for name, line in sorted(seen.items(), key=lambda item: item[1]):
+        yield Violation(
+            path,
+            line,
+            "TQ007",
+            f"`litellm.{name}` is saved and restored around every test in this tree; the list is an "
+            "inventory of known leaks and may only shrink, so give the consumers an injection seam "
+            f"instead of adding to it (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+        )
+
+
 def check_file(path: Path) -> tuple[Violation, ...]:
     try:
         source: Final = path.read_text(encoding="utf-8")
@@ -458,6 +743,9 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_sys_path_violations(path, tree),
             *iter_environ_violations(path, tree),
             *iter_global_mutation_violations(path, tree),
+            *iter_credential_skip_violations(path, tree),
+            *iter_conftest_inventory_violations(path, tree),
+            *iter_internal_patch_violations(path, tree),
         )
         if violation.line not in skip
     )
@@ -472,13 +760,36 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
             yield candidate
 
 
+PARALLEL_MIN_PATHS = 200
+MAX_WORKERS = 8
+
+
+def _worker_count(path_count: int) -> int:
+    """1 when the run is too small to repay process startup, else one worker per
+    core up to MAX_WORKERS."""
+    if path_count < PARALLEL_MIN_PATHS:
+        return 1
+    return max(1, min(os.cpu_count() or 1, MAX_WORKERS))
+
+
+def scan_paths(paths: Sequence[Path]) -> tuple[Violation, ...]:
+    """check_file over every path. Pure per-file work, so it fans out across
+    processes; callers sort, which is what keeps output order stable."""
+    workers = _worker_count(len(paths))
+    if workers == 1:
+        return tuple(v for path in paths for v in check_file(path))
+    with Pool(workers) as pool:
+        return tuple(v for found in pool.imap_unordered(check_file, paths, chunksize=32) for v in found)
+
+
 def main(argv: Sequence[str]) -> int:
     paths: Final = tuple(a for a in argv if not a.startswith("-"))
     if not paths:
         print("usage: check_test_quality.py <files-or-dirs>...", file=sys.stderr)
         return 2
 
-    violations: Final = sorted(v for path in collect_paths(paths) for v in check_file(path))
+    targets: Final = tuple(collect_paths(paths))
+    violations: Final = sorted(scan_paths(targets))
     for violation in violations:
         print(violation.render())
 

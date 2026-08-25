@@ -144,11 +144,13 @@ lint-install:
 	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
-# Diff-scoped format check, identical to test-linting.yml's "Check ruff format" step:
+# Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
-# format issue elsewhere doesn't block an unrelated commit.
+# format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
+# recursively, so 'litellm/*.py' covers nested modules and the top-level files that
+# CI's 'litellm/**/*.py' skips, which makes this target a superset of the CI step.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	@files=$$(git diff --name-only origin/litellm_internal_staging...HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' || true); \
+	@files=$$(git diff --name-only --diff-filter=ACMR origin/litellm_internal_staging...HEAD -- 'litellm/*.py' | grep -v '^litellm/enterprise/' || true); \
 	if [ -z "$$files" ]; then \
 		echo "No changed litellm Python files to format-check."; \
 	else \
@@ -158,6 +160,7 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) ruff check . && cd ..
+	$(UV_RUN) ruff check --config ruff-tests.toml tests
 
 # faster linter for developing ...
 # inspiration from:
@@ -203,7 +206,8 @@ lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/type_discipline_gate.py --base origin/litellm_internal_staging
 
 # Test-quality budget (zero-assert / mock-echo tests, sys.path.insert, raw env writes,
-# litellm module-global mutation), counted across tests/ the same delta-vs-base way.
+# litellm module-global mutation, credential-gated skips, conftest snapshot
+# inventory), counted across tests/ the same delta-vs-base way.
 lint-test-quality: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/test_quality_gate.py --base origin/litellm_internal_staging
 

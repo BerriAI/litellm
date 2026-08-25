@@ -346,7 +346,7 @@ export function LogDetailsDrawer({
                       <button
                         type="button"
                         onClick={handleCopyLeftPanelId}
-                        className="text-muted-foreground/70 hover:text-muted-foreground"
+                        className="text-muted-foreground hover:text-foreground"
                         aria-label="Copy trace id"
                       >
                         {copiedLeftPanelId ? <Check className="size-3" /> : <Copy className="size-3" />}

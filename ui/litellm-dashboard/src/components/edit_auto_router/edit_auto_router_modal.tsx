@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
 import { CircleHelp } from "lucide-react";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,12 @@ import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceC
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { normalizeTierModels, resolveComplexityDefaultModel } from "../add_model/complexity_router_tiers";
+import {
+  hydrateTierModelParams,
+  normalizeTierModels,
+  resolveComplexityDefaultModel,
+  serializeTierModelConfigs,
+} from "../add_model/complexity_router_tiers";
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   getKeywordTierRulesError,
@@ -66,13 +71,14 @@ interface EditAutoRouterModalProps {
 // actually renders a control that can set it.
 const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "tier_model_configs",
   "default_model",
   "plan_mode_min_tier",
   "tier_labels",
   "classifier_type",
   "classifier_llm_config",
   "classifier_context_window_size",
-  "classifier_context_per_turn_chars",
+  "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
   "classifier_fallback",
   "session_affinity",
@@ -149,9 +155,12 @@ export const buildUpdatedComplexityRouterConfig = (
   const serializedTierLabels = serializeTierLabels(value.tier_labels);
   const scorerRuns = heuristicScoringRole(value) !== "never";
 
+  const serializedTierModelConfigs = serializeTierModelConfigs(value.tiers, value.tier_model_params);
+
   return {
     ...preservedConfig,
     tiers: value.tiers,
+    ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(value.default_model?.trim() && { default_model: value.default_model }),
     ...(value.plan_mode_min_tier?.trim() && { plan_mode_min_tier: value.plan_mode_min_tier }),
     ...(serializedTierLabels && { tier_labels: serializedTierLabels }),
@@ -166,8 +175,8 @@ export const buildUpdatedComplexityRouterConfig = (
         classifier_context_window_size: value.classifier_context_window_size,
       }),
     ...(value.classifier_type === "llm" &&
-      value.classifier_context_per_turn_chars !== undefined && {
-        classifier_context_per_turn_chars: value.classifier_context_per_turn_chars,
+      value.classifier_context_budget_chars !== undefined && {
+        classifier_context_budget_chars: value.classifier_context_budget_chars,
       }),
     ...(value.classifier_type === "llm" &&
       value.classifier_context_include_assistant_turns !== undefined && {
@@ -342,6 +351,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
         const hydratedComplexityRouterConfig: ComplexityRouterConfigValue = {
           tiers: hydratedTiers,
+          tier_model_params: hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
           default_model: hydratePinnedDefaultModel(
             parsedConfig.default_model,
             modelData.litellm_params?.complexity_router_default_model,
@@ -358,9 +368,9 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             typeof parsedConfig.classifier_context_window_size === "number"
               ? parsedConfig.classifier_context_window_size
               : undefined,
-          classifier_context_per_turn_chars:
-            typeof parsedConfig.classifier_context_per_turn_chars === "number"
-              ? parsedConfig.classifier_context_per_turn_chars
+          classifier_context_budget_chars:
+            typeof parsedConfig.classifier_context_budget_chars === "number"
+              ? parsedConfig.classifier_context_budget_chars
               : undefined,
           classifier_context_include_assistant_turns:
             typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"

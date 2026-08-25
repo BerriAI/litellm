@@ -64,7 +64,7 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
           <span className="text-sm font-medium text-foreground">Session Management</span>
           <Tooltip>
             <TooltipTrigger aria-label="About session management">
-              <Info className="size-3 text-muted-foreground/70" />
+              <Info className="size-3 text-muted-foreground" />
             </TooltipTrigger>
             <TooltipContent>
               Choose between LiteLLM API session management (using previous_response_id) or UI-based session management

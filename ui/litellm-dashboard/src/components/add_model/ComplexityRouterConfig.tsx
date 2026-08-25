@@ -12,7 +12,16 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
-import { resolveComplexityDefaultModel, tierOptions } from "./complexity_router_tiers";
+import {
+  REASONING_EFFORT_OPTIONS,
+  ReasoningEffort,
+  TierModelParamsByTier,
+  pruneTierModelParams,
+  resolveComplexityDefaultModel,
+  setTierModelReasoningEffort,
+  tierOptions,
+} from "./complexity_router_tiers";
+import TierModelEffortRows from "./TierModelEffortRows";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
@@ -23,7 +32,8 @@ export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
-export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
+export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
+export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
@@ -34,7 +44,7 @@ export interface ComplexityTiers {
   REASONING: string[];
 }
 
-export type ClassificationRubric = "legacy" | "agentic" | "chat";
+export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
 
 /** What an unset preset means, matching the backend: the rubric as it shipped before calibration. */
 export const DEFAULT_CLASSIFICATION_RUBRIC: ClassificationRubric = "legacy";
@@ -67,6 +77,13 @@ export const CLASSIFICATION_RUBRIC_DESCRIPTIONS: Record<ClassificationRubric, { 
       description:
         "Drops the engineering examples, for a router serving only conversational traffic that never sees those " +
         "requests.",
+    },
+    business: {
+      label: "Business",
+      description:
+        "Business and sales examples plus business-oriented tier definitions: routine drafting and summarizing " +
+        "stay at Medium, data-determined analysis is Complex, and only decisions under conflicting tradeoffs " +
+        "reach Reasoning. Suits sales, support, and go-to-market traffic.",
     },
   };
 
@@ -122,6 +139,7 @@ export interface ComplexityRouterConfigValue {
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -146,6 +164,12 @@ export interface ComplexityRouterConfigValue {
    * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.
    */
   reasoning_override_min_score?: number;
+  /**
+   * Per-(tier, model) litellm_params, serialized to the sibling tier_model_configs key. The full
+   * params object is held, not just reasoning_effort, so keys authored in config.yaml survive an
+   * edit round-trip.
+   */
+  tier_model_params?: TierModelParamsByTier;
 }
 
 interface ComplexityRouterConfigProps {
@@ -229,6 +253,15 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
+  // An absent list means the proxy does not send the field yet, so every level is offered as before.
+  // An empty list is the group's own answer that its deployments share no level, and is left empty.
+  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
+    modelInfo.map((model) => [
+      model.model_group,
+      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
+    ]),
+  );
+
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
@@ -241,6 +274,18 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     onChange({
       ...value,
       tiers: { ...value.tiers, [tier]: models },
+      tier_model_params: pruneTierModelParams(value.tier_model_params, tier, models),
+    });
+  };
+
+  const handleTierModelEffortChange = (
+    tier: keyof ComplexityTiers,
+    model: string,
+    effort: ReasoningEffort | undefined,
+  ) => {
+    onChange({
+      ...value,
+      tier_model_params: setTierModelReasoningEffort(value.tier_model_params, tier, model, effort),
     });
   };
 
@@ -262,7 +307,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <div className="inline-flex items-center gap-2 mb-4">
         <h4 className="m-0 text-xl font-semibold text-foreground">Complexity Tier Configuration</h4>
         <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-          <Info className="size-4 text-muted-foreground/70" />
+          <Info className="size-4 text-muted-foreground" />
         </SimpleTooltip>
       </div>
 
@@ -291,7 +336,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <div className="flex items-center gap-2 mb-2">
                     <strong className="text-base font-semibold">{label} Tier</strong>
                     <SimpleTooltip content={tierInfo.description}>
-                      <Info className="size-4 text-muted-foreground/70" />
+                      <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                     <span className="text-xs text-muted-foreground">
                       Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
@@ -325,6 +370,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     emptyText="No models found"
                     className={tierMissing ? "w-full border-destructive" : "w-full"}
                   />
+                  <TierModelEffortRows
+                    tierLabel={label}
+                    models={value.tiers[tier]}
+                    effortOptionsByModel={effortOptionsByModel}
+                    paramsByModel={value.tier_model_params?.[tier]}
+                    onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
+                  />
                   {value.tiers[tier].length > 1 && (
                     <span className="text-xs text-muted-foreground">
                       Multiple models selected — the router randomly picks among them per request (or Thompson-samples
@@ -342,7 +394,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             <div className="flex items-center gap-2 mb-2">
               <strong className="text-base font-semibold">Default Model</strong>
               <SimpleTooltip content="Leave empty to follow the tiers. A model chosen here is pinned: it stays the default however the tiers change.">
-                <Info className="size-4 text-muted-foreground/70" />
+                <Info className="size-4 text-muted-foreground" />
               </SimpleTooltip>
             </div>
             <SearchSelect

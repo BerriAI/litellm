@@ -191,7 +191,7 @@ class CustomStreamWrapper:
         custom_llm_provider: str | None = None,
         stream_options=None,
         make_call: Callable | None = None,
-        _response_headers: dict | None = None,
+        _response_headers: dict | httpx.Headers | None = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -2315,10 +2315,18 @@ class CustomStreamWrapper:
         if self.logging_obj is None or not self.chunks:
             return
         try:
-            partial_response: Final = litellm.stream_chunk_builder(chunks=self.chunks)
+            partial_response: Final = litellm.stream_chunk_builder(
+                chunks=self.chunks,
+                messages=self.messages if isinstance(self.messages, list) else None,
+            )
+            if partial_response is None:
+                return
             usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
             if usage is None:
                 return
+            if self.model:
+                partial_response.model = self.model
+            backfill_missing_cache_usage_fields(usage)
             self.logging_obj.model_call_details["combined_usage_object"] = usage
             self.logging_obj.model_call_details["response_cost"] = (
                 self.logging_obj._response_cost_calculator(result=partial_response) or 0.0
@@ -2437,6 +2445,35 @@ class CustomStreamWrapper:
                 return chunk[_length_of_sse_data_prefix:]
 
         return chunk
+
+
+def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:
+    for key in keys:
+        value = getattr(details, key, None)
+        if isinstance(value, int) and not isinstance(value, bool) and value:
+            return value
+    return 0
+
+
+def backfill_missing_cache_usage_fields(usage: Usage) -> None:
+    """Give partial-stream usage the same cache fields a complete stream reports.
+
+    Carries OpenAI-style ``prompt_tokens_details`` counts up to the Anthropic-style
+    top-level keys, defaulting to zero. It must carry the real count rather than a
+    flat zero: downstream readers treat these keys as authoritative once present and
+    skip their own normalization, so a zero here would overwrite a real cache read.
+    """
+    details: Final = usage.prompt_tokens_details
+    if getattr(usage, "cache_read_input_tokens", None) is None:
+        usage.cache_read_input_tokens = _cache_token_count(  # rebind-ok: in-place backfill is the contract
+            details, ("cached_tokens",)
+        )
+    if getattr(usage, "cache_creation_input_tokens", None) is None:
+        usage.cache_creation_input_tokens = _cache_token_count(  # rebind-ok: in-place backfill is the contract
+            details, ("cache_write_tokens", "cache_creation_tokens")
+        )
+    if usage.prompt_tokens_details is None:
+        usage.prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=0)  # rebind-ok: backfill in place
 
 
 _TokenDetails = TypeVar("_TokenDetails", PromptTokensDetailsWrapper, CompletionTokensDetailsWrapper)

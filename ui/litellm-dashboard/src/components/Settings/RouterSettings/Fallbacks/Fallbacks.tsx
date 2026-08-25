@@ -56,7 +56,7 @@ function renderFallbacksChain(
         {list.map((model, i) => (
           <React.Fragment key={model}>
             {i > 0 && (
-              <span className={`${iconWrapperClass} text-muted-foreground/70`}>
+              <span className={`${iconWrapperClass} text-muted-foreground`}>
                 <ArrowRight className="h-3 w-3 shrink-0" />
               </span>
             )}

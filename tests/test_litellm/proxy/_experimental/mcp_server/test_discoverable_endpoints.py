@@ -4,12 +4,18 @@ import hashlib
 import json
 import time
 from base64 import urlsafe_b64encode
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.types.mcp import MCPAuth
+
+if TYPE_CHECKING:
+    import httpx
+
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 # Fixture to mock IP address check for all MCP tests
@@ -2692,13 +2698,6 @@ async def test_token_endpoint_respects_x_forwarded_host():
         (
             "http://localhost:4000/",
             "https",
-            "proxy.example.com",
-            "8443",
-            "https://proxy.example.com:8443",
-        ),
-        (
-            "http://localhost:4000/",
-            "https",
             "proxy.example.com:443",
             None,
             "https://proxy.example.com",
@@ -2956,6 +2955,55 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(caplog, monk
     assert "https://litellm.example.com/ui/mcp/oauth/callback" in msg
     assert "litellm-internal:4000" in msg
     assert "X-Forwarded-Host" in msg
+
+
+@pytest.mark.parametrize(
+    "direct_ip,expect_accepted",
+    [
+        ("10.0.0.7", True),
+        ("203.0.113.5", False),
+    ],
+)
+def test_validate_trusted_redirect_uri_follows_the_xff_trust_gate(direct_ip, expect_accepted, monkeypatch):
+    try:
+        from fastapi import HTTPException, Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = direct_ip
+
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "proxy.example.com",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+    mock_request.headers.__contains__ = lambda self_, name: name in headers
+
+    redirect_uri = "https://proxy.example.com/callback"
+    general_settings = {
+        "use_x_forwarded_for": True,
+        "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+    }
+
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings, create=True):
+        if expect_accepted:
+            validate_trusted_redirect_uri(mock_request, redirect_uri)
+            return
+        with pytest.raises(HTTPException) as exc_info:
+            validate_trusted_redirect_uri(mock_request, redirect_uri)
+
+    assert exc_info.value.status_code == 400
+    assert "proxy.example.com" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -5200,11 +5248,18 @@ async def test_interactive_bridge_gateway_code_for_another_server_is_rejected_40
 async def test_interactive_bridge_authorize_seals_sso_user_into_state():
     """On the short-circuit bridge oauth_delegate arm, authorize captures the SSO user from the UI
     session cookie and seals it (and the target server) into the encrypted OAuth state, so the
-    callback can later mint a user-bound gateway code; it still proceeds to the upstream redirect."""
+    callback can later mint a user-bound gateway code; it still proceeds to the upstream redirect.
+    The access gate runs for real against a granted resolver, so its interface stays exercised."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import MCPAuth
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="admin-client", registration_url=None)
+    admitted = UserAPIKeyAuth(user_id="sso-user-42")
+    admitted.mcp_admitted_user_subject = True
     captured: dict = {}
 
     def _capture(**kwargs):
@@ -5215,6 +5270,15 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
         patch(
             "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
             return_value="sso-user-42",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+            new=AsyncMock(return_value=admitted),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new=AsyncMock(return_value=[server.server_id]),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encode_state_with_base_url",
@@ -5234,6 +5298,147 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
     assert captured["litellm_user_id"] == "sso-user-42"
     assert captured["mcp_server_id"] == server.server_id
     assert "/sso/key/generate" not in response.headers["location"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_can_reach_server", [True, False])
+async def test_bridge_authorize_gates_on_the_egress_server_access_resolver(user_can_reach_server):
+    """The interactive dcr_bridge oauth_delegate authorize admits the signed-in user the way MCP
+    egress will and refuses with an RFC 6749 access_denied redirect when that admitted subject
+    cannot reach the target server, instead of minting an envelope whose every tool request would
+    fail-closed to an empty list (#36358). A user the resolver grants proceeds upstream unchanged."""
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="upstream-app", registration_url=None)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    admitted = UserAPIKeyAuth(user_id="bridge-user-1")
+    admitted.mcp_admitted_user_subject = True
+    allowed = [server.server_id] if user_can_reach_server else []
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    client_redirect = "http://127.0.0.1:60108/callback"
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+                return_value="bridge-user-1",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                new=AsyncMock(return_value=admitted),
+            ) as mock_reload,
+            patch.object(
+                global_mcp_server_manager,
+                "get_allowed_mcp_servers",
+                new=AsyncMock(return_value=allowed),
+            ) as mock_allowed,
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper",
+                return_value="mocked_encrypted_state",
+            ),
+        ):
+            response = await authorize(
+                request=mock_request,
+                client_id="dcr_client_id",
+                mcp_server_name="bridge_srv",
+                redirect_uri=client_redirect,
+                state="client-state-1",
+                code_challenge="a" * 43,
+                code_challenge_method="S256",
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    mock_reload.assert_awaited_once_with("bridge-user-1")
+    mock_allowed.assert_awaited_once_with(admitted)
+    location = response.headers["location"]
+    if user_can_reach_server:
+        assert response.status_code == 307
+        assert location.startswith("https://provider.com/oauth/authorize")
+    else:
+        assert response.status_code == 302
+        assert location.startswith(client_redirect)
+        query = parse_qs(urlparse(location).query)
+        assert query["error"] == ["access_denied"]
+        assert query["state"] == ["client-state-1"]
+        assert "bridge_srv" in query["error_description"][0]
+        assert "provider.com" not in location
+        assert "set-cookie" not in {k.lower() for k in response.headers}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reload_status,expect_denial", [(401, True), (500, False), (503, False)])
+async def test_bridge_authorize_reload_failure_denies_or_stays_retryable(reload_status, expect_denial):
+    """An unknown or deactivated signed-in user denies like a missing grant (fail closed); a DB
+    outage keeps its retryable 503 instead of masquerading as an access denial."""
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="upstream-app", registration_url=None)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+                return_value="bridge-user-1",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                new=AsyncMock(side_effect=HTTPException(status_code=reload_status, detail="x")),
+            ),
+        ):
+            if expect_denial:
+                response = await authorize(
+                    request=mock_request,
+                    client_id="dcr_client_id",
+                    mcp_server_name="bridge_srv",
+                    redirect_uri="http://127.0.0.1:60108/callback",
+                    state="client-state-1",
+                    code_challenge="a" * 43,
+                    code_challenge_method="S256",
+                )
+                assert response.status_code == 302
+                query = parse_qs(urlparse(response.headers["location"]).query)
+                assert query["error"] == ["access_denied"]
+            else:
+                with pytest.raises(HTTPException) as exc_info:
+                    await authorize(
+                        request=mock_request,
+                        client_id="dcr_client_id",
+                        mcp_server_name="bridge_srv",
+                        redirect_uri="http://127.0.0.1:60108/callback",
+                        state="client-state-1",
+                        code_challenge="a" * 43,
+                        code_challenge_method="S256",
+                    )
+                assert exc_info.value.status_code == reload_status
+    finally:
+        global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio

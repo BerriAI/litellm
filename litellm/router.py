@@ -44,6 +44,7 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    AUTO_ROUTED_REQUEST_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
@@ -52,7 +53,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
@@ -64,13 +65,22 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from litellm.litellm_core_utils.ptu_pricing import zeroed_ptu_pricing
+from litellm.litellm_core_utils.ptu_pricing import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    declares_ptu,
+    is_ptu_cost_attribution_enabled,
+    ptu_config_error,
+    ptu_identity_error,
+    ptu_terms,
+    zeroed_ptu_pricing,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
+    mask_credentials_in_payload,
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -157,6 +167,11 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+)
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -366,10 +381,17 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
-# Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
-# logs and logging callbacks, and these carry either the request payload or router-internal
-# walk state rather than anything that identifies the failed attempt.
-RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(("messages", "original_function", "attempted_targets"))
+# Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
+# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
+# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
+# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
+    (
+        "messages",
+        "original_function",
+        "attempted_targets",
+    )
+)
 
 
 class Router:
@@ -7338,7 +7360,8 @@ class Router:
             if len(self.previous_models) > 3:
                 self.previous_models.pop(0)
 
-            self.previous_models.append(previous_model)
+            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
+            self.previous_models.append(scrubbed_previous_model)
             kwargs[_metadata_var]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
@@ -7690,6 +7713,9 @@ class Router:
         _model_name: str,
         _litellm_params: dict,
         _model_info: dict,
+        *,
+        declared_id: str | None = None,
+        duplicate_ids: frozenset[str] = frozenset(),
     ) -> Deployment | None:
         """
         Create a deployment object and add it to the model list
@@ -7701,9 +7727,23 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            zeroed_pricing: Final = (
-                zeroed_ptu_pricing(_model_info, _litellm_params) if _model_info.get("db_model") is not True else None
+            config_sourced: Final = _model_info.get("db_model") is not True
+            identity_error: Final = (
+                ptu_identity_error(
+                    declared_id=declared_id,
+                    taken=declared_id in duplicate_ids,
+                    current_id=_model_info.get("id"),
+                    model_name=_model_name,
+                )
+                if config_sourced and ptu_terms(_model_info) is not None
+                else None
             )
+            ptu_error: Final = (
+                (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
+            )
+            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+                raise ValueError(ptu_error)
+            zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(
                     _litellm_params
@@ -8203,6 +8243,28 @@ class Router:
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
+        declared_ids: Final = tuple(
+            str(entry["model_info"]["id"])
+            for entry in original_model_list
+            if isinstance(entry.get("model_info"), dict) and entry["model_info"].get("id") is not None
+        )
+        duplicate_ids: Final = frozenset(model_id for model_id in declared_ids if declared_ids.count(model_id) > 1)
+
+        ptu_declared: Final = tuple(
+            str(entry.get("model_name"))
+            for entry in original_model_list
+            if isinstance(entry.get("model_info"), dict)
+            and entry["model_info"].get("db_model") is not True
+            and declares_ptu(entry["model_info"])
+        )
+        if ptu_declared and not is_ptu_cost_attribution_enabled():
+            verbose_router_logger.warning(
+                "PTU fields are set on config.yaml deployment(s) %s, but PTU cost attribution is disabled, so no "
+                "flat cost accrues and this traffic is billed per token. Set %s=True to enable it",
+                ", ".join(ptu_declared),
+                PTU_COST_ATTRIBUTION_ENV_VAR,
+            )
+
         for model in original_model_list:
             _model_name = model.pop("model_name")
             _litellm_params = model.pop("litellm_params")
@@ -8213,6 +8275,8 @@ class Router:
                         _litellm_params[k] = get_secret(v)
 
             _model_info: dict = model.pop("model_info", {})
+
+            declared_id = None if _model_info.get("id") is None else str(_model_info["id"])
 
             # check if model info has id
             if "id" not in _model_info:
@@ -8229,6 +8293,8 @@ class Router:
                         _model_name=_model_name,
                         _litellm_params=_litellm_params,
                         _model_info=_model_info,
+                        declared_id=declared_id,
+                        duplicate_ids=duplicate_ids,
                     )
             else:
                 self._create_deployment(
@@ -8236,6 +8302,8 @@ class Router:
                     _model_name=_model_name,
                     _litellm_params=_litellm_params,
                     _model_info=_model_info,
+                    declared_id=declared_id,
+                    duplicate_ids=duplicate_ids,
                 )
 
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
@@ -8278,6 +8346,7 @@ class Router:
             ) = litellm.get_llm_provider(
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
+                api_base=deployment.litellm_params.api_base,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -9147,10 +9216,27 @@ class Router:
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
-            verbose_router_logger.error(
-                "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
-                _model,
+            # Router init auto-registers every deployment name into
+            # litellm.model_cost as a zeroed stub, so membership alone can't
+            # tell a resolvable name apart; require usable limits/costs.
+            _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
+            _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
+            _fallback_resolves = _fallback_entry is not None and (
+                (_fallback_entry.get("max_input_tokens") or 0) > 0
+                or (_fallback_entry.get("max_tokens") or 0) > 0
+                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
+            if _fallback_resolves:
+                verbose_router_logger.debug(
+                    "Azure deployment '%s' has no base_model set; using '%s' from the model cost map for max tokens, cost tracking, etc.",
+                    _model,
+                    _azure_fallback_key,
+                )
+            else:
+                verbose_router_logger.error(
+                    "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
+                    _model,
+                )
         elif custom_llm_provider != "azure":
             model = _model
 
@@ -9192,7 +9278,7 @@ class Router:
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
-        merged_model_info: Final = copy.copy(model_info)
+        merged_model_info: Final = copy.deepcopy(model_info)
         if user_model_info:
             for key, value in user_model_info.items():
                 if value is not None:
@@ -9243,7 +9329,7 @@ class Router:
         litellm_model_name_model_info: ModelInfo | None = None
 
         try:
-            custom_model_info = litellm.model_cost.get(model_id)
+            custom_model_info = copy.deepcopy(litellm.model_cost.get(model_id))
         except Exception:
             pass
 
@@ -9258,9 +9344,8 @@ class Router:
                 base_model: Final = custom_model_info.get("base_model", None)
                 if base_model is not None:
                     ## update litellm model info with base model info
-                    base_model_info: Final = litellm.get_model_info(model=base_model)
+                    base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:
-                        custom_model_info = custom_model_info or {}
                         # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
                             cast(dict, base_model_info),
@@ -9276,13 +9361,13 @@ class Router:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
-                    cast(dict, litellm_model_name_model_info).copy(),
+                    copy.deepcopy(cast(dict, litellm_model_name_model_info)),
                     custom_model_info,
                 ),
             )
         elif litellm_model_name_model_info is not None:
             # (2) Built-in only — no custom pricing to merge
-            model_info = litellm_model_name_model_info
+            model_info = copy.deepcopy(litellm_model_name_model_info)
         elif custom_model_info is not None:
             # (3) Custom only — model not in built-in cost map yet
             # custom_model_info already includes base_model defaults at this point, if applicable
@@ -9369,6 +9454,8 @@ class Router:
             except Exception:
                 model_info = None
 
+            deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
@@ -9411,6 +9498,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supported_reasoning_efforts": None,
                     }
                 )
             else:
@@ -9487,6 +9575,11 @@ class Router:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
+
+            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                model_group_info.supported_reasoning_efforts,
+                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:
@@ -10570,6 +10663,64 @@ class Router:
             return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
         raise ValueError("Either messages or input must be provided to count tokens")
 
+    def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
+        """The deployment's declared context window, or None when it declares none or cannot be resolved."""
+        try:
+            model_info: Final = self.get_router_model_info(
+                deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
+                received_model_name=model,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e
+            )
+            return None
+        max_input_tokens: Final = model_info.get("max_input_tokens")
+        return max_input_tokens if isinstance(max_input_tokens, int) else None
+
+    def _pre_call_checks_need_token_count(
+        self, model: str, healthy_deployments: Sequence[Mapping[str, object]]
+    ) -> bool:
+        """Whether any healthy deployment declares a context window that a token count could exceed.
+
+        Resolves each deployment the way ``_pre_call_checks`` does, so one unmappable deployment
+        cannot hide a later one that does declare a limit.
+        """
+        return any(
+            self._deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
+        )
+
+    async def _acount_pre_call_check_tokens(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        messages: Sequence[Mapping[str, str]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> int | None:
+        """Count input tokens off the event loop, so a multi-MB prompt cannot stall the proxy.
+
+        Returns None when no deployment limits its context window, and when counting fails. The
+        caller pairs this with ``skip_inline_token_count`` so neither case puts the count back on
+        the loop: a failed count leaves the deployments unfiltered, exactly as before.
+        """
+        if messages is None and input is None:
+            return None
+        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
+        try:
+            if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+                return None
+            return await asyncify(self._count_pre_call_check_tokens)(
+                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
+                input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
+                instructions=raw_instructions if isinstance(raw_instructions, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
+            verbose_router_logger.error(
+                "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
+            )
+            return None
+
     def _pre_call_checks(
         self,
         model: str,
@@ -10577,6 +10728,8 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         request_kwargs: dict | None = None,
+        input_token_count: int | None = None,
+        skip_inline_token_count: bool = False,
     ):
         """
         Filter out model in model group, if:
@@ -10598,7 +10751,9 @@ class Router:
         # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
         # Only count when a deployment actually declares max_input_tokens, and count
         # at most once; for model groups with no context-window limit it is skipped.
-        input_tokens: int | None = None
+        # Async callers pass the count in, already computed off the event loop, and set
+        # skip_inline_token_count so a failed off-loop count is not retried back on the loop.
+        input_tokens: int | None = input_token_count
 
         _context_window_error = False
         _potential_error_str = ""
@@ -10633,6 +10788,8 @@ class Router:
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
+                        if skip_inline_token_count:
+                            return _returned_deployments
                         try:
                             input_tokens = self._count_pre_call_check_tokens(
                                 messages=messages, input=input, instructions=instructions
@@ -11115,12 +11272,21 @@ class Router:
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
+            deployments_to_check: Final = cast(list[dict], healthy_deployments)
             healthy_deployments = self._pre_call_checks(
                 model=model,
-                healthy_deployments=cast(list[dict], healthy_deployments),
+                healthy_deployments=deployments_to_check,
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                input_token_count=await self._acount_pre_call_check_tokens(
+                    model=model,
+                    healthy_deployments=deployments_to_check,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                ),
+                skip_inline_token_count=True,
             )
         # check if user wants to do tag based routing
         healthy_deployments = await get_deployments_for_tag(
@@ -11569,6 +11735,9 @@ class Router:
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=AUTO_ROUTED_REQUEST_METADATA_KEY, value=None
+            )
             return None
 
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
@@ -11595,6 +11764,13 @@ class Router:
                 pre_routing_hook_response=pre_routing_hook_response,
                 request_tags=_get_tags_from_request_kwargs(request_kwargs),
             ),
+        )
+        # Gates the proxy's `router_model_name` response field; the body `model` is
+        # always restamped back to the alias the client sent.
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=AUTO_ROUTED_REQUEST_METADATA_KEY,
+            value=(True if pre_routing_hook_response is not None else None),
         )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually

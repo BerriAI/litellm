@@ -1,16 +1,12 @@
 import json
 import logging
 import os
-import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm._logging import (
@@ -36,6 +32,7 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _get_potential_model_names,
     _is_streaming_request,
     get_api_key,
     get_llm_provider,
@@ -100,18 +97,6 @@ def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment()
     assert details.cache_write_tokens == details.cache_creation_tokens == 375
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
-
 
 def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
     """supports_adaptive_thinking must flow through get_model_info like every other
@@ -127,6 +112,74 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
         model="claude-opus-4-9", custom_llm_provider="anthropic"
     )
     assert generalized["supports_adaptive_thinking"] is True
+
+
+def test_potential_model_names_keeps_provider_prefixed_candidate():
+    """A provider whose own model ids repeat the litellm provider name (Perplexity's
+    Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
+    needs the un-stripped `<provider>/<model>` candidate. Every other candidate reads
+    the leading `perplexity/` as the litellm prefix and strips it away."""
+    already_prefixed = _get_potential_model_names(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert already_prefixed["provider_prefixed_model_name"] == "perplexity/perplexity/glm-5.2"
+    assert already_prefixed["split_model"] == "glm-5.2"
+    assert already_prefixed["combined_model_name"] == "perplexity/glm-5.2"
+    assert already_prefixed["combined_stripped_model_name"] == "perplexity/glm-5.2"
+
+    bare = _get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
+    assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
+
+
+def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_map):
+    """Perplexity's Agent API third-party models are keyed `perplexity/perplexity/<id>`
+    because Perplexity's own id already starts with `perplexity/`. Callers run
+    `get_llm_provider` first, which hands `_get_potential_model_names` model
+    `perplexity/glm-5.2` with provider `perplexity`, and every candidate but the
+    provider-prefixed one strips that second `perplexity/` off. Regression: the
+    entries were unreachable from `supports_reasoning` and from the cost calculator's
+    per-token fallback, so a mapped model reported no reasoning support and raised
+    "This model isn't mapped yet" on the only path where its rates are ever used."""
+    for model, reasoning in (
+        ("perplexity/perplexity/glm-5.2", True),
+        ("perplexity/perplexity/kimi-k3", True),
+        ("perplexity/perplexity/deepseek-v4-flash-0731", True),
+        ("perplexity/perplexity/kimi-k2.7-code", False),
+    ):
+        assert litellm.supports_reasoning(model=model) is reasoning, model
+
+    via_provider = litellm.get_model_info(
+        model="perplexity/glm-5.2", custom_llm_provider="perplexity"
+    )
+    assert via_provider["key"] == "perplexity/perplexity/glm-5.2"
+    assert via_provider["input_cost_per_token"] == 1.4e-06
+    assert via_provider["output_cost_per_token"] == 4.4e-06
+    assert via_provider["mode"] == "responses"
+
+
+def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
+    """The provider-prefixed candidate is tried last, after every candidate that
+    already existed, so no model that resolves today can change answer. `perplexity/sonar`
+    is the case that proves it: both `perplexity/sonar` and `perplexity/perplexity/sonar`
+    are cost-map keys, and the shorter one must keep winning."""
+    sonar = litellm.get_model_info(model="sonar", custom_llm_provider="perplexity")
+    assert sonar["key"] == "perplexity/sonar"
+    assert sonar["mode"] == "chat"
+    assert sonar["input_cost_per_token"] == 1e-06
+
+    still_sonar = litellm.get_model_info(
+        model="perplexity/sonar", custom_llm_provider="perplexity"
+    )
+    assert still_sonar["key"] == "perplexity/sonar"
+    assert still_sonar["mode"] == "chat"
+
+    for model, provider, expected_key in (
+        ("claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("anthropic/claude-sonnet-4-5", "anthropic", "claude-sonnet-4-5"),
+        ("gemini/gemini-2.0-flash", "gemini", "gemini/gemini-2.0-flash"),
+        ("openrouter/openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
+    ):
+        assert litellm.get_model_info(model=model, custom_llm_provider=provider)["key"] == expected_key
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -615,8 +668,8 @@ def test_all_model_configs():
     ) == {"max_output_tokens": 10}
 
 
-def test_anthropic_web_search_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_anthropic_web_search_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
@@ -677,7 +730,9 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "input_cost_per_second",
         "output_cost_per_second",
+        "output_cost_per_second_480p",
         "output_cost_per_second_1080p",
+        "output_cost_per_second_4k",
         "input_cost_per_query",
         "input_cost_per_request",
         "input_cost_per_audio_token",
@@ -807,7 +862,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
                 "input_cost_per_image_above_128k_tokens": {"type": "number"},
-                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_video_token": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
@@ -891,7 +945,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
+                "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
+                "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
@@ -940,6 +996,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
+                "supports_legacy_thinking": {"type": "boolean"},
+                "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
@@ -950,7 +1008,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "tpm": {"type": "number"},
-                "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
                     "type": "array",
                     "items": {
@@ -1070,6 +1127,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     exceptions = [
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
+        "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -1135,11 +1193,11 @@ def test_max_tokens_consistency():
         raise AssertionError(error_msg)
 
 
-def test_get_model_info_gemini():
+def test_get_model_info_gemini(monkeypatch):
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1194,8 +1252,8 @@ def test_get_model_info_bedrock_double_provider_prefix_resolves(local_model_cost
     assert info["key"] == "us.anthropic.claude-sonnet-4-6"
 
 
-def test_openai_models_in_model_info():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_openai_models_in_model_info(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model_map = litellm.model_cost
@@ -1305,7 +1363,7 @@ def test_get_provider_rerank_config():
     Test the get_provider_rerank_config function for various providers
     """
     from litellm import HostedVLLMRerankConfig
-    from litellm.utils import LlmProviders, ProviderConfigManager
+    from litellm.utils import LlmProviders
 
     # Test for hosted_vllm provider
     config = ProviderConfigManager.get_provider_rerank_config(
@@ -1350,7 +1408,7 @@ for commitment in BEDROCK_COMMITMENTS:
 print("block_list", block_list)
 
 
-def test_supports_computer_use_utility():
+def test_supports_computer_use_utility(monkeypatch):
     """
     Tests the litellm.utils.supports_computer_use utility function.
     """
@@ -1362,7 +1420,7 @@ def test_supports_computer_use_utility():
     original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
     original_model_cost = getattr(litellm, "model_cost", None)
 
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")  # Load with local/backup
 
     try:
@@ -1380,7 +1438,7 @@ def test_supports_computer_use_utility():
         if original_env_var is None:
             del os.environ["LITELLM_LOCAL_MODEL_COST_MAP"]
         else:
-            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", original_env_var)
 
         if original_model_cost is not None:
             litellm.model_cost = original_model_cost
@@ -1388,13 +1446,13 @@ def test_supports_computer_use_utility():
             delattr(litellm, "model_cost")
 
 
-def test_get_model_info_shows_supports_computer_use():
+def test_get_model_info_shows_supports_computer_use(monkeypatch):
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
     We'll use 'claude-4-sonnet-20250514' as it's configured
     in the backup JSON to have supports_computer_use: True.
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
     # as per previous debugging.
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1428,7 +1486,7 @@ def test_get_model_info_shows_supports_computer_use():
 def test_pre_process_non_default_params(model, custom_llm_provider):
     from pydantic import BaseModel
 
-    from litellm.utils import ProviderConfigManager, pre_process_non_default_params
+    from litellm.utils import pre_process_non_default_params
 
     provider_config = ProviderConfigManager.get_provider_chat_config(
         model=model, provider=LlmProviders(custom_llm_provider)
@@ -2295,7 +2353,6 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeConfig,
     )
-    from litellm.utils import ProviderConfigManager
 
     config = ProviderConfigManager.get_provider_chat_config(
         model="invoke/us.anthropic.claude-sonnet-4-20250514-v1:0",
@@ -3182,7 +3239,6 @@ class TestProxyLoggingBudgetAlerts:
 def test_azure_ai_claude_provider_config():
     """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
     from litellm import AzureAIStudioConfig, AzureAnthropicConfig
-    from litellm.utils import ProviderConfigManager
 
     # Claude models should return AzureAnthropicConfig
     config = ProviderConfigManager.get_provider_chat_config(
@@ -3721,7 +3777,7 @@ class TestMetadataNoneHandling:
 
         # Attempting 'in' on None raises TypeError
         with pytest.raises(TypeError):
-            "model_group" in kwargs.get("metadata", {})
+            _ = "model_group" in kwargs.get("metadata", {})
 
     def test_litellm_params_metadata_none(self):
         """litellm_params.get("metadata") or {} should handle None value."""
@@ -4250,7 +4306,6 @@ class TestGetOptionalParamsTencent:
         from litellm.llms.tencent.messages.transformation import (
             TencentAnthropicMessagesConfig,
         )
-        from litellm.utils import ProviderConfigManager
 
         config = ProviderConfigManager.get_provider_anthropic_messages_config(
             model="deepseek-v4-pro",
@@ -4301,7 +4356,7 @@ class TestVertexEmbeddingEncodingFormat:
         assert "encoding_format" not in optional_params
 
     def test_encoding_format_base64_still_rejected_without_drop_params(self):
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match='To drop these, set `litellm\\.drop_params=True` or for proxy') as excinfo:
             litellm.utils.get_optional_params_embeddings(
                 model="gemini-embedding-001",
                 encoding_format="base64",
@@ -4336,11 +4391,13 @@ class TestVertexEmbeddingEncodingFormat:
         "vertex_ai/gemini-3-pro-image-preview",
         "vertex_ai/gemini-3.1-flash-image",
         "vertex_ai/gemini-3.1-flash-image-preview",
+        "vertex_ai/gemini-3.1-flash-lite-image",
         "gemini/gemini-2.5-flash-image",
         "gemini/gemini-3-pro-image",
         "gemini/gemini-3-pro-image-preview",
         "gemini/gemini-3.1-flash-image",
         "gemini/gemini-3.1-flash-image-preview",
+        "gemini/gemini-3.1-flash-lite-image",
     ],
 )
 def test_gemini_image_models_do_not_support_reasoning(

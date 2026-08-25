@@ -1,5 +1,6 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -79,7 +80,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
   classifierContextWindowSize: number | undefined;
-  classifierContextPerTurnChars: number | undefined;
+  classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   sessionAffinity: boolean;
@@ -99,6 +100,7 @@ export interface BuildComplexityRouterConfigParams {
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
   reasoningOverrideMinScore?: number;
+  tierModelParams?: TierModelParamsByTier;
 }
 
 export interface ComplexityRouterConfigPayload {
@@ -109,6 +111,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -129,6 +132,7 @@ export interface ComplexityRouterConfigPayload {
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
   reasoning_override_min_score?: number;
+  tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -216,7 +220,7 @@ export const buildComplexityRouterConfig = ({
   classifierType,
   classifierLlmConfig,
   classifierContextWindowSize,
-  classifierContextPerTurnChars,
+  classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   sessionAffinity,
@@ -236,7 +240,9 @@ export const buildComplexityRouterConfig = ({
   tokenThresholds,
   dimensionWeights,
   reasoningOverrideMinScore,
+  tierModelParams,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
+  const serializedTierModelConfigs = serializeTierModelConfigs(tiers, tierModelParams);
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
@@ -252,6 +258,7 @@ export const buildComplexityRouterConfig = ({
 
   return {
     tiers,
+    ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
@@ -264,8 +271,8 @@ export const buildComplexityRouterConfig = ({
         classifier_context_window_size: classifierContextWindowSize,
       }),
     ...(classifierType === "llm" &&
-      classifierContextPerTurnChars !== undefined && {
-        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
       }),
     ...(classifierType === "llm" &&
       classifierContextIncludeAssistantTurns !== undefined && {

@@ -23,7 +23,8 @@ type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "falsePositiveR
 const providerColors: Record<string, string> = {
   Bedrock: "bg-warning/15 text-warning border-warning/20",
   "Google Cloud": "bg-info/15 text-info border-info/20",
-  LiteLLM: "bg-indigo-100 text-indigo-700 border-indigo-200",
+  LiteLLM:
+    "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-800",
   Custom: "bg-muted text-muted-foreground border-border",
 };
 
@@ -150,7 +151,7 @@ export function GuardrailsOverview({
         <span
           className={
             row.original.avgLatency == null
-              ? "text-muted-foreground/70"
+              ? "text-muted-foreground"
               : row.original.avgLatency > 150
                 ? "text-destructive"
                 : row.original.avgLatency > 50
