@@ -49,6 +49,11 @@ const formatDateWithoutTZ = (date: Date | undefined) => {
   return date.toISOString().split("T")[0];
 };
 
+const resolveDrilldownCallType = (selected: string | null, groups: readonly CacheActivityGroup[]): string | null =>
+  selected !== null && groups.some((group) => group.call_type === selected && group.failed_requests > 0)
+    ? selected
+    : null;
+
 function valueFormatterNumbers(number: number) {
   const formatter = new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 0,
@@ -98,6 +103,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const uniqueApiKeys = activity?.filter_options.key_aliases ?? [];
   const uniqueModels = activity?.filter_options.models ?? [];
   const chartData = (activity?.groups ?? []).map(toChartDatum);
+  const activeDrilldownCallType = resolveDrilldownCallType(errorDrilldownCallType, activity?.groups ?? []);
 
   const handleRefreshClick = () => {
     refetch();
@@ -298,9 +304,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               </CardContent>
             </Card>
 
-            {errorDrilldownCallType !== null && (
+            {activeDrilldownCallType !== null && (
               <ErrorDrilldownCard
-                callType={errorDrilldownCallType}
+                callType={activeDrilldownCallType}
                 buckets={activity?.error_breakdown ?? []}
                 valueFormatter={valueFormatterNumbers}
                 onClose={() => setErrorDrilldownCallType(null)}

@@ -24,21 +24,18 @@ export type ErrorCodeDatum = {
 };
 
 export const groupErrorBuckets = (buckets: readonly CacheActivityErrorBucket[], callType: string): ErrorCodeDatum[] => {
-  const byCode = new Map<string, Map<string, number>>();
-  for (const bucket of buckets) {
-    if (bucket.call_type !== callType) continue;
-    const classes = byCode.get(bucket.error_code) ?? new Map<string, number>();
-    classes.set(bucket.error_class, (classes.get(bucket.error_class) ?? 0) + bucket.count);
-    byCode.set(bucket.error_code, classes);
-  }
-  return [...byCode.entries()]
-    .map(([errorCode, classes]) => ({
-      error_code: errorCode,
-      [FAILED_REQUESTS_SERIES]: [...classes.values()].reduce((total, count) => total + count, 0),
-      classes: [...classes.entries()]
-        .map(([errorClass, count]) => ({ error_class: errorClass, count }))
-        .sort((a, b) => b.count - a.count),
-    }))
+  const rows = buckets.filter((bucket) => bucket.call_type === callType);
+  return [...new Set(rows.map((row) => row.error_code))]
+    .map((errorCode) => {
+      const codeRows = rows.filter((row) => row.error_code === errorCode);
+      return {
+        error_code: errorCode,
+        [FAILED_REQUESTS_SERIES]: codeRows.reduce((total, row) => total + row.count, 0),
+        classes: codeRows
+          .map((row) => ({ error_class: row.error_class, count: row.count }))
+          .sort((a, b) => b.count - a.count),
+      };
+    })
     .sort((a, b) => b[FAILED_REQUESTS_SERIES] - a[FAILED_REQUESTS_SERIES]);
 };
 
