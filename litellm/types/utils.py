@@ -3806,6 +3806,7 @@ all_litellm_params = (
         "cooldown_time",
         "cache_key",
         "max_retries",
+        "ssl_verify",
         "azure_ad_token_provider",
         "tenant_id",
         "client_id",
