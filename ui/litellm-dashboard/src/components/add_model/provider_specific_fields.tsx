@@ -17,7 +17,7 @@ import {
 import { CredentialItem, ProviderCredentialFieldMetadata, ProviderCredentialVariants } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { getVariant, inferActiveVariant, resolveVariantFieldDefs } from "./provider_credential_variants";
 
 interface ProviderSpecificFieldsProps {

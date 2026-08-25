@@ -4,7 +4,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import CopyButton from "@/components/shared/CopyButton";
