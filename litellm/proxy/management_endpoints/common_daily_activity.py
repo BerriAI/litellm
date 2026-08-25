@@ -441,7 +441,7 @@ async def get_api_key_metadata(
     This ensures that key_alias and team_id are preserved in historical activity logs
     even after a key is deleted or regenerated.
     """
-    key_records: list[PrismaVerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
+    key_records: Sequence[PrismaVerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"token": {"in": list(api_keys)}}
     )
     result: Final[dict[str, _KeyMetadataDict]] = {
@@ -452,9 +452,9 @@ async def get_api_key_metadata(
     missing_keys: Final = api_keys - set(result.keys())
     if missing_keys:
         try:
-            deleted_key_records: Final[list[PrismaDeletedVerificationToken]] = await DeletedVerificationTokenRepository(
-                prisma_client
-            ).table.find_many(
+            deleted_key_records: Final[
+                Sequence[PrismaDeletedVerificationToken]
+            ] = await DeletedVerificationTokenRepository(prisma_client).table.find_many(
                 where={"token": {"in": list(missing_keys)}},
                 order={"deleted_at": "desc"},
             )

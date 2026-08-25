@@ -1037,3 +1037,29 @@ async def test_get_organization_daily_activity_non_admin_without_org_admin_role_
 
     assert get_daily_activity_mock.call_args.kwargs["entity_id"] == []
     assert org_table_find_many.call_args.kwargs["where"] == {"organization_id": {"in": []}}
+
+
+@pytest.mark.asyncio
+async def test_find_member_if_email_missing_row_raises_documented_400():
+    """A user_email lookup that matches nothing returns None instead of raising, so the
+    only failure the surrounding try/except models is never entered. Without an explicit
+    None guard the next line dereferences None and /organization/member_add answers with
+    an AttributeError-driven 500 rather than the documented 400.
+    """
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        find_member_if_email,
+    )
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await find_member_if_email("missing@example.com", prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": (
+            "Unique user not found for user_email=missing@example.com. Potential duplicate OR "
+            "non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
+        )
+    }

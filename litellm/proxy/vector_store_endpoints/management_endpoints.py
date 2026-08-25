@@ -10,8 +10,7 @@ All /vector_store management endpoints
 
 import copy
 import json
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -37,6 +36,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helpe
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
 from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.vector_stores import (
@@ -51,17 +51,7 @@ from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 router: Final = APIRouter()
 
 
-class _VectorStoreTableActions(Protocol):
-    async def find_unique(self, where: Mapping[str, str]) -> "_VectorStoreRow | None": ...
-
-    async def create(self, data: Mapping[str, object]) -> "_VectorStoreRow": ...
-
-    async def update(self, where: Mapping[str, str], data: Mapping[str, object]) -> "_VectorStoreRow": ...
-
-    async def delete(self, where: Mapping[str, str]) -> "_VectorStoreRow | None": ...
-
-
-def _vector_store_table(prisma_client: "PrismaClient") -> _VectorStoreTableActions:
+def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorStoreRow]":
     return ManagedVectorStoresRepository(prisma_client).table
 
 
@@ -277,7 +267,7 @@ async def _resolve_embedding_config_from_db(
             if db_model and db_model.litellm_params:
                 # Extract litellm_params (could be dict or JSON string)
                 model_params = db_model.litellm_params
-                if isinstance(model_params, str):
+                if isinstance(model_params, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json is str
                     model_params = json.loads(model_params)
 
                 # Decrypt values from database (similar to how proxy_server.py does it)
@@ -887,6 +877,12 @@ async def update_vector_store(
             where={"vector_store_id": vector_store_id},
             data=update_data,
         )
+
+        if updated is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Vector store with ID {vector_store_id} not found",
+            )
 
         updated_vs: Final = _row_to_vector_store(updated)
 

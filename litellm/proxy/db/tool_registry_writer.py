@@ -6,14 +6,15 @@ Admins use the management endpoints to read and update input_policy / output_pol
 """
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ToolRepository
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
@@ -25,33 +26,16 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import PrismaClient
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
 
-
-class _TableActions(Protocol[_RowT_co]):
-    async def find_unique(self, where: Mapping[str, object]) -> _RowT_co | None: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        order: Mapping[str, object] | None = None,
-        include: Mapping[str, object] | None = None,
-    ) -> Sequence[_RowT_co]: ...
-
-    async def upsert(self, where: Mapping[str, object], data: Mapping[str, object]) -> _RowT_co: ...
-
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _RowT_co | None: ...
-
-
-def _tool_table_actions(prisma_client: "PrismaClient") -> "_TableActions[prisma_db_models.LiteLLM_ToolTable]":
-    table: Final[_TableActions[prisma_db_models.LiteLLM_ToolTable]] = ToolRepository(prisma_client).table
+def _tool_table_actions(prisma_client: "PrismaClient") -> "TableActions[prisma_db_models.LiteLLM_ToolTable]":
+    table: Final[TableActions[prisma_db_models.LiteLLM_ToolTable]] = ToolRepository(prisma_client).table
     return table
 
 
 def _object_permission_table_actions(
     prisma_client: "PrismaClient",
-) -> "_TableActions[prisma_db_models.LiteLLM_ObjectPermissionTable]":
-    table: Final[_TableActions[prisma_db_models.LiteLLM_ObjectPermissionTable]] = ObjectPermissionRepository(
+) -> "TableActions[prisma_db_models.LiteLLM_ObjectPermissionTable]":
+    table: Final[TableActions[prisma_db_models.LiteLLM_ObjectPermissionTable]] = ObjectPermissionRepository(
         prisma_client
     ).table
     return table

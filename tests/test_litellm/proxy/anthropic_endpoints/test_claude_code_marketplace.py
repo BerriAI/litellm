@@ -232,6 +232,30 @@ async def test_update_plugin_db_error_maps_to_structured_500():
 
 
 @pytest.mark.asyncio
+async def test_update_plugin_deleted_mid_update_returns_404():
+    """A concurrent delete between the find_unique pre-check and the update makes prisma's
+    update return None; that must surface the same 404 as a plain miss, not an AttributeError."""
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.update = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name=name,
+            request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": f"Plugin '{name}' not found"}
+
+
+@pytest.mark.asyncio
 async def test_get_marketplace_skips_plugin_with_null_manifest():
     await register_plugin(
         request=RegisterPluginRequest(name="good-plugin", source=_GIT_SUBDIR_SOURCE, version="1.0.0"),

@@ -16,7 +16,7 @@ import json
 from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -72,6 +72,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
@@ -100,6 +101,9 @@ from litellm.types.router import (
 )
 from litellm.utils import get_utc_datetime
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
 router: Final = APIRouter()
 
 
@@ -120,10 +124,14 @@ class UpdatePublicModelGroupsRequest(BaseModel):
 
 
 class _ProxyModelRow(Protocol):
-    model_id: str
-    model_name: str
-    litellm_params: Mapping[str, object]
-    model_info: Mapping[str, object] | None
+    @property
+    def model_id(self) -> str: ...
+
+    @property
+    def model_name(self) -> str: ...
+
+    @property
+    def model_info(self) -> object: ...
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
 
@@ -133,7 +141,9 @@ class _ProxyModelTable(Protocol):
 
     def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_ProxyModelRow]]: ...
 
-    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[_ProxyModelRow]: ...
+    def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> Awaitable[_ProxyModelRow | None]: ...
 
     def delete(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
 
@@ -144,41 +154,35 @@ class _TxModelTables(Protocol):
     litellm_proxymodeltable: _ProxyModelTable
 
 
+class _ExistingModelRow(Protocol):
+    @property
+    def litellm_params(self) -> Mapping[str, object]: ...
+
+    def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
+
+
 class _TeamRow(Protocol):
-    models: Sequence[str]
+    @property
+    def models(self) -> Sequence[str]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _TeamTable(Protocol):
+class _TeamLookupTable(Protocol):
     def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
 
+
+class _TeamTable(_TeamLookupTable, Protocol):
     def update(
         self, *, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, bool]
     ) -> Awaitable[LiteLLM_TeamTable]: ...
-
-
-class _TeamIdRef(Protocol):
-    team_id: str
-
-
-class _ModelAliasRow(Protocol):
-    id: int
-    model_aliases: dict[str, str]
-    team: _TeamIdRef | None
-
-
-class _ModelAliasTable(Protocol):
-    def find_many(self, *, include: Mapping[str, bool]) -> Awaitable[Sequence[_ModelAliasRow]]: ...
-
-    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[object]: ...
 
 
 def _proxy_model_table(prisma_client: PrismaClient) -> _ProxyModelTable:
     return ModelRepository(prisma_client).table
 
 
-def _repo_team_table(prisma_client: PrismaClient) -> _TeamTable:
+def _repo_team_table(prisma_client: PrismaClient) -> _TeamLookupTable:
     return TeamRepository(prisma_client).table
 
 
@@ -186,7 +190,7 @@ def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
     return prisma_client.db.litellm_teamtable
 
 
-def _model_alias_table(prisma_client: PrismaClient) -> _ModelAliasTable:
+def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
     return ModelTableRepository(prisma_client).table
 
 
@@ -677,6 +681,14 @@ async def patch_model(
             data=update_data,
         )
 
+        if updated_model is None:
+            raise ProxyException(
+                message=f"Model {model_id} not found on proxy.",
+                type=ProxyErrorTypes.not_found_error,
+                code=status.HTTP_404_NOT_FOUND,
+                param=None,
+            )
+
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         live_before_reload: Final = live_model_ids_snapshot()
         reload_outcome: Final = await clear_cache()
@@ -811,7 +823,7 @@ async def _set_model_blocked_status(
             live_after=reload_outcome.live_after,
         )
 
-        return updated_model
+        return updated_model  # pyright: ignore[reportReturnType]  # prisma row, coerced by this route's response_model
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in model %s: %s", action, e)
@@ -897,7 +909,7 @@ async def _add_model_to_db(
     prisma_client: PrismaClient,
     new_encryption_key: str | None = None,
     should_create_model_in_db: bool = True,
-) -> LiteLLM_ProxyModelTable | None:
+) -> "prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None":
     # encrypt litellm params #
     _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
     _original_litellm_model_name: Final = model_params.litellm_params.model
@@ -914,8 +926,9 @@ async def _add_model_to_db(
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
+    _create_data: Final = cast("Mapping[str, object]", _data)  # cast-ok: str-keyed json payload built just above
     if should_create_model_in_db:
-        model_response = await ModelRepository(prisma_client).table.create(data=_data)
+        model_response = await ModelRepository(prisma_client).table.create(data=_create_data)
     else:
         model_response = LiteLLM_ProxyModelTable(**_data)
     return model_response
@@ -925,7 +938,7 @@ async def _add_team_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-) -> LiteLLM_ProxyModelTable | None:
+) -> "prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None":
     """
     If 'team_id' is provided,
 
@@ -1638,7 +1651,9 @@ async def delete_team_model_alias(
     tasks: Final = []
     removed_model_aliases: Final[list[tuple[str, str]]] = []
     for team_model_alias in team_model_aliases:
-        model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
+        model_aliases = cast(  # cast-ok: prisma types Json columns as `str`; the driver hands back the parsed dict
+            "dict[str, str]", team_model_alias.model_aliases
+        )
         id = team_model_alias.id
 
         if public_model_name in model_aliases.values():
@@ -1733,7 +1748,7 @@ async def add_new_model(
             existing_params=None,
         )
 
-        model_response: LiteLLM_ProxyModelTable | None = None
+        model_response: prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None = None
         # update DB
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
         _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
@@ -1902,7 +1917,10 @@ async def update_model(
 
         # update DB
         if store_model_in_db is True:
-            _existing_litellm_params_dict: Final = dict(_existing_litellm_params.litellm_params)
+            existing_model_row: Final = cast(  # cast-ok: prisma types Json columns as `str`; the driver parses them
+                "_ExistingModelRow", _existing_litellm_params
+            )
+            _existing_litellm_params_dict: Final = dict(existing_model_row.litellm_params)
 
             if model_params.litellm_params is None:
                 raise Exception("litellm_params not provided")
@@ -1946,8 +1964,8 @@ async def update_model(
                     user_api_key_dict=user_api_key_dict,
                     table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
                     before_value=(
-                        _existing_litellm_params.model_dump_json(exclude_none=True)
-                        if isinstance(_existing_litellm_params, BaseModel)
+                        existing_model_row.model_dump_json(exclude_none=True)
+                        if isinstance(existing_model_row, BaseModel)
                         else None
                     ),
                     after_value=(

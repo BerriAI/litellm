@@ -417,6 +417,34 @@ async def test_update_returns_404_when_not_found():
 
 
 @pytest.mark.asyncio
+async def test_update_returns_404_when_row_deleted_before_write():
+    """A mapping deleted between the read and the write must 404, not 500.
+
+    Prisma's update returns None when the row is gone, and the endpoint used to
+    dereference it for the cache key.
+    """
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_jwtkeymapping.find_unique.return_value = _mock_mapping()
+    mock_prisma.db.litellm_jwtkeymapping.update.return_value = None
+    mock_cache = AsyncMock()
+
+    data = UpdateJWTKeyMappingRequest(id="mapping-1", description="test")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_jwt_key_mapping(
+                data=data, user_api_key_dict=_make_admin_auth()
+            )
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Mapping not found"
+
+
+@pytest.mark.asyncio
 async def test_info_returns_404_when_not_found():
     """Getting info for non-existent mapping should return 404."""
     mock_prisma = _mock_prisma()

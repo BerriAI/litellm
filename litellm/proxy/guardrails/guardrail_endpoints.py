@@ -29,6 +29,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
@@ -65,29 +66,12 @@ router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 
 
-class _GuardrailsTableActions(Protocol):
-    async def create(self, data: Mapping[str, object]) -> "LiteLLM_GuardrailsTable": ...
-
-    async def delete(self, where: Mapping[str, object]) -> "LiteLLM_GuardrailsTable | None": ...
-
-    async def find_unique(self, where: Mapping[str, object]) -> "LiteLLM_GuardrailsTable | None": ...
-
-    async def find_many(
-        self, where: Mapping[str, object], order: Mapping[str, str]
-    ) -> "Sequence[LiteLLM_GuardrailsTable]": ...
-
-    async def update(
-        self, where: Mapping[str, object], data: Mapping[str, object]
-    ) -> "LiteLLM_GuardrailsTable | None": ...
-
-
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
     return mapping
 
 
-def _guardrails_table(prisma_client: "PrismaClient") -> _GuardrailsTableActions:
-    table: Final[_GuardrailsTableActions] = GuardrailsRepository(prisma_client).table
-    return table
+def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
+    return GuardrailsRepository(prisma_client).table
 
 
 async def _create_guardrail_row(prisma_client: "PrismaClient", data: Mapping[str, object]) -> "LiteLLM_GuardrailsTable":

@@ -40,17 +40,22 @@ router: Final = APIRouter()
 
 
 class _DeploymentRow(Protocol):
-    model_id: str
-    model_name: str
-    model_info: object
+    @property
+    def model_id(self) -> str: ...
+
+    @property
+    def model_name(self) -> str: ...
+
+    @property
+    def model_info(self) -> object: ...
 
 
 class _ModelTableClient(Protocol):
-    async def find_many(self, where: Mapping[str, object] | None = None) -> Sequence[_DeploymentRow]: ...
+    async def find_many(self, *, where: Mapping[str, object] | None = None) -> Sequence[_DeploymentRow]: ...
 
-    async def find_unique(self, where: Mapping[str, object]) -> _DeploymentRow | None: ...
+    async def find_unique(self, *, where: Mapping[str, object]) -> _DeploymentRow | None: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 def _model_table(prisma_client: PrismaClient) -> _ModelTableClient:
@@ -322,7 +327,9 @@ async def get_all_access_groups_from_db(
 
     for deployment in deployments:
         model_info = deployment.model_info or {}
-        access_groups = model_info.get("access_groups", [])
+        access_groups = model_info.get(  # pyright: ignore[reportAttributeAccessIssue]  # Json reads back as a dict
+            "access_groups", []
+        )
         model_name = deployment.model_name
 
         for access_group in access_groups:

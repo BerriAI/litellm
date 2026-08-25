@@ -7,6 +7,7 @@ We patch the endpoint module's `_require_prisma` helper so we never need the
 real proxy_server import chain (which pulls heavy optional deps).
 """
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
@@ -176,14 +177,36 @@ class _InMemoryTeamTable:
         return None
 
 
-def _make_team(team_id: str, *, admin_user_ids: List[str]) -> MagicMock:
-    """Build a team-row stub with `members_with_roles` shaped like Prisma."""
-    members = [MagicMock(user_id=uid, role="admin") for uid in admin_user_ids]
-    team = MagicMock()
-    team.team_id = team_id
-    team.organization_id = None  # skip org-admin path in tests
-    team.members_with_roles = members
-    return team
+def _make_team(team_id: str, *, admin_user_ids: List[str]) -> Any:
+    """Build a real Prisma team row.
+
+    `members_with_roles` is a JSON column, so Prisma deserializes it into plain
+    dicts, not `Member` objects. A stub that hands back attribute-style members
+    would let the router read `member.role` off something Prisma never returns.
+    """
+    from prisma import models as prisma_models
+
+    now = datetime.now(timezone.utc)
+    return prisma_models.LiteLLM_TeamTable(
+        team_id=team_id,
+        organization_id=None,
+        members_with_roles=json.dumps([{"user_id": uid, "role": "admin"} for uid in admin_user_ids]),
+        metadata="{}",
+        models=[],
+        blocked=False,
+        created_at=now,
+        updated_at=now,
+        spend=0.0,
+        model_spend="{}",
+        model_max_budget="{}",
+        admins=[],
+        members=[],
+        team_member_permissions=[],
+        access_group_ids=[],
+        policies=[],
+        default_team_member_models=[],
+        allow_team_guardrail_config=False,
+    )
 
 
 def _make_prisma() -> MagicMock:
@@ -652,6 +675,39 @@ class TestMemoryEndpoints:
         assert resp.status_code == 200
         assert resp.json()["value"] == "new"
         assert len(table.rows) == 1
+
+    def test_put_memory_row_deleted_mid_update_returns_404(self):
+        """
+        A concurrent DELETE landing between the visibility read and the write
+        makes Prisma's `update` return None. That must surface the same 404 the
+        read path uses, not an AttributeError bubbling out as an unhandled 500.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(
+                memory_id="m1",
+                key="notes",
+                value="old",
+                user_id="user-a",
+                team_id="team-a",
+            )
+        )
+
+        async def vanished(*_args, **_kwargs):
+            return None
+
+        original_update = table.update
+        table.update = vanished
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        try:
+            with _patch_prisma(self.prisma):
+                resp = client.put("/v1/memory/notes", json={"value": "new"})
+        finally:
+            table.update = original_update
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Memory with key 'notes' not found"
 
     def test_put_memory_explicit_null_metadata_clears_field(self):
         """

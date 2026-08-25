@@ -2,17 +2,21 @@
 Project repository for database operations on LiteLLM_ProjectTable.
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
     """Repository for project database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
         return self.prisma_client.db.litellm_projecttable
 
     @property

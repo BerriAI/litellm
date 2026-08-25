@@ -6,7 +6,8 @@ Policy resolve and attachment impact estimation endpoints.
 """
 
 import json
-from typing import Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -30,25 +31,28 @@ from litellm.types.proxy.policy_engine import (
     PolicyResolveResponse,
 )
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
 router: Final = APIRouter()
 
 
-def _build_alias_where(field: str, patterns: list) -> dict:
+def _build_alias_where(field: str, patterns: Sequence[str]) -> dict[str, object]:
     """Build a Prisma ``where`` clause for alias patterns.
 
     Supports exact matches and suffix wildcards (``prefix*``).
     Returns something like:
         {"OR": [{"field": {"in": ["a","b"]}}, {"field": {"startsWith": "dev-"}}]}
     """
-    exact: Final[list] = []
-    prefix_conditions: Final[list] = []
+    exact: Final[list[str]] = []
+    prefix_conditions: Final[list[dict[str, object]]] = []
     for pat in patterns:
         if pat.endswith("*"):
             prefix_conditions.append({field: {"startsWith": pat[:-1]}})
         else:
             exact.append(pat)
 
-    conditions: Final[list] = []
+    conditions: Final[list[dict[str, object]]] = []
     if exact:
         conditions.append({field: {"in": exact}})
     conditions.extend(prefix_conditions)
@@ -79,7 +83,7 @@ def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> l
     return parsed.get("tags", []) or []
 
 
-async def _fetch_all_teams(prisma_client: object) -> list:
+async def _fetch_all_teams(prisma_client: object) -> "Sequence[prisma_models.LiteLLM_TeamTable]":
     """Fetch teams from DB once. Reuse the result across tag and alias lookups."""
     return await TeamRepository(prisma_client).table.find_many(
         where={},
@@ -88,13 +92,15 @@ async def _fetch_all_teams(prisma_client: object) -> list:
     )
 
 
-def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
+def _filter_keys_by_tags(
+    keys: "Sequence[prisma_models.LiteLLM_VerificationToken]", tag_patterns: Sequence[str]
+) -> tuple[list[str], int]:
     """Filter key rows whose metadata.tags match any of the given patterns.
 
     Returns (named_aliases, unnamed_count).
     """
 
-    affected: Final[list] = []
+    affected: Final[list[str]] = []
     unnamed_count = 0
     for key in keys:
         key_alias = key.key_alias or ""
@@ -111,13 +117,15 @@ def _filter_keys_by_tags(keys: list, tag_patterns: list) -> tuple:
     return affected, unnamed_count
 
 
-def _filter_teams_by_tags(teams: list, tag_patterns: list) -> tuple:
+def _filter_teams_by_tags(
+    teams: "Sequence[prisma_models.LiteLLM_TeamTable]", tag_patterns: Sequence[str]
+) -> tuple[list[str], int]:
     """Filter pre-fetched team rows whose metadata.tags match any patterns.
 
     Returns (named_aliases, unnamed_count).
     """
 
-    affected: Final[list] = []
+    affected: Final[list[str]] = []
     unnamed_count = 0
     for team in teams:
         team_alias = team.team_alias or ""
@@ -136,18 +144,18 @@ def _filter_teams_by_tags(teams: list, tag_patterns: list) -> tuple:
 
 async def _find_affected_by_team_patterns(
     prisma_client: object,
-    all_teams: list,
-    team_patterns: list,
-    existing_teams: list,
-    existing_keys: list,
-) -> tuple:
+    all_teams: "Sequence[prisma_models.LiteLLM_TeamTable]",
+    team_patterns: Sequence[str],
+    existing_teams: Sequence[str],
+    existing_keys: Sequence[str],
+) -> tuple[list[str], list[str], int]:
     """Filter pre-fetched teams by alias patterns, then fetch their keys.
 
     Returns (new_teams, new_keys, unnamed_keys_count).
     """
 
-    new_teams: Final[list] = []
-    matched_team_ids: Final[list] = []
+    new_teams: Final[list[str]] = []
+    matched_team_ids: Final[list[str]] = []
 
     for team in all_teams:
         team_alias = team.team_alias or ""
@@ -158,7 +166,7 @@ async def _find_affected_by_team_patterns(
                 new_teams.append(team_alias)
                 matched_team_ids.append(str(team.team_id))
 
-    new_keys: Final[list] = []
+    new_keys: Final[list[str]] = []
     unnamed_keys_count = 0
     if matched_team_ids:
         keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
@@ -177,10 +185,12 @@ async def _find_affected_by_team_patterns(
     return new_teams, new_keys, unnamed_keys_count
 
 
-async def _find_affected_keys_by_alias(prisma_client: object, key_patterns: list, existing_keys: list) -> list:
+async def _find_affected_keys_by_alias(
+    prisma_client: object, key_patterns: Sequence[str], existing_keys: Sequence[str]
+) -> list[str]:
     """Find keys whose alias matches the given patterns."""
 
-    affected: Final[list] = []
+    affected: Final[list[str]] = []
 
     keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
         where=_build_alias_where("key_alias", key_patterns),
@@ -349,8 +359,8 @@ async def estimate_attachment_impact(
                 sample_teams=["(global scope — affects all teams)"],
             )
 
-        affected_keys: list = []
-        affected_teams: list = []
+        affected_keys: list[str] = []
+        affected_teams: list[str] = []
         unnamed_keys = 0
         unnamed_teams = 0
 
@@ -358,7 +368,7 @@ async def estimate_attachment_impact(
         team_patterns: Final = request.teams or []
 
         # Fetch teams once — reused by both tag-based and alias-based lookups
-        all_teams: list = []
+        all_teams: Sequence[prisma_models.LiteLLM_TeamTable] = []
         if tag_patterns or team_patterns:
             all_teams = await _fetch_all_teams(prisma_client)
 

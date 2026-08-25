@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -143,7 +143,7 @@ class ResponsesSessionHandler:
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
-                    chat_completion_message_history.append(getattr(choice, "message"))
+                    chat_completion_message_history.append(choice.message)
         return chat_completion_message_history
 
     @staticmethod
@@ -195,7 +195,7 @@ class ResponsesSessionHandler:
         try:
             metadata_str: Final = spend_log.get("metadata", "{}")
             if isinstance(metadata_str, str):
-                metadata_dict: Final = json.loads(metadata_str)
+                metadata_dict: Final[SpendLogsMetadata] = json.loads(metadata_str)
                 return metadata_dict.get("cold_storage_object_key")
             elif isinstance(metadata_str, dict):
                 return metadata_str.get("cold_storage_object_key")

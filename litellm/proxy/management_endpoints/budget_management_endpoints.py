@@ -93,7 +93,7 @@ async def new_budget(
         budget_obj.budget_reset_at = get_budget_reset_time(budget_duration=budget_obj.budget_duration)
 
     budget_obj_json: Final = budget_obj.model_dump(exclude_none=True)
-    budget_obj_jsonified: Final = jsonify_object(budget_obj_json)  # json dump any dictionaries
+    budget_obj_jsonified: Final[dict[str, object]] = jsonify_object(budget_obj_json)  # mutable-ok: prisma create input
     try:
         response: Final = await BudgetRepository(prisma_client).table.create(
             data={

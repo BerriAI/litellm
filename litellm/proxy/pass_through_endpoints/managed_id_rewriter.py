@@ -33,7 +33,13 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    TypeVar,
+    cast,  # noqa: TID251  # prisma stubs type Json columns as fields.Json but de-serialize them on read
+    overload,
+)
 from urllib.parse import quote, unquote
 
 from fastapi import HTTPException
@@ -286,11 +292,15 @@ def _canonical_path(route: str) -> str:
 
 
 def _file_table(prisma_client: PrismaClient) -> ManagedFileTable:
-    return ManagedFileRepository(prisma_client).table
+    return cast(  # cast-ok: stub-only mismatch, prisma returns real lists and de-serialized Json
+        ManagedFileTable, ManagedFileRepository(prisma_client).table
+    )
 
 
 def _object_table(prisma_client: PrismaClient) -> ManagedObjectTable:
-    return ManagedObjectRepository(prisma_client).table
+    return cast(  # cast-ok: stub-only mismatch, prisma returns real lists and de-serialized Json
+        ManagedObjectTable, ManagedObjectRepository(prisma_client).table
+    )
 
 
 async def _resolve_one(

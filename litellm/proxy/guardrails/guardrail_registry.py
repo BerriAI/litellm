@@ -3,12 +3,12 @@
 import asyncio
 import importlib
 import os
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime, timezone
 from itertools import chain, count
-from typing import Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router
@@ -39,6 +39,7 @@ from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
 )
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
@@ -61,6 +62,9 @@ from .guardrail_initializers import (
     initialize_tool_permission,
 )
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
 
 class _GuardrailRowLike(Protocol):
     @property
@@ -68,15 +72,7 @@ class _GuardrailRowLike(Protocol):
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
 
-class _GuardrailTableActions(Protocol):
-    async def create(self, *, data: Mapping[str, object]) -> _GuardrailRowLike: ...
-    async def delete(self, *, where: Mapping[str, str]) -> object: ...
-    async def update(self, *, where: Mapping[str, str], data: Mapping[str, object]) -> _GuardrailRowLike: ...
-    async def find_many(self, *, where: Mapping[str, str], order: Mapping[str, str]) -> Sequence[BaseModel]: ...
-    async def find_unique(self, *, where: Mapping[str, str]) -> BaseModel | None: ...
-
-
-def _guardrail_table(prisma_client: PrismaClient) -> _GuardrailTableActions:
+def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
     """Typed view of the guardrails table actions exposed by the Prisma repository."""
     return GuardrailsRepository(prisma_client).table
 
@@ -347,7 +343,7 @@ class GuardrailRegistry:
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
-            updated_guardrail: Final[_GuardrailRowLike] = await _guardrail_table(prisma_client).update(
+            updated_guardrail: Final[_GuardrailRowLike | None] = await _guardrail_table(prisma_client).update(
                 where={"guardrail_id": guardrail_id},
                 data={
                     "guardrail_name": guardrail_name,
@@ -356,6 +352,8 @@ class GuardrailRegistry:
                     "updated_at": datetime.now(timezone.utc),
                 },
             )
+            if updated_guardrail is None:
+                raise ValueError(f"Guardrail not found, passed guardrail_id={guardrail_id}")
 
             # Convert to dict and return
             return dict(updated_guardrail)
