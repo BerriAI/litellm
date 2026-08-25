@@ -407,12 +407,14 @@ class RouterBudgetLimiting(CustomLogger):
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
-        custom_llm_provider: Final[str] = kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
-        if custom_llm_provider is None:
-            raise ValueError("custom_llm_provider is required")
+        # litellm_params only carries the provider on chat completions; the payload carries it on every
+        # surface, so read it from there instead of skipping the budget for responses, messages and embeddings.
+        custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 
-        budget_config: Final = self._get_budget_config_for_provider(custom_llm_provider)
-        if budget_config:
+        budget_config: Final = (
+            self._get_budget_config_for_provider(custom_llm_provider) if custom_llm_provider is not None else None
+        )
+        if custom_llm_provider is not None and budget_config is not None:
             # increment spend for provider
             spend_key: Final = f"provider_spend:{custom_llm_provider}:{budget_config.budget_duration}"
             start_time_key: Final = f"provider_budget_start_time:{custom_llm_provider}"
