@@ -1,29 +1,16 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 
 import litellm
 
-import json
-import os
-import sys
-from datetime import datetime
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 from test_rerank import assert_response_shape
-import litellm
 
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler

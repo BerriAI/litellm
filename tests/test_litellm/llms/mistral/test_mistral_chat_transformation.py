@@ -1,5 +1,3 @@
-import os
-import sys
 from typing import List, cast
 from unittest.mock import MagicMock, patch
 
@@ -8,9 +6,6 @@ import pytest
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.types.llms.openai import AllMessageValues
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,

@@ -788,7 +788,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
         """
-        Masks the input before logging to langfuse, datadog, etc.
+        Masks the input and output before logging to langfuse, datadog, etc.
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
             messages: Final[list | None] = kwargs.get("messages", None)
@@ -846,6 +846,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
+
+            if (
+                isinstance(result, ModelResponse)
+                and result.choices
+                and not isinstance(result.choices[0], StreamingChoices)
+            ):
+                await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
+            elif self._is_anthropic_message_response(result):
+                await self._process_anthropic_response_for_pii(
+                    response=cast(dict, result),  # cast-ok: _is_anthropic_message_response narrows via isinstance
+                    request_data=kwargs,
+                    mode="mask",
+                )
 
         return kwargs, result
 

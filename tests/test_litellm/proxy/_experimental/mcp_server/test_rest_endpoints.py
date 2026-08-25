@@ -796,7 +796,7 @@ class TestListToolsRestAPI:
             return admitted_auth
 
         monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
             fake_reload,
         )
 
@@ -912,7 +912,7 @@ class TestListToolsRestAPI:
             return ["toolset-tool-1"]
 
         monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
             record_reload,
         )
         monkeypatch.setattr(

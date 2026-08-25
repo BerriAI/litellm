@@ -32,6 +32,12 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
 
+DROP_DISABLED_THINKING_WARNING: Final = (
+    "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
+    "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
+    "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
@@ -424,6 +430,45 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         in that declarative rule, not here.
         """
         return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
+
+    @staticmethod
+    def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` always thinks and rejects ``thinking.type=disabled``
+        (Fable 5 / Mythos 5 generation). The model cost map is authoritative: an
+        explicit ``thinking_always_on`` entry resolved under ``custom_llm_provider``,
+        or a ``fallback_generalizations`` rule for unmapped ids of those families.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
+
+    @staticmethod
+    def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` is an adaptive-thinking model that still accepts legacy
+        ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
+        The model cost map is authoritative: an explicit ``supports_legacy_thinking``
+        entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
+        rule for unmapped 4.6 ids. Absent flag means the model rejects the legacy shape.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "supports_legacy_thinking", custom_llm_provider)
+
+    @staticmethod
+    def maybe_drop_disabled_thinking(
+        model: str,
+        optional_params: dict,  # mutable-ok: in-place out-param, same contract as AnthropicConfig._maybe_drop_speed_param
+        custom_llm_provider: str,
+    ) -> None:
+        """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
+        (Fable 5 / Mythos 5), which 400 on it; omission is the API-documented
+        remedy and yields the model's default adaptive thinking."""
+        thinking: Final = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "disabled":
+            return
+        if not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+            return
+        litellm.verbose_logger.warning(
+            DROP_DISABLED_THINKING_WARNING,
+            model,
+        )
+        optional_params.pop("thinking", None)
 
     def is_effort_used(
         self,

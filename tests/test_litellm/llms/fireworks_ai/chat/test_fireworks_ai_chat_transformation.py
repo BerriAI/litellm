@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
@@ -478,12 +473,14 @@ def test_transform_messages_helper_strips_thinking_blocks():
             "thinking_blocks": [
                 {"type": "thinking", "thinking": "internal", "signature": ""}
             ],
+            "reasoning_content": "internal",
         },
     ]
     out = config._transform_messages_helper(
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
+    assert "reasoning_content" not in out[1]
     assert out[1]["content"] == "I can help."
 
 

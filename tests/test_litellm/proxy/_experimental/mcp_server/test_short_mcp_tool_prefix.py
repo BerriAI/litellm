@@ -79,7 +79,7 @@ class TestShortPrefixHelpers:
         assert compute_short_server_prefix("abc") != compute_short_server_prefix("abd")
 
     def test_short_prefix_requires_server_id(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='compute_short_server_prefix requires a non-empty server_id'):
             compute_short_server_prefix("")
 
     def test_flag_defaults_to_false(self):

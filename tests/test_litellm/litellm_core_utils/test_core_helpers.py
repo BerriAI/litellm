@@ -255,3 +255,26 @@ class TestRedactNestedMatchAndRegexKeys:
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
         assert redact_nested_match_and_regex_keys("plain") == "plain"
+
+
+class TestIsExpectedClientError:
+    def test_status_ranges(self):
+        from litellm.litellm_core_utils.core_helpers import is_expected_client_error
+
+        class WithStatusCode(Exception):
+            def __init__(self, status_code):
+                self.status_code = status_code
+
+        class WithCode(Exception):
+            def __init__(self, code):
+                self.code = code
+
+        assert is_expected_client_error(WithStatusCode(400)) is True
+        assert is_expected_client_error(WithStatusCode(429)) is True
+        assert is_expected_client_error(WithStatusCode(499)) is True
+        assert is_expected_client_error(WithStatusCode(500)) is False
+        assert is_expected_client_error(WithStatusCode(399)) is False
+        assert is_expected_client_error(WithCode("403")) is True
+        assert is_expected_client_error(WithCode("invalid_request_error")) is False
+        assert is_expected_client_error(Exception("no status")) is False
+        assert is_expected_client_error(None) is False

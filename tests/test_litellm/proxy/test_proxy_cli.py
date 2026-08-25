@@ -1,6 +1,5 @@
 import inspect
 import os
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,9 +8,6 @@ import click
 import fastapi
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
 
 import builtins
 import types

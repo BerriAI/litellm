@@ -1,10 +1,8 @@
-import { defineConfig } from "cva";
+import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
-export const { cva, cx, compose } = defineConfig({
-  hooks: {
-    onComplete: (className) => twMerge(className),
-  },
-});
+export { cva, type VariantProps } from "class-variance-authority";
 
-export const cn = cx;
+export const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs));
+
+export const cx = cn;

@@ -4130,7 +4130,7 @@ def get_optional_params(
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
     elif custom_llm_provider == "together_ai":
-        optional_params = litellm.TogetherAIConfig().map_openai_params(
+        optional_params = litellm.TogetherAIChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -5726,6 +5726,8 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
+                output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
+                output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
@@ -5753,6 +5755,8 @@ def _get_model_info_helper(
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
+                supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
+                thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
@@ -6522,24 +6526,6 @@ def validate_environment(
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
     return litellm.acompletion(*args, **kwargs)
-
-
-def prompt_token_calculator(model, messages):
-    # use tiktoken or anthropic's tokenizer depending on the model
-    text: Final = " ".join(message["content"] for message in messages)
-    num_tokens = 0
-    if "claude" in model:
-        try:
-            import anthropic
-        except Exception:
-            Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
-
-        anthropic_obj: Final = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
-    else:
-        num_tokens = len(_get_default_encoding().encode(text))
-    return num_tokens
 
 
 def valid_model(model):
@@ -7912,7 +7898,7 @@ class ProviderConfigManager:
             LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
             LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
-            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
+            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIChatConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
@@ -8624,6 +8610,12 @@ class ProviderConfigManager:
             )
 
             return BedrockPassthroughConfig()
+        elif LlmProviders.BEDROCK_MANTLE == provider:
+            from litellm.llms.bedrock_mantle.passthrough.transformation import (
+                BedrockMantlePassthroughConfig,
+            )
+
+            return BedrockMantlePassthroughConfig()
         elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.passthrough.transformation import (
                 VLLMPassthroughConfig,
@@ -9110,6 +9102,7 @@ class ProviderConfigManager:
         from litellm.llms.apiserpent.search.transformation import (
             APISerpentSearchConfig,
         )
+        from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
@@ -9151,6 +9144,7 @@ class ProviderConfigManager:
             SearchProviders.TINYFISH: TinyfishSearchConfig,
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
+            SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
