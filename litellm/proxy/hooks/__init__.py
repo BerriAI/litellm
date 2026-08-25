@@ -11,6 +11,7 @@ from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
 from .responses_id_security import ResponsesIDSecurity
 from .sensitive_data_routing import _PROXY_SensitiveDataRoutingHandler
+from litellm._logging import verbose_proxy_logger
 
 # List of all available hooks that can be enabled.
 # Defined before the enterprise import below so that any module re-imported
@@ -47,10 +48,8 @@ def get_proxy_hook(
 
 try:
     from enterprise.enterprise_hooks import ENTERPRISE_PROXY_HOOKS
-except ImportError:
-    ENTERPRISE_PROXY_HOOKS = {}
-
-
-### update PROXY_HOOKS with ENTERPRISE_PROXY_HOOKS ###
-
-PROXY_HOOKS.update(ENTERPRISE_PROXY_HOOKS)
+    PROXY_HOOKS.update(ENTERPRISE_PROXY_HOOKS)
+except ImportError as e:
+    verbose_proxy_logger.warning(
+        f"Could not import enterprise hooks — enterprise features disabled: {e}"
+    )

@@ -49,3 +49,38 @@ def test_isolation_module_does_not_pull_in_proxy_utils():
     importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
     assert "litellm.proxy.utils" not in sys.modules
     assert "litellm.proxy.management_endpoints.common_utils" not in sys.modules
+
+def test_enterprise_hooks_import_failure_logs_warning(monkeypatch, caplog):
+    """
+    If the `enterprise` / `litellm_enterprise` package is unavailable
+    (e.g. missing from a hardened non_root Docker image), hooks/__init__.py
+    should log a warning and continue, instead of letting the ImportError
+    propagate and crash the whole proxy at import time.
+    """
+    import builtins
+    import importlib
+    import logging
+    import sys
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "enterprise" or name.startswith("enterprise."):
+            raise ImportError("No module named 'enterprise'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    sys.modules.pop("litellm.proxy.hooks", None)
+
+    with caplog.at_level(logging.WARNING):
+        import litellm.proxy.hooks as hooks_module
+        importlib.reload(hooks_module)
+
+    assert any(
+        "enterprise hooks" in record.message.lower()
+        for record in caplog.records
+    ), "Expected a warning to be logged when enterprise hooks import fails"
+
+    monkeypatch.undo()
+    sys.modules.pop("litellm.proxy.hooks", None)
+    importlib.import_module("litellm.proxy.hooks")
