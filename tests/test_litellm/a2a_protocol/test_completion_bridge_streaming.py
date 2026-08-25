@@ -288,6 +288,49 @@ async def test_handle_streaming_preserves_multiple_choices():
 
 
 @pytest.mark.asyncio
+async def test_handle_streaming_preserves_non_text_delta_fields():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    delta = MagicMock()
+    delta.content = ""
+    delta.tool_calls = None
+    delta.model_dump.return_value = {
+        "audio": {"data": "abc"},
+        "reasoning_content": "thinking",
+        "provider_specific_fields": {"trace_id": "trace-1"},
+    }
+    choice = MagicMock()
+    choice.index = 0
+    choice.finish_reason = "stop"
+    choice.delta = delta
+    choice.logprobs = {"content": []}
+    chunk = MagicMock()
+    chunk.choices = [choice]
+
+    async def mock_streaming_response():
+        yield chunk
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_streaming_response()
+        events = [
+            event
+            async for event in A2ACompletionBridgeHandler.handle_streaming(
+                request_id="req-fields",
+                params={"message": {"role": "user", "parts": []}},
+                litellm_params={"custom_llm_provider": "langgraph", "model": "agent"},
+            )
+        ]
+
+    result = events[-1]["result"]
+    assert result["audio"] == {"data": "abc"}
+    assert result["reasoning_content"] == "thinking"
+    assert result["provider_specific_fields"] == {"trace_id": "trace-1"}
+    assert result["logprobs"] == {"content": []}
+
+
+@pytest.mark.asyncio
 async def test_provider_config_receives_full_message_history():
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2ACompletionBridgeHandler,

@@ -282,6 +282,8 @@ class A2ACompletionBridgeHandler:
         accumulated_tool_calls: Final[list[object]] = []  # mutable-ok: collect streaming tool-call deltas
         choice_texts: dict[int, str] = {}
         choice_tool_calls: dict[int, list[object]] = {}
+        choice_delta_fields: dict[int, dict[str, object]] = {}
+        choice_logprobs: dict[int, object] = {}
         choice_finish_reasons: dict[int, str] = {}
         stream_usage: object | None = None
         stream_finish_reason: str | None = None
@@ -328,6 +330,26 @@ class A2ACompletionBridgeHandler:
                             if isinstance(tool_calls, (list, tuple)):
                                 accumulated_tool_calls.extend(tool_calls)
                                 choice_tool_calls.setdefault(choice_index, []).extend(tool_calls)
+                            delta_fields = A2ACompletionBridgeTransformation._model_dump(delta)
+                            if delta_fields:
+                                choice_fields = choice_delta_fields.setdefault(choice_index, {})
+                                for field, value in delta_fields.items():
+                                    if field in {"content", "role", "tool_calls"} or value is None:
+                                        continue
+                                    previous = choice_fields.get(field)
+                                    if (isinstance(previous, str) and isinstance(value, str)) or (
+                                        isinstance(previous, list) and isinstance(value, list)
+                                    ):
+                                        choice_fields[field] = previous + value
+                                    elif isinstance(previous, Mapping) and isinstance(value, Mapping):
+                                        choice_fields[field] = {**previous, **value}
+                                    else:
+                                        choice_fields[field] = value
+
+                        raw_logprobs = getattr(choice, "logprobs", None)
+                        serialized_logprobs = A2ACompletionBridgeTransformation._model_dump(raw_logprobs)
+                        if serialized_logprobs:
+                            choice_logprobs[choice_index] = serialized_logprobs
 
                         if content:
                             artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
@@ -352,6 +374,10 @@ class A2ACompletionBridgeHandler:
             completed_event["result"]["finish_reason"] = stream_finish_reason
         if stream_usage is not None:
             completed_event["usage"] = stream_usage
+        if choice_delta_fields.get(0):
+            completed_event["result"].update(choice_delta_fields[0])
+        if 0 in choice_logprobs:
+            completed_event["result"]["logprobs"] = choice_logprobs[0]
         if len(choice_texts) > 1:
             completed_event["result"]["choices"] = [
                 {
@@ -365,12 +391,14 @@ class A2ACompletionBridgeHandler:
                             if choice_tool_calls.get(choice_index)
                             else {}
                         ),
+                        **choice_delta_fields.get(choice_index, {}),
                     },
                     **(
                         {"finish_reason": choice_finish_reasons[choice_index]}
                         if choice_index in choice_finish_reasons
                         else {}
                     ),
+                    **({"logprobs": choice_logprobs[choice_index]} if choice_index in choice_logprobs else {}),
                 }
                 for choice_index in sorted(choice_texts)
             ]

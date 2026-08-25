@@ -70,7 +70,56 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
         try:
             # Extract text from A2A response
-            text: Final = extract_text_from_a2a_response(chunk)
+            result: Final = chunk.get("result", {})
+            status: Final = result.get("status", {}) if isinstance(result, Mapping) else {}
+            is_working_status: Final = (
+                isinstance(result, Mapping)
+                and result.get("kind") == "status-update"
+                and isinstance(status, Mapping)
+                and status.get("state") == "working"
+            )
+            text: Final = "" if is_working_status else extract_text_from_a2a_response(chunk)
+            provider_fields: dict[str, object] = {}
+            if isinstance(result, Mapping) and not is_working_status:
+                control_fields = {
+                    "artifacts",
+                    "choices",
+                    "contextId",
+                    "final",
+                    "finish_reason",
+                    "history",
+                    "id",
+                    "kind",
+                    "message",
+                    "parts",
+                    "status",
+                    "taskId",
+                    "tool_calls",
+                    "usage",
+                }
+                provider_fields.update(
+                    {key: value for key, value in result.items() if key not in control_fields and value is not None}
+                )
+                choices = result.get("choices")
+                if isinstance(choices, list) and choices:
+                    first_choice = choices[0]
+                    if isinstance(first_choice, Mapping):
+                        provider_fields.update(
+                            {
+                                key: value
+                                for key, value in first_choice.items()
+                                if key not in {"index", "message", "finish_reason"} and value is not None
+                            }
+                        )
+                        first_message = first_choice.get("message")
+                        if isinstance(first_message, Mapping):
+                            provider_fields.update(
+                                {
+                                    key: value
+                                    for key, value in first_message.items()
+                                    if key not in {"kind", "role", "parts", "tool_calls"} and value is not None
+                                }
+                            )
 
             # Determine finish reason
             finish_reason: Final = self._get_finish_reason(chunk)
@@ -85,6 +134,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 usage=usage,
                 index=0,
                 tool_use=tool_calls,
+                provider_specific_fields=provider_fields or None,
             )
         except Exception:
             # Return empty chunk on parse error
@@ -149,9 +199,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 return raw_usage
         return raw_usage
 
-    def _get_tool_calls(
-        self, chunk: dict
-    ) -> ChatCompletionToolCallChunk | list[ChatCompletionToolCallChunk] | None:
+    def _get_tool_calls(self, chunk: dict) -> ChatCompletionToolCallChunk | list[ChatCompletionToolCallChunk] | None:
         result: Final = chunk.get("result", {})
         if not isinstance(result, dict):
             return None

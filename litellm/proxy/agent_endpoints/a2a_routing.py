@@ -55,6 +55,7 @@ _FORWARDED_REQUEST_PARAMS: Final = frozenset(
         "safety_identifier",
         "stop",
         "store",
+        "stream_options",
         "temperature",
         "thinking",
         "timeout",

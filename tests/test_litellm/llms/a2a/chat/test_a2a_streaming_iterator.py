@@ -29,6 +29,52 @@ async def test_async_iterator_accepts_decoded_a2a_events():
 
 
 @pytest.mark.asyncio
+async def test_async_iterator_ignores_status_message_text():
+    async def _events():
+        yield {
+            "jsonrpc": "2.0",
+            "result": {
+                "kind": "status-update",
+                "status": {
+                    "state": "working",
+                    "message": {"parts": [{"kind": "text", "text": "Processing request..."}]},
+                },
+            },
+        }
+
+    iterator = A2AModelResponseIterator(streaming_response=_events(), sync_stream=False)
+
+    chunk = await iterator.__aiter__().__anext__()
+
+    assert chunk["text"] == ""
+
+
+@pytest.mark.asyncio
+async def test_async_iterator_preserves_non_text_fields():
+    async def _events():
+        yield {
+            "jsonrpc": "2.0",
+            "result": {
+                "kind": "status-update",
+                "status": {"state": "completed"},
+                "audio": {"data": "abc"},
+                "reasoning_content": "thinking",
+                "logprobs": {"content": []},
+            },
+        }
+
+    iterator = A2AModelResponseIterator(streaming_response=_events(), sync_stream=False)
+
+    chunk = await iterator.__aiter__().__anext__()
+
+    assert chunk["provider_specific_fields"] == {
+        "audio": {"data": "abc"},
+        "reasoning_content": "thinking",
+        "logprobs": {"content": []},
+    }
+
+
+@pytest.mark.asyncio
 async def test_async_iterator_preserves_tool_calls():
     tool_calls = [
         {
