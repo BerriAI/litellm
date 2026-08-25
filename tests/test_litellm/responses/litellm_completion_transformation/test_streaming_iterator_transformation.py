@@ -523,3 +523,151 @@ async def test_streaming_response_id_falls_back_when_upstream_yields_nothing():
     assert response_ids
     assert len(set(response_ids)) == 1
     assert response_ids[0].startswith("resp_")
+
+
+class _FakeChatCompletionStream:
+    """Minimal stand-in for CustomStreamWrapper: yields chunks, carries logging_obj."""
+
+    def __init__(self, chunks):
+        self._chunks = iter(chunks)
+        self.logging_obj = None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._chunks)
+
+
+def _tool_chunk(content=None, tool_calls=None, finish_reason=None):
+    return ModelResponseStream(
+        id="chatcmpl-a83572f7",
+        created=123,
+        model="claude-sonnet-4-6",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=finish_reason,
+                index=0,
+                delta=Delta(
+                    role="assistant", content=content, tool_calls=tool_calls
+                ),
+            )
+        ],
+    )
+
+
+_WEB_SEARCH_TOOL_CALL = [
+    {
+        "id": "tooluse_8G8H6h8nrt79WT4b8sHNd0",
+        "type": "function",
+        "function": {"name": "web_search", "arguments": '{"query":"floppy disks"}'},
+    }
+]
+
+
+def _drive(chunks):
+    """Run the whole stream and return (event type, item id) for every event."""
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-4-6",
+        litellm_custom_stream_wrapper=_FakeChatCompletionStream(chunks),
+        request_input="Search the web for floppy disks.",
+        responses_api_request={},
+    )
+    iterator.litellm_custom_stream_wrapper.__anext__ = AsyncMock()
+    return [
+        (
+            event.type,
+            getattr(event, "item_id", None)
+            or getattr(getattr(event, "item", None), "id", None),
+        )
+        for event in iterator
+    ]
+
+
+def _unopened_done_events(events):
+    """Every *.done whose item id was never introduced by a matching *.added."""
+    opened = {
+        item_id
+        for event_type, item_id in events
+        if event_type
+        in (
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+        )
+    }
+    return [
+        (event_type, item_id)
+        for event_type, item_id in events
+        if event_type
+        in (
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        )
+        and item_id not in opened
+    ]
+
+
+def test_tool_only_turn_does_not_close_a_message_item_it_never_opened():
+    """A tool call with no assistant text must not emit message .done events.
+
+    _ensure_output_item_for_chunk opens no message item for a tool-first chunk, so
+    emitting output_text.done / content_part.done / output_item.done for one leaves
+    three events pointing at an id the client never saw. Clients that track output
+    items by id (e.g. the Vercel AI SDK) abort the run on that.
+    """
+    events = _drive(
+        [
+            _tool_chunk(content="", tool_calls=_WEB_SEARCH_TOOL_CALL),
+            _tool_chunk(finish_reason="tool_calls"),
+        ]
+    )
+
+    assert _unopened_done_events(events) == []
+    # The tool call itself is still opened and closed as before.
+    assert (
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        "tooluse_8G8H6h8nrt79WT4b8sHNd0",
+    ) in events
+    assert (
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        "tooluse_8G8H6h8nrt79WT4b8sHNd0",
+    ) in events
+    assert events[-1][0] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+
+
+def test_tool_call_with_text_still_closes_its_message_item():
+    """Control: text alongside the tool call keeps the full message item lifecycle."""
+    events = _drive(
+        [
+            _tool_chunk(content="Let me search."),
+            _tool_chunk(content="", tool_calls=_WEB_SEARCH_TOOL_CALL),
+            _tool_chunk(finish_reason="tool_calls"),
+        ]
+    )
+
+    assert _unopened_done_events(events) == []
+    message_id = next(
+        item_id
+        for event_type, item_id in events
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        and item_id.startswith("msg_")
+    )
+    for done_event in (
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+    ):
+        assert (done_event, message_id) in events
+
+
+def test_text_only_turn_still_closes_its_message_item():
+    """Control: the ordinary no-tool-calls stream is untouched."""
+    events = _drive([_tool_chunk(content="Floppy disks are obsolete."), _tool_chunk(finish_reason="stop")])
+
+    assert _unopened_done_events(events) == []
+    assert any(
+        event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE
+        for event_type, _ in events
+    )

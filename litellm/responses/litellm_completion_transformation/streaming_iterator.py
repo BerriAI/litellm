@@ -743,9 +743,31 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
 
+    def _message_item_was_never_opened(self, litellm_complete_object: ModelResponse) -> bool:
+        """True when this turn produced tool calls only, so no message item exists.
+
+        ``_ensure_output_item_for_chunk`` deliberately opens no message item for a
+        tool-first chunk, and a turn with no assistant text has nothing to put in one.
+        Emitting the message ``.done`` events anyway would reference an item the client
+        never saw opened, which clients that track output items by id reject.
+        """
+        if self.sent_content_part_added_event:
+            return False
+        message: Final = litellm_complete_object.choices[0].message
+        if getattr(message, "content", None) or getattr(message, "reasoning_content", None):
+            return False
+        return bool(getattr(message, "tool_calls", None))
+
     def return_default_done_events(
         self, litellm_complete_object: ModelResponse
     ) -> BaseLiteLLMOpenAIResponseObject | None:
+        if self._message_item_was_never_opened(litellm_complete_object):
+            # Latch the flags so is_stream_finished() still reports done and the
+            # stream proceeds straight to response.completed.
+            self.sent_output_text_done_event = True
+            self.sent_output_content_part_done_event = True
+            self.sent_output_item_done_event = True
+            return None
         if self.sent_output_text_done_event is False:
             self.sent_output_text_done_event = True
             return self.create_output_text_done_event(litellm_complete_object)
