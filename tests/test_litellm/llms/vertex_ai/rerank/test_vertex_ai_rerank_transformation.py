@@ -92,13 +92,9 @@ class TestVertexAIRerankTransform:
             litellm.vertex_project = None
             # Reset mock and set it to raise an error
             mock_ensure_access_token.reset_mock()
-            mock_ensure_access_token.side_effect = ValueError(
-                "Vertex AI project ID is required"
-            )
+            mock_ensure_access_token.side_effect = ValueError("Vertex AI project ID is required")
             try:
-                with pytest.raises(
-                    ValueError, match="Vertex AI project ID is required"
-                ):
+                with pytest.raises(ValueError, match="Vertex AI project ID is required"):
                     self.config.get_complete_url(api_base=None, model=self.model)
             finally:
                 litellm.vertex_project = original_project
@@ -111,14 +107,10 @@ class TestVertexAIRerankTransform:
         importlib.reload(litellm) in conftest.py.
         """
         # Mock the authentication at instance level
-        mock_ensure_access_token = MagicMock(
-            return_value=("test-access-token", "test-project-123")
-        )
+        mock_ensure_access_token = MagicMock(return_value=("test-access-token", "test-project-123"))
         self.config._ensure_access_token = mock_ensure_access_token
 
-        headers = self.config.validate_environment(
-            headers={}, model=self.model, api_key=None
-        )
+        headers = self.config.validate_environment(headers={}, model=self.model, api_key=None)
 
         expected_headers = {
             "Authorization": "Bearer test-access-token",
@@ -166,9 +158,7 @@ class TestVertexAIRerankTransform:
                     "text": "Gemini is a cutting edge large language model created by Google.",
                     "title": "Custom Title 1",
                 },
-                {
-                    "text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."
-                },
+                {"text": "The Gemini zodiac symbol often depicts two figures standing side-by-side."},
             ],
         }
 
@@ -178,9 +168,7 @@ class TestVertexAIRerankTransform:
 
         # Verify record structure with custom titles
         assert request_data["records"][0]["title"] == "Custom Title 1"
-        assert (
-            request_data["records"][1]["title"] == "The Gemini zodiac"
-        )  # First 3 words
+        assert request_data["records"][1]["title"] == "The Gemini zodiac"  # First 3 words
 
     def test_transform_rerank_request_return_documents_mapping(self):
         """Test return_documents to ignoreRecordDetailsInResponse mapping."""
@@ -226,9 +214,7 @@ class TestVertexAIRerankTransform:
             model=self.model,
             optional_rerank_params=optional_params,
             headers={},
-            litellm_params={
-                "metadata": {"requester_metadata": {"app": "litellm", "tier": "1"}}
-            },
+            litellm_params={"metadata": {"requester_metadata": {"app": "litellm", "tier": "1"}}},
         )
         assert request_data["userLabels"] == {"app": "litellm", "tier": "1"}
 
@@ -243,9 +229,7 @@ class TestVertexAIRerankTransform:
             )
 
         # Test missing documents
-        with pytest.raises(
-            ValueError, match="documents is required for Vertex AI rerank"
-        ):
+        with pytest.raises(ValueError, match="documents is required for Vertex AI rerank"):
             self.config.transform_rerank_request(
                 model=self.model,
                 optional_rerank_params={"query": "test query"},
@@ -294,11 +278,118 @@ class TestVertexAIRerankTransform:
         assert len(result.results) == 2
         assert result.results[0]["index"] == 1  # Converted back to 0-based index
         assert result.results[0]["relevance_score"] == 0.98
+        assert (
+            result.results[0]["document"]["text"]
+            == "The sky appears blue due to a phenomenon called Rayleigh scattering."
+        )
         assert result.results[1]["index"] == 0
         assert result.results[1]["relevance_score"] == 0.64
+        assert (
+            result.results[1]["document"]["text"]
+            == "A canvas stretched across the day, Where sunlight learns to dance and play."
+        )
 
         # Verify metadata
         assert result.meta["billed_units"]["search_units"] == 2
+
+    def test_transform_rerank_response_return_documents_true_populates_document_text(self):
+        """Test that return_documents=True populates document with {'text': record['content']}."""
+        response_data = {
+            "records": [
+                {
+                    "id": "1",
+                    "score": 0.95,
+                    "title": "Doc 1",
+                    "content": "Content of document 1",
+                },
+                {
+                    "id": "0",
+                    "score": 0.80,
+                    "title": "Doc 0",
+                    "content": "Content of document 0",
+                },
+            ]
+        }
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_data
+        mock_response.text = json.dumps(response_data)
+        mock_logging = MagicMock()
+        model_response = RerankResponse()
+
+        # Test with optional_params={"return_documents": True}
+        result = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            optional_params={"return_documents": True},
+        )
+
+        assert len(result.results) == 2
+        assert result.results[0]["index"] == 1
+        assert result.results[0]["relevance_score"] == 0.95
+        assert result.results[0]["document"] == {"text": "Content of document 1"}
+        assert result.results[0]["document"]["text"] == "Content of document 1"
+
+        assert result.results[1]["index"] == 0
+        assert result.results[1]["relevance_score"] == 0.80
+        assert result.results[1]["document"] == {"text": "Content of document 0"}
+        assert result.results[1]["document"]["text"] == "Content of document 0"
+
+    def test_transform_rerank_response_return_documents_false_omits_document_text(self):
+        """Test that return_documents=False does not populate document field."""
+        response_data = {
+            "records": [
+                {
+                    "id": "1",
+                    "score": 0.95,
+                    "title": "Doc 1",
+                    "content": "Content of document 1",
+                },
+                {
+                    "id": "0",
+                    "score": 0.80,
+                    "title": "Doc 0",
+                    "content": "Content of document 0",
+                },
+            ]
+        }
+
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = response_data
+        mock_response.text = json.dumps(response_data)
+        mock_logging = MagicMock()
+        model_response = RerankResponse()
+
+        # Test with optional_params={"return_documents": False}
+        result = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            optional_params={"return_documents": False},
+        )
+
+        assert len(result.results) == 2
+        assert result.results[0]["index"] == 1
+        assert result.results[0]["relevance_score"] == 0.95
+        assert "document" not in result.results[0]
+
+        assert result.results[1]["index"] == 0
+        assert result.results[1]["relevance_score"] == 0.80
+        assert "document" not in result.results[1]
+
+        # Test with request_data={"ignoreRecordDetailsInResponse": True}
+        result_request_data = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={"ignoreRecordDetailsInResponse": True},
+        )
+        assert "document" not in result_request_data.results[0]
+        assert "document" not in result_request_data.results[1]
 
     def test_transform_rerank_response_with_ignore_record_details(self):
         """Test response transformation when ignoreRecordDetailsInResponse=true."""
@@ -387,9 +478,7 @@ class TestVertexAIRerankTransform:
         # Verify title generation
         assert request_data["records"][0]["title"] == "This is a"  # First 3 words
         assert request_data["records"][1]["title"] == "Short doc"  # Less than 3 words
-        assert (
-            request_data["records"][2]["title"] == "Another document with"
-        )  # First 3 words
+        assert request_data["records"][2]["title"] == "Another document with"  # First 3 words
 
     def test_record_id_generation(self):
         """Test that record IDs are generated correctly with 0-based indexing."""
@@ -470,9 +559,7 @@ class TestVertexAIRerankTransform:
         importlib.reload(litellm) in conftest.py.
         """
         # Mock the authentication at instance level
-        mock_ensure_access_token = MagicMock(
-            return_value=("test-access-token", "test-project-123")
-        )
+        mock_ensure_access_token = MagicMock(return_value=("test-access-token", "test-project-123"))
         self.config._ensure_access_token = mock_ensure_access_token
 
         optional_params = {
@@ -510,9 +597,7 @@ class TestVertexAIRerankTransform:
         Uses instance-level mocking to avoid class-reference issues caused by
         importlib.reload(litellm) in conftest.py.
         """
-        mock_ensure_access_token = MagicMock(
-            return_value=("test-access-token", "project-from-token")
-        )
+        mock_ensure_access_token = MagicMock(return_value=("test-access-token", "project-from-token"))
         self.config._ensure_access_token = mock_ensure_access_token
 
         optional_params = {
