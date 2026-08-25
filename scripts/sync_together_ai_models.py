@@ -308,7 +308,7 @@ def _new_entry(model: CatalogModel, mode: str) -> RegistryEntry:
 def _updated_entry(entry: RegistryEntry, model: CatalogModel) -> tuple[RegistryEntry, tuple[str, ...]]:
     rule: Final = RULES_BY_ID.get(model.id)
     desired: Final = {**_api_fields(model), **(dict(rule.fields) if rule else {})}
-    dropped: Final = () if model.pricing.cached_input else ("cache_read_input_token_cost",)
+    dropped: Final = () if model.pricing.cached_input else ("cache_read_input_token_cost", "supports_prompt_caching")
     changes: Final = tuple(
         f"{name}: {entry.get(name)!r} -> {value!r}" for name, value in desired.items() if entry.get(name) != value
     ) + tuple(
