@@ -4,6 +4,8 @@ MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's 
 
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
