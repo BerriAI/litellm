@@ -78,6 +78,16 @@ def client_no_auth():
     return TestClient(app)
 
 
+def test_cors_exposes_cache_key_header_to_browser_js():
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from litellm.constants import LITELLM_UI_ALLOW_HEADERS
+
+    cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
+    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
+
+
 def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     mock_login_result = {"user_id": "test-user"}
     mock_prisma_client = MagicMock()
