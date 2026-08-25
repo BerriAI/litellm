@@ -1227,6 +1227,50 @@ class TestPassthroughAuthToken:
         assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
 
+    def test_passthrough_missing_credentials_raises_authentication_error(self):
+        """Passthrough endpoint should raise locally instead of forwarding an unauthenticated request."""
+        from unittest.mock import patch as mock_patch
+
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(litellm.AuthenticationError, match="Missing Anthropic API Key"):
+                config.validate_anthropic_messages_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    def test_passthrough_client_x_api_key_header_is_kept(self):
+        """A client-forwarded x-api-key header should satisfy validation without env credentials."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            updated_headers, _ = config.validate_anthropic_messages_environment(
+                headers={"x-api-key": FAKE_REGULAR_KEY},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
+
     def test_passthrough_get_complete_url_honours_base_url_env(self):
         """get_complete_url should use ANTHROPIC_BASE_URL when api_base is None."""
         from unittest.mock import patch as mock_patch
