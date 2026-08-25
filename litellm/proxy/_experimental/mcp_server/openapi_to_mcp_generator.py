@@ -7,17 +7,27 @@ import contextvars
 import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Final, TypedDict
 from urllib.parse import quote
+
+import httpx
+from typing_extensions import ReadOnly, Required
+
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPOpenApiUpstreamError,
+    MCPUpstreamAuthError,
+)
 
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
 # OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
 # ^[a-zA-Z0-9_-]+$ on tool names. Many specs (notably GitHub's REST API) use
 # tag-namespaced operationIds like "actions/download-job-logs-for-workflow-run"
 # which include '/'. Sanitize here so the same regex passes everywhere downstream.
-_OPENAPI_TOOL_NAME_INVALID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
-_OPENAPI_TOOL_NAME_MAX_LEN = 128
+_OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
+_OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -30,35 +40,74 @@ def sanitize_openapi_tool_name(raw_name: str) -> str:
     """
     if not raw_name:
         return raw_name
-    sanitized = _OPENAPI_TOOL_NAME_INVALID_CHARS.sub("_", raw_name).lower()
+    sanitized: Final = _OPENAPI_TOOL_NAME_INVALID_CHARS.sub("_", raw_name).lower()
     return sanitized[:_OPENAPI_TOOL_NAME_MAX_LEN]
 
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 
+
+class _OpenAPIJSONSchema(TypedDict, total=False):
+    properties: Mapping[str, object]
+    type: ReadOnly[str]
+
+
+class _OpenAPIParameter(TypedDict, total=False):
+    name: Required[ReadOnly[str]]
+    description: ReadOnly[str]
+    required: ReadOnly[bool]
+    schema: ReadOnly[_OpenAPIJSONSchema]
+
+
+class _OpenAPIMediaType(TypedDict, total=False):
+    schema: _OpenAPIJSONSchema
+
+
+class _OpenAPIRequestBody(TypedDict, total=False):
+    description: str
+    required: bool
+    content: Mapping[str, _OpenAPIMediaType]
+
+
+class _OpenAPIOperation(TypedDict, total=False):
+    operationId: str
+    summary: str
+    description: str
+    parameters: Sequence[_OpenAPIParameter]
+    requestBody: _OpenAPIRequestBody
+
+
+class _OpenAPIPathItem(TypedDict, total=False):
+    summary: str
+    description: str
+    parameters: Sequence[_OpenAPIParameter]
+
+
+class _OpenAPIComponents(TypedDict, total=False):
+    parameters: Mapping[str, _OpenAPIParameter]
+
+
 # Store the base URL and headers globally
-BASE_URL = ""
-HEADERS: Dict[str, str] = {}
+BASE_URL: Final = ""
+HEADERS: Final[dict[str, str]] = {}
 
 # Per-request auth header override for BYOK servers.
 # Set this ContextVar before calling a local tool handler to inject the user's
 # stored credential into the HTTP request made by the tool function closure.
-_request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "_request_auth_header", default=None
-)
+_request_auth_header: contextvars.ContextVar[str | None] = contextvars.ContextVar("_request_auth_header", default=None)
 
 # Per-request extra headers forwarded from the client request.
 # Populated from MCPServer.extra_headers names matched against raw request
 # headers in server.py before dispatching to a local/OpenAPI tool handler.
-_request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = contextvars.ContextVar(
+_request_extra_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
     "_request_extra_headers", default=None
 )
 
@@ -66,21 +115,21 @@ _request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = conte
 # (stored per-user OAuth token, minted M2M token, exchanged OBO token).
 # Set from MCPServerManager.resolve_openapi_upstream_auth; authoritative
 # over every other Authorization source in _merge_openapi_tool_request_headers.
-_request_resolved_auth_headers: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+_request_resolved_auth_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
     "_request_resolved_auth_headers", default=None
 )
 
 
-def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
+def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
     if param_value is None:
         return ""
 
-    value_str = str(param_value)
+    value_str: Final = str(param_value)
     if value_str == "":
         return ""
 
-    normalized_value = value_str.replace("\\", "/")
+    normalized_value: Final = value_str.replace("\\", "/")
     if "/" in normalized_value:
         raise ValueError(f"Path parameter '{param_name}' must not contain path separators")
 
@@ -90,7 +139,7 @@ def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> Dict[str, Any]:
+def load_openapi_spec(filepath: str) -> dict[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -108,10 +157,10 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
+async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r = await async_safe_get(client, filepath)
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        r: Final[httpx.Response] = await async_safe_get(client, filepath)
         r.raise_for_status()
         return r.json()
 
@@ -123,11 +172,11 @@ async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
         return json.load(f)
 
 
-def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
+def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
-        server_url = spec["servers"][0]["url"]
+        server_url: Final[str] = spec["servers"][0]["url"]
 
         # If the server URL is relative (starts with /), derive base from spec_path
         if server_url.startswith("/") and spec_path:
@@ -136,20 +185,21 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
                 # Combine domain with the relative server URL
                 from urllib.parse import urlparse
 
-                parsed = urlparse(spec_path)
-                base_domain = f"{parsed.scheme}://{parsed.netloc}"
-                full_base_url = base_domain + server_url
+                parsed: Final = urlparse(spec_path)
+                base_domain: Final = f"{parsed.scheme}://{parsed.netloc}"
+                full_base_url: Final = base_domain + server_url
                 verbose_logger.info(
-                    f"OpenAPI spec has relative server URL '{server_url}'. "
-                    f"Deriving base from spec_path: {full_base_url}"
+                    "OpenAPI spec has relative server URL '%s'. Deriving base from spec_path: %s",
+                    server_url,
+                    full_base_url,
                 )
                 return full_base_url
 
         return server_url
     # OpenAPI 2.x (Swagger)
     elif "host" in spec:
-        scheme = spec.get("schemes", ["https"])[0]
-        base_path = spec.get("basePath", "")
+        scheme: Final[str] = spec.get("schemes", ["https"])[0]
+        base_path: Final[str] = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
 
     # Fallback: derive base URL from spec_path if it's a URL
@@ -162,33 +212,37 @@ def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
         ]:
             if spec_path.endswith(suffix):
                 base_url = spec_path[: -len(suffix)]
-                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+                verbose_logger.info("No server info in OpenAPI spec. Using derived base URL: %s", base_url)
                 return base_url
 
         if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
             base_url = "/".join(spec_path.split("/")[:-1])
-            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+            verbose_logger.info("No server info in OpenAPI spec. Using derived base URL: %s", base_url)
             return base_url
 
     return ""
 
 
-def _resolve_ref(param: Dict[str, Any], component_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _resolve_ref(
+    param: _OpenAPIParameter, component_params: Mapping[str, _OpenAPIParameter]
+) -> _OpenAPIParameter | None:
     """Resolve a single parameter, following a $ref if present.
 
     Returns the resolved param dict, or None if the $ref target is absent from
     components (so callers can skip/filter it rather than propagating a stub
     with name=None that would corrupt deduplication).
     """
-    ref = param.get("$ref", "")
+    ref: Final[str] = param.get("$ref", "")
     if not ref.startswith("#/components/parameters/"):
         return param
     return component_params.get(ref.split("/")[-1])
 
 
-def _resolve_param_list(raw: List[Dict[str, Any]], component_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _resolve_param_list(
+    raw: Sequence[_OpenAPIParameter], component_params: Mapping[str, _OpenAPIParameter]
+) -> list[_OpenAPIParameter]:
     """Resolve $refs in a parameter list, dropping any unresolvable entries."""
-    result = []
+    result: Final = []
     for p in raw:
         resolved = _resolve_ref(p, component_params)
         if resolved is not None and resolved.get("name"):
@@ -197,10 +251,10 @@ def _resolve_param_list(raw: List[Dict[str, Any]], component_params: Dict[str, A
 
 
 def resolve_operation_params(
-    operation: Dict[str, Any],
-    path_item: Dict[str, Any],
-    components: Dict[str, Any],
-) -> Dict[str, Any]:
+    operation: _OpenAPIOperation,
+    path_item: _OpenAPIPathItem,
+    components: _OpenAPIComponents,
+) -> _OpenAPIOperation:
     """Return a copy of *operation* with fully-resolved, merged parameters.
 
     Handles two common patterns in real-world OpenAPI specs:
@@ -215,21 +269,20 @@ def resolve_operation_params(
        merged with the operation-level params; operation-level wins when the
        same ``name`` + ``in`` combination appears in both.
     """
-    component_params = components.get("parameters", {})
-    path_level = _resolve_param_list(path_item.get("parameters", []), component_params)
-    op_level = _resolve_param_list(operation.get("parameters", []), component_params)
-    op_keys = {(p["name"], p.get("in")) for p in op_level}
-    merged = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
-    result = dict(operation)
-    result["parameters"] = merged
+    component_params: Final[Mapping[str, _OpenAPIParameter]] = components.get("parameters", {})
+    path_level: Final = _resolve_param_list(path_item.get("parameters", []), component_params)
+    op_level: Final = _resolve_param_list(operation.get("parameters", []), component_params)
+    op_keys: Final = {(p["name"], p.get("in")) for p in op_level}
+    merged: Final = [p for p in path_level if (p["name"], p.get("in")) not in op_keys] + op_level
+    result: Final[_OpenAPIOperation] = {**operation, "parameters": merged}
     return result
 
 
-def extract_parameters(operation: Dict[str, Any]) -> tuple:
+def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
     """Extract parameter names from OpenAPI operation."""
-    path_params = []
-    query_params = []
-    body_params = []
+    path_params: Final = []
+    query_params: Final = []
+    body_params: Final = []
 
     # OpenAPI 3.x and 2.x parameters
     if "parameters" in operation:
@@ -251,10 +304,10 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
+def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     """Build MCP input schema from OpenAPI operation."""
-    properties = {}
-    required = []
+    properties: Final = {}
+    required: Final = []
 
     # Process parameters
     if "parameters" in operation:
@@ -275,12 +328,12 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
 
     # Process requestBody (OpenAPI 3.x)
     if "requestBody" in operation:
-        request_body = operation["requestBody"]
-        content = request_body.get("content", {})
+        request_body: Final[_OpenAPIRequestBody] = operation["requestBody"]
+        content: Final[Mapping[str, _OpenAPIMediaType]] = request_body.get("content", {})
 
         # Try to get JSON schema
         if "application/json" in content:
-            schema = content["application/json"].get("schema", {})
+            schema: Final[_OpenAPIJSONSchema] = content["application/json"].get("schema", {})
             properties["body"] = {
                 "type": "object",
                 "description": request_body.get("description", "Request body"),
@@ -297,8 +350,8 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _merge_openapi_tool_request_headers(
-    static_headers: Dict[str, str],
-) -> Dict[str, str]:
+    static_headers: dict[str, str],
+) -> dict[str, str]:
     """Merge static closure headers with per-request ContextVar overrides.
 
     Precedence (highest to lowest):
@@ -323,20 +376,20 @@ def _merge_openapi_tool_request_headers(
     Header names are compared case-insensitively so different casing cannot
     bypass the precedence rules.
     """
-    request_extra = _request_extra_headers.get() or {}
-    static = static_headers or {}
+    request_extra: Final = _request_extra_headers.get() or {}
+    static: Final = static_headers or {}
 
-    static_lower_names = {k.lower() for k in static}
-    effective_headers: Dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
+    static_lower_names: Final = {k.lower() for k in static}
+    effective_headers: dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
     effective_headers.update(static)
 
-    override_auth = _request_auth_header.get()
+    override_auth: Final = _request_auth_header.get()
     if override_auth:
         for existing in [k for k in effective_headers if k.lower() == "authorization"]:
             del effective_headers[existing]
         effective_headers["Authorization"] = override_auth
 
-    resolved_auth_headers = _request_resolved_auth_headers.get() or {}
+    resolved_auth_headers: Final = _request_resolved_auth_headers.get() or {}
     for name, value in resolved_auth_headers.items():
         for existing in [k for k in effective_headers if k.lower() == name.lower()]:
             del effective_headers[existing]
@@ -345,12 +398,40 @@ def _merge_openapi_tool_request_headers(
     return effective_headers
 
 
+def _raise_for_upstream_failure(
+    response: httpx.Response,
+    upstream: str,
+    relays_upstream_auth: bool,
+) -> None:
+    """Turn a non-2xx upstream response into the right typed failure, or return for a 2xx.
+
+    Both call sites feed this: ``get`` hands back the response for a 4xx, while post/put/patch/delete
+    raise ``MaskedHTTPStatusError`` from inside the HTTP handler, so without one classifier the
+    non-GET tools would keep serving an error body as tool output.
+
+    Only the client-forwarded modes carry the caller's own upstream token, so only they can act on a
+    401 by re-authenticating; ``_call_regular_mcp_tool`` gates its re-auth signal the same way. Every
+    other status carries the code alone, never the upstream's body, which crosses a trust boundary.
+    """
+    if response.status_code < 400:
+        return
+    if response.status_code == 401 and relays_upstream_auth:
+        raise MCPUpstreamAuthError(
+            status_code=response.status_code,
+            www_authenticate=response.headers.get("www-authenticate"),
+            server_name=upstream,
+        )
+    raise MCPOpenApiUpstreamError(response.status_code, upstream)
+
+
 def create_tool_function(
     path: str,
     method: str,
-    operation: Dict[str, Any],
+    operation: _OpenAPIOperation,
     base_url: str,
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
+    server_label: str | None = None,
+    relays_upstream_auth: bool = False,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -372,9 +453,9 @@ def create_tool_function(
         headers = {}
 
     path_params, query_params, body_params = extract_parameters(operation)
-    original_method = method.lower()
+    original_method: Final = method.lower()
 
-    async def tool_function(**kwargs: Any) -> str:
+    async def tool_function(**kwargs: object) -> str:
         """
         Dynamically generated tool function.
 
@@ -382,7 +463,7 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        effective_headers = _merge_openapi_tool_request_headers(headers)
+        effective_headers: Final = _merge_openapi_tool_request_headers(headers)
 
         # Build URL from base_url and path
         url = base_url + path
@@ -402,7 +483,7 @@ def create_tool_function(
                 url = url.replace("{{" + param_name + "}}", safe_value)
 
         # Build query params using original parameter names
-        params: Dict[str, Any] = {}
+        params: Final[dict[str, object]] = {}
         for param_name in query_params:
             param_value = kwargs.get(param_name, "")
             if param_value:
@@ -410,7 +491,7 @@ def create_tool_function(
                 params[param_name] = param_value
 
         # Build request body
-        json_body: Optional[Dict[str, Any]] = None
+        json_body: dict[str, object] | None = None
         if body_params:
             # Try "body" first (most common), then check all body param names
             body_value = kwargs.get("body", {})
@@ -429,30 +510,36 @@ def create_tool_function(
                 except (json.JSONDecodeError, TypeError):
                     json_body = {"data": body_value}
 
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        upstream: Final = server_label or f"{original_method.upper()} {path}"
 
-        if original_method == "get":
-            response = await client.get(url, params=params, headers=effective_headers)
-        elif original_method == "post":
-            response = await client.post(url, params=params, json=json_body, headers=effective_headers)
-        elif original_method == "put":
-            response = await client.put(url, params=params, json=json_body, headers=effective_headers)
-        elif original_method == "delete":
-            response = await client.delete(url, params=params, headers=effective_headers)
-        elif original_method == "patch":
-            response = await client.patch(url, params=params, json=json_body, headers=effective_headers)
-        else:
-            return f"Unsupported HTTP method: {original_method}"
+        try:
+            if original_method == "get":
+                response = await client.get(url, params=params, headers=effective_headers)
+            elif original_method == "post":
+                response = await client.post(url, params=params, json=json_body, headers=effective_headers)
+            elif original_method == "put":
+                response = await client.put(url, params=params, json=json_body, headers=effective_headers)
+            elif original_method == "delete":
+                response = await client.delete(url, params=params, headers=effective_headers)
+            elif original_method == "patch":
+                response = await client.patch(url, params=params, json=json_body, headers=effective_headers)
+            else:
+                return f"Unsupported HTTP method: {original_method}"
+        except MaskedHTTPStatusError as e:
+            _raise_for_upstream_failure(e.response, upstream, relays_upstream_auth)
+            raise
 
+        _raise_for_upstream_failure(response, upstream, relays_upstream_auth)
         return response.text
 
     return tool_function
 
 
-def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
+def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
-    paths = spec.get("paths", {})
-    used_names: set = set()
+    paths: Final[Mapping[str, Mapping[str, _OpenAPIOperation]]] = spec.get("paths", {})
+    used_names: Final = set()
 
     for path, path_item in paths.items():
         for method in ["get", "post", "put", "delete", "patch"]:
@@ -499,4 +586,4 @@ def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
                     input_schema=input_schema,
                     handler=tool_func,
                 )
-                verbose_logger.debug(f"Registered tool: {tool_name}")
+                verbose_logger.debug("Registered tool: %s", tool_name)

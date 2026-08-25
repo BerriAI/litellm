@@ -1,4 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
+import * as path from "path";
+import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -16,11 +18,15 @@ export default defineConfig({
   /* Opt out of parallel tests on CI. */
   workers: process.env.CI ? 1 : undefined,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: "html",
+  /* The html reporter and the artifact dir both write relative to cwd, which is
+     read-only in the packaged e2e image; keep them under ARTIFACT_DIR so a plain
+     `npx playwright test` works there without extra flags. */
+  reporter: [["html", { outputFolder: path.join(ARTIFACT_DIR, "playwright-report"), open: "never" }]],
+  outputDir: path.join(ARTIFACT_DIR, "test-results"),
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: "http://localhost:4000",
+    baseURL: UI_BASE_URL,
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: "on-first-retry",

@@ -125,7 +125,7 @@ describe("TopKeyView", () => {
     const chartViewButton = screen.getByRole("button", { name: "Chart View" });
     await user.click(chartViewButton);
 
-    expect(chartViewButton).toHaveClass("bg-blue-100");
+    expect(chartViewButton).toHaveClass("bg-info/15");
   });
 
   it("renders cyan bars with truncated aliases in chart view and opens the key info modal on bar click", async () => {
@@ -152,7 +152,7 @@ describe("TopKeyView", () => {
 
     const bars = container.querySelectorAll("path.recharts-rectangle");
     expect(bars).toHaveLength(1);
-    expect(bars[0].getAttribute("fill")).toBe("var(--color-cyan-500, #06b6d4)");
+    expect(bars[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
     expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
 
     fireEvent.click(bars[0]);
@@ -177,22 +177,14 @@ describe("TopKeyView", () => {
     await user.click(chartViewButton);
     await user.click(tableViewButton);
 
-    expect(tableViewButton).toHaveClass("bg-blue-100");
+    expect(tableViewButton).toHaveClass("bg-info/15");
   });
 
-  it("should call setTopKeysLimit when limit is changed via Segmented control", async () => {
+  it("should call setTopKeysLimit when limit is changed via the segmented control", async () => {
     const user = userEvent.setup();
     render(<TopKeyView {...baseProps} />);
 
-    const limit10Radio = screen.getByRole("radio", { name: "10" });
-    const limit10Label = limit10Radio.closest("label");
-    if (limit10Label) {
-      await user.click(limit10Label);
-    } else {
-      // Fallback: click the div with title="10"
-      const limit10Div = screen.getByTitle("10");
-      await user.click(limit10Div);
-    }
+    await user.click(screen.getByRole("radio", { name: "10" }));
 
     expect(mockSetTopKeysLimit).toHaveBeenCalledWith(10);
   });

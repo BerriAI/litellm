@@ -12,16 +12,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
-
-from proxy_client import ProxyClient
+from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS
 from e2e_http import BinaryStream, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
+from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 __all__ = [
     "CacheControl",
+    "ImageEditForm",
+    "ImagesResult",
     "RichMessage",
     "TextBlock",
+    "TranscriptionForm",
+    "TranscriptionResult",
 ]
 
 
@@ -70,12 +74,15 @@ class ResponsesRequest(BaseModel):
     instructions: str | None = None
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
+    guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RichMessagesRequest(BaseModel):
@@ -83,11 +90,20 @@ class RichMessagesRequest(BaseModel):
     max_tokens: int = 64
     system: list[TextBlock]
     messages: list[RichMessage]
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class CompletionsRequest(BaseModel):
+    model: str
+    prompt: str
+    max_tokens: int = 32
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbeddingsRequest(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RerankRequest(BaseModel):
@@ -95,6 +111,7 @@ class RerankRequest(BaseModel):
     query: str
     documents: list[str]
     top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class SpeechRequest(BaseModel):
@@ -110,6 +127,12 @@ class ImageRequest(BaseModel):
     size: str = "1024x1024"
 
 
+class ImageEditForm(BaseModel):
+    model: str
+    prompt: str
+    n: int = 1
+
+
 class TranscriptionForm(BaseModel):
     model: str
     response_format: str = "json"
@@ -118,6 +141,19 @@ class TranscriptionForm(BaseModel):
 class ModerationRequest(BaseModel):
     model: str
     input: str
+
+
+class GenerateContentPart(BaseModel):
+    text: str
+
+
+class GenerateContentContent(BaseModel):
+    role: Literal["user"] = "user"
+    parts: tuple[GenerateContentPart, ...]
+
+
+class GenerateContentBody(BaseModel):
+    contents: tuple[GenerateContentContent, ...]
 
 
 class ResponsesOutputContent(BaseModel):
@@ -193,6 +229,14 @@ class MessagesResult(BaseModel):
         return "".join(block.text or "" for block in self.content)
 
 
+class CompletionChoice(BaseModel):
+    text: str | None = None
+
+
+class CompletionsResult(BaseModel):
+    choices: list[CompletionChoice] = []
+
+
 class EmbeddingItem(BaseModel):
     embedding: list[float] = []
 
@@ -265,7 +309,13 @@ class EndpointsClient:
         )
 
     def responses(
-        self, key: str, model: str, text: str, *, stream: bool = False
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        stream: bool = False,
+        guardrails: list[str] | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
@@ -275,6 +325,7 @@ class EndpointsClient:
                 input=text,
                 instructions="You are a helpful assistant",
                 stream=stream,
+                guardrails=guardrails,
             ),
             stream=stream,
         )
@@ -324,6 +375,15 @@ class EndpointsClient:
                 max_tokens=max_tokens,
                 messages=[ChatMessage(role="user", content=text)],
             ),
+        )
+
+    def text_completions(
+        self, key: str, model: str, prompt: str, *, max_tokens: int = 32
+    ) -> StreamingResponse:
+        return self._send(
+            "/v1/completions",
+            key,
+            CompletionsRequest(model=model, prompt=prompt, max_tokens=max_tokens),
         )
 
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:
@@ -378,6 +438,34 @@ class EndpointsClient:
     def images(self, key: str, model: str, prompt: str) -> StreamingResponse:
         return self._send(
             "/v1/images/generations", key, ImageRequest(model=model, prompt=prompt)
+        )
+
+    def image_edit(
+        self, key: str, model: str, prompt: str, image: bytes, *, filename: str = "image.png"
+    ) -> Result[ImagesResult]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename=filename,
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImagesResult,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    def generate_content(
+        self, key: str, model: str, text: str, *, stream: bool = False
+    ) -> StreamingResponse:
+        operation = "streamGenerateContent" if stream else "generateContent"
+        return self._send(
+            f"/v1beta/models/{model}:{operation}",
+            key,
+            GenerateContentBody(
+                contents=(GenerateContentContent(parts=(GenerateContentPart(text=text),)),)
+            ),
+            stream=stream,
         )
 
 

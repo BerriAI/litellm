@@ -2,7 +2,7 @@ import asyncio
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -11,6 +11,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_hostname,
     get_datadog_pod_name,
     get_datadog_service,
+    normalize_datadog_tag_value,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -27,7 +28,7 @@ from litellm.types.utils import StandardLoggingPayload
 # request_tags / metadata cannot overwrite these, even when the key is
 # allowlisted via cost_tag_keys, because that would let an authenticated caller
 # spoof cost attribution (e.g. request_tags=["team:victim-team"]).
-_RESERVED_TAG_KEYS: frozenset = frozenset(
+_RESERVED_TAG_KEYS: Final[frozenset] = frozenset(
     {
         "env",
         "service",
@@ -44,8 +45,8 @@ _RESERVED_TAG_KEYS: frozenset = frozenset(
 
 
 class DatadogCostManagementLogger(CustomBatchLogger):
-    def __init__(self, cost_tag_keys: Optional[List[str]] = None, **kwargs):
-        self.cost_tag_keys: List[str] = list(cost_tag_keys) if cost_tag_keys else []
+    def __init__(self, cost_tag_keys: list[str] | None = None, **kwargs):
+        self.cost_tag_keys: list[str] = list(cost_tag_keys) if cost_tag_keys else []
         self.dd_api_key = os.getenv("DD_API_KEY")
         self.dd_app_key = os.getenv("DD_APP_KEY")
         self.dd_site = os.getenv("DD_SITE", "datadoghq.com")
@@ -71,7 +72,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+            standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
             if standard_logging_object is None:
                 return
@@ -84,17 +85,17 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                     await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Cost Management: Error in async_log_success_event: {str(e)}")
+            verbose_logger.exception("Datadog Cost Management: Error in async_log_success_event: %s", e)
 
     async def async_send_batch(self):
         if not self.log_queue:
             return
 
-        batch_to_send = self.log_queue[:]
+        batch_to_send: Final = self.log_queue[:]
         self.log_queue = []
 
         try:
-            aggregated_entries = self._aggregate_costs(batch_to_send)
+            aggregated_entries: Final = self._aggregate_costs(batch_to_send)
             if not aggregated_entries:
                 verbose_logger.debug(
                     "Datadog Cost Management: batch produced no aggregable entries; dropping %d log(s) from queue.",
@@ -104,14 +105,14 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             await self._upload_to_datadog(aggregated_entries)
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
-            verbose_logger.exception(f"Datadog Cost Management: Error in async_send_batch: {str(e)}")
+            verbose_logger.exception("Datadog Cost Management: Error in async_send_batch: %s", e)
 
-    def _aggregate_costs(self, logs: List[StandardLoggingPayload]) -> List[DatadogFOCUSCostEntry]:
+    def _aggregate_costs(self, logs: list[StandardLoggingPayload]) -> list[DatadogFOCUSCostEntry]:
         """
         Aggregates costs by Provider, Model, and Date.
         Returns a list of DatadogFOCUSCostEntry.
         """
-        aggregator: Dict[Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry] = {}
+        aggregator: Final[dict[tuple[str, str, str, tuple[tuple[str, str], ...]], DatadogFOCUSCostEntry]] = {}
 
         for log in logs:
             try:
@@ -159,13 +160,13 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 aggregator[key]["BilledCost"] += cost
 
             except Exception as e:
-                verbose_logger.warning(f"Error processing log for cost aggregation: {e}")
+                verbose_logger.warning("Error processing log for cost aggregation: %s", e)
                 continue
 
         return list(aggregator.values())
 
-    def _extract_tags(self, log: StandardLoggingPayload) -> Dict[str, str]:
-        tags: Dict[str, str] = {
+    def _extract_tags(self, log: StandardLoggingPayload) -> dict[str, str]:
+        tags: Final[dict[str, str]] = {
             "env": get_datadog_env(),
             "service": get_datadog_service(),
             "host": get_datadog_hostname(),
@@ -180,19 +181,19 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
         # cast because StandardLoggingMetadata is a TypedDict; we iterate it
         # as a generic mapping below.
-        metadata: Dict[str, Any] = cast(Dict[str, Any], log.get("metadata") or {})
+        metadata: Final[dict[str, Any]] = cast(dict[str, Any], log.get("metadata") or {})
 
         # Backwards-compat: team/user/model_group preserved regardless of allowlist.
         if metadata.get("user_api_key_alias"):
-            tags["user"] = str(metadata["user_api_key_alias"])
-        team_tag = (
+            tags["user"] = normalize_datadog_tag_value(metadata["user_api_key_alias"])
+        team_tag: Final = (
             metadata.get("user_api_key_team_alias")
             or metadata.get("team_alias")
             or metadata.get("user_api_key_team_id")
             or metadata.get("team_id")
         )
         if team_tag:
-            tags["team"] = str(team_tag)
+            tags["team"] = normalize_datadog_tag_value(team_tag)
         if metadata.get("model_group"):
             tags["model_group"] = str(metadata["model_group"])
 
@@ -200,7 +201,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         # Reserved keys are hard-blocked here regardless of allowlist membership —
         # see _RESERVED_TAG_KEYS for the rationale.
         if self.cost_tag_keys:
-            allow = set(self.cost_tag_keys)
+            allow: Final = set(self.cost_tag_keys)
             for rt in log.get("request_tags") or []:
                 if not isinstance(rt, str) or ":" not in rt:
                     continue
@@ -220,7 +221,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         return tags
 
     @staticmethod
-    def _set_custom_tag(tags: Dict[str, str], key: str, value: str) -> None:
+    def _set_custom_tag(tags: dict[str, str], key: str, value: str) -> None:
         if key in _RESERVED_TAG_KEYS:
             verbose_logger.debug(
                 "Datadog Cost Management: dropping user-supplied tag %r=%r — "
@@ -229,30 +230,30 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 value,
             )
             return
-        tags[key] = value
+        tags[key] = normalize_datadog_tag_value(value)
 
     @staticmethod
-    def _add_tag(tags: Dict[str, str], key: str, value: Any) -> None:
+    def _add_tag(tags: dict[str, str], key: str, value: Any) -> None:
         if value:
             tags[key] = str(value)
 
-    async def _upload_to_datadog(self, payload: List[Dict]):
+    async def _upload_to_datadog(self, payload: list[dict]):
         if not self.dd_api_key or not self.dd_app_key:
             return
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
             "DD-API-KEY": self.dd_api_key,
             "DD-APPLICATION-KEY": self.dd_app_key,
         }
 
         # The API endpoint expects a list of objects directly in the body (file content behavior)
-        data_json = safe_dumps(payload)
+        data_json: Final = safe_dumps(payload)
 
-        response = await self.async_client.put(self.upload_url, content=data_json, headers=headers)
+        response: Final = await self.async_client.put(self.upload_url, content=data_json, headers=headers)
 
         response.raise_for_status()
 
         verbose_logger.debug(
-            f"Datadog Cost Management: Uploaded {len(payload)} cost entries. Status: {response.status_code}"
+            "Datadog Cost Management: Uploaded %s cost entries. Status: %s", len(payload), response.status_code
         )

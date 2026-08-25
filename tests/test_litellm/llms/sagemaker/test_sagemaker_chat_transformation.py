@@ -19,6 +19,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
 
 
@@ -233,3 +235,85 @@ def test_decoder_reassembles_frames_across_arbitrary_byte_boundaries(split_size)
     ]
 
     assert texts == [f"token{i} " for i in range(len(frames))]
+
+
+_INFERENCE_COMPONENT_HEADER = "X-Amzn-SageMaker-Inference-Component"
+
+_STUB_COMPLETION_RESPONSE = {
+    "id": "chatcmpl-test",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "served-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+class _RequestCapturingHTTPHandler(HTTPHandler):
+    """Injected transport that records exactly what sagemaker_chat put on the wire."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_headers: dict[str, str] = {}
+        self.request_body: dict = {}
+
+    def post(self, url: str, headers=None, data=None, **kwargs) -> httpx.Response:
+        self.request_headers = dict(headers or {})
+        self.request_body = json.loads(data)
+        return httpx.Response(200, json=_STUB_COMPLETION_RESPONSE, request=httpx.Request("POST", url))
+
+
+def _invoke_sagemaker_chat(monkeypatch, **extra_params) -> _RequestCapturingHTTPHandler:
+    """Drive one sagemaker_chat completion against an injected transport.
+
+    A Bedrock API key short-circuits SigV4 inside `BaseAWSLLM._sign_request`, which would hide
+    whether the inference-component header is really covered by the signature, so it is cleared.
+    """
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    client = _RequestCapturingHTTPHandler()
+    litellm.completion(
+        model="sagemaker_chat/my-endpoint",
+        messages=[{"role": "user", "content": "hi"}],
+        aws_access_key_id="AKIATESTTESTTESTTEST",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        client=client,
+        **extra_params,
+    )
+    return client
+
+
+def test_model_id_is_sent_as_a_signed_inference_component_header(monkeypatch):
+    """`model_id` names an inference component and must reach SageMaker as a signed header.
+
+    Endpoints backed by inference components reject any request without
+    `X-Amzn-SageMaker-Inference-Component` with HTTP 400 INFERENCE_COMPONENT_NAME_MISSING, so the
+    header has to be built before `sign_request` runs and end up inside SignedHeaders.
+    """
+    client = _invoke_sagemaker_chat(monkeypatch, model_id="my-inference-component")
+
+    assert client.request_headers[_INFERENCE_COMPONENT_HEADER] == "my-inference-component"
+    assert "x-amzn-sagemaker-inference-component" in client.request_headers["Authorization"]
+
+
+def test_no_inference_component_header_when_model_id_is_unset(monkeypatch):
+    """Plain endpoints must not receive the header at all, not even an empty one."""
+    client = _invoke_sagemaker_chat(monkeypatch)
+
+    assert not any(name.lower() == _INFERENCE_COMPONENT_HEADER.lower() for name in client.request_headers)
+
+
+def test_hf_model_name_becomes_the_body_model(monkeypatch):
+    """`hf_model_name` names the served model, and containers that validate the body's `model`
+    404 on the endpoint name, so it has to replace it rather than ride along as an extra field."""
+    client = _invoke_sagemaker_chat(monkeypatch, hf_model_name="org/served-model")
+
+    assert client.request_body["model"] == "org/served-model"
+    assert "hf_model_name" not in client.request_body
+
+
+def test_body_model_stays_the_endpoint_name_when_hf_model_name_is_unset(monkeypatch):
+    """Without `hf_model_name` the body must keep the model it has today."""
+    client = _invoke_sagemaker_chat(monkeypatch)
+
+    assert client.request_body["model"] == "my-endpoint"

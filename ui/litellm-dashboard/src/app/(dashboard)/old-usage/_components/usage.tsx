@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "@/components/view_user_spend";
 import { ProxySettings } from "@/components/user_dashboard";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -15,8 +15,9 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -37,6 +38,7 @@ import {
 } from "@/components/networking";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { MoneyCell } from "@/components/shared/table_cells";
+import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface UsagePageProps {
@@ -53,6 +55,8 @@ interface GlobalActivityData {
   sum_total_tokens: number;
   daily_data: { date: string; api_requests: number; total_tokens: number }[];
 }
+
+const EMPTY_GLOBAL_ACTIVITY: GlobalActivityData = { sum_api_requests: 0, sum_total_tokens: 0, daily_data: [] };
 
 type UsageDateRange = { from?: Date; to?: Date };
 
@@ -90,6 +94,8 @@ const TeamSpendBarList: React.FC<{ data: TeamSpendTotal[] }> = ({ data }) => {
 };
 
 const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, userID, keys, premiumUser }) => {
+  const anchor = useComboboxAnchor();
+  const canViewGlobalSpend = hasCapability(userRole, "viewGlobalSpend");
   const currentDate = new Date();
   const [keySpendData, setKeySpendData] = useState<any[]>([]);
   const [topKeys, setTopKeys] = useState<any[]>([]);
@@ -101,7 +107,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<TeamSpendTotal[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
-  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
+  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>(EMPTY_GLOBAL_ACTIVITY);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyToken, setSelectedKeyToken] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([ALL_TAGS]);
@@ -155,8 +161,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
   };
 
   useEffect(() => {
+    if (!canViewGlobalSpend) {
+      return;
+    }
     updateTagSpendData(dateValue.from, dateValue.to);
-  }, [dateValue, selectedTags]);
+  }, [canViewGlobalSpend, dateValue, selectedTags]);
 
   const updateEndUserData = async (
     startTime: Date | undefined,
@@ -319,10 +328,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
   const fetchProviderSpend = () =>
     fetchAndSetData(
-      () =>
-        accessToken && token
-          ? adminspendByProvider(accessToken, token, startTime, endTime)
-          : Promise.reject("No access token or token"),
+      () => (accessToken ? adminspendByProvider(accessToken, startTime, endTime) : Promise.reject("No access token")),
       setSpendByProvider,
       "Error fetching provider spend",
     );
@@ -467,6 +473,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
   useEffect(() => {
     const initlizeUsageData = async () => {
+      if (!canViewGlobalSpend) {
+        return;
+      }
       if (accessToken && token && userRole && userID) {
         const proxy_settings: ProxySettings | undefined = await fetchProxySettings();
         if (proxy_settings) {
@@ -493,7 +502,24 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
     };
 
     initlizeUsageData();
-  }, [accessToken, token, userRole, userID, startTime, endTime]);
+  }, [canViewGlobalSpend, accessToken, token, userRole, userID, startTime, endTime]);
+
+  if (!canViewGlobalSpend) {
+    return (
+      <div className="w-full p-8">
+        <Card>
+          <CardHeader>
+            <CardTitle>Usage</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Proxy-wide usage is only available to admin users. Your own usage is on the Usage page.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (proxySettings?.DISABLE_EXPENSIVE_DB_QUERIES) {
     return (
@@ -536,14 +562,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           )}
         </TabsList>
 
-        <TabsContent value="all-up">
+        <TabsContent value="all-up" keepMounted>
           <Tabs defaultValue="cost">
             <TabsList className="mt-1">
               <TabsTrigger value="cost">Cost</TabsTrigger>
               <TabsTrigger value="activity">Activity</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="cost">
+            <TabsContent value="cost" keepMounted>
               <div className="grid h-screen w-full grid-cols-2 gap-2">
                 <div className="col-span-2">
                   <p className="mt-2 mb-2 text-lg text-muted-foreground">
@@ -647,7 +673,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
               </div>
             </TabsContent>
 
-            <TabsContent value="activity">
+            <TabsContent value="activity" keepMounted>
               <div className="grid h-[75vh] w-full grid-cols-1 gap-2">
                 <Card>
                   <CardHeader>
@@ -727,7 +753,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </Tabs>
         </TabsContent>
 
-        <TabsContent value="team-based-usage">
+        <TabsContent value="team-based-usage" keepMounted>
           <div className="grid h-[75vh] w-full grid-cols-2 gap-2">
             <div className="col-span-2">
               <Card className="mb-2">
@@ -758,7 +784,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </div>
         </TabsContent>
 
-        <TabsContent value="customer-usage">
+        <TabsContent value="customer-usage" keepMounted>
           <p className="mb-2 text-[12px] text-muted-foreground italic">
             Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls{" "}
             <a
@@ -772,7 +798,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </p>
           <div className="grid grid-cols-2">
             <div>
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
@@ -835,10 +862,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </Card>
         </TabsContent>
 
-        <TabsContent value="tag-based-usage">
+        <TabsContent value="tag-based-usage" keepMounted>
           <div className="grid grid-cols-2">
             <div className="col-span-1">
-              <UsageDatePicker
+              <AdvancedDatePicker
+                align="left"
                 className="mb-4"
                 value={dateValue}
                 onValueChange={(value) => {
@@ -857,7 +885,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                 isItemEqualToValue={(a: TagOption, b: TagOption) => a.value === b.value}
                 itemToStringLabel={(option: TagOption) => option.label}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor} />}>
                   <ComboboxValue>
                     {(options: TagOption[]) =>
                       options.map((option) => (
@@ -867,9 +895,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select tags" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select tags" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor}>
                   <ComboboxEmpty>No tags found</ComboboxEmpty>
                   <ComboboxList>
                     {(option: TagOption) => (

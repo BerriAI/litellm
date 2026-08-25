@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Mapping
-from typing import Any, Coroutine, Optional, Tuple, Union
+from collections.abc import Coroutine, Mapping
+from typing import Any, Final
 
 import httpx
 
@@ -43,7 +43,7 @@ class BedrockFilesHandler(BaseAWSLLM):
         s3_uri: str,
         configured_bucket_name: str,
         allow_legacy_cloud_file_ids: bool = False,
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         Parse S3 URI to extract bucket name and object key.
 
@@ -70,8 +70,8 @@ class BedrockFilesHandler(BaseAWSLLM):
         self,
         file_content_request: FileContentRequest,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
     ) -> HttpxBinaryResponseContent:
         """
         Download file content from S3 bucket for Bedrock files.
@@ -88,13 +88,13 @@ class BedrockFilesHandler(BaseAWSLLM):
         import boto3
         from botocore.credentials import Credentials
 
-        file_id = file_content_request.get("file_id")
+        file_id: Final = file_content_request.get("file_id")
         if not file_id:
             raise ValueError("file_id is required in file_content_request")
 
         # Extract S3 URI from file ID
-        s3_uri = self._extract_s3_uri_from_file_id(file_id)
-        configured_bucket_name = self._get_configured_s3_bucket_name(optional_params)
+        s3_uri: Final = self._extract_s3_uri_from_file_id(file_id)
+        configured_bucket_name: Final = self._get_configured_s3_bucket_name(optional_params)
         bucket_name, object_key = self._parse_s3_uri(
             s3_uri=s3_uri,
             configured_bucket_name=configured_bucket_name,
@@ -102,8 +102,8 @@ class BedrockFilesHandler(BaseAWSLLM):
         )
 
         # Get AWS credentials
-        aws_region_name = self._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Credentials = self.get_credentials(
+        aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model="")
+        credentials: Final[Credentials] = self.get_credentials(
             aws_access_key_id=optional_params.get("aws_access_key_id"),
             aws_secret_access_key=optional_params.get("aws_secret_access_key"),
             aws_session_token=optional_params.get("aws_session_token"),
@@ -116,7 +116,7 @@ class BedrockFilesHandler(BaseAWSLLM):
         )
 
         # Create S3 client
-        s3_client = boto3.client(
+        s3_client: Final = boto3.client(
             "s3",
             aws_access_key_id=credentials.access_key,
             aws_secret_access_key=credentials.secret_key,
@@ -127,13 +127,13 @@ class BedrockFilesHandler(BaseAWSLLM):
 
         # Download file from S3
         try:
-            response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-            file_content = response["Body"].read()
+            response: Final = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+            file_content: Final = response["Body"].read()
         except Exception as e:
-            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {str(e)}")
+            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {e}")
 
         # Create mock HTTP response
-        mock_response = httpx.Response(
+        mock_response: Final = httpx.Response(
             status_code=200,
             content=file_content,
             headers={"content-type": "application/octet-stream"},
@@ -146,11 +146,11 @@ class BedrockFilesHandler(BaseAWSLLM):
         self,
         _is_async: bool,
         file_content_request: FileContentRequest,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         """
         Download file content from S3 bucket for Bedrock files.
         Supports both sync and async operations.

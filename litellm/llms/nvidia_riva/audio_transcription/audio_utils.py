@@ -16,7 +16,7 @@ import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Tuple, cast
+from typing import Any, Final, cast
 
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
@@ -48,7 +48,7 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
     seconds (used for cost calculation when Riva does not return usage).
     """
     try:
-        import numpy as np  # type: ignore
+        import numpy as np
     except ImportError as e:
         raise NvidiaRivaException(
             status_code=500,
@@ -70,10 +70,10 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
 
     # Clip + convert float [-1, 1] to int16 little-endian PCM.
     np.clip(samples_float, -1.0, 1.0, out=samples_float)
-    pcm_int16 = (samples_float * 32767.0).astype("<i2")
-    pcm_bytes = pcm_int16.tobytes()
+    pcm_int16: Final = (samples_float * 32767.0).astype("<i2")
+    pcm_bytes: Final = pcm_int16.tobytes()
 
-    duration_seconds = float(pcm_int16.size) / float(RIVA_TARGET_SAMPLE_RATE_HZ)
+    duration_seconds: Final = float(pcm_int16.size) / float(RIVA_TARGET_SAMPLE_RATE_HZ)
 
     return ResampledAudio(
         pcm_bytes=pcm_bytes,
@@ -83,7 +83,7 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
     )
 
 
-def _decode_to_float32(file_bytes: bytes) -> Tuple["FloatArray", int]:
+def _decode_to_float32(file_bytes: bytes) -> tuple["FloatArray", int]:
     """
     Decode arbitrary audio bytes into a float32 array shaped either
     ``(n_samples,)`` (mono) or ``(n_samples, n_channels)`` plus the source
@@ -93,11 +93,11 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["FloatArray", int]:
     ``audioread`` for compressed formats. Raises a clear error if neither
     works.
     """
-    import numpy as np  # type: ignore
+    import numpy as np
 
     sf_error: Exception | None = None
     try:
-        import soundfile as sf  # type: ignore
+        import soundfile as sf
 
         with io.BytesIO(file_bytes) as buf:
             data, source_rate = sf.read(buf, dtype="float32", always_2d=False)
@@ -110,7 +110,7 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["FloatArray", int]:
         sf_error = e
 
     try:
-        import audioread  # type: ignore
+        import audioread
     except ImportError as e:
         raise NvidiaRivaException(
             status_code=400,
@@ -132,8 +132,8 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["FloatArray", int]:
         try:
             with audioread.audio_open(tmp_path) as src:
                 source_rate = int(src.samplerate)
-                channels = int(src.channels)
-                chunks = []
+                channels: Final = int(src.channels)
+                chunks: Final = []
                 for buf in src:
                     chunks.append(np.frombuffer(buf, dtype=np.int16))
                 if not chunks:
@@ -172,13 +172,13 @@ def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "Flo
     band). Falls back to linear interpolation if neither is installed —
     acceptable for speech-only mono input but lossy for wideband content.
     """
-    import numpy as np  # type: ignore
+    import numpy as np
 
     if source_rate == target_rate or samples.size == 0:
         return samples
 
     try:
-        import soxr  # type: ignore
+        import soxr
 
         return cast(
             "FloatArray",
@@ -190,11 +190,11 @@ def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "Flo
     try:
         from math import gcd
 
-        from scipy.signal import resample_poly  # type: ignore
+        from scipy.signal import resample_poly
 
-        g = gcd(int(source_rate), int(target_rate))
-        up = int(target_rate) // g
-        down = int(source_rate) // g
+        g: Final = gcd(int(source_rate), int(target_rate))
+        up: Final = int(target_rate) // g
+        down: Final = int(source_rate) // g
         return cast("FloatArray", np.asarray(resample_poly(samples, up, down), dtype=np.float32))
     except ImportError:
         pass
@@ -204,16 +204,16 @@ def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "Flo
 
 def _linear_resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "FloatArray":
     """Linear-interpolation fallback. See :func:`_resample` for caveats."""
-    import numpy as np  # type: ignore
+    import numpy as np
 
-    duration = samples.size / float(source_rate)
-    target_length = int(round(duration * target_rate))
+    duration: Final = samples.size / float(source_rate)
+    target_length: Final = int(round(duration * target_rate))
     if target_length <= 1:
         return samples.astype(np.float32)
 
-    src_indices = np.linspace(0, samples.size - 1, num=target_length, dtype=np.float64)
-    left = np.floor(src_indices).astype(np.int64)
-    right = np.minimum(left + 1, samples.size - 1)
-    frac = (src_indices - left).astype(np.float32)
+    src_indices: Final = np.linspace(0, samples.size - 1, num=target_length, dtype=np.float64)
+    left: Final = np.floor(src_indices).astype(np.int64)
+    right: Final = np.minimum(left + 1, samples.size - 1)
+    frac: Final = (src_indices - left).astype(np.float32)
 
     return ((1.0 - frac) * samples[left] + frac * samples[right]).astype(np.float32)
