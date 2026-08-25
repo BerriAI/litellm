@@ -33,6 +33,7 @@ import {
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
 import {
+  formatGuardrailMode,
   getGuardrailLogoAndName,
   guardrail_provider_map,
   skipSystemMessageToChoice,
@@ -559,7 +560,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block p-6">
                 <p>Mode</p>
                 <div className="mt-2">
-                  <h3 className="text-lg font-medium">{guardrailData.litellm_params?.mode || "-"}</h3>
+                  <h3 className="text-lg font-medium">
+                    {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
+                  </h3>
                   <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
@@ -856,7 +859,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </div>
                     <div>
                       <p className="font-medium">Mode</p>
-                      <div>{guardrailData.litellm_params?.mode || "-"}</div>
+                      <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
                     </div>
                     <div>
                       <p className="font-medium">Default On</p>
