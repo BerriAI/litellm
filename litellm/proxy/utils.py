@@ -6377,6 +6377,7 @@ async def update_spend_logs_job(
 
 
 MAX_SPEND_LOG_DRAIN_ITERATIONS: Final = 20
+MAX_SPEND_LOG_DRAIN_SECONDS: Final = 15.0
 
 
 async def drain_spend_logs_queue(
@@ -6391,9 +6392,12 @@ async def drain_spend_logs_queue(
             await monitor_task
         prisma_client.spend_logs_queue_monitor_task = None  # rebind-ok: the client owns its monitor handle
 
+    deadline: Final = time.monotonic() + MAX_SPEND_LOG_DRAIN_SECONDS
     for _ in range(MAX_SPEND_LOG_DRAIN_ITERATIONS):
         if await _total_queued_spend_transactions(prisma_client) == 0:
             return
+        if time.monotonic() >= deadline:
+            break
         await update_spend_logs_job(
             prisma_client=prisma_client,
             db_writer_client=db_writer_client,

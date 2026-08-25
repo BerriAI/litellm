@@ -19,6 +19,7 @@ import pytest
 
 from litellm.proxy.utils import (
     MAX_SPEND_LOG_DRAIN_ITERATIONS,
+    MAX_SPEND_LOG_DRAIN_SECONDS,
     _monitor_spend_logs_queue,
     _raise_failed_update_spend_exception,
     drain_spend_logs_queue,
@@ -456,6 +457,44 @@ async def test_drain_spend_logs_queue_gives_up_after_max_passes(
         mock_prisma_client.db.litellm_spendlogs.create_many.await_count
         == MAX_SPEND_LOG_DRAIN_ITERATIONS
     )
+
+
+@pytest.mark.asyncio
+async def test_drain_spend_logs_queue_gives_up_when_time_budget_expires(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+    import litellm.proxy.utils as utils_mod
+
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "process_spend_logs_tool_usage", AsyncMock(), raising=False)
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
+
+    monotonic = {"t": 0.0}
+
+    def _now() -> float:
+        return monotonic["t"]
+
+    async def _write_and_refill(*args: Any, **kwargs: Any) -> None:
+        monotonic["t"] += MAX_SPEND_LOG_DRAIN_SECONDS
+        mock_prisma_client.spend_log_transactions.append(make_spend_log_row())
+
+    monkeypatch.setattr(utils_mod.time, "monotonic", _now)
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_write_and_refill)
+
+    await drain_spend_logs_queue(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+
+    # First pass starts under the deadline; the write then consumes the whole
+    # budget, so the next loop exits instead of spinning to max iterations.
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 1
 
 
 @pytest.mark.asyncio

@@ -894,7 +894,15 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:
-        # Drain the SGR fold first: it lives in memory, so an un-drained interval
+        # Request-time spend queues live in this process. A worker recycle
+        # (`--max_requests_before_restart`) or deploy otherwise drops whatever
+        # the periodic flush has not written. Drain while Prisma is still
+        # connected; a write after disconnect is ClientNotConnectedError and
+        # the rows never reach LiteLLM_SpendLogs. The same emptiness owner
+        # (`_total_queued_spend_transactions`) also covers
+        # tool_usage_transactions and autorouter_turn_transactions.
+        await _flush_spend_logs_queue_on_shutdown()
+        # Drain the SGR fold next: it lives in memory, so an un-drained interval
         # is lost, and a write attempted after disconnect raises
         # ClientNotConnectedError rather than persisting anything. Ordering this
         # inside the same guard is what keeps the two from drifting apart.
