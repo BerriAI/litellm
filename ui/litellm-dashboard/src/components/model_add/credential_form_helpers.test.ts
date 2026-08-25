@@ -98,6 +98,13 @@ describe("computeCredentialValuesToDelete", () => {
     expect(computeCredentialValuesToDelete(original, mounted)).toEqual([]);
   });
 
+  it("deletes a field the operator cleared, since the caller drops it from the payload", () => {
+    const original = { api_base: "https://old.gateway.internal" };
+    const mounted = { api_base: "" };
+
+    expect(computeCredentialValuesToDelete(original, mounted)).toEqual(["api_base"]);
+  });
+
   it("keeps a field the operator genuinely changed", () => {
     const original = { api_key: "sk-***1234" };
     const mounted = { api_key: "sk-new-real-key" };

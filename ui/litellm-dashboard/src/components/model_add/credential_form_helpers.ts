@@ -47,11 +47,21 @@ export function resetCredentialFormOnProviderChange(
  *
  * `mountedValues` must be the full projected form state (masked-but-untouched fields included),
  * not the caller's post-filter payload: a masked value that the operator never touched is still
- * mounted and must be preserved, not read as "absent, so delete it".
+ * mounted and must be preserved, not read as "absent, so delete it". A masked value is a
+ * non-empty string, which is what separates it from a field the operator emptied.
+ *
+ * A cleared field stays mounted carrying an empty value, so emptiness counts as a deletion too.
+ * Without that it is neither deleted here nor sent in the update (the caller drops empty values
+ * from the payload), and the old value survives: clearing a destination would leave the previous
+ * one still receiving requests that now carry a minted federation token.
  */
 export function computeCredentialValuesToDelete(
   originalValues: Record<string, unknown>,
   mountedValues: Record<string, unknown>,
 ): string[] {
-  return Object.keys(originalValues).filter((key) => !(key in mountedValues));
+  return Object.keys(originalValues).filter((key) => {
+    if (!(key in mountedValues)) return true;
+    const value = mountedValues[key];
+    return value === "" || value === null || value === undefined;
+  });
 }
