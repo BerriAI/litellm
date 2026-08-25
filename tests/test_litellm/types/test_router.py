@@ -109,6 +109,7 @@ def test_credential_litellm_params_declares_every_anthropic_wif_field():
 def test_anthropic_wif_fields_round_trip_through_model_dump():
     values = {field: f"value-for-{field}" for field in anthropic_wif_litellm_params}
     values["anthropic_issuer_ttl_seconds"] = 300
+    values["anthropic_disable_workload_identity_federation"] = True
 
     dumped = CredentialLiteLLMParams(**values).model_dump(exclude_none=True)
 

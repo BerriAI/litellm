@@ -50,6 +50,11 @@ ANTHROPIC_WIF_KWARGS_KEYS: Final = frozenset(
         "anthropic_keycloak_auth_method",
         "anthropic_keycloak_client_secret_ref",
         "anthropic_keycloak_scope",
+        # Set server-side when a client redirects api_base, to stop a federated deployment minting
+        # for a base the caller chose. It has to ride this funnel or it is dropped on the way and
+        # the deployment federates anyway; being carried here also request-bans it, which is right,
+        # since a caller must not be able to set it in either direction.
+        "anthropic_disable_workload_identity_federation",
     }
 )
 

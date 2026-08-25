@@ -3426,6 +3426,28 @@ class TestWifServerOwnedParamsAreUnconditional:
 
 
 class TestWifDisabledOnClientRedirectedBase:
+    def test_the_sentinel_survives_the_kwargs_funnel(self):
+        """Setting the sentinel is only half of it. get_litellm_params rebuilds litellm_params from
+        kwargs, so a field it does not carry is dropped on the way and the deployment federates for
+        the caller-chosen base after all."""
+        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
+        from litellm.router_utils.clientside_credential_handler import (
+            DISABLE_WORKLOAD_IDENTITY_PARAM,
+        )
+
+        assert DISABLE_WORKLOAD_IDENTITY_PARAM in FORWARDED_KWARGS_KEYS
+
+    def test_the_sentinel_is_not_client_settable(self):
+        """It is server-owned in both directions: a caller must not be able to set it, and must not
+        be able to clear it either."""
+        from litellm.router_utils.clientside_credential_handler import (
+            DISABLE_WORKLOAD_IDENTITY_PARAM,
+        )
+        from litellm.types.router import reject_server_owned_wif_params
+
+        with pytest.raises(ValueError, match=DISABLE_WORKLOAD_IDENTITY_PARAM):
+            reject_server_owned_wif_params({DISABLE_WORKLOAD_IDENTITY_PARAM: False})
+
     def test_base_override_clears_wif_and_sets_the_sentinel(self):
         """A federation token minted for a client-chosen api_base would send the workload's assertion,
         and then the minted bearer, to that host."""

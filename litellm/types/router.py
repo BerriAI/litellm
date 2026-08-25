@@ -297,6 +297,9 @@ class CredentialLiteLLMParams(BaseModel):
     anthropic_keycloak_auth_method: str | None = None
     anthropic_keycloak_client_secret_ref: str | None = None
     anthropic_keycloak_scope: str | None = None
+    # Server-set when a client redirects api_base. Declared so it survives the strict dump the
+    # other federation fields above are declared for, rather than being rebuilt away in transit.
+    anthropic_disable_workload_identity_federation: bool | None = None
 
 
 def anthropic_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
