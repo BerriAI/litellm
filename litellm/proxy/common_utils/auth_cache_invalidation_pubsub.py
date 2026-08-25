@@ -36,7 +36,8 @@ class _CacheInvalidationMessage:
 
 
 def _cache_invalidation_message_json(cache_key: str, new_value: float | None = None, ttl: float | None = None) -> str:
-    return json.dumps(asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl)))
+    message: Final = asdict(_CacheInvalidationMessage(cache_key=cache_key, new_value=new_value, ttl=ttl))
+    return json.dumps({field: value for field, value in message.items() if value is not None})
 
 
 def _finite_number_or_none(value: object) -> float | None:
