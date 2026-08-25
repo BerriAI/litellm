@@ -5552,3 +5552,81 @@ def test_accumulated_json_skips_non_dict_leading_value():
 
     assert len(out) == 1
     assert out[0].choices[0].delta.content == "a"
+
+
+def test_vertex_ai_content_less_candidate_rescued_as_length():
+    """A candidate with no "content" (e.g. a thinking model that spends its whole
+    token budget on reasoning -> finishReason=MAX_TOKENS, no content) must still
+    produce a choice, not be silently dropped. Dropping it leaves
+    model_response.choices empty and the caller hits IndexError on choices[0].
+    The rescued choice must carry empty content and finishReason mapped through
+    the SAME path the mainline uses (MAX_TOKENS -> "length"), never the raw
+    provider value.
+    """
+    v = VertexGeminiConfig()
+    model_response = ModelResponse()
+    model_response.choices = []
+
+    v._process_candidates(
+        _candidates=[
+            {
+                "finishReason": "MAX_TOKENS",
+                "index": 0,
+            }
+        ],
+        model_response=model_response,
+        standard_optional_params={},
+    )
+
+    assert len(model_response.choices) == 1
+    choice = model_response.choices[0]
+    # mapped, not the raw "MAX_TOKENS"
+    assert choice.finish_reason == "length"
+    assert choice.message.content == ""
+    assert choice.message.role == "assistant"
+
+
+def test_vertex_ai_content_less_candidate_without_finish_reason_not_stop():
+    """A content-less candidate with NO finishReason at all must not silently
+    become finish_reason="stop" (a false claim the model finished normally).
+    Budget-exhausted-with-no-marker is honestly reported as "length".
+    """
+    v = VertexGeminiConfig()
+    model_response = ModelResponse()
+    model_response.choices = []
+
+    v._process_candidates(
+        _candidates=[{"index": 0}],
+        model_response=model_response,
+        standard_optional_params={},
+    )
+
+    assert len(model_response.choices) == 1
+    assert model_response.choices[0].finish_reason == "length"
+    assert model_response.choices[0].finish_reason != "stop"
+    assert model_response.choices[0].message.content == ""
+
+
+def test_vertex_ai_multiple_content_less_candidates_each_rescued():
+    """Every content-less candidate is rescued independently, preserving each
+    candidate's index and mapping its own finishReason (MAX_TOKENS -> length,
+    SAFETY -> content_filter), rather than dropping any of them.
+    """
+    v = VertexGeminiConfig()
+    model_response = ModelResponse()
+    model_response.choices = []
+
+    v._process_candidates(
+        _candidates=[
+            {"finishReason": "MAX_TOKENS", "index": 0},
+            {"finishReason": "SAFETY", "index": 1},
+        ],
+        model_response=model_response,
+        standard_optional_params={},
+    )
+
+    assert len(model_response.choices) == 2
+    by_index = {c.index: c for c in model_response.choices}
+    assert by_index[0].finish_reason == "length"
+    assert by_index[1].finish_reason == "content_filter"
+    assert all(c.message.content == "" for c in model_response.choices)
