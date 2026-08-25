@@ -14936,6 +14936,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/{team_id}/member/{user_id}/reset_spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Team Member Spend Fn
+         * @description Reset a team member's tracked spend against their per-member budget.
+         *
+         *     A member's spend is tracked separately from both their own personal
+         *     budget and the team's own budget (LiteLLM_TeamMembership.spend), so
+         *     neither /user/update nor /team/update can clear it: this is the only
+         *     endpoint that does. The cross-pod spend counter and cached membership
+         *     reads are invalidated so the reset takes effect on the member's next
+         *     request rather than waiting on the membership cache's TTL.
+         */
+        post: operations["reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/{team_id}/members/me": {
         parameters: {
             query?: never;
@@ -23009,6 +23036,17 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityErrorBucket */
+        CacheActivityErrorBucket: {
+            /** Call Type */
+            call_type: string;
+            /** Count */
+            count: number;
+            /** Error Class */
+            error_class: string;
+            /** Error Code */
+            error_code: string;
+        };
         /** CacheActivityFilterOptions */
         CacheActivityFilterOptions: {
             /** Key Aliases */
@@ -23033,6 +23071,8 @@ export interface components {
         };
         /** CacheActivityResponse */
         CacheActivityResponse: {
+            /** Error Breakdown */
+            error_breakdown: components["schemas"]["CacheActivityErrorBucket"][];
             filter_options: components["schemas"]["CacheActivityFilterOptions"];
             /** Groups */
             groups: components["schemas"]["CacheActivityGroup"][];
@@ -29537,6 +29577,8 @@ export interface components {
              * @default []
              */
             supported_openai_params: string[] | null;
+            /** Supported Reasoning Efforts */
+            supported_reasoning_efforts?: string[] | null;
             /**
              * Supports Function Calling
              * @default false
@@ -32475,17 +32517,22 @@ export interface components {
              */
             classification_prompt?: string | null;
             /**
+             * Classifier Context Budget Chars
+             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and the caller's system prompt sit outside this budget and are always sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @default 8000
+             */
+            classifier_context_budget_chars: number;
+            /**
              * Classifier Context Include Assistant Turns
-             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
              */
             classifier_context_include_assistant_turns: boolean;
             /**
              * Classifier Context Per Turn Chars
-             * @description Maximum character length for each prior turn's text in the classifier context window. Turns exceeding this are truncated. Only applies when classifier_type is 'llm'.
-             * @default 200
+             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Only applies when classifier_type is 'llm'.
              */
-            classifier_context_per_turn_chars: number;
+            classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
              * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call already carries the current user ask and the caller's system prompt in full. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
@@ -55044,6 +55091,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetSpendRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

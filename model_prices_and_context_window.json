@@ -17155,6 +17155,14 @@
             "notes": "Web Search on Amazon Bedrock AgentCore, billed by AWS on the gateway"
         }
     },
+    "bing_grounding/search": {
+        "input_cost_per_query": 0.035,
+        "litellm_provider": "bing_grounding",
+        "mode": "search",
+        "metadata": {
+            "notes": "Grounding with Bing Search (G1 SKU): $35 per 1,000 transactions. Tokens for the Foundry model deployment that runs the grounded search are billed separately on that deployment."
+        }
+    },
     "tinyfish/search": {
         "input_cost_per_query": 0.0,
         "litellm_provider": "tinyfish",
@@ -49008,12 +49016,13 @@
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -49040,12 +49049,13 @@
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -49072,12 +49082,13 @@
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
         "use_openai_responses_path": true,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [

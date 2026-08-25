@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, Type
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -1846,6 +1847,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def async_search(
@@ -1944,6 +1946,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def _async_post_anthropic_messages_with_http_error_retry(
@@ -7838,6 +7841,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
+        video_file: FileContent | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | None = None,
@@ -7849,6 +7853,7 @@ class BaseLLMHTTPHandler:
             return self.async_video_edit_handler(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 video_provider_config=video_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -7902,9 +7907,10 @@ class BaseLLMHTTPHandler:
             prefetched_source_data = prefetch_resp.json()
 
         try:
-            url, data = video_provider_config.transform_video_edit_request(
+            url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 headers=headers,
@@ -7923,11 +7929,10 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            response: Final = sync_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
+            response: Final = (
+                sync_httpx_client.post(url=url, headers=headers, data=data, files=files, timeout=timeout)
+                if files
+                else sync_httpx_client.post(url=url, headers=headers, json=data, timeout=timeout)
             )
             response.raise_for_status()
             return video_provider_config.transform_video_edit_response(
@@ -7947,6 +7952,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
+        video_file: FileContent | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | None = None,
@@ -7998,9 +8004,10 @@ class BaseLLMHTTPHandler:
             prefetched_source_data = prefetch_resp.json()
 
         try:
-            url, data = video_provider_config.transform_video_edit_request(
+            url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 headers=headers,
@@ -8019,11 +8026,10 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            response: Final = await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
+            response: Final = await (
+                async_httpx_client.post(url=url, headers=headers, data=data, files=files, timeout=timeout)
+                if files
+                else async_httpx_client.post(url=url, headers=headers, json=data, timeout=timeout)
             )
             response.raise_for_status()
             return video_provider_config.transform_video_edit_response(

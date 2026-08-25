@@ -416,7 +416,7 @@ async def acompletion(
     logprobs: bool | None = None,
     top_logprobs: int | None = None,
     deployment_id=None,
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None = None,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
@@ -602,7 +602,7 @@ async def acompletion(
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=base_url,
+            api_base=kwargs.get("api_base") or base_url,
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -4920,7 +4920,7 @@ def completion(
     logit_bias: dict | None = None,
     user: str | None = None,
     # openai v1.0+ new params
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None = None,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     response_format: dict | type[BaseModel] | None = None,
     seed: int | None = None,

@@ -8610,6 +8610,12 @@ class ProviderConfigManager:
             )
 
             return BedrockPassthroughConfig()
+        elif LlmProviders.BEDROCK_MANTLE == provider:
+            from litellm.llms.bedrock_mantle.passthrough.transformation import (
+                BedrockMantlePassthroughConfig,
+            )
+
+            return BedrockMantlePassthroughConfig()
         elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.passthrough.transformation import (
                 VLLMPassthroughConfig,
@@ -9096,6 +9102,7 @@ class ProviderConfigManager:
         from litellm.llms.apiserpent.search.transformation import (
             APISerpentSearchConfig,
         )
+        from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
@@ -9137,6 +9144,7 @@ class ProviderConfigManager:
             SearchProviders.TINYFISH: TinyfishSearchConfig,
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
+            SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

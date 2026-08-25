@@ -208,6 +208,29 @@ def test_bedrock_converse_streaming_consistent_id():
         ), "All chunk IDs must match the one captured from the messageStart event"
 
 
+def test_converse_streaming_usage_uses_provider_thinking_tokens():
+    """Regression LIT-5714: the messageStop event carries provider thinking tokens
+    under ``additionalModelResponseFields``; the usage chunk must report them instead
+    of a token_counter estimate."""
+    chunks = [
+        {
+            "contentBlockIndex": 0,
+            "delta": {"reasoningContent": {"text": "thinking about it"}},
+        },
+        {
+            "stopReason": "end_turn",
+            "additionalModelResponseFields": {"usage": {"output_tokens_details": {"thinking_tokens": 1033}}},
+        },
+        {"usage": {"inputTokens": 40, "outputTokens": 3002, "totalTokens": 3042}},
+    ]
+
+    decoder = AWSEventStreamDecoder(model="bedrock/anthropic.claude-opus-4-7")
+    parsed = [decoder.converse_chunk_parser(chunk) for chunk in chunks]
+
+    usage = parsed[-1].usage
+    assert usage.completion_tokens_details.reasoning_tokens == 1033
+
+
 @pytest.mark.asyncio
 async def test_make_call_does_not_rechunk_stream_by_default():
     """Re-chunking the event stream into fixed 1024-byte blocks holds small
