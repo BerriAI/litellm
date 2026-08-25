@@ -13,6 +13,9 @@ from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    AnthropicMessagesStreamingResponse,
+)
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -2528,9 +2531,11 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
         ping_interval_seconds=0.01,
     )
 
+    wrapped = AnthropicMessagesStreamingResponse(completion_stream=held_back, hidden_params={})
+
     async def ping_then_cancel(user_api_key_dict, response, request_data):
         yield await response.__anext__()
-        while not response.has_buffered_provider_output:
+        while not held_back.has_buffered_provider_output:
             yield await response.__anext__()
         raise asyncio.CancelledError()
 
@@ -2538,7 +2543,7 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
     streaming_logging_obj.async_post_call_streaming_iterator_hook = ping_then_cancel
     streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
-        response=held_back,
+        response=wrapped,
         user_api_key_dict=valid_token,
         request_data=_request_body(),
         proxy_logging_obj=streaming_logging_obj,
