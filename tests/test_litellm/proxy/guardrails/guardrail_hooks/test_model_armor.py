@@ -623,6 +623,162 @@ async def test_model_armor_streaming_block_yields_sse_error():
         assert int(error_data["error"]["code"]) == 400
 
 
+_ANTHROPIC_SSE_CHUNKS = (
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
+    b'"role":"assistant","model":"claude","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+    b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+    b'"content_block":{"type":"text","text":""}}\n\n',
+    b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":"my ssn is 123-45-6789"}}\n\n',
+    b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    b'"usage":{"output_tokens":9}}\n\n',
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+)
+
+
+def _sse_armor_guardrail(**kwargs: object) -> ModelArmorGuardrail:
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        **kwargs,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+    return guardrail
+
+
+async def _drain_armor_streaming_hook(
+    guardrail: ModelArmorGuardrail, chunks: tuple[bytes, ...] = _ANTHROPIC_SSE_CHUNKS
+) -> list[object]:
+    async def _stream():
+        for chunk in chunks:
+            yield chunk
+
+    return [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_stream(),
+            request_data={
+                "model": "claude-sonnet-4-5",
+                "messages": [{"role": "user", "content": "what is my ssn"}],
+                "metadata": {"guardrails": ["model-armor-test"]},
+            },
+        )
+    ]
+
+
+def _armor_api_response(sanitization_result: dict) -> AsyncMock:
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={"sanitizationResult": sanitization_result})
+    return mock_response
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
+    """A /v1/messages stream arrives as raw SSE frames and must be assembled, then scanned.
+
+    Regression for `500 Error building chunks for logging/streaming usage calculation`:
+    stream_chunk_builder subscripts each chunk, which raises TypeError on bytes.
+    """
+    guardrail = _sse_armor_guardrail()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_api_response({"filterMatchState": "NO_MATCH_FOUND"})),
+    ) as mock_post:
+        delivered = await _drain_armor_streaming_hook(guardrail)
+
+    mock_post.assert_called_once()
+    assert "my ssn is 123-45-6789" in json.dumps(mock_post.call_args.kwargs.get("json"))
+    assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_blocks_raw_anthropic_sse_with_error_frame():
+    guardrail = _sse_armor_guardrail()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(
+            return_value=_armor_api_response(
+                {
+                    "filterMatchState": "MATCH_FOUND",
+                    "filterResults": {
+                        "sdp": {
+                            "sdpFilterResult": {
+                                "inspectResult": {
+                                    "matchState": "MATCH_FOUND",
+                                    "findings": [{"infoType": "US_SOCIAL_SECURITY_NUMBER"}],
+                                }
+                            }
+                        }
+                    },
+                }
+            )
+        ),
+    ):
+        delivered = await _drain_armor_streaming_hook(guardrail)
+
+    body = b"".join(chunk for chunk in delivered if isinstance(chunk, bytes))
+    assert b"event: error" in body
+    assert b"123-45-6789" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_masks_raw_anthropic_sse():
+    guardrail = _sse_armor_guardrail(mask_response_content=True)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(
+            return_value=_armor_api_response(
+                {
+                    "filterMatchState": "MATCH_FOUND",
+                    "filterResults": {
+                        "sdp": {
+                            "sdpFilterResult": {
+                                "deidentifyResult": {
+                                    "matchState": "MATCH_FOUND",
+                                    "data": {"text": "my ssn is [REDACTED]"},
+                                }
+                            }
+                        }
+                    },
+                }
+            )
+        ),
+    ):
+        delivered = await _drain_armor_streaming_hook(guardrail)
+
+    body = b"".join(chunk for chunk in delivered if isinstance(chunk, bytes))
+    assert b"[REDACTED]" in body
+    assert b"123-45-6789" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_fails_closed_on_unparseable_raw_sse():
+    guardrail = _sse_armor_guardrail()
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock()) as mock_post:
+        delivered = await _drain_armor_streaming_hook(
+            guardrail, chunks=(b"data: not anthropic\n\n",)
+        )
+
+    mock_post.assert_not_called()
+    body = b"".join(chunk for chunk in delivered if isinstance(chunk, bytes))
+    assert b"event: error" in body
+    assert b"not anthropic" not in body
+
+
 @pytest.mark.asyncio
 async def test_model_armor_api_failure_raises_sanitized_error():
     """Test that Model Armor API failures raise HTTP 400, not the upstream status code."""
