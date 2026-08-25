@@ -1043,6 +1043,15 @@ def test_convert_model_response_object():
             "The sky is a canvas of blue",
         ),
         ("I am a regular response", None, "I am a regular response"),
+        (
+            # Regression for #38197: MiniMax M2.7 puts its entire answer
+            # inside <think>...</think> with nothing trailing after the
+            # closing tag. Fall back to the reasoning content instead of
+            # silently discarding the model's only real output.
+            "<think>The answer to 2+2 is 4.</think>",
+            "The answer to 2+2 is 4.",
+            "The answer to 2+2 is 4.",
+        ),
     ],
 )
 def test_parse_content_for_reasoning(content, expected_reasoning, expected_content):
