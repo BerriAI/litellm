@@ -660,8 +660,8 @@ def test_normalize_redacted_arguments_skips_custom_tool_calls():
 
 @pytest.mark.asyncio
 async def test_message_history_normalizes_redacted_tool_call_arguments():
-    """Sessions stored with turn_off_message_logging before the fix hold the bare
-    sentinel in tool-call arguments; replay must normalize it to valid JSON."""
+    """Sessions stored with turn_off_message_logging hold the bare sentinel
+    in tool-call arguments; replay must normalize it to valid JSON."""
     mock_spend_logs = [
         {
             "request_id": "chatcmpl-redacted-1",

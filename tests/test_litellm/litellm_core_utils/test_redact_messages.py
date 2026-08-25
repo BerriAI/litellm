@@ -352,9 +352,9 @@ class TestPerformRedaction:
         message = redacted["choices"][0]["message"]
         assert message["content"] is None
         tool_call = message["tool_calls"][0]
-        assert tool_call["function"]["arguments"] == "{}"
+        assert tool_call["function"]["arguments"] == "redacted-by-litellm"
         assert tool_call["function"]["name"] == "get_weather"
-        assert message["function_call"]["arguments"] == "{}"
+        assert message["function_call"]["arguments"] == "redacted-by-litellm"
 
     def test_redacts_tool_call_arguments_in_streaming_delta_dict(self):
         result = {
@@ -379,7 +379,7 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         delta = redacted["choices"][0]["delta"]
-        assert delta["tool_calls"][0]["function"]["arguments"] == "{}"
+        assert delta["tool_calls"][0]["function"]["arguments"] == "redacted-by-litellm"
 
     def test_redacts_tool_call_arguments_on_model_response_object(self):
         result = litellm.ModelResponse(
@@ -408,7 +408,7 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         tool_call = redacted.choices[0].message.tool_calls[0]
-        assert tool_call.function.arguments == "{}"
+        assert tool_call.function.arguments == "redacted-by-litellm"
         assert tool_call.function.name == "get_weather"
         assert result.choices[0].message.tool_calls[0].function.arguments == (
             '{"city": "sensitive-city"}'
@@ -442,7 +442,7 @@ class TestPerformRedaction:
         perform_redaction(details, None)
 
         tool_call = streaming_response.choices[0].delta.tool_calls[0]
-        assert tool_call.function.arguments == "{}"
+        assert tool_call.function.arguments == "redacted-by-litellm"
 
     def test_redacts_tool_call_arguments_in_standard_logging_object(self):
         details = {
@@ -472,7 +472,7 @@ class TestPerformRedaction:
         perform_redaction(details, None)
 
         message = details["standard_logging_object"]["response"]["choices"][0]["message"]
-        assert message["tool_calls"][0]["function"]["arguments"] == "{}"
+        assert message["tool_calls"][0]["function"]["arguments"] == "redacted-by-litellm"
 
     def test_redacts_responses_api_function_call_arguments_dict(self):
         result = {
@@ -488,7 +488,7 @@ class TestPerformRedaction:
 
         redacted = perform_redaction({}, result)
 
-        assert redacted["output"][0]["arguments"] == "{}"
+        assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
         assert redacted["output"][0]["name"] == "get_weather"
 
     def test_redacts_every_tool_call_in_multi_element_list(self):
@@ -520,8 +520,8 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         tool_calls = redacted.choices[0].message.tool_calls
-        assert tool_calls[0].function.arguments == "{}"
-        assert tool_calls[1].function.arguments == "{}"
+        assert tool_calls[0].function.arguments == "redacted-by-litellm"
+        assert tool_calls[1].function.arguments == "redacted-by-litellm"
 
     def test_preserves_none_content_on_tool_call_only_message(self):
         result = litellm.ModelResponse(
@@ -558,7 +558,7 @@ class TestPerformRedaction:
 
         _redact_responses_api_output([output_item])
 
-        assert output_item.arguments == "{}"
+        assert output_item.arguments == "redacted-by-litellm"
         assert output_item.name == "get_weather"
 
     def test_redacts_response_output_objects_with_top_level_text(self):
@@ -571,6 +571,29 @@ class TestPerformRedaction:
 
         assert output_items[0].text == "redacted-by-litellm"
         assert output_items[1] == "non-dict output item"
+
+    def test_preserves_none_text_in_responses_output(self):
+        from litellm.litellm_core_utils.redact_messages import _redact_responses_api_output_dict
+
+        none_item = SimpleNamespace(type="output_text", text=None, content=[SimpleNamespace(text=None)])
+        real_item = SimpleNamespace(type="output_text", text="real answer", content=[SimpleNamespace(text="real part")])
+
+        _redact_responses_api_output([none_item, real_item])
+
+        assert none_item.text is None
+        assert none_item.content[0].text is None
+        assert real_item.text == "redacted-by-litellm"
+        assert real_item.content[0].text == "redacted-by-litellm"
+
+        none_dict = {"type": "output_text", "text": None, "content": [{"text": None}]}
+        real_dict = {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
+
+        _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
+
+        assert none_dict["text"] is None
+        assert none_dict["content"][0]["text"] is None
+        assert real_dict["text"] == "redacted-by-litellm"
+        assert real_dict["content"][0]["text"] == "redacted-by-litellm"
 
     def test_skips_non_dict_response_output_items(self):
         result = {

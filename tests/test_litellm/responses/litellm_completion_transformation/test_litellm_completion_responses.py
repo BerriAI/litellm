@@ -954,7 +954,7 @@ class TestFunctionCallTransformation:
         assert function.get("arguments") == '{"location": "São Paulo, Brazil"}'
 
     def test_function_call_transformation_normalizes_redacted_arguments(self):
-        """Rows stored before the redaction fix hold the bare sentinel, which is invalid JSON."""
+        """Redacted rows hold the bare sentinel in arguments, which is invalid JSON."""
         result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
             function_call={
                 "type": "function_call",
