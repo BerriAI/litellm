@@ -3930,9 +3930,7 @@ def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_ca
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_with_tool_reference():
-    """Regression test for LIT-6103: a tool_result whose content is a single unknown
-    block type (e.g. tool_reference from Claude Code's ENABLE_TOOL_SEARCH) must still
-    emit a role:"tool" message instead of being silently dropped."""
+    """LIT-6103: a single unknown block type must still emit the tool message."""
 
     tool_reference_block = {"type": "tool_reference", "tool_name": "WebFetch"}
     anthropic_messages = [
@@ -3970,10 +3968,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_tool_reference(
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_tool_reference_with_sibling_text():
-    """Regression test for LIT-6103: with a sibling text part next to the tool_result,
-    dropping the tool_result leaves an assistant tool_use answered only by a user text
-    message, which Anthropic rejects with a 400. The tool message must be emitted and
-    placed before the user message."""
+    """LIT-6103: the tool message must be emitted before the sibling text user message."""
 
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Load the WebFetch tool"}]),
@@ -4020,8 +4015,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_tool_reference_with_
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_mixed_unknown_and_text():
-    """Regression test for LIT-6103: unknown block types mixed with text in a multi-item
-    tool_result content list must be JSON-serialized into text parts, not dropped."""
+    """LIT-6103: unknown blocks mixed with text become serialized text parts."""
 
     tool_reference_block = {"type": "tool_reference", "tool_name": "WebFetch"}
     search_result_block = {"type": "search_result", "title": "docs", "source": "https://example.com"}
@@ -4071,8 +4065,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_mixed_unknown_and_te
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_empty_content_list():
-    """Regression test for LIT-6103: a tool_result with an empty content list must still
-    emit a role:"tool" message so the tool_use stays answered."""
+    """LIT-6103: an empty content list must still emit the tool message."""
 
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
@@ -4119,8 +4112,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_empty_content_list()
 def test_translate_anthropic_messages_to_openai_tool_result_odd_content_shapes(
     tool_result_content, expected_tool_content
 ):
-    """Regression test for LIT-6103: tool_result content that is a non-str non-dict item,
-    an explicit null, or a bare dict must still emit a role:"tool" message."""
+    """LIT-6103: off-contract content shapes must still emit the tool message."""
 
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
@@ -4144,8 +4136,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_odd_content_shapes(
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_multi_item_non_dict_items():
-    """Regression test for LIT-6103: non-str non-dict items in a multi-item tool_result
-    content list must be JSON-serialized into text parts, not silently discarded."""
+    """LIT-6103: non-dict items in a multi-item list become serialized text parts."""
 
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
@@ -4179,8 +4170,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_multi_item_non_dict_
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_null_content_preserves_cache_control():
-    """Regression test for LIT-6103: the fallthrough emit sites must carry cache_control
-    through for Claude models the same way the pre-existing branches do."""
+    """LIT-6103: the fallthrough emit sites carry cache_control through."""
 
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
@@ -4213,8 +4203,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_null_content_preserv
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_all_image_parts_unconvertible():
-    """Regression test for LIT-6103: a multi-item tool_result whose parts all fail to
-    convert must still emit the tool message with empty content, never drop it."""
+    """LIT-6103: a tool_result whose parts all fail to convert must still emit the tool message."""
 
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Screenshot twice"}]),
