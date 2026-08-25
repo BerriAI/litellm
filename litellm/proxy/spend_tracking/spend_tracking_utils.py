@@ -131,6 +131,8 @@ def _get_spend_logs_metadata(
             litellm_overhead_time_ms=None,
             attempted_retries=None,
             max_retries=None,
+            attempted_fallbacks=None,
+            original_model_group=None,
             cost_breakdown=None,
             compression_savings=None,
             autorouter_savings=autorouter_savings,
