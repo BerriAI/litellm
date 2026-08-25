@@ -867,6 +867,7 @@ PROVIDERS_WITH_A_HANDLER = (
     "openrouter",
     "perplexity",
     "replicate",
+    "runwayml",
     "sagemaker",
     "together_ai",
     "vertex_ai",
@@ -956,6 +957,7 @@ PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
     "mistral",
     "openai",
     "perplexity",
+    "runwayml",
     "together_ai",
     "vertex_ai",
     "xai",
@@ -971,6 +973,7 @@ PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK = (
     "mistral",
     "openai",
     "perplexity",
+    "runwayml",
     "together_ai",
     "xai",
 )
