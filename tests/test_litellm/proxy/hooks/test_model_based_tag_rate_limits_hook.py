@@ -2378,7 +2378,10 @@ async def test_concurrency_slot_released_by_post_call_failure_hook_on_the_final_
     # This hop's admission reserves the slot; its own failure is the chain's
     # final one, so async_log_failure_event never fires for it (simulating
     # litellm's has_logged_async_failure dedup blocking the callback here).
-    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"]}, "litellm_call_id": "call-final"}
+    request_kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"], "user_api_key": "hash"},
+        "litellm_call_id": "call-final",
+    }
     await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
@@ -2394,6 +2397,69 @@ async def test_concurrency_slot_released_by_post_call_failure_hook_on_the_final_
         healthy_deployments=healthy,
         messages=None,
         request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_cannot_release_a_different_keys_reservation(time_controller):
+    """
+    Security regression: litellm_call_id comes from the caller-controlled
+    x-litellm-call-id header, so two different callers choosing the identical
+    id must not be able to release each other's reservation through the
+    pending-reservations cache mirror. Request A (key-a, tag victim_user) and
+    request B (key-b, tag attacker_user) share one call_id; A's own terminal
+    failure must only ever be able to find and release A's own mirror entry,
+    keyed by A's server-authenticated key hash, never B's.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    victim_request_kwargs = {
+        "metadata": {"tags": ["end_user_id:victim_user"], "user_api_key": "key-a-hash"},
+        "litellm_call_id": "shared-call-id",
+    }
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=victim_request_kwargs
+    )
+
+    attacker_request_kwargs = {
+        "metadata": {"tags": ["end_user_id:attacker_user"], "user_api_key": "key-b-hash"},
+        "litellm_call_id": "shared-call-id",
+    }
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=attacker_request_kwargs
+    )
+
+    # Simulates request A's own fallback chain exhausting -- its terminal
+    # failure hook must not touch request B's still-live reservation just
+    # because both requests share a caller-chosen call_id.
+    await limiter.async_post_call_failure_hook(
+        request_data={"litellm_call_id": "shared-call-id"},
+        original_exception=Exception("all deployments failed"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="key-a-hash"),
+    )
+
+    # attacker_user's own reservation must still be held: key-a's failure
+    # hook releasing it would let key-b bypass its own concurrency cap.
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:attacker_user"], "user_api_key": "key-b-hash"}},
+        )
+    assert exc_info.value.detail["type"] == "concurrency"
+
+    # victim_user's own slot was correctly released by its own key's
+    # failure hook -- the legitimate single-key path still works.
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:victim_user"], "user_api_key": "key-a-hash"}},
     )
     assert result == healthy
 

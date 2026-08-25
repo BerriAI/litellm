@@ -647,8 +647,8 @@ _CONCURRENCY_MIN_SAFETY_TTL_SECONDS: Final = 3600
 _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_concurrency_keys"
 
 # Mirrors the latest hop's own queued reservation in the same external cache
-# the reservations themselves live in, keyed by litellm_call_id, for the one
-# release path that cannot reach model_call_details at all:
+# the reservations themselves live in, keyed by (litellm_call_id, key_hash),
+# for the one release path that cannot reach model_call_details at all:
 # proxy/utils.py's post_call_failure_hook deliberately pops litellm_logging_obj
 # off request_data before invoking any callback's async_post_call_failure_hook
 # ("Remove before callbacks iterate — not serialisable"), so a fallback
@@ -671,11 +671,22 @@ _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pend
 # those objects, so an external cache keyed by it -- the same Redis/
 # in-memory store the reservations themselves already live in -- is the
 # only channel that survives all three failure modes at once.
+#
+# litellm_call_id alone is not enough to key this cache: it comes from the
+# caller-controlled x-litellm-call-id header, so two unrelated requests that
+# choose the identical id would overwrite each other's mirror entry, letting
+# one caller's terminal failure release a completely different caller's
+# still-live reservation. Folding in key_hash -- the calling virtual key's
+# hash, resolved server-side (UserAPIKeyAuth.api_key in
+# async_post_call_failure_hook, metadata["user_api_key"] everywhere else,
+# both authenticated before this hook ever runs) -- confines a collision to
+# a caller overwriting their own other request's entry, which only weakens
+# that caller's own configured cap rather than crossing between callers.
 _PENDING_RESERVATIONS_CACHE_KEY_PREFIX: Final = "model_based_tag_rate_limits:pending_reservations:"
 
 
-def _pending_reservations_cache_key(call_id: str) -> str:
-    return f"{_PENDING_RESERVATIONS_CACHE_KEY_PREFIX}{call_id}"
+def _pending_reservations_cache_key(call_id: str, key_hash: str | None) -> str:
+    return f"{_PENDING_RESERVATIONS_CACHE_KEY_PREFIX}{call_id}:{key_hash or ''}"
 
 
 def _encode_reservations(reservations: Sequence[tuple[str, "_PartitionKey"]]) -> str:
@@ -1322,19 +1333,21 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             if concurrency_reservations:
                 _queue_pending_concurrency_reservations(resolved_request_kwargs, concurrency_reservations)
                 await self._mirror_pending_reservations(
-                    resolved_request_kwargs.get("litellm_call_id"), concurrency_reservations
+                    resolved_request_kwargs.get("litellm_call_id"),
+                    _extract_key_hash(resolved_request_kwargs, metadata_variable_name),
+                    concurrency_reservations,
                 )
 
         return healthy_deployments
 
     async def _mirror_pending_reservations(
-        self, call_id: object, reservations: Sequence[tuple[str, "_PartitionKey"]]
+        self, call_id: object, key_hash: str | None, reservations: Sequence[tuple[str, "_PartitionKey"]]
     ) -> None:
         if not isinstance(call_id, str):
             return
         try:
             await self.internal_usage_cache.async_set_cache(
-                key=_pending_reservations_cache_key(call_id),
+                key=_pending_reservations_cache_key(call_id, key_hash),
                 value=_encode_reservations(reservations),
                 ttl=_CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
                 litellm_parent_otel_span=None,
@@ -1529,8 +1542,21 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # must never be found there later and double-released.
         call_id: Final = kwargs.get("litellm_call_id")
         if isinstance(call_id, str):
+            # Not `get_metadata_variable_name_from_kwargs` (naive key-presence
+            # check): at this point `kwargs` is `model_call_details`, which
+            # carries `litellm_metadata` present-but-`None` alongside the
+            # real, populated `metadata` for a standard request -- see
+            # `_resolve_success_event_metadata_variable_name`'s own docstring.
+            litellm_params_raw: Final = kwargs.get("litellm_params")
+            litellm_params_for_metadata: Final = (
+                litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
+            )
+            metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
+            key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
             try:
-                await self.internal_usage_cache.dual_cache.async_delete_cache(_pending_reservations_cache_key(call_id))
+                await self.internal_usage_cache.dual_cache.async_delete_cache(
+                    _pending_reservations_cache_key(call_id, key_hash)
+                )
             except Exception as e:  # noqa: BLE001 - a failed mirror clear must never block the real release below
                 verbose_proxy_logger.warning(
                     "model_based_tag_rate_limits_hook: failed to clear mirrored reservations for call_id=%s: %s",
@@ -1598,11 +1624,18 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         neither a ContextVar nor `request_data` itself survives to this
         point either (see `_PENDING_RESERVATIONS_CACHE_KEY_PREFIX`'s own
         docstring for why, confirmed live for each).
+
+        Keyed by `user_api_key_dict.api_key`, not a value read out of
+        `request_data`: the proxy's own auth middleware establishes
+        `user_api_key_dict` before any hook runs, so it can't be forged the
+        way `request_data["litellm_call_id"]` (the `x-litellm-call-id`
+        header) can -- see `_PENDING_RESERVATIONS_CACHE_KEY_PREFIX`'s
+        docstring for what a caller-forgeable-only key would let a caller do.
         """
         call_id: Final = request_data.get("litellm_call_id")
         if not isinstance(call_id, str):
             return
-        cache_key: Final = _pending_reservations_cache_key(call_id)
+        cache_key: Final = _pending_reservations_cache_key(call_id, user_api_key_dict.api_key)
         try:
             raw: Final = await self.internal_usage_cache.async_get_cache(key=cache_key, litellm_parent_otel_span=None)
         except Exception as e:  # noqa: BLE001 - a failed mirror read must never raise into the caller's request path
