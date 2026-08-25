@@ -318,6 +318,40 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
 @pytest.mark.parametrize(
     "model",
     [
+        "us.openai.gpt-5.6-sol",
+        "bedrock/converse/global.openai.gpt-5.6-luna",
+    ],
+)
+def test_openai_gpt5_converse_never_forwards_thinking(model, local_model_cost_map):
+    """GPT-5.x on Converse must never send Anthropic ``thinking``/``output_config`` (Bedrock rejects them).
+
+    Regression: ``thinking`` is not advertised as supported, and even when supplied alongside
+    ``reasoning_effort`` in either order it never survives into the request."""
+    config = AmazonConverseConfig()
+
+    supported = config.get_supported_openai_params(model=model)
+    assert "thinking" not in supported
+    assert "output_config" not in supported
+
+    thinking_block = {"type": "enabled", "budget_tokens": 2048}
+    for non_default_params in (
+        {"reasoning_effort": "high", "thinking": thinking_block},
+        {"thinking": thinking_block, "reasoning_effort": "high"},
+    ):
+        optional_params = config.map_openai_params(
+            non_default_params=dict(non_default_params),
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
+        assert additional_request_params["reasoning"] == {"effort": "high"}
+        assert "thinking" not in additional_request_params
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
         "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0",
         "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
         "bedrock/converse/us.anthropic.claude-opus-4-7",

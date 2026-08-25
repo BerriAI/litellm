@@ -426,8 +426,6 @@ class AmazonConverseConfig(BaseConfig):
         if "gpt-oss" in model:
             optional_params["reasoning_effort"] = reasoning_effort
         elif "openai.gpt-5" in model:
-            # Converse rejects Anthropic's `thinking` for OpenAI GPT-5.x; effort goes
-            # under additionalModelRequestFields as {"reasoning": {"effort": ...}}.
             optional_params.pop("thinking", None)
             optional_params["reasoning"] = {"effort": reasoning_effort}
         elif self._is_nova_2_model(model):
@@ -561,7 +559,7 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model:
+        if "gpt-oss" in model or "openai.gpt-5" in model or "openai.gpt-5" in base_model:
             supported_params.append("reasoning_effort")
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
@@ -909,7 +907,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
-            if param == "thinking":
+            if param == "thinking" and "openai.gpt-5" not in model:
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
