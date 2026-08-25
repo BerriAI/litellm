@@ -1130,7 +1130,8 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 
     Parameters:
     - user_route: str - the route the user is trying to call
-    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
+    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user. Entries are a route group name
+      (e.g. "openai_routes"), an exact route, or a trailing-wildcard prefix (e.g. "/internal-models/*").
     """
     from starlette.routing import compile_path
 
@@ -1140,7 +1141,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
                 regex, _, _ = compile_path(template)
                 if regex.match(user_route):
                     return True
-        elif allowed_route == user_route:
+        elif RouteChecks.route_matches_wildcard_pattern(route=user_route, pattern=allowed_route):
             return True
     return False
 
