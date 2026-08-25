@@ -43,12 +43,16 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
       # The gate provisions its own measurement env (.venv-typecheck: a frozen
       # uv sync of its canonical dependency groups plus a generated Prisma
       # client), so no install step here can drift from what local runs measure.
       - name: Emit basedpyright counts for HEAD
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
           python scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/basedpyright-counts"
           counts_file=$(ls "$RUNNER_TEMP"/basedpyright-counts/basedpyright-counts-*.json)

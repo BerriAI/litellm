@@ -12,8 +12,10 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.db.autorouter_session_rollup import UPSERT_AUTOROUTER_SESSION_SQL
-from litellm.proxy.management_endpoints.auto_router_endpoints import _BENCHMARKS_SQL
+from litellm.proxy.db.autorouter_session_rollup import (
+    AUTOROUTER_BENCHMARKS_SQL,
+    UPSERT_AUTOROUTER_SESSION_SQL,
+)
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -164,7 +166,7 @@ async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
     await _turn(db, key, "A", T0 - timedelta(days=40), session_id=out_of_window, router=router)
 
     rows = await db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
     )
@@ -186,7 +188,7 @@ async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db
     await _turn(db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{uuid.uuid4()}", router=router, router_type="quality")
 
     rows = await db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
     )
@@ -248,7 +250,7 @@ async def test_the_benchmarks_aggregate_sums_tier_turns_across_sessions(db):
     await _turn(db, key, "C", T0 + timedelta(seconds=30), session_id=f"s-{uuid.uuid4()}", router=router, tier=None)
 
     rows = await db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
     )
@@ -275,7 +277,7 @@ async def test_tier_maps_stay_separate_per_router_type_on_a_reconfigured_alias(d
     )
 
     rows = await db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
     )
@@ -289,7 +291,7 @@ async def test_a_window_with_no_tiered_turns_aggregates_to_an_empty_map(db):
     await _turn(db, key, "A", T0, session_id=f"s-{uuid.uuid4()}", router=router, tier=None)
 
     rows = await db.query_raw(
-        _BENCHMARKS_SQL,
+        AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
     )

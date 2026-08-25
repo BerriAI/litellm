@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAutoRouterDeployment,
   selectAutoRouterModelGroups,
+  selectPlainModelGroups,
   useAllProxyModels,
   useAutoRouterModelGroups,
   useAutoRouters,
@@ -974,6 +975,32 @@ describe("selectAutoRouterModelGroups", () => {
 
   it("returns an empty set for an empty model list", () => {
     expect(selectAutoRouterModelGroups([])).toEqual(new Set());
+  });
+});
+
+describe("selectPlainModelGroups", () => {
+  it("keeps only non-auto-router model groups", () => {
+    const deployments: AutoRouterCandidateDeployment[] = [
+      { model_name: "smart-router", litellm_params: { model: "auto_router/complexity_router" } },
+      { model_name: "claude-haiku", litellm_params: { model: "anthropic/claude-haiku-4-5" } },
+      { model_name: "claude-sonnet", litellm_params: { model: "anthropic/claude-sonnet-4-5" } },
+      { model_name: "cheap-router", litellm_params: { model: "auto_router/adaptive_router" } },
+    ];
+
+    expect(selectPlainModelGroups(deployments)).toEqual(new Set(["claude-haiku", "claude-sonnet"]));
+  });
+
+  it("drops a group name that also fronts an auto-router deployment", () => {
+    const deployments: AutoRouterCandidateDeployment[] = [
+      { model_name: "shared-name", litellm_params: { model: "auto_router/complexity_router" } },
+      { model_name: "shared-name", litellm_params: { model: "anthropic/claude-sonnet-4-5" } },
+    ];
+
+    expect(selectPlainModelGroups(deployments)).toEqual(new Set());
+  });
+
+  it("drops deployments that have no public model_name", () => {
+    expect(selectPlainModelGroups([{ model_name: "", litellm_params: { model: "openai/gpt-4o" } }])).toEqual(new Set());
   });
 });
 

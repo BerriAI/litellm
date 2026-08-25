@@ -1,12 +1,15 @@
 import { Settings, X } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { ComparisonInstance } from "../CompareUI";
 import { MessageDisplay } from "./MessageDisplay";
 import { UnifiedSelector } from "./UnifiedSelector";
 import TagSelector from "@/components/tag_management/TagSelector";
 import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
-import { Checkbox, Divider, Popover, Slider } from "antd";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
+import { Slider } from "@/components/ui/slider";
 import { SelectorOption, EndpointConfig, isAgentEndpoint, getComparisonSelection } from "../endpoint_config";
 
 interface ComparisonPanelProps {
@@ -35,6 +38,8 @@ export function ComparisonPanel({
   const isA2AMode = isAgentEndpoint(endpointConfig.id);
   const currentSelection = getComparisonSelection(comparison, endpointConfig.id);
   const [popoverVisible, setPopoverVisible] = useState(false);
+  const syncId = useId();
+  const advancedParamsId = useId();
 
   const handleSyncChange = (checked: boolean) => {
     if (checked) {
@@ -80,7 +85,7 @@ export function ComparisonPanel({
   };
 
   const disabledOpacity = comparison.useAdvancedParams ? 1 : 0.4;
-  const disabledTextColor = comparison.useAdvancedParams ? "text-gray-700" : "text-gray-400";
+  const disabledTextColor = comparison.useAdvancedParams ? "text-foreground" : "text-muted-foreground";
 
   const handleTogglePopover = () => {
     setPopoverVisible((prev) => !prev);
@@ -95,7 +100,7 @@ export function ComparisonPanel({
       {/* Close button in top right */}
       <button
         onClick={handleClosePopover}
-        className="absolute top-0 right-0 p-1 hover:bg-gray-100 rounded-sm transition-colors text-gray-500 hover:text-gray-700 z-10"
+        className="absolute top-0 right-0 p-1 hover:bg-accent rounded-sm transition-colors text-muted-foreground hover:text-foreground z-10"
       >
         <X size={14} />
       </button>
@@ -103,19 +108,25 @@ export function ComparisonPanel({
       <div className="space-y-2">
         {/* Sync Checkbox */}
         <div className="flex items-center gap-2">
-          <Checkbox checked={comparison.applyAcrossModels} onChange={(e) => handleSyncChange(e.target.checked)}>
-            <span className="text-xs font-medium">Sync Settings Across Models</span>
-          </Checkbox>
+          <Checkbox
+            id={syncId}
+            checked={comparison.applyAcrossModels}
+            onCheckedChange={handleSyncChange}
+            aria-label="Sync Settings Across Models"
+          />
+          <label htmlFor={syncId} className="cursor-pointer text-xs font-medium">
+            Sync Settings Across Models
+          </label>
         </div>
 
-        <Divider className="border-gray-200" />
+        <Separator className="my-3" />
 
         {/* General Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">General Settings</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">General Settings</h4>
           <div className="space-y-2">
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Tags</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Tags</label>
               <TagSelector
                 value={comparison.tags}
                 onChange={(value) => handleSettingChange("tags", value)}
@@ -123,7 +134,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Vector Stores</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Vector Stores</label>
               <VectorStoreSelector
                 value={comparison.vectorStores}
                 onChange={(value) => handleSettingChange("vectorStores", value)}
@@ -131,7 +142,7 @@ export function ComparisonPanel({
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-gray-600 block mb-0.5">Guardrails</label>
+              <label className="text-xs font-medium text-muted-foreground block mb-0.5">Guardrails</label>
               <GuardrailSelector
                 value={comparison.guardrails}
                 onChange={(value) => handleSettingChange("guardrails", value)}
@@ -142,15 +153,18 @@ export function ComparisonPanel({
         </div>
         {/* Advanced Settings */}
         <div>
-          <h4 className="text-xs font-semibold text-gray-700 mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-1.5 uppercase tracking-wide">Advanced Settings</h4>
           <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <Checkbox
+                id={advancedParamsId}
                 checked={comparison.useAdvancedParams}
-                onChange={(e) => handleAdvancedParamsChange(e.target.checked)}
-              >
-                <span className="text-sm font-medium">Use Advanced Parameters</span>
-              </Checkbox>
+                onCheckedChange={handleAdvancedParamsChange}
+                aria-label="Use Advanced Parameters"
+              />
+              <label htmlFor={advancedParamsId} className="cursor-pointer text-sm font-medium">
+                Use Advanced Parameters
+              </label>
             </div>
             <div className="space-y-2 transition-opacity duration-200" style={{ opacity: disabledOpacity }}>
               <div>
@@ -162,8 +176,8 @@ export function ComparisonPanel({
                   min={0}
                   max={2}
                   step={0.01}
-                  value={comparison.temperature}
-                  onChange={(value) => {
+                  value={[comparison.temperature]}
+                  onValueChange={(value) => {
                     const nextValue = Array.isArray(value) ? value[0] : value;
                     const clamped = Math.min(2, Math.max(0, Number(nextValue.toFixed(2))));
                     handleSettingChange("temperature", clamped);
@@ -180,8 +194,8 @@ export function ComparisonPanel({
                   min={1}
                   max={32768}
                   step={1}
-                  value={comparison.maxTokens}
-                  onChange={(value) => {
+                  value={[comparison.maxTokens]}
+                  onValueChange={(value) => {
                     const nextValue = Array.isArray(value) ? value[0] : value;
                     const clamped = Math.min(32768, Math.max(1, Math.round(nextValue)));
                     handleSettingChange("maxTokens", clamped);
@@ -197,7 +211,7 @@ export function ComparisonPanel({
   );
 
   return (
-    <div className="bg-white first:border-l-0 border-l border-gray-200 flex flex-col min-h-0">
+    <div className="bg-card first:border-l-0 border-l border-border flex flex-col min-h-0">
       <div className="border-b flex items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-3 flex-1">
           <UnifiedSelector
@@ -209,26 +223,29 @@ export function ComparisonPanel({
           />
           <div className="flex items-center gap-2">
             <Popover
-              content={settingsContent}
-              trigger={[]}
               open={popoverVisible}
               onOpenChange={() => {
                 // Prevent automatic closing - we control it manually
               }}
-              placement="bottomRight"
-              destroyTooltipOnHide={false}
             >
-              <button
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleTogglePopover();
-                }}
-                className={`p-2 rounded-lg transition-colors ${
-                  popoverVisible ? "bg-gray-200 text-gray-700" : "hover:bg-gray-100 text-gray-600"
-                }`}
-              >
-                <Settings size={18} />
-              </button>
+              <PopoverTrigger
+                render={
+                  <button
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleTogglePopover();
+                    }}
+                    className={`p-2 rounded-lg transition-colors ${
+                      popoverVisible ? "bg-border text-foreground" : "hover:bg-accent text-muted-foreground"
+                    }`}
+                  >
+                    <Settings size={18} />
+                  </button>
+                }
+              />
+              <PopoverContent side="bottom" align="end" className="w-auto">
+                {settingsContent}
+              </PopoverContent>
             </Popover>
           </div>
         </div>
@@ -238,7 +255,7 @@ export function ComparisonPanel({
               event.stopPropagation();
               onRemove();
             }}
-            className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+            className="p-2 hover:bg-destructive/10 text-destructive rounded-lg transition-colors"
           >
             <X size={18} />
           </button>

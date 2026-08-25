@@ -3,7 +3,7 @@
 ## Initial implementation - covers gemini + image gen calls
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
@@ -208,7 +208,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         presence_penalty: float | None = None,
         seed: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -1427,7 +1427,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _extract_server_side_tool_invocations(
         parts: list[HttpxPartType],
-    ) -> list[dict[str, Any]] | None:
+    ) -> list[dict[str, object]] | None:
         """Extract server-side tool invocations (toolCall/toolResponse) from parts.
 
         These are returned by Gemini when context circulation is enabled
@@ -1438,15 +1438,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             List of server-side invocation dicts if any found, None otherwise.
         """
-        invocations: Final[list[dict[str, Any]]] = []
+        invocations: Final[list[dict[str, object]]] = []
         # Index toolCalls by id so we can pair them with responses
-        tool_calls_by_id: Final[dict[str, dict[str, Any]]] = {}
-        tool_responses_by_id: Final[dict[str, dict[str, Any]]] = {}
+        tool_calls_by_id: Final[dict[str, dict[str, object]]] = {}
+        tool_responses_by_id: Final[dict[str, dict[str, object]]] = {}
 
         for part in parts:
             if "toolCall" in part:
                 tc = part["toolCall"]
-                entry: dict[str, Any] = {
+                entry: dict[str, object] = {
                     "tool_type": tc.get("toolType"),
                     "id": tc.get("id"),
                     "args": tc.get("args"),
@@ -1753,7 +1753,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response_tokens_details: CompletionTokensDetailsWrapper | None = None
         usage_metadata: Final = completion_response["usageMetadata"]
 
-        def _get_token_count(detail: Mapping[str, Any]) -> int:
+        def _get_token_count(detail: Mapping[str, object]) -> int:
             raw_token_count: Final = detail.get("tokenCount", detail.get("token_count", 0))
             return raw_token_count if isinstance(raw_token_count, int) else 0
 
@@ -2068,7 +2068,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
 
     @staticmethod
-    def _get_stream_chunk_attr(chunk: Any, field_name: str) -> Any:
+    def _get_stream_chunk_attr(chunk: object, field_name: str) -> object:
         if isinstance(chunk, dict):
             value = chunk.get(field_name)
             if value is not None:
@@ -2110,10 +2110,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def apply_assembled_streaming_response_metadata(
         self,
         response: ModelResponse,
-        chunks: list[Any],
+        chunks: list[object],
     ) -> None:
         for field_name in VERTEX_AI_PROVIDER_METADATA_FIELDS:
-            merged: list[Any] = []
+            merged: list[object] = []
             for chunk in chunks:
                 value = VertexGeminiConfig._get_stream_chunk_attr(chunk, field_name)
                 if not value:
@@ -2214,8 +2214,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         functions: ChatCompletionToolCallFunctionChunk | None = None
         thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
         reasoning_content: str | None = None
-        thought_signatures: Any | None = None
-        server_side_tool_invocations: list[dict[str, Any]] | None = None
+        thought_signatures: Sequence[str] | None = None
+        server_side_tool_invocations: list[dict[str, object]] | None = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -2370,7 +2370,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -2486,7 +2486,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
-                if service_tier := raw_response.headers.get("x-gemini-service-tier"):
+                service_tier: Final[str | None] = raw_response.headers.get("x-gemini-service-tier")
+                if service_tier:
                     if service_tier.lower() == "standard":
                         setattr(model_response, "service_tier", "default")
                     else:
@@ -2660,7 +2661,7 @@ class VertexLLM(VertexBase):
         print_verbose: Callable,
         data: dict,
         timeout: float | httpx.Timeout | None,
-        encoding,
+        encoding: object,
         logging_obj,
         stream,
         optional_params: dict,
@@ -2756,7 +2757,7 @@ class VertexLLM(VertexBase):
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
         timeout: float | httpx.Timeout | None,
-        encoding,
+        encoding: object,
         logging_obj,
         stream,
         optional_params: dict,
@@ -2873,7 +2874,7 @@ class VertexLLM(VertexBase):
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
-        encoding,
+        encoding: object,
         logging_obj,
         optional_params: dict,
         acompletion: bool,
@@ -3122,7 +3123,7 @@ class ModelResponseIterator:
     def _apply_stream_candidates(
         self,
         _candidates: list[Candidates],
-        model_response: Any,
+        model_response: "ModelResponseStream",
     ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
         (
             grounding_metadata,
@@ -3200,7 +3201,7 @@ class ModelResponseIterator:
 
     def _apply_stream_usage_metadata(
         self,
-        processed_chunk: Any,
+        processed_chunk: GenerateContentResponseBody,
         model_response: Any,
         grounding_metadata: list[dict],
     ) -> Usage | None:

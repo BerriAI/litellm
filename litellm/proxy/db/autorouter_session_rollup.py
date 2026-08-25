@@ -24,6 +24,7 @@ from itertools import groupby
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 
 if TYPE_CHECKING:
@@ -32,6 +33,53 @@ if TYPE_CHECKING:
 
 CACHE_TTL_5M_SECONDS: Final = 300
 CACHE_TTL_1H_SECONDS: Final = 3600
+
+AUTOROUTER_BENCHMARKS_SQL: Final = """
+WITH windowed AS (
+    SELECT * FROM "LiteLLM_AutoRouterSession"
+    WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+),
+tier_maps AS (
+    SELECT router_name, router_type, jsonb_object_agg(tier, tier_turns) AS tier_turns
+    FROM (
+        SELECT router_name, router_type, kv.key AS tier, SUM((kv.value)::int)::int AS tier_turns
+        FROM windowed, LATERAL jsonb_each_text(tier_turns) AS kv
+        GROUP BY router_name, router_type, kv.key
+    ) per_tier
+    GROUP BY router_name, router_type
+)
+SELECT
+    agg.*,
+    COALESCE(tier_maps.tier_turns, '{}'::jsonb) AS tier_turns
+FROM (
+SELECT
+    router_name,
+    router_type,
+    COUNT(*)::int AS sessions,
+    COALESCE(SUM(turns), 0)::int AS turns,
+    COALESCE(SUM(unordered_turns), 0)::int AS unordered_turns,
+    COALESCE(SUM(covered_turns), 0)::int AS covered_turns,
+    COALESCE(SUM(cache_hits), 0)::int AS cache_hits,
+    COALESCE(SUM(same_model_turns), 0)::int AS same_model_turns,
+    COALESCE(SUM(same_model_hits), 0)::int AS same_model_hits,
+    COALESCE(SUM(first_visit_turns), 0)::int AS first_visit_turns,
+    COALESCE(SUM(first_visit_hits), 0)::int AS first_visit_hits,
+    COALESCE(SUM(return_turns), 0)::int AS return_turns,
+    COALESCE(SUM(return_hits), 0)::int AS return_hits,
+    COALESCE(SUM(return_expired_misses), 0)::int AS return_expired_misses,
+    COALESCE(SUM(return_within_ttl_misses), 0)::int AS return_within_ttl_misses,
+    COALESCE(SUM(ttl_5m_turns), 0)::int AS ttl_5m_turns,
+    COALESCE(SUM(ttl_1h_turns), 0)::int AS ttl_1h_turns,
+    COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
+    COALESCE(SUM(spend), 0)::float8 AS spend,
+    COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
+    COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
+FROM windowed
+GROUP BY router_name, router_type
+) agg
+LEFT JOIN tier_maps USING (router_name, router_type)
+ORDER BY agg.spend DESC
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,11 +181,16 @@ def build_autorouter_turn_transaction(
 
     The routing_decision record is what says a request was auto-routed at all, so a
     request without one (including the auto-router's own classifier sub-calls) never
-    reaches the rollup. Failed requests served nothing and are excluded. Cache facts
-    are derived from the payload's own usage record through the savings owner, never
-    handed in beside it.
+    reaches the rollup. Internal sub-calls that DO carry one (a shadow eval's duplicate
+    of a request through the router) are excluded by their internal_call_origin stamp:
+    they are not traffic a user sent, so counting them would manufacture sessions and
+    savings in the adoption metrics. Failed requests served nothing and are excluded.
+    Cache facts are derived from the payload's own usage record through the savings
+    owner, never handed in beside it.
     """
     if payload.get("status") != "success":
+        return None
+    if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
         return None
     routing_decision: Final = metadata.get("routing_decision")
     if not isinstance(routing_decision, Mapping) or not routing_decision:

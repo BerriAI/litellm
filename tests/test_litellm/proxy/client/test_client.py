@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.client import ChatClient, Client, ModelsManagementClient
 from litellm.proxy.client.http_client import HTTPClient
@@ -22,7 +17,7 @@ def api_key():
     return "test-api-key"
 
 
-def test_client_initialization(base_url, api_key):
+def test_client_initialization_wires_resource_clients(base_url, api_key):
     """Test that the Client is properly initialized with all resource clients"""
     client = Client(base_url=base_url, api_key=api_key)
 
@@ -63,7 +58,7 @@ def test_client_initialization_strips_trailing_slash():
     assert client.http._base_url == "http://localhost:8000"
 
 
-def test_client_without_api_key(base_url):
+def test_client_without_api_key_propagates_none_to_resource_clients(base_url):
     """Test that the client works without an API key"""
     client = Client(base_url=base_url)
 

@@ -102,10 +102,51 @@ describe("computeCacheLeakage", () => {
         leaker: { alias: "leaker", metrics: { prompt_tokens: 500 } },
       }),
     ];
-    const { rows, discountPerToken } = computeCacheLeakage(results);
-    expect(discountPerToken).toBeCloseTo(0.002, 6);
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
     expect(rows.map((r) => r.label)).toEqual(["leaker"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
+  });
+
+  it("divides net savings by cache writes as well as reads, since a new cacher pays write premiums too", () => {
+    const results = [
+      day("2026-07-01", {
+        cacher: {
+          alias: "cacher",
+          metrics: {
+            prompt_tokens: 2000,
+            cache_read_input_tokens: 1000,
+            cache_creation_input_tokens: 1000,
+            prompt_caching_savings_spend: 2.0,
+          },
+        },
+        leaker: { alias: "leaker", metrics: { prompt_tokens: 500 } },
+      }),
+    ];
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeCloseTo(0.001, 6);
+    expect(rows[0].potentialSavings).toBeCloseTo(0.5, 6);
+  });
+
+  it("declines to price leakage when write premiums leave caching net negative", () => {
+    const results = [
+      day("2026-07-01", {
+        writer: {
+          alias: "writer",
+          metrics: {
+            prompt_tokens: 2000,
+            cache_read_input_tokens: 100,
+            cache_creation_input_tokens: 1500,
+            prompt_caching_savings_spend: -0.75,
+          },
+        },
+        leaker: { alias: "leaker", metrics: { prompt_tokens: 500 } },
+      }),
+    ];
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeLessThan(0);
+    expect(rows.every((r) => r.potentialSavings === null)).toBe(true);
+    expect(rows.map((r) => r.label)).toEqual(["leaker", "writer"]);
   });
 
   it("returns null estimate and ranks by uncached tokens when nobody used caching", () => {
@@ -115,8 +156,8 @@ describe("computeCacheLeakage", () => {
         small: { alias: "small", metrics: { prompt_tokens: 100 } },
       }),
     ];
-    const { rows, discountPerToken } = computeCacheLeakage(results);
-    expect(discountPerToken).toBeNull();
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results);
+    expect(netSavingsPerCachedToken).toBeNull();
     expect(rows.map((r) => r.label)).toEqual(["big", "small"]);
     expect(rows.every((r) => r.potentialSavings === null)).toBe(true);
   });
@@ -174,8 +215,8 @@ describe("computeCacheLeakage by model", () => {
         "claude-haiku-4-5": { prompt_tokens: 500 },
       }),
     ];
-    const { rows, discountPerToken } = computeCacheLeakage(results, "model");
-    expect(discountPerToken).toBeCloseTo(0.002, 6);
+    const { rows, netSavingsPerCachedToken } = computeCacheLeakage(results, "model");
+    expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
     expect(rows.map((r) => r.id)).toEqual(["claude-haiku-4-5"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
   });

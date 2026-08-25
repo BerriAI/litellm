@@ -1,13 +1,11 @@
 import io
-import os
-import sys
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
+import litellm
 from litellm.llms.azure_ai.image_edit import (
     AzureFoundryMAIImageEditConfig,
     get_azure_ai_image_edit_config,
@@ -169,3 +167,16 @@ class TestAzureMAIImageEdit:
         assert image_response.data[0].b64_json == "abc123"
         assert image_response.usage.output_tokens == 1024
         assert image_response.usage.total_tokens == 1024
+
+
+def test_mai_validate_environment_with_entra_token(monkeypatch):
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+
+    headers = AzureFoundryMAIImageEditConfig().validate_environment(
+        headers={},
+        model="MAI-Image-2.5",
+        litellm_params={"azure_ad_token": "entra-token"},
+    )
+
+    assert headers == {"Authorization": "Bearer entra-token"}

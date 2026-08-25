@@ -226,4 +226,19 @@ describe("public hub MCP details modal", () => {
     await screen.findByText("Server Overview");
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
   });
+
+  it("closes the server details modal from its close control", async () => {
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
+
+    render(<PublicModelHub />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
+    await screen.findByText("Server Overview");
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+
+    await waitFor(() => expect(screen.queryByText("Server Overview")).not.toBeInTheDocument());
+  });
 });
