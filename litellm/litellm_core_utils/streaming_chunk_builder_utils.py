@@ -631,9 +631,12 @@ class ChunkProcessor:
                                 )
                         else:
                             thinking_text = thinking_block.get("thinking", None)
-                            if thinking_text:
-                                current_thinking_text_parts.append(thinking_text)
                             signature = thinking_block.get("signature", None)
+                            already_accumulated = bool(signature) and thinking_text == "".join(
+                                current_thinking_text_parts
+                            )
+                            if thinking_text and not already_accumulated:
+                                current_thinking_text_parts.append(thinking_text)
                             if signature:
                                 current_signature = signature
                                 _flush_thinking_block()
