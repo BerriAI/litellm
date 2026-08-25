@@ -3,13 +3,10 @@ import datetime
 import json
 from datetime import timezone
 from typing import Any, Final, cast
-
-from typing_extensions import ReadOnly, TypedDict
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -3526,8 +3523,6 @@ def _model_router_spend_log_kwargs(slp_model: str | None) -> _ModelRouterSpendLo
     }
 
 
-@patch("litellm.proxy.proxy_server.master_key", None)
-@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_uses_standard_logging_payload_model():
     payload = get_logging_payload(
         kwargs=_model_router_spend_log_kwargs(slp_model="azure_ai/gpt-5-mini"),
@@ -3538,8 +3533,6 @@ def test_get_logging_payload_uses_standard_logging_payload_model():
     assert payload["model"] == "azure_ai/gpt-5-mini"
 
 
-@patch("litellm.proxy.proxy_server.master_key", None)
-@patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_falls_back_to_kwargs_model_when_slp_model_missing():
     payload = get_logging_payload(
         kwargs=_model_router_spend_log_kwargs(slp_model=None),
