@@ -116,10 +116,12 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 <!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
      Call out known limitations, follow-up work, or anything a reviewer should watch out for
      Lead every bullet with its severity: Severe, High, Medium, or Low
-     - Severe: an operator must plan around it before rollout: it can degrade or take down a running
-       deployment (e.g. a slow or table-locking boot migration), rewrite or lose data, break an
-       existing workflow, or change auth behavior
-     - High: unsafe to ship as is: a correctness, security, data-loss, or backward-compatibility hole
+     - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
+       it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
+       rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
+       operator must plan around it before rollout
+     - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
+       unsafe to ship as is
      - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
      - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
      Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
