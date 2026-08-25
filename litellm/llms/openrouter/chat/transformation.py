@@ -160,9 +160,15 @@ class OpenrouterConfig(OpenAIGPTConfig):
         response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
 
-        # ALWAYS add usage parameter to get cost data from OpenRouter
-        # This ensures cost tracking works for all OpenRouter models
-        if "usage" not in response:
+        # Add OpenRouter usage accounting for cost data. Opt-out for endpoints
+        # that reject the param (e.g. an OpenAI-compatible gateway that does not
+        # accept `usage`) via per-route `model_info: {openrouter_include_usage:
+        # false}` or global `litellm.openrouter_include_usage`.
+        model_info = litellm_params.get("model_info")
+        include_usage = model_info.get("openrouter_include_usage") if model_info else None
+        if include_usage is None:
+            include_usage = getattr(litellm, "openrouter_include_usage", True)
+        if include_usage and "usage" not in response:
             response["usage"] = {"include": True}
 
         return response

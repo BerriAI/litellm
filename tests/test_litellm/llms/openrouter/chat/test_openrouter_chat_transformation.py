@@ -613,3 +613,28 @@ def test_openrouter_reasoning_effort_high_passes_through():
     )
 
     assert result["reasoning_effort"] == "high"
+
+
+def test_openrouter_usage_injection_default():
+    """By default OpenRouter usage accounting is injected for cost data."""
+    transformed = OpenrouterConfig().transform_request(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert transformed["usage"] == {"include": True}
+
+
+def test_openrouter_usage_injection_opt_out_via_model_info():
+    """Per-route model_info.openrouter_include_usage=False suppresses the usage
+    param for endpoints that reject it."""
+    transformed = OpenrouterConfig().transform_request(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"model_info": {"openrouter_include_usage": False}},
+        headers={},
+    )
+    assert "usage" not in transformed
