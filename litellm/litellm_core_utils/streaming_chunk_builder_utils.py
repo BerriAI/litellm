@@ -201,19 +201,20 @@ def _narrow(chunk: object, index: int) -> object | None:
     if not kept:
         return None
     if isinstance(chunk, dict):
-        return {**chunk, "choices": list(kept)}
+        return {**chunk, "choices": list(kept)}  # mutable-ok: a streamed chunk is a plain dict downstream.
     if hasattr(chunk, "model_copy"):
-        return chunk.model_copy(update={"choices": list(kept)})
+        return chunk.model_copy(update={"choices": list(kept)})  # mutable-ok: `choices` is a declared `list` field.
     return chunk
 
 
-def chunks_for_choice(chunks: Sequence[object], index: int) -> list:
+def chunks_for_choice(chunks: Sequence[object], index: int) -> list:  # mutable-ok: stream_chunk_builder wants a list.
     """The same stream carrying only the choices for `index`.
 
     Chunks without choices, such as the usage-only chunk many providers send
     last, are kept because usage belongs to the request rather than a choice.
     """
-    return [narrowed for chunk in chunks if (narrowed := _narrow(chunk, index)) is not None]
+    narrowed_chunks: Final = (narrowed for chunk in chunks if (narrowed := _narrow(chunk, index)) is not None)
+    return list(narrowed_chunks)  # mutable-ok: see the return annotation.
 
 
 class ChunkProcessor:
