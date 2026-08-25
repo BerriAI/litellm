@@ -46,20 +46,16 @@ function ChatMessageBubble({
   return (
     <div className={`mb-4 min-w-0 ${isUser ? "text-right" : "text-left"}`}>
       <div
-        className="inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg p-3 shadow-xs sm:max-w-[85%] sm:px-4"
-        style={{
-          backgroundColor: isUser ? "#f0f8ff" : "#ffffff",
-          border: isUser ? "1px solid #e6f0fa" : "1px solid #f0f0f0",
-          textAlign: "left",
-        }}
+        className={`inline-block min-w-0 max-w-[92%] overflow-hidden rounded-lg border p-3 text-left text-card-foreground shadow-xs sm:max-w-[85%] sm:px-4 ${
+          isUser ? "border-info/20 bg-info/10" : "border-border bg-card"
+        }`}
       >
         {/* Header: role icon + name + model badge */}
         <div className="mb-1.5 flex min-w-0 items-center gap-2">
           <div
-            className="flex items-center justify-center w-6 h-6 rounded-full mr-1"
-            style={{
-              backgroundColor: isUser ? "#e6f0fa" : "#f5f5f5",
-            }}
+            className={`flex items-center justify-center w-6 h-6 rounded-full mr-1 ${
+              isUser ? "bg-info/20" : "bg-muted"
+            }`}
           >
             {isUser ? (
               <User className="size-3 text-info" aria-hidden="true" />
