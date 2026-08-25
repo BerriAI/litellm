@@ -14,6 +14,7 @@ from litellm.utils import ProviderConfigManager
 
 MANTLE_API_BASE = "https://bedrock-mantle.us-east-2.api.aws"
 INVOKE_ENDPOINT = "model/us.openai.gpt-5.6-sol/invoke"
+CONVERSE_ENDPOINT = "model/us.openai.gpt-5.6-sol/converse"
 REQUEST_BODY = {"messages": [{"role": "user", "content": "say pong"}], "max_completion_tokens": 64}
 
 
@@ -150,3 +151,47 @@ def test_invoke_passthrough_route_reaches_bedrock_runtime_for_a_mantle_deploymen
     assert str(sent["url"]) == f"https://bedrock-runtime.us-east-2.amazonaws.com/{INVOKE_ENDPOINT}"
     assert sent["headers"]["Authorization"] == f"Bearer {expected_bearer}"
     assert json.loads(sent["content"]) == REQUEST_BODY
+
+
+def _logged_model_response(endpoint, body):
+    request = httpx.Request("POST", f"https://bedrock-runtime.us-east-1.amazonaws.com/{endpoint}")
+    return BedrockMantlePassthroughConfig().logging_non_streaming_response(
+        model="us.openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock_mantle",
+        httpx_response=httpx.Response(200, json=body, request=request),
+        request_data={"messages": [{"role": "user", "content": [{"text": "say pong"}]}]},
+        logging_obj=MagicMock(),
+        endpoint=endpoint,
+    )
+
+
+def test_converse_logging_parses_the_converse_response_shape():
+    result = _logged_model_response(
+        CONVERSE_ENDPOINT,
+        {
+            "metrics": {"latencyMs": 800.0},
+            "output": {"message": {"content": [{"text": "pong"}], "role": "assistant"}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 8, "outputTokens": 5, "totalTokens": 13},
+        },
+    )
+    assert result.choices[0].message.content == "pong"
+    assert result.usage.prompt_tokens == 8
+    assert result.usage.completion_tokens == 5
+
+
+def test_invoke_logging_parses_the_openai_chat_response_shape():
+    result = _logged_model_response(
+        INVOKE_ENDPOINT,
+        {
+            "choices": [{"finish_reason": "stop", "index": 0, "message": {"content": "pong", "role": "assistant"}}],
+            "created": 1787677792,
+            "id": "chatcmpl-regression",
+            "model": "us.openai.gpt-5.6-sol",
+            "object": "chat.completion",
+            "usage": {"completion_tokens": 5, "prompt_tokens": 8, "total_tokens": 13},
+        },
+    )
+    assert result.choices[0].message.content == "pong"
+    assert result.usage.prompt_tokens == 8
+    assert result.usage.completion_tokens == 5
