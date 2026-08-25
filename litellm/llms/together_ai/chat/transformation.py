@@ -4,17 +4,24 @@ Translates from OpenAI's `/v1/chat/completions` to Together AI's `/v1/chat/compl
 Docs: https://docs.together.ai/docs/chat-overview
 """
 
-from collections.abc import Callable, Container
-from typing import Final
+from collections.abc import Callable, Container, Coroutine
+from typing import (
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # rebuilding a TypedDict minus keys has no checked spelling
+    overload,
+)
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_function_calling, supports_response_schema
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 TOOL_CALLING_PARAMS: Final = ("tools", "tool_choice", "function_call")
+LITELLM_INTERNAL_ASSISTANT_FIELDS: Final = frozenset({"thinking_blocks", "provider_specific_fields"})
 FUNCTION_CALLING_DOCS_URL: Final = "https://docs.together.ai/docs/function-calling"
 STRUCTURED_OUTPUTS_DOCS_URL: Final = "https://docs.together.ai/docs/inference/chat/structured-outputs"
 
@@ -102,7 +109,50 @@ def _drop_response_format(passed_params: Container[str], model: str, drop_params
     )
 
 
+def _without_litellm_internal_fields(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "assistant" or LITELLM_INTERNAL_ASSISTANT_FIELDS.isdisjoint(message):
+        return message
+    return cast(  # cast-ok: rebuilding the same TypedDict minus internal keys loses the narrowed type
+        "AllMessageValues",
+        {  # mutable-ok: TypedDict rebuild minus internal keys
+            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_ASSISTANT_FIELDS
+        },
+    )
+
+
 class TogetherAIChatConfig(OpenAIGPTConfig):
+    @overload
+    def _transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: inherited contract
+        model: str,
+        is_async: Literal[True],
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...  # mutable-ok: inherited contract
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: inherited contract
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> list[AllMessageValues]: ...  # mutable-ok: inherited contract
+
+    def _transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: inherited contract
+        model: str,
+        is_async: bool = False,
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:  # mutable-ok: inherited contract
+        """Together consumes replayed assistant `reasoning_content` (preserved thinking via
+        `chat_template_kwargs: {"clear_thinking": false}`), so it must stay in the payload;
+        only litellm-internal fields are stripped before sending."""
+        stripped: Final = [  # mutable-ok: super() requires a list
+            _without_litellm_internal_fields(message) for message in messages
+        ]
+        if is_async:
+            return super()._transform_messages(stripped, model, is_async=True)
+        return super()._transform_messages(stripped, model, is_async=False)
+
     def map_openai_params(
         self,
         non_default_params: dict,
