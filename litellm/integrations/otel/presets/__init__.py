@@ -16,6 +16,7 @@ from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset
 from litellm.integrations.otel.presets.base import Preset
 from litellm.integrations.otel.presets.langfuse import (
+    langfuse_dynamic_endpoint,
     langfuse_dynamic_headers,
     langfuse_preset,
 )
@@ -64,12 +65,16 @@ DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynami
 )
 
 #: Callback name → per-request OTLP endpoint resolver. Only integrations whose
-#: destination host varies per tenant (from a fixed region table, never a
-#: caller-supplied URL) appear here; for everyone else the preset's endpoint is
-#: authoritative.
+#: destination host varies per tenant appear here; for everyone else the preset's
+#: endpoint is authoritative. Two shapes exist: newrelic picks from a fixed region
+#: table, and langfuse_otel reads the host the key or team was configured with,
+#: which the proxy resolved at auth. Neither takes a URL straight off the request:
+#: a client-supplied langfuse_host is rejected unless an admin opts in with
+#: general_settings.allow_client_side_credentials.
 DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = (
     MappingProxyType(
         {
+            "langfuse_otel": langfuse_dynamic_endpoint,
             "newrelic": newrelic_dynamic_endpoint,
         }
     )

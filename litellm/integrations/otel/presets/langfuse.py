@@ -46,3 +46,16 @@ def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str,
             _V1Langfuse._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)
         )
     return {}
+
+
+def langfuse_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+    """Per-request Langfuse OTLP endpoint when the key or team pins its own host.
+
+    ``None`` means the request does not move the destination, so the preset's
+    env-resolved endpoint stands (V1 parity: ``construct_dynamic_otel_config``
+    falls back to the env host when the dynamic params carry no ``langfuse_host``).
+    """
+    host: Final = params.get("langfuse_host")
+    if not host:
+        return None
+    return _V1Langfuse.get_langfuse_otel_endpoint(host)

@@ -317,6 +317,23 @@ class LangfuseOtelLogger(OpenTelemetry):
         )
 
     @staticmethod
+    def get_langfuse_otel_endpoint(langfuse_host: str | None) -> str:
+        """
+        The Langfuse OTLP endpoint for langfuse_host, or the US cloud endpoint when
+        no host is given.
+
+        Shared by the env-resolved config and by per-key/team routing so the two can
+        never derive a different endpoint from the same host.
+        """
+        if not langfuse_host:
+            verbose_logger.debug("Using Langfuse US cloud endpoint: %s", LANGFUSE_CLOUD_US_ENDPOINT)
+            return LANGFUSE_CLOUD_US_ENDPOINT
+        normalized_host: Final = langfuse_host if langfuse_host.startswith("http") else f"https://{langfuse_host}"
+        endpoint: Final = f"{normalized_host.rstrip('/')}/api/public/otel"
+        verbose_logger.debug("Using Langfuse OTEL endpoint from host: %s", endpoint)
+        return endpoint
+
+    @staticmethod
     def _build_langfuse_otel_config(
         public_key: str, secret_key: str, langfuse_host: str | None
     ) -> "OpenTelemetryConfig":
@@ -324,14 +341,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         Builds an OTLP HTTP config pointing at the Langfuse OTEL endpoint for the
         given host (US cloud when no host is provided), authorized with the given keys.
         """
-        if langfuse_host:
-            normalized_host: Final = langfuse_host if langfuse_host.startswith("http") else f"https://{langfuse_host}"
-            endpoint = f"{normalized_host.rstrip('/')}/api/public/otel"
-            verbose_logger.debug("Using Langfuse OTEL endpoint from host: %s", endpoint)
-        else:
-            endpoint = LANGFUSE_CLOUD_US_ENDPOINT
-            verbose_logger.debug("Using Langfuse US cloud endpoint: %s", endpoint)
-
+        endpoint: Final = LangfuseOtelLogger.get_langfuse_otel_endpoint(langfuse_host)
         auth_header: Final = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key
         )
