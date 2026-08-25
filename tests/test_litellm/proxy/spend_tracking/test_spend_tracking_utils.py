@@ -3,11 +3,10 @@ import datetime
 import json
 from datetime import timezone
 from typing import Any, Final, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -3498,6 +3497,50 @@ def test_get_logging_payload_failed_request_without_standard_logging_payload_lea
     assert payload["model_group"] == ""
     assert payload["api_base"] == ""
     assert payload["custom_llm_provider"] == ""
+
+
+class _ModelRouterSpendLogKwargs(TypedDict):
+    model: ReadOnly[str]
+    litellm_params: ReadOnly[dict[str, dict[str, str]]]
+    standard_logging_object: ReadOnly[StandardLoggingPayload]
+
+
+def _model_router_spend_log_kwargs(slp_model: str | None) -> _ModelRouterSpendLogKwargs:
+    standard_logging_payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "model": slp_model,
+            "metadata": {},
+            "model_map_information": StandardLoggingModelInformation(
+                model_map_key="azure_ai/model_router", model_map_value=None
+            ),
+        },
+    )
+    return {
+        "model": "azure_ai/model_router/model-router",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test-key"}},
+        "standard_logging_object": standard_logging_payload,
+    }
+
+
+def test_get_logging_payload_uses_standard_logging_payload_model():
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model="azure_ai/gpt-5-mini"),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == "azure_ai/gpt-5-mini"
+
+
+def test_get_logging_payload_falls_back_to_kwargs_model_when_slp_model_missing():
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model=None),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == "azure_ai/model_router/model-router"
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)

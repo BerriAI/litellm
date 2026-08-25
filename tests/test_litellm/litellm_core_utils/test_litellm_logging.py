@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 import time
 
 import httpx
@@ -3865,6 +3864,90 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
 
     assert payload is not None
     assert payload["litellm_call_id"] == call_id
+
+
+# ── Azure Model Router selected-model attribution ────────────────────────────
+
+
+def _model_router_response(selected_model: str, stamp: bool):
+    """A ModelResponse as AzureModelRouterConfig hands it back, with or without the stamp."""
+    from litellm.llms.azure_ai.common_utils import (
+        AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+    )
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(model=selected_model)
+    response._hidden_params = (
+        {AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model} if stamp else {}
+    )
+    return response
+
+
+def test_standard_logging_payload_uses_stamped_model_router_model(logging_obj):
+    """
+    The selected model must win off the stamp, not off "model-router" appearing in the
+    requested model. An operator whose model group is named anything else was invisible
+    to the name check, so their logs and spend rows named the router instead.
+    """
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "azure_ai/smart-pick",
+            "custom_llm_provider": "azure_ai",
+            "messages": [],
+            "litellm_params": {"metadata": {}},
+        },
+        init_response_obj=_model_router_response(
+            "azure_ai/grok-4-1-fast-reasoning", stamp=True
+        ),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["model"] == "azure_ai/grok-4-1-fast-reasoning"
+
+
+def test_standard_logging_payload_keeps_requested_model_without_router_stamp(
+    logging_obj,
+):
+    """
+    Control for the test above: an ordinary azure_ai deployment is unaffected, so the stamp
+    is what redirects attribution rather than the response model winning unconditionally.
+    """
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "azure_ai/smart-pick",
+            "custom_llm_provider": "azure_ai",
+            "messages": [],
+            "litellm_params": {"metadata": {}},
+        },
+        init_response_obj=_model_router_response(
+            "azure_ai/grok-4-1-fast-reasoning", stamp=False
+        ),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["model"] == "azure_ai/smart-pick"
 
 
 def _make_dict_logging_obj():

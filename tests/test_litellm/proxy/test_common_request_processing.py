@@ -2294,6 +2294,54 @@ class TestOverrideOpenAIResponseModel:
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
 
+    def test_override_model_preserves_model_router_model_for_alias_without_router_in_name(
+        self,
+    ):
+        """
+        The client sends a model group alias, which carries no model_router/ prefix, so the
+        name check alone only fires when the operator happened to put "model-router" in the
+        alias. With the stamp on the response the actual model survives whatever it is named.
+        """
+        from litellm.llms.azure_ai.common_utils import (
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+        )
+
+        requested_model = "smart-pick"
+        actual_model_used = "azure_ai/grok-4-1-fast-reasoning"
+
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {
+            "additional_headers": {},
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: actual_model_used,
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == actual_model_used
+
+    def test_override_model_still_restamps_non_router_alias_without_stamp(self):
+        """
+        Control for the test above: absent the stamp, an ordinary deployment keeps being
+        restamped to the requested model, so the stamp is doing the work rather than the
+        preserve branch having gone unconditional.
+        """
+        requested_model = "smart-pick"
+
+        response_obj = MagicMock()
+        response_obj.model = "azure_ai/grok-4-1-fast-reasoning"
+        response_obj._hidden_params = {"additional_headers": {}}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == requested_model
+
     def test_override_model_uses_winning_model_for_fastest_response(self):
         """
         Test that when fastest_response batch completion is used with a
