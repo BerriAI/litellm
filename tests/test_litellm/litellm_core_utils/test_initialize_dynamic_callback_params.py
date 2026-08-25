@@ -77,6 +77,20 @@ def test_resolves_plain_values_from_metadata():
     assert params.get("langfuse_host") == "https://test.langfuse.com"
 
 
+def test_resolves_langfuse_environment_from_metadata():
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "langfuse_environment": "team-a-env",
+            }
+        }
+    }
+
+    params = initialize_standard_callback_dynamic_params(kwargs)
+
+    assert params.get("langfuse_environment") == "team-a-env"
+
+
 def test_litellm_params_metadata_overrides_metadata():
     kwargs = {
         "metadata": {

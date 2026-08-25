@@ -140,6 +140,7 @@ class LangFuseLogger:
         langfuse_public_key=None,
         langfuse_secret=None,
         langfuse_host=None,
+        langfuse_environment=None,
         flush_interval=1,
         allow_env_credentials: bool = True,
     ):
@@ -159,6 +160,7 @@ class LangFuseLogger:
         if not (self.langfuse_host.startswith("http://") or self.langfuse_host.startswith("https://")):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.langfuse_host = "http://" + self.langfuse_host
+        self.langfuse_environment = langfuse_environment or os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
@@ -179,6 +181,7 @@ class LangFuseLogger:
             "debug": self.langfuse_debug,
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
             "httpx_client": self.langfuse_client,
+            "environment": self.langfuse_environment,
         }
         self.langfuse_sdk_version: str = langfuse.version.__version__
 

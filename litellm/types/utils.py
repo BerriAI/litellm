@@ -3263,6 +3263,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret: str | None
     langfuse_secret_key: str | None
     langfuse_host: str | None
+    langfuse_environment: ReadOnly[str | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None

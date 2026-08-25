@@ -1195,6 +1195,49 @@ def _build_langfuse_logger(monkeypatch) -> LangFuseLogger:
         )
 
 
+def test_langfuse_environment_is_passed_to_sdk_client(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="staging",
+        )
+    assert logger.langfuse_environment == "staging"
+    assert _RecordingLangfuse.last_parameters["environment"] == "staging"
+
+
+def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "deployment-wide")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+        )
+    assert logger.langfuse_environment == "deployment-wide"
+    assert _RecordingLangfuse.last_parameters["environment"] == "deployment-wide"
+
+
+def test_dynamic_langfuse_environment_triggers_dynamic_logger():
+    from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    params = StandardCallbackDynamicParams(langfuse_environment="team-a-env")
+
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True
+
+    config = LangFuseHandler.get_dynamic_langfuse_logging_config(
+        standard_callback_dynamic_params=params
+    )
+    assert config["langfuse_environment"] == "team-a-env"
+
+
 def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
     import gc
     import weakref
