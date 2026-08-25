@@ -1060,5 +1060,5 @@ class TestInferContentTypeQueryString:
     def test_a_url_with_no_usable_extension_still_raises(self):
         # The fallback is unchanged: non-image bytes with no known extension
         # have nothing left to infer from.
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Unable to determine content type from URL"):
             self._infer("https://cdn.example.com/download?id=1.2", b"not-an-image")
