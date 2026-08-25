@@ -1278,6 +1278,23 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+
+            # An assistant message can carry both text and function_call items mixed
+            # inside `content`. The top-level `type` is not "function_call" in that
+            # case (it's a regular message item with a `role`), so the function_call
+            # parts would otherwise be silently dropped here — leaving the downstream
+            # `function_call_output` orphaned and causing "Missing corresponding tool
+            # call for tool response message". Split them out into a proper assistant
+            # message with both `content` and `tool_calls`. See issue #28978.
+            if (
+                _input_item_role(input_item) == "assistant"
+                and isinstance(content, list)
+                and any(isinstance(part, dict) and part.get("type") == "function_call" for part in content)
+            ):
+                return LiteLLMCompletionResponsesConfig._transform_responses_api_mixed_assistant_content_to_chat_completion_message(
+                    content_list=content
+                )
+
             return [
                 GenericChatCompletionMessage(
                     role=_input_item_role(input_item),
@@ -1602,6 +1619,59 @@ class LiteLLMCompletionResponsesConfig:
         )
 
         return [chat_completion_response_message]
+
+    @staticmethod
+    def _is_function_call_part(part: object) -> bool:
+        return isinstance(part, dict) and part.get("type") == "function_call"
+
+    @staticmethod
+    def _transform_responses_api_mixed_assistant_content_to_chat_completion_message(
+        content_list: Sequence[object],
+    ) -> list[ChatCompletionResponseMessage]:  # mutable-ok: caller returns this message list verbatim
+        """
+        Transform a Responses API assistant message whose `content` list mixes
+        text/output_text parts with `function_call` parts into a single Chat
+        Completion assistant message carrying both `content` and `tool_calls`.
+
+        The non-mixed cases are already handled by:
+        - `_transform_responses_api_function_call_to_chat_completion_message`
+          (top-level item with `type == "function_call"`)
+        - `_transform_responses_api_content_to_chat_completion_content`
+          (top-level item with text-only content)
+        """
+        is_call: Final = LiteLLMCompletionResponsesConfig._is_function_call_part
+
+        # index = position among tool calls, not position in the raw content list
+        # (a leading text part must not shift the first tool call off 0).
+        tool_calls: Final = [  # mutable-ok: built once, handed to the message verbatim
+            ChatCompletionToolCallChunk(
+                id=part.get("call_id") or part.get("id") or "",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(
+                    name=part.get("name") or "",
+                    arguments=str(part.get("arguments") or ""),
+                ),
+                index=idx,
+            )
+            for idx, part in enumerate(p for p in content_list if is_call(p))
+        ]
+        non_call_parts: Final = [  # mutable-ok: forwarded to the content transformer
+            p for p in content_list if not is_call(p)
+        ]
+
+        transformed_content: Final = (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(non_call_parts)
+            if non_call_parts
+            else None
+        )
+
+        return [  # mutable-ok: single-message result list is the documented return shape
+            ChatCompletionResponseMessage(
+                role="assistant",
+                content=transformed_content,
+                tool_calls=tool_calls,
+            )
+        ]
 
     @staticmethod
     def _resolve_file_id(item: Mapping[str, object]) -> object:
