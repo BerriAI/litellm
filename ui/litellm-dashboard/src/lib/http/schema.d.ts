@@ -6160,11 +6160,12 @@ export interface paths {
          *
          *     Because the kubelet calls preStop hooks without proxy credentials, the
          *     endpoint does not require ``user_api_key_auth``. To prevent any
-         *     pod-reachable caller from triggering shutdown, set
+         *     pod-reachable caller from triggering shutdown, a token is required: set
          *     ``general_settings.drain_endpoint_token`` (or the ``DRAIN_ENDPOINT_TOKEN``
          *     env var) and supply the same value on the ``X-Drain-Token`` header from
          *     the preStop hook. Calls without the header (or with a wrong value) get a
-         *     401 and have no side effect.
+         *     401 and have no side effect. The endpoint fails closed: when enabled with
+         *     no token configured, every call is rejected with 401.
          *
          *     When enabled, it marks the worker as shutting down (so /health/readiness
          *     and /health/liveliness immediately start returning 503, removing the pod

@@ -322,11 +322,11 @@ db:
 #
 # /health/drain is off by default; enable it with
 # general_settings.enable_drain_endpoint: true. The kubelet calls preStop
-# hooks without proxy credentials, so when the health port is reachable from
-# other pods (the common case) also set
-# general_settings.drain_endpoint_token (or the DRAIN_ENDPOINT_TOKEN env
+# hooks without proxy credentials, so the endpoint requires a shared secret:
+# set general_settings.drain_endpoint_token (or the DRAIN_ENDPOINT_TOKEN env
 # var) and send the same value on the X-Drain-Token header from the hook.
-# Calls missing/wrong the token get a 401 and have no side effect.
+# Calls missing/wrong the token get a 401 and have no side effect; when no
+# token is configured at all, every call is rejected with 401 (fail closed).
 # Example:
 # lifecycle:
 #   preStop:

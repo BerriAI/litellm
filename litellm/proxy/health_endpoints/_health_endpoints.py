@@ -1593,13 +1593,20 @@ def _authorize_drain_request(request: Request) -> None:
     """
     Reject /health/drain calls that don't carry the configured X-Drain-Token.
 
-    When no token is configured the endpoint is treated as already opted-in
-    (the ``enable_drain_endpoint`` flag is the only gate). Comparison uses
-    ``secrets.compare_digest`` to avoid timing leaks.
+    Fails closed: an enabled drain endpoint with no token configured rejects
+    every call with 401 instead of accepting them, otherwise anything able to
+    reach the health port could trigger a process-wide shutdown. Comparison
+    uses ``secrets.compare_digest`` to avoid timing leaks.
     """
     expected: Final = _drain_endpoint_token()
     if expected is None:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "Drain endpoint requires a token: set general_settings."
+                "drain_endpoint_token or the DRAIN_ENDPOINT_TOKEN environment variable"
+            ),
+        )
     supplied: Final = request.headers.get("x-drain-token") or ""
     if not secrets.compare_digest(supplied, expected):
         raise HTTPException(
@@ -1692,11 +1699,12 @@ async def health_drain(request: Request):
 
     Because the kubelet calls preStop hooks without proxy credentials, the
     endpoint does not require ``user_api_key_auth``. To prevent any
-    pod-reachable caller from triggering shutdown, set
+    pod-reachable caller from triggering shutdown, a token is required: set
     ``general_settings.drain_endpoint_token`` (or the ``DRAIN_ENDPOINT_TOKEN``
     env var) and supply the same value on the ``X-Drain-Token`` header from
     the preStop hook. Calls without the header (or with a wrong value) get a
-    401 and have no side effect.
+    401 and have no side effect. The endpoint fails closed: when enabled with
+    no token configured, every call is rejected with 401.
 
     When enabled, it marks the worker as shutting down (so /health/readiness
     and /health/liveliness immediately start returning 503, removing the pod
