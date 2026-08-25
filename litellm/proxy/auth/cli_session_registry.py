@@ -105,19 +105,23 @@ async def is_cli_session_revoked(
     interval per replica rather than one per request. That TTL is also the bound on
     how long a revocation takes to reach a replica that did not serve the revoke.
 
-    A lookup that cannot reach the database follows the proxy-wide
+    A proxy running without a database has no registry, so nothing can have been
+    revoked; those sessions authenticate as they always have. A lookup that cannot
+    reach a configured database follows the proxy-wide
     ``allow_requests_on_db_unavailable`` posture rather than inventing its own: an
-    operator who opted into serving during an outage keeps serving CLI sessions,
-    and one who did not gets the same failure every other DB-backed auth read gives.
+    operator who opted into serving during an outage keeps serving CLI sessions, and
+    one who did not gets the same failure every other DB-backed auth read gives. The
+    cache is consulted first either way, so a revocation this replica already knows
+    about is refused regardless of DB health.
     """
-    if prisma_client is None:
-        return False
-
     session_id: Final = cli_session_id(session_token)
     cache_key: Final = _revocation_cache_key(session_id)
     cached: Final = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached is not None:
         return bool(cached)
+
+    if prisma_client is None:
+        return False
 
     try:
         session: Final = await _get_cli_session(prisma_client=prisma_client, session_id=session_id)

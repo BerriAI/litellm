@@ -297,9 +297,22 @@ async def test_recorded_session_is_keyed_by_the_hash_not_the_token():
 
 @pytest.mark.asyncio
 async def test_no_db_connection_does_not_refuse_the_session():
+    """A proxy running without a database has no registry, so nothing can have been
+    revoked and the session keeps authenticating."""
     assert (
         await is_cli_session_revoked(session_token=SESSION_TOKEN, prisma_client=None, user_api_key_cache=_cache())
         is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_cached_revocation_is_refused_even_without_a_db_client():
+    cache = _cache()
+    await cache.async_set_cache(key=f"cli_session_revoked:{hash_token(SESSION_TOKEN)}", value=True, ttl=60)
+
+    assert (
+        await is_cli_session_revoked(session_token=SESSION_TOKEN, prisma_client=None, user_api_key_cache=cache)
+        is True
     )
 
 
