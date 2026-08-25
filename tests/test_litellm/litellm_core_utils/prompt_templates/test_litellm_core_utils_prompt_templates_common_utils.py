@@ -1027,3 +1027,38 @@ def test_update_messages_xlitellm_decode_does_not_override_mapping():
     updated = update_messages_with_model_file_ids(messages, "model-A", mapping)
 
     assert updated[0]["content"][0]["file"]["file_id"] == "provider-explicit-id"
+
+
+class TestInferContentTypeQueryString:
+    """A dot in the query string must not be mistaken for the file extension."""
+
+    def _infer(self, url: str, content: bytes):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            infer_content_type_from_url_and_content,
+        )
+
+        return infer_content_type_from_url_and_content(
+            url=url, content=content, current_content_type="binary/octet-stream"
+        )
+
+    @pytest.mark.parametrize(
+        "url, content, expected",
+        [
+            # No query string, and a query string without a dot, both already worked.
+            ("https://bucket.s3.amazonaws.com/report.pdf", b"%PDF-1.7", "application/pdf"),
+            ("https://bucket.s3.amazonaws.com/report.pdf?v=1", b"%PDF-1.7", "application/pdf"),
+            # A dotted query string is the regression: the extension used to be
+            # read out of the query, so these raised ValueError.
+            ("https://bucket.s3.amazonaws.com/report.pdf?v=1.0", b"%PDF-1.7", "application/pdf"),
+            ("https://bucket.s3.amazonaws.com/data.csv?X-Amz-Expires=3.6", b"a,b\n1,2", "text/csv"),
+            ("https://cdn.example.com/page.html?cb=1.2.3", b"<html>", "text/html"),
+        ],
+    )
+    def test_extension_is_read_from_the_path_not_the_query(self, url, content, expected):
+        assert self._infer(url, content) == expected
+
+    def test_a_url_with_no_usable_extension_still_raises(self):
+        # The fallback is unchanged: non-image bytes with no known extension
+        # have nothing left to infer from.
+        with pytest.raises(ValueError):
+            self._infer("https://cdn.example.com/download?id=1.2", b"not-an-image")
