@@ -15,6 +15,7 @@ from litellm._redis import (
     _get_redis_env_kwarg_mapping,
     _get_redis_kwargs,
     _get_redis_url_kwargs,
+    _pretty_print_redis_config,
     get_redis_async_client,
     get_redis_client,
     get_redis_connection_pool,
@@ -413,6 +414,25 @@ def test_redis_cache_key_does_not_inspect_provider(clear_llm_client_cache):
     first_key = cache._get_async_client_cache_key()
     assert first_key == cache._get_async_client_cache_key()
     assert first_key != second_cache._get_async_client_cache_key()
+
+
+def test_pretty_print_never_expands_credential_provider(capsys):
+    secret = "aaaa-UNIQUE-SENTINEL-bbbb"
+
+    with patch("litellm._redis.verbose_logger.isEnabledFor", return_value=True):
+        _pretty_print_redis_config(
+            redis_kwargs={
+                "host": "redis-host",
+                "port": 6379,
+                "credential_provider": _HostileCredentialProvider(secret),
+            }
+        )
+
+    output = capsys.readouterr().out
+    assert secret not in output
+    assert "UNIQUE" not in output
+    assert "_payload" not in output
+    assert "credential_provider" in output
 
 
 def test_redis_cache_key_does_not_serialize_connect_func():

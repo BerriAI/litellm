@@ -764,8 +764,20 @@ def get_redis_connection_pool(
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 
 
+def _redis_kwargs_for_logging(redis_kwargs: dict) -> dict:
+    return {
+        key: "<credential provider>"
+        if key == "credential_provider" and value is not None
+        else "<redis connect function>"
+        if key == "redis_connect_func" and value is not None
+        else value
+        for key, value in redis_kwargs.items()
+    }
+
+
 def _pretty_print_redis_config(redis_kwargs: dict) -> None:
     """Pretty print the Redis configuration using rich with sensitive data masking"""
+    redis_kwargs_for_logging: Final = _redis_kwargs_for_logging(redis_kwargs)
     try:
         import logging
 
@@ -783,7 +795,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
         masker = SensitiveDataMasker()
 
         # Mask sensitive data in redis_kwargs
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs)
+        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
 
         # Create main panel title
         title: Final = Text("Redis Configuration", style="bold blue")
@@ -846,7 +858,7 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
     except ImportError:
         # Fallback to simple logging if rich is not available
         masker = SensitiveDataMasker()
-        masked_redis_kwargs = masker.mask_dict(redis_kwargs)
+        masked_redis_kwargs = masker.mask_dict(redis_kwargs_for_logging)
         verbose_logger.info("Redis configuration: %s", masked_redis_kwargs)
     except Exception as e:
         verbose_logger.error("Error pretty printing Redis configuration: %s", e)
