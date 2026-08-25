@@ -65,11 +65,11 @@ async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS) -> Response:
         return _call()
 
     with (
-        patch.object(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request),
-        patch.object(proxy_server_mod, "route_request", fake_route_request),
-        patch.object(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj),
-        patch.object(proxy_server_mod, "llm_router", MagicMock()),
-        patch.object(proxy_server_mod, "version", "1.2.3"),
+        patch.object(proxy_server_mod, "add_litellm_data_to_request", fake_add_litellm_data_to_request),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "route_request", fake_route_request),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "proxy_logging_obj", proxy_logging_obj),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "llm_router", MagicMock()),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
+        patch.object(proxy_server_mod, "version", "1.2.3"),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
     ):
         await rerank(
             request=_build_request(),
@@ -95,7 +95,7 @@ async def test_rerank_emits_latency_and_cost_headers():
 @pytest.mark.asyncio
 async def test_rerank_emits_detailed_timing_headers_when_enabled():
     """LITELLM_DETAILED_TIMING must also work on /rerank, not just /chat/completions."""
-    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True):
+    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
         fastapi_response = await _call_rerank()
 
     assert fastapi_response.headers["x-litellm-timing-llm-api-ms"] == "1488.0"
@@ -114,7 +114,7 @@ async def test_rerank_emits_zero_response_cost_header():
 
 @pytest.mark.asyncio
 async def test_rerank_omits_detailed_timing_headers_when_disabled():
-    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False):
+    with patch.object(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False):  # test-quality-ok: LITELLM_DETAILED_TIMING is a module constant; toggling it is the behavior under test
         fastapi_response = await _call_rerank()
 
     assert "x-litellm-timing-llm-api-ms" not in fastapi_response.headers
