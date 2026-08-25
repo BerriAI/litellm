@@ -392,8 +392,25 @@ class VectorStoreRegistry:
 
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """
-        Loads vector stores from the litellm proxy config.yaml
+        Loads vector stores from the litellm proxy config.yaml.
+
+        Safe to call on config reload: any previously-config-loaded store whose
+        id is not in the new config is removed from the registry and the marker
+        set, so a store removed from config.yaml stops being protected from the
+        list-endpoint reconciliation on the very next reload.
         """
+        new_config_ids: set[str] = {
+            (cfg.get("litellm_params") or {}).get("vector_store_id")
+            for cfg in vector_stores_config
+        }
+        new_config_ids.discard(None)  # ids missing here will re-raise below with a clearer error
+
+        stale_ids: Final = self.config_loaded_vector_store_ids - new_config_ids
+        for stale_id in stale_ids:
+            # delete_vector_store_from_registry also discards from
+            # config_loaded_vector_store_ids, keeping the two in sync.
+            self.delete_vector_store_from_registry(stale_id)
+
         for vector_store_config in vector_stores_config:
             # cast to VectorStoreConfig
             litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
@@ -421,7 +438,9 @@ class VectorStoreRegistry:
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )
-            self.vector_stores.append(litellm_managed_vector_store)
+            # add_vector_store_to_registry is idempotent by id, so a reload
+            # that re-lists an existing store won't create duplicates.
+            self.add_vector_store_to_registry(litellm_managed_vector_store)
             self.config_loaded_vector_store_ids.add(vector_store_id)
 
         verbose_logger.debug(

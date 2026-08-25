@@ -182,3 +182,87 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+# ---------------------------------------------------------------------------
+# config-loaded marker bookkeeping (fixes: /vector_store/list used to prune
+# config.yaml-sourced entries because they have no DB row).
+# ---------------------------------------------------------------------------
+
+
+def _cfg_entry(vs_id: str) -> dict:
+    return {
+        "vector_store_name": f"name-{vs_id}",
+        "litellm_params": {
+            "vector_store_id": vs_id,
+            "custom_llm_provider": "bedrock",
+        },
+    }
+
+
+def test_load_from_config_tracks_marker_ids():
+    registry = VectorStoreRegistry()
+    assert registry.config_loaded_vector_store_ids == set()
+
+    registry.load_vector_stores_from_config([_cfg_entry("vs_a"), _cfg_entry("vs_b")])
+
+    assert {vs["vector_store_id"] for vs in registry.vector_stores} == {"vs_a", "vs_b"}
+    assert registry.config_loaded_vector_store_ids == {"vs_a", "vs_b"}
+
+
+def test_delete_drops_config_marker():
+    """An explicit delete of a config-loaded id must also clear the marker
+    so a later reload can re-load the entry without being incorrectly protected."""
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config([_cfg_entry("vs_a")])
+    assert "vs_a" in registry.config_loaded_vector_store_ids
+
+    registry.delete_vector_store_from_registry("vs_a")
+
+    assert registry.vector_stores == []
+    assert "vs_a" not in registry.config_loaded_vector_store_ids
+
+
+def test_delete_of_db_only_store_does_not_touch_marker_set():
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config([_cfg_entry("vs_config")])
+    registry.add_vector_store_to_registry(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="vs_from_db",
+            custom_llm_provider="openai",
+            vector_store_name="db-store",
+            litellm_credential_name=None,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+
+    registry.delete_vector_store_from_registry("vs_from_db")
+
+    assert [vs["vector_store_id"] for vs in registry.vector_stores] == ["vs_config"]
+    assert registry.config_loaded_vector_store_ids == {"vs_config"}
+
+
+def test_reload_removes_entries_dropped_from_config():
+    """Reloading config with a store removed should evict it from both the
+    registry and the marker set — otherwise a stale marker would permanently
+    protect the deleted store from the list-endpoint reconciliation."""
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config([_cfg_entry("vs_a"), _cfg_entry("vs_b")])
+    assert registry.config_loaded_vector_store_ids == {"vs_a", "vs_b"}
+
+    # Simulate config reload with vs_b removed from config.yaml.
+    registry.load_vector_stores_from_config([_cfg_entry("vs_a")])
+
+    assert registry.config_loaded_vector_store_ids == {"vs_a"}
+    assert [vs["vector_store_id"] for vs in registry.vector_stores] == ["vs_a"]
+
+
+def test_reload_is_idempotent_for_unchanged_config():
+    """Re-loading the same config must not create duplicate registry entries."""
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config([_cfg_entry("vs_a")])
+    registry.load_vector_stores_from_config([_cfg_entry("vs_a")])
+
+    assert [vs["vector_store_id"] for vs in registry.vector_stores] == ["vs_a"]
+    assert registry.config_loaded_vector_store_ids == {"vs_a"}
