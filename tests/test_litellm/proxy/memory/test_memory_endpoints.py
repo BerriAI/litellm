@@ -975,6 +975,28 @@ class TestMemoryEndpoints:
             resp = client.delete("/v1/memory/notes")
         assert resp.status_code == 404
 
+    def test_delete_memory_row_deleted_mid_delete_returns_404(self):
+        table = self.prisma.db.litellm_memorytable
+        table.rows.append(
+            _make_row(memory_id="m1", key="notes", user_id="user-a", team_id="team-a")
+        )
+
+        async def vanished(*_args, **_kwargs):
+            return None
+
+        original_delete = table.delete
+        table.delete = vanished
+
+        client = _make_client(_user_auth("user-a", "team-a"))
+        try:
+            with _patch_prisma(self.prisma):
+                resp = client.delete("/v1/memory/notes")
+        finally:
+            table.delete = original_delete
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Memory with key 'notes' not found"
+
     def test_visibility_filter_unscoped_for_admin_viewer(self):
         """
         proxy_admin_viewer reads with the same unscoped filter as proxy_admin;

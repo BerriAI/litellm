@@ -535,8 +535,10 @@ async def delete_memory(
     # Visibility != write authority — see the upsert handler for the rationale.
     await _assert_write_access(prisma_client, row, user_api_key_dict)
     try:
-        await _memory_table(prisma_client).delete(where={"memory_id": row.memory_id})
+        deleted: Final = await _memory_table(prisma_client).delete(where={"memory_id": row.memory_id})
     except Exception as e:
         raise _internal_error("Error deleting memory: %s", e, "Internal error deleting memory entry.")
 
+    if deleted is None:
+        raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return MemoryDeleteResponse(key=key, deleted=True)
