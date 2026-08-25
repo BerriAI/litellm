@@ -12,7 +12,7 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
@@ -764,7 +764,7 @@ def get_redis_connection_pool(
     return async_redis.BlockingConnectionPool(timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs)
 
 
-def _redis_kwargs_for_logging(redis_kwargs: dict) -> dict:
+def _redis_kwargs_for_logging(redis_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     return {
         key: "<credential provider>"
         if key == "credential_provider" and value is not None
