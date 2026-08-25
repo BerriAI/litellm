@@ -3748,6 +3748,37 @@ def test_partition_key_distinguishes_entries_that_differ_only_by_scope_by_key_ha
     assert _partition_key(unscoped) != _partition_key(scoped)
 
 
+def test_partition_key_distinguishes_entries_that_differ_only_by_scoping_fields():
+    """
+    A plain, unscoped entry and a scoped override can legitimately share
+    name/tag_id/limit/period_seconds/scope_by_key_hash (see
+    test_bucket_key_differs_for_same_named_entries_with_different_scoping_only)
+    while disagreeing on enabled_for/disabled_for/apply_to_key_alias --
+    _DedupSignature and _policy_fingerprint already treat that as two
+    distinct policies, so a shared max_in_memory_cache_size must not route
+    them onto the same in-memory partition either, or one entry's
+    high-cardinality traffic can evict the other's active counters from a
+    cache neither entry asked to share.
+    """
+    base_kwargs = {"name": "daily", "tag_id": "end_user_id", "limit": 100, "period_seconds": 86400, "max_in_memory_cache_size": 50}
+    unscoped = TagRateLimitEntry(**base_kwargs)
+    enabled_for_scoped = TagRateLimitEntry(
+        **base_kwargs, enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",))
+    )
+    disabled_for_scoped = TagRateLimitEntry(
+        **base_kwargs, disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",))
+    )
+    alias_scoped = TagRateLimitEntry(**base_kwargs, apply_to_key_alias=("premium-key",))
+
+    keys = {
+        _partition_key(unscoped),
+        _partition_key(enabled_for_scoped),
+        _partition_key(disabled_for_scoped),
+        _partition_key(alias_scoped),
+    }
+    assert len(keys) == 4
+
+
 @pytest.mark.asyncio
 async def test_scope_by_key_hash_composes_with_max_in_memory_cache_size_and_key_ttl_seconds_overrides(time_controller):
     """

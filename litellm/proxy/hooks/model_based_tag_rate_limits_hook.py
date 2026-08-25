@@ -883,7 +883,17 @@ def _resolve_max_in_memory_cache_size() -> int | None:
 # always resolves to the same signature across index rebuilds, which is what
 # keeps _PROXY_ModelBasedTagRateLimitsHook._partitions from leaking a fresh partition
 # every time _TagRateLimitIndex rebuilds and reconstructs `_ConfiguredLimit`s.
-_PartitionKey: TypeAlias = tuple[str, str, float, int, bool, int] | None
+# The str before the trailing int is `_policy_fingerprint(entry)`: two
+# entries can share tag_id/name (see
+# test_bucket_key_differs_for_same_named_entries_with_different_scoping_only)
+# while disagreeing on limit/period_seconds/scope_by_key_hash/enabled_for/
+# disabled_for/apply_to_key_alias -- _DedupSignature already treats that as
+# two distinct policies, so a shared max_in_memory_cache_size must not route
+# them onto the same partition either, or one entry's high-cardinality
+# traffic can evict the other's active counters from a cache neither entry
+# asked to share. max_in_memory_cache_size stays the trailing element:
+# `partition_key[-1]` reads it directly to size the partition's cache.
+_PartitionKey: TypeAlias = tuple[str, str, str, int] | None
 # Grouping type for async_log_success_event's per-partition tokens/dollars
 # pipeline dispatch -- named only so the declaration fits on one line; see
 # that method for why the grouping is needed.
@@ -896,9 +906,7 @@ def _partition_key(entry: TagRateLimitEntry) -> _PartitionKey:
     return (
         entry.tag_id,
         entry.name,
-        entry.limit,
-        entry.period_seconds,
-        entry.scope_by_key_hash,
+        _policy_fingerprint(entry),
         entry.max_in_memory_cache_size,
     )
 
