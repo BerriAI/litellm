@@ -4852,6 +4852,13 @@ class ProxyConfig:
         if litellm_settings is None:
             litellm_settings = {}
         if litellm_settings:
+            # Prometheus collectors have fixed label schemas. Load this setting
+            # before processing callbacks so YAML key order cannot construct the
+            # collectors with the default caller-identity mode.
+            caller_identity_mode: Final = litellm_settings.get("prometheus_deployment_and_latency_caller_identity")
+            if caller_identity_mode is not None:
+                litellm.prometheus_deployment_and_latency_caller_identity = caller_identity_mode
+
             # ANSI escape code for blue text
             blue_color_code: Final = "\033[94m"
             reset_color_code: Final = "\033[0m"

@@ -2462,6 +2462,7 @@ class PrometheusLogger(CustomLogger):
         else:
             _metadata = {
                 "user_api_key_alias": getattr(_metadata_raw, "user_api_key_alias", None),
+                "user_api_key_user_email": getattr(_metadata_raw, "user_api_key_user_email", None),
                 "user_api_key_team_id": getattr(_metadata_raw, "user_api_key_team_id", None),
                 "user_api_key_team_alias": getattr(_metadata_raw, "user_api_key_team_alias", None),
                 "user_api_key_hash": getattr(_metadata_raw, "user_api_key_hash", None),
@@ -2482,6 +2483,17 @@ class PrometheusLogger(CustomLogger):
                 return val
             if user_api_key_auth is not None:
                 return getattr(user_api_key_auth, "key_alias", None)
+            return None
+
+        def _get_user_email() -> str | None:
+            val = _metadata.get("user_api_key_user_email")
+            if val is not None:
+                return val
+            val = _litellm_params_metadata.get("user_api_key_user_email")
+            if val is not None:
+                return val
+            if user_api_key_auth is not None:
+                return self._safe_get(user_api_key_auth, "user_email")
             return None
 
         def _get_team_id() -> str | None:
@@ -2519,6 +2531,7 @@ class PrometheusLogger(CustomLogger):
 
         return {
             "api_key_alias": _get_api_key_alias(),
+            "user_email": _get_user_email(),
             "team": _get_team_id(),
             "team_alias": _get_team_alias(),
             "hashed_api_key": _get_hashed_api_key(),
@@ -2576,6 +2589,7 @@ class PrometheusLogger(CustomLogger):
             _metadata: Final = standard_logging_payload.get("metadata", {}) or {}
             hashed_api_key: Final = fallback_values.get("hashed_api_key") or _metadata.get("user_api_key_hash")
             api_key_alias: Final = fallback_values.get("api_key_alias") or _metadata.get("user_api_key_alias")
+            user_email: Final = fallback_values.get("user_email")
             team: Final = fallback_values.get("team") or _metadata.get("user_api_key_team_id")
             team_alias: Final = fallback_values.get("team_alias") or _metadata.get("user_api_key_team_alias")
             client_ip: Final = fallback_values.get("client_ip") or _metadata.get("requester_ip_address")
@@ -2616,6 +2630,7 @@ class PrometheusLogger(CustomLogger):
                 requested_model=label_requested_model,
                 hashed_api_key=hashed_api_key,
                 api_key_alias=api_key_alias,
+                user_email=user_email,
                 team=team,
                 team_alias=team_alias,
                 tags=standard_logging_payload.get("request_tags", []),

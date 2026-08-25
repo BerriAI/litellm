@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
@@ -274,6 +274,57 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_mcp_tool_calls_total",
     "litellm_mcp_tool_call_spend_metric",
 ]
+
+
+PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS: Final[frozenset[str]] = frozenset(
+    {
+        "litellm_deployment_total_requests",
+        "litellm_deployment_success_responses",
+        "litellm_deployment_failure_responses",
+        "litellm_request_total_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_overhead_latency_metric",
+        "litellm_deployment_latency_per_output_token",
+    }
+)
+
+PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES: Final[tuple[str, ...]] = (
+    "api_key_alias",
+    "user_email",
+    "both",
+)
+
+
+def _resolve_deployment_and_latency_caller_identity_labels(
+    metric_name: str,
+    labels: Sequence[object],
+) -> list[str]:  # mutable-ok: every caller must receive an independently mutable label list
+    """Return a fresh label list with the configured caller identity schema."""
+    if not all(isinstance(label, str) for label in labels):
+        raise TypeError(f"Prometheus labels for {metric_name} must be strings")
+    resolved_labels: Final = [label for label in labels if isinstance(label, str)]
+    if metric_name not in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS:
+        return resolved_labels
+
+    caller_identity: Final[object] = getattr(
+        litellm,
+        "prometheus_deployment_and_latency_caller_identity",
+        "api_key_alias",
+    )
+    if caller_identity not in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES:
+        accepted_values: Final = ", ".join(PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES)
+        raise ValueError(
+            "Invalid prometheus_deployment_and_latency_caller_identity="
+            f"{caller_identity!r}. Accepted values: {accepted_values}."
+        )
+
+    alias_index: Final = resolved_labels.index(UserAPIKeyLabelNames.API_KEY_ALIAS.value)
+    if caller_identity == "user_email":
+        resolved_labels[alias_index] = UserAPIKeyLabelNames.USER_EMAIL.value
+    elif caller_identity == "both":
+        resolved_labels.insert(alias_index + 1, UserAPIKeyLabelNames.USER_EMAIL.value)
+
+    return resolved_labels
 
 
 class PrometheusMetricLabels:
@@ -781,7 +832,10 @@ class PrometheusMetricLabels:
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> list[str]:
-        default_labels: Final = getattr(PrometheusMetricLabels, label_name)
+        default_labels: Final = _resolve_deployment_and_latency_caller_identity_labels(
+            metric_name=label_name,
+            labels=getattr(PrometheusMetricLabels, label_name),
+        )
         custom_labels: Final = []
 
         # Add custom metadata labels
