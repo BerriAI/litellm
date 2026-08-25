@@ -308,9 +308,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This is a DEPLOYMENT-LEVEL signal, distinct from the REQUEST-LEVEL
         ``async_log_failure_event``, which fires once per logical client
-        request behind a dedup gate. ``request_data`` is this attempt's own
-        kwargs, not a value shared across the fallback chain, so unlike
-        ``async_log_failure_event`` there's nothing stale to watch out for.
+        request behind a dedup gate. ``request_data`` is mostly this
+        attempt's own kwargs, with one exception: it omits
+        ``attempted_targets``, the router's own bookkeeping of which fallback
+        targets this request has already tried, since that one object *is*
+        shared by reference across every hop of the live fallback walk.
 
         Pairs with ``async_pre_call_deployment_hook`` and
         ``async_post_call_success_deployment_hook`` to complete the
@@ -323,11 +325,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         bookkeeping (``kwargs["fallback_depth"]``), not a value this hook
         computes or guarantees the shape of across versions. It tracks
         fallback hops only, not retries within the same model group - a
-        retry-only failure (no fallback yet) also reports ``None``.
+        retry-only failure (no fallback yet) also reports ``None``. If an
+        override predates this field it's simply never passed, rather than
+        raising - safe to leave off an override written before it existed.
+
+        ``exception`` is a same-class snapshot, not the exact object about to
+        be re-raised to the real caller: read it freely, but setting an
+        attribute on it (e.g. ``status_code``) has no effect on what the
+        caller actually receives.
 
         Default: no-op. Opt in by overriding. Keep overrides fast - this
         runs on the request's exception path, so a slow implementation
-        delays error propagation to the caller.
+        delays error propagation to the caller. The reported failure
+        duration is captured before this hook runs, so a slow override
+        doesn't inflate that metric, but the caller still waits for it.
         """
 
     async def async_post_call_streaming_deployment_hook(

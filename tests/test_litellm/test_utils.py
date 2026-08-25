@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -4996,8 +4997,9 @@ class _RecordingDeploymentFailureLogger(CustomLogger):
 async def test_async_post_call_failure_deployment_hook_calls_custom_logger_callbacks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The dispatcher must call the CustomLogger hook with the exception it was given
-    and the call_type resolved to its CallTypes enum member."""
+    """The dispatcher must call the CustomLogger hook with an equivalent exception (not
+    necessarily the same object - see test_..._snapshots_exception_so_callback_mutations_..._
+    below) and the call_type resolved to its CallTypes enum member."""
     recorder = _RecordingDeploymentFailureLogger()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
 
@@ -5009,7 +5011,8 @@ async def test_async_post_call_failure_deployment_hook_calls_custom_logger_callb
     assert len(recorder.calls) == 1
     request_data, received_exc, call_type, fallback_depth = recorder.calls[0]
     assert request_data == {"model": "gpt-4o-mini"}
-    assert received_exc is exc
+    assert isinstance(received_exc, ValueError)
+    assert str(received_exc) == str(exc)
     assert call_type == CallTypes.acompletion
     assert fallback_depth is None
 
@@ -5286,3 +5289,197 @@ async def test_wrapper_async_does_not_fire_failure_hook_for_post_success_error(
         )
 
     assert exploding_logger.failure_calls == []
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_calls_hook_override_missing_fallback_depth_param(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: an override written before fallback_depth existed (this PR's own earlier
+    proof-of-fix example used exactly this 3-arg signature) must still fire, not raise a
+    TypeError on the fallback_depth keyword that gets swallowed at debug level."""
+
+    class ThreeArgLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[tuple[dict, Exception, CallTypes | None]] = []
+
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type):
+            self.calls.append((request_data, exception, call_type))
+
+    three_arg_logger = ThreeArgLogger()
+    monkeypatch.setattr(litellm, "callbacks", [three_arg_logger])
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+
+    assert len(three_arg_logger.calls) == 1
+    assert isinstance(three_arg_logger.calls[0][1], litellm.AuthenticationError)
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_failure_hook_exception_mutation_does_not_change_raised_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a callback setting an attribute on the exception it receives (e.g.
+    status_code, as a real caller would read to determine the HTTP response) must not
+    change what the actual caller ends up with - the hook must not have write access to
+    the real exception about to be re-raised."""
+
+    class StatusCodeMutatingLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+            exception.status_code = 429
+
+    monkeypatch.setattr(litellm, "callbacks", [StatusCodeMutatingLogger()])
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_omits_attempted_targets_from_request_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: attempted_targets is the router's own live fallback-walk bookkeeping,
+    shared by reference across every hop of a single request - unlike the rest of
+    request_data, it is not this attempt's own isolated copy. A callback calling .record()
+    on it would make the router skip a deployment it hasn't actually tried, so the
+    dispatcher must never hand it to a callback."""
+    recorder = _RecordingDeploymentFailureLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    sentinel_targets = object()
+    await async_post_call_failure_deployment_hook(
+        request_data={"model": "gpt-4o-mini", "attempted_targets": sentinel_targets},
+        exception=ValueError("x"),
+        call_type="acompletion",
+    )
+
+    assert recorder.calls[0][0].get("attempted_targets") is None
+
+
+@pytest.mark.asyncio
+async def test_router_fallback_not_skipped_when_failure_hook_callback_touches_attempted_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: even a callback that tries to record a target on whatever it's handed as
+    attempted_targets must not affect the live Router fallback walk - the healthy fallback
+    deployment must still be reachable, not silently skipped as already-attempted.
+
+    attempted_targets is only present in kwargs starting from the second hop onward (the
+    first deployment's own failure predates the router's own fallback bookkeeping), so this
+    needs a 3-deployment chain: mid-group's failure is where the callback sees
+    attempted_targets and can prematurely mark good-group as tried. Uses per-deployment
+    mock_timeout/mock_response, not a request-level mock_response, which Router carries
+    into every hop's kwargs and would mask this test's real signal."""
+
+    class RecordingAttemptLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+            attempted = request_data.get("attempted_targets")
+            if attempted is not None:
+                attempted.record("good-group")
+
+    monkeypatch.setattr(litellm, "callbacks", [RecordingAttemptLogger()])
+
+    def _mock_timeout_deployment(model_name: str) -> dict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "fake",
+                "mock_timeout": True,
+                "timeout": 0.001,
+                "num_retries": 0,
+            },
+        }
+
+    router = litellm.Router(
+        model_list=[
+            _mock_timeout_deployment("bad-group"),
+            _mock_timeout_deployment("mid-group"),
+            {
+                "model_name": "good-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake",
+                    "mock_response": "fallback worked",
+                    "num_retries": 0,
+                },
+            },
+        ],
+        num_retries=0,
+        fallbacks=[{"bad-group": ["mid-group", "good-group"]}],
+    )
+
+    response = await router.acompletion(
+        model="bad-group",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert response.choices[0].message.content == "fallback worked"
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_preserves_original_exception_when_hook_await_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: if the caller's own timeout (e.g. asyncio.wait_for) fires while the
+    failure hook is still being awaited, the real deployment exception must still reach
+    the caller - not get replaced by CancelledError/TimeoutError from the hook's own
+    await getting cancelled."""
+
+    class SlowLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+            await asyncio.sleep(5)
+
+    monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
+
+    with pytest.raises(litellm.AuthenticationError):
+        await asyncio.wait_for(
+            litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+            ),
+            timeout=0.2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_failure_hook_latency_does_not_inflate_reported_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a slow failure-hook callback must not inflate the duration reported to
+    async_log_failure_event - that's real observability data (e.g. latency dashboards),
+    and the hook's own runtime is not part of how long the deployment call itself took."""
+    reported_durations: list[float] = []
+
+    class SlowLoggerWithDurationCapture(CustomLogger):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+            await asyncio.sleep(1)
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            reported_durations.append((end_time - start_time).total_seconds())
+
+    monkeypatch.setattr(litellm, "callbacks", [SlowLoggerWithDurationCapture()])
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+    await asyncio.sleep(0.1)
+
+    assert len(reported_durations) == 1
+    assert reported_durations[0] < 0.5
