@@ -1644,6 +1644,23 @@ class TestToolResultDocuments:
         output = self._tool_output(self._translate([{"type": "text", "text": "plain result"}]))
         assert output == "plain result"
 
+    def test_file_id_source_document_keeps_string_output(self):
+        output = self._tool_output(
+            self._translate(
+                [
+                    {"type": "text", "text": "stub"},
+                    {"type": "document", "source": {"type": "file", "file_id": "file_abc123"}},
+                ]
+            )
+        )
+        assert output == "stub"
+
+    def test_url_source_without_url_keeps_string_output(self):
+        output = self._tool_output(
+            self._translate([{"type": "text", "text": "stub"}, {"type": "document", "source": {"type": "url"}}])
+        )
+        assert output == "stub"
+
     def test_text_image_and_document_mix(self):
         items = self._translate(
             [
