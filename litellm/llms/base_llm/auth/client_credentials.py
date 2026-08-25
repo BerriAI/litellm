@@ -145,8 +145,23 @@ def _resolve_client_secret(config: KeycloakSource, secret_reader: SecretReader) 
     return secret
 
 
+def _wire_forms_of_secret(config: KeycloakSource, client_secret: str) -> tuple[SecretStr, ...]:
+    """Every shape the secret leaves this process in, so an echo of any of them is caught.
+
+    client_secret_basic sends base64 of ``id:secret``, which decodes straight back to the secret,
+    so an endpoint echoing that blob hands over reversible material that a raw comparison misses.
+    """
+    raw: Final = SecretStr(client_secret)
+    if config.auth_method != "client_secret_basic":
+        return (raw,)
+    encoded_pair: Final = f"{_form_encode(config.client_id)}:{_form_encode(client_secret)}"
+    return (raw, SecretStr(base64.b64encode(encoded_pair.encode()).decode("ascii")))
+
+
 def _endpoint_error_message(config: KeycloakSource, response: httpx.Response, client_secret: str) -> str:
-    endpoint_error: Final = redact_oauth_error_body(response.status_code, response.text, SecretStr(client_secret))
+    endpoint_error: Final = redact_oauth_error_body(
+        response.status_code, response.text, _wire_forms_of_secret(config, client_secret)
+    )
     return (
         f"keycloak token endpoint {endpoint_url_for_error_message(config.token_url)} "
         f"returned HTTP {endpoint_error.status_code}: {endpoint_error.redacted_body}"

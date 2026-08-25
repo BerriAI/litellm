@@ -13,7 +13,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import dataclass
 from math import inf
@@ -116,12 +116,28 @@ def validate_token_endpoint_url(url: str) -> str | InsecureTokenUrl:
     return InsecureTokenUrl(host=parsed.hostname or "")
 
 
-def redact_oauth_error_body(status_code: int, body_text: str, assertion: SecretStr | None = None) -> TokenEndpointError:
+def redact_oauth_error_body(
+    status_code: int,
+    body_text: str,
+    assertion: SecretStr | Sequence[SecretStr] | None = None,
+) -> TokenEndpointError:
+    """``assertion`` may be every form of the credential that went out on the wire.
+
+    A grant that encodes its credential before sending it (``client_secret_basic`` base64s
+    ``id:secret``) can have that encoded form echoed back, and it decodes straight to the secret,
+    so checking only the raw value lets reversible material through.
+    """
     rendered: Final = _redact_body_text(body_text)
-    return TokenEndpointError(
-        status_code=status_code,
-        redacted_body=_drop_reflected_assertion(rendered, assertion),
+    secrets: Final = () if assertion is None else (assertion,) if isinstance(assertion, SecretStr) else tuple(assertion)
+    redacted: Final = next(
+        (
+            _REFLECTED_VALUE_MESSAGE
+            for secret in secrets
+            if _drop_reflected_assertion(rendered, secret) is _REFLECTED_VALUE_MESSAGE
+        ),
+        rendered,
     )
+    return TokenEndpointError(status_code=status_code, redacted_body=redacted)
 
 
 def _drop_reflected_assertion(rendered: str, assertion: SecretStr | None) -> str:
