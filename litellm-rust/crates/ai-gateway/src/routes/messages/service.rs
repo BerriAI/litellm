@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use litellm_core::constants::ANTHROPIC_MESSAGES_PROVIDER;
+use litellm_core::messages::types::MessagesRequest;
+use litellm_core::messages::{messages, messages_stream};
 use litellm_core::router::Router;
 use litellm_core::{CoreError, CoreResult};
 use serde_json::{Map, Value};
-
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-use crate::messages::{MessagesRequest, execute_messages};
 
 pub(crate) enum MessagesResponse {
     Json(Value),
@@ -52,13 +52,14 @@ pub async fn run(
         extra_headers,
         timeout: None,
     };
-    let stream = request.body.get("stream").and_then(Value::as_bool) == Some(true);
-    execute_messages(request, stream)
-        .await
-        .map(|response| match response {
-            crate::messages::MessagesResponse::Json(body) => MessagesResponse::Json(body),
-            crate::messages::MessagesResponse::Stream(upstream) => {
-                MessagesResponse::Stream(upstream)
-            }
+    if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
+        return messages_stream(request).await.map(MessagesResponse::Stream);
+    }
+
+    let response = messages(request).await?;
+    serde_json::to_value(response)
+        .map(MessagesResponse::Json)
+        .map_err(|err| {
+            CoreError::InvalidResponse(format!("failed to serialize messages response: {err}"))
         })
 }

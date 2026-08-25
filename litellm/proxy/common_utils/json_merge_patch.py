@@ -1,11 +1,13 @@
 """RFC 7386 JSON Merge Patch (https://www.rfc-editor.org/rfc/rfc7386)."""
 
+from typing import Final
+
 from pydantic import JsonValue
 
 # A merge patch recurses as deep as the client's JSON nests. Cap it far above any
 # realistic team-metadata shape but well below Python's stack limit, so a
 # pathologically deep patch is rejected instead of overflowing the stack.
-_MAX_MERGE_DEPTH = 64
+_MAX_MERGE_DEPTH: Final = 64
 
 
 def apply_json_merge_patch(target: JsonValue, patch: JsonValue, _depth: int = 0) -> JsonValue:
@@ -23,9 +25,9 @@ def apply_json_merge_patch(target: JsonValue, patch: JsonValue, _depth: int = 0)
     if _depth >= _MAX_MERGE_DEPTH:
         raise ValueError(f"JSON merge patch nesting exceeds the maximum depth of {_MAX_MERGE_DEPTH}")
 
-    base = target if isinstance(target, dict) else {}
-    preserved = {key: value for key, value in base.items() if key not in patch}
-    applied = {
+    base: Final = target if isinstance(target, dict) else {}
+    preserved: Final = {key: value for key, value in base.items() if key not in patch}
+    applied: Final = {
         key: apply_json_merge_patch(base.get(key), value, _depth + 1)
         for key, value in patch.items()
         if value is not None

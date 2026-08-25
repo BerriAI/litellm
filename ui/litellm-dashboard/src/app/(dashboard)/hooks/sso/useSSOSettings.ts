@@ -24,6 +24,10 @@ export interface SSOSettingsValues {
   generic_authorization_endpoint: string | null;
   generic_token_endpoint: string | null;
   generic_userinfo_endpoint: string | null;
+  saml_idp_metadata_url: string | null;
+  saml_idp_metadata_xml: string | null;
+  saml_sp_entity_id: string | null;
+  saml_allow_unsolicited: string | null;
   generic_scope: string | null;
   proxy_base_url: string | null;
   user_email: string | null;

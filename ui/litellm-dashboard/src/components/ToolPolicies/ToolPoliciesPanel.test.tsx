@@ -4,9 +4,10 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { ToolRow } from "@/components/networking";
 import { ToolPoliciesPanel } from "./ToolPoliciesPanel";
+import { toast } from "@/lib/toast";
 
 const fetchToolsList = vi.fn();
 const updateToolPolicy = vi.fn();
@@ -16,9 +17,11 @@ vi.mock("@/components/networking", () => ({
   updateToolPolicy: (...args: unknown[]) => updateToolPolicy(...args),
 }));
 
-const fromBackend = vi.fn();
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { fromBackend: (...args: unknown[]) => fromBackend(...args) },
+const fromBackend = vi.mocked(toast.fromError);
+
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
 }));
 
 const NOW = new Date("2026-07-21T12:00:00Z");
@@ -67,24 +70,19 @@ const row = (toolId: string): HTMLElement => {
 const policySelect = (toolId: string, kind: "input" | "output"): HTMLElement =>
   within(row(toolId)).getAllByRole("combobox")[kind === "input" ? 0 : 1];
 
-/** Exact selected-value text. Never assert with toHaveTextContent here: it substring-matches, so "untrusted" satisfies "trusted". */
-const policyValue = (toolId: string, kind: "input" | "output"): string =>
-  policySelect(toolId, kind).closest(".ant-select")?.querySelector(".ant-select-selection-item")?.textContent ?? "";
+/**
+ * Exact selected-value text, read off the policy cell and stripped of anything
+ * that is not a letter (the control draws a status dot and a chevron around the
+ * label). Never assert with toHaveTextContent here: it substring-matches, so
+ * "untrusted" satisfies "trusted".
+ */
+const policyValue = (toolId: string, kind: "input" | "output"): string => {
+  const cell = policySelect(toolId, kind).closest("td");
+  return (cell?.textContent ?? "").replace(/[^a-z]/gi, "");
+};
 
 const isSaving = (toolId: string, kind: "input" | "output"): boolean =>
-  policySelect(toolId, kind).closest(".ant-select")?.classList.contains("ant-select-disabled") ?? false;
-
-const chooseOption = async (user: ReturnType<typeof userEvent.setup>, trigger: HTMLElement, label: string) => {
-  await user.click(trigger);
-  const option = await waitFor(() => {
-    const match = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
-      (element) => element.textContent === label,
-    );
-    if (match === undefined) throw new Error(`option ${label} not open`);
-    return match as HTMLElement;
-  });
-  await user.click(option);
-};
+  policySelect(toolId, kind).hasAttribute("disabled");
 
 const renderPanel = (onSelectTool = vi.fn()) =>
   renderWithProviders(<ToolPoliciesPanel accessToken="sk-token" onSelectTool={onSelectTool} />);
@@ -98,6 +96,7 @@ beforeEach(() => {
   fetchToolsList.mockReset().mockResolvedValue(TOOLS);
   updateToolPolicy.mockReset().mockResolvedValue({});
   fromBackend.mockReset();
+  can.mockReset().mockReturnValue(true);
   Element.prototype.scrollIntoView = vi.fn();
 });
 
@@ -106,6 +105,18 @@ afterEach(() => {
 });
 
 describe("ToolPoliciesPanel data loading", () => {
+  it("should not fetch tools when the caller lacks the viewToolPolicies capability", async () => {
+    can.mockReturnValue(false);
+    renderPanel();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(can).toHaveBeenCalledWith("viewToolPolicies");
+    expect(fetchToolsList).not.toHaveBeenCalled();
+  });
+
   it("should load tools once and never auto-refresh on a timer", async () => {
     renderPanel();
     await waitForRows();
@@ -180,7 +191,7 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     renderPanel();
     await waitForRows();
 
-    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseSelectOption(user, policySelect("tool-1", "input"), "trusted");
 
     expect(updateToolPolicy).toHaveBeenCalledWith("sk-token", "get_weather", { input_policy: "trusted" });
     await waitFor(() => expect(policyValue("tool-1", "input")).toBe("trusted"));
@@ -192,7 +203,7 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     renderPanel();
     await waitForRows();
 
-    await chooseOption(user, policySelect("tool-1", "output"), "trusted");
+    await chooseSelectOption(user, policySelect("tool-1", "output"), "trusted");
 
     expect(updateToolPolicy).toHaveBeenCalledWith("sk-token", "get_weather", { output_policy: "trusted" });
   });
@@ -203,8 +214,8 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     renderPanel();
     await waitForRows();
 
-    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
-    await chooseOption(user, policySelect("tool-2", "input"), "blocked");
+    await chooseSelectOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseSelectOption(user, policySelect("tool-2", "input"), "blocked");
 
     expect(isSaving("tool-2", "input")).toBe(true);
     expect(isSaving("tool-1", "input")).toBe(true);
@@ -219,8 +230,8 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     renderPanel();
     await waitForRows();
 
-    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
-    await chooseOption(user, policySelect("tool-2", "input"), "blocked");
+    await chooseSelectOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseSelectOption(user, policySelect("tool-2", "input"), "blocked");
     await act(async () => {
       finishFirst();
     });
@@ -240,7 +251,7 @@ describe("ToolPoliciesPanel inline policy editing", () => {
       () => new Promise<ToolRow[]>((resolve) => (landStaleRefresh = () => resolve(TOOLS))),
     );
     await user.click(screen.getByTestId("datatable-refresh"));
-    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseSelectOption(user, policySelect("tool-1", "input"), "trusted");
     await waitFor(() => expect(policyValue("tool-1", "input")).toBe("trusted"));
 
     await act(async () => {
@@ -259,7 +270,7 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     renderPanel();
     await waitForRows();
 
-    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseSelectOption(user, policySelect("tool-1", "input"), "trusted");
 
     await waitFor(() => expect(fromBackend).toHaveBeenCalledWith("Failed to update input policy: nope"));
     expect(policyValue("tool-1", "input")).toBe("untrusted");
@@ -271,7 +282,7 @@ describe("ToolPoliciesPanel inline policy editing", () => {
     renderPanel();
     await waitForRows();
 
-    await chooseOption(user, policySelect("tool-1", "input"), "trusted");
+    await chooseSelectOption(user, policySelect("tool-1", "input"), "trusted");
 
     await waitFor(() => expect(isSaving("tool-1", "input")).toBe(true));
     expect(isSaving("tool-1", "output")).toBe(false);

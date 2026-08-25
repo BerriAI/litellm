@@ -2,7 +2,7 @@
 Types and field definitions for cache settings management endpoints
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from pydantic import BaseModel
 
@@ -13,14 +13,14 @@ class CacheSettingsField(BaseModel):
     field_value: Any
     field_description: str
     field_default: Any = None
-    options: Optional[List[str]] = None  # For fields with predefined options/enum values
+    options: list[str] | None = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
-    link: Optional[str] = None  # Documentation link for the field
-    redis_type: Optional[str] = None  # Which Redis type this field applies to (node, cluster, sentinel)
+    link: str | None = None  # Documentation link for the field
+    redis_type: str | None = None  # Which Redis type this field applies to (node, cluster, sentinel)
 
 
 # Redis type descriptions
-REDIS_TYPE_DESCRIPTIONS: Dict[str, str] = {
+REDIS_TYPE_DESCRIPTIONS: Final[dict[str, str]] = {
     "node": "Standard Redis node/single instance",
     "cluster": "Redis Cluster mode for high availability and horizontal scaling",
     "sentinel": "Redis Sentinel mode for high availability with automatic failover",
@@ -28,7 +28,7 @@ REDIS_TYPE_DESCRIPTIONS: Dict[str, str] = {
 
 
 # Define all available cache settings fields
-CACHE_SETTINGS_FIELDS: List[CacheSettingsField] = [
+CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
     CacheSettingsField(
         field_name="redis_type",
         field_type="String",

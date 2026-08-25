@@ -140,8 +140,9 @@ describe("AgentsPanel", () => {
     await user.click(await screen.findByTestId("agent-actions-agent-9"));
     await user.click(await screen.findByTestId("agent-action-delete"));
 
-    const modal = await screen.findByRole("dialog");
-    await user.click(within(modal).getByRole("button", { name: /^delete$/i }));
+    const confirmPrompt = await screen.findByText(/are you sure you want to delete agent: Doomed Agent\?/i);
+    const confirmDialog = confirmPrompt.closest('[role="dialog"],[role="alertdialog"]') as HTMLElement;
+    await user.click(within(confirmDialog).getByRole("button", { name: /^delete$/i }));
 
     await waitFor(() => {
       expect(networking.deleteAgentCall).toHaveBeenCalledWith("test-token", "agent-9");

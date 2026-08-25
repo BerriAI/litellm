@@ -1,0 +1,25 @@
+# Daily timer for the compatibility-matrix populator.
+#
+# 06:00 UTC matches the original GitHub Actions cron schedule; chosen so
+# operators in US/EU timezones see fresh PRs at the start of their work
+# day.
+#
+# `Persistent=true` causes a missed run (VM was off / suspended) to
+# fire the next time the timer is started, which is the property we
+# want for a once-a-day job: the matrix should refresh as soon as the
+# VM is reachable again, not wait another 24h.
+#
+# `RandomizedDelaySec=10min` smears load if multiple matrix-style
+# pipelines are ever colocated on the same VM in the future.
+
+[Unit]
+Description=Run the Claude Code compatibility-matrix populator daily
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+Unit=litellm-compat-matrix.service
+
+[Install]
+WantedBy=timers.target

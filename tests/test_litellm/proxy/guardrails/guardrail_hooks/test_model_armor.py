@@ -2,13 +2,10 @@ import asyncio
 import base64
 import io
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import httpx
 from fastapi import HTTPException
@@ -1964,7 +1961,6 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
 
 def mock_open(read_data=""):
     """Helper to create a mock file object"""
-    import io
     from unittest.mock import MagicMock
 
     file_object = io.StringIO(read_data)
@@ -2334,7 +2330,7 @@ async def test_async_moderation_hook_api_error_fail_on_error_true():
         }
 
         # Should raise the exception since fail_on_error is True
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="API Error") as exc_info:
             await guardrail.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -2374,7 +2370,7 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
 
         # Even with fail_on_error=False, the decorator may still raise the exception
         # This test verifies that the exception is properly logged and handled
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="API Error") as exc_info:
             await guardrail.async_moderation_hook(
                 data=request_data,
                 user_api_key_dict=mock_user_api_key_dict,
@@ -2865,7 +2861,7 @@ async def test_skip_unscannable_still_fails_closed_on_api_error():
         "post",
         AsyncMock(side_effect=Exception("model armor upstream 500")),
     ):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='model armor upstream') as exc_info:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=MagicMock(spec=DualCache),
@@ -3503,6 +3499,44 @@ async def test_single_scan_response_stays_a_dict():
 
 
 @pytest.mark.asyncio
+async def test_scan_result_reaches_the_logger_on_a_seeded_route():
+    """On routes that seed `litellm_metadata` the scan result must land in that bucket
+    and be found by `_process_response`. Writing the file-scan result through the shared
+    resolver while the text-scan writers and the reader used a hard-coded `metadata` key
+    split the record in two, so the logged guardrail payload came back empty."""
+    guardrail = _make_guardrail()
+    pdf_b64 = base64.b64encode(PDF_BYTES).decode("utf-8")
+    request_data = {
+        "model": "claude-haiku",
+        "messages": [_file_message(pdf_b64)],
+        "metadata": {"user_id": "device-account-session"},
+        "litellm_metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_response(blocked=False)),
+    ):
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=MagicMock(spec=DualCache),
+            data=request_data,
+            call_type="completion",
+        )
+
+    assert "_model_armor_response" not in request_data["metadata"]
+    assert "_model_armor_response" in request_data["litellm_metadata"]
+
+    before = len(request_data["litellm_metadata"].get("standard_logging_guardrail_information", []))
+    guardrail._process_response(response=None, request_data=request_data)
+
+    logged = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+    assert len(logged) == before + 1
+    assert logged[-1]["guardrail_response"], "the logger recorded an empty Model Armor payload"
+
+
+@pytest.mark.asyncio
 async def test_pre_call_blocks_supported_document_with_undecodable_base64():
     """A supported document whose inline base64 will not decode cannot be scanned, so it fails closed."""
     guardrail = _make_guardrail()
@@ -3678,6 +3712,22 @@ async def test_pre_call_hook_skips_chat_traffic_when_configured_for_pre_mcp_call
 
     assert result == data
     mock_post.assert_not_called()
+
+
+def test_process_response_with_none_metadata_does_not_crash():
+    guardrail = _make_guardrail()
+    response = {"id": "batch_123", "status": "validating"}
+    request_data = {"model": "gemini-2.5-flash", "metadata": None}
+
+    result = guardrail._process_response(
+        response=response,
+        request_data=request_data,
+        event_type=GuardrailEventHooks.post_call,
+    )
+
+    assert result is response
+    assert isinstance(request_data["metadata"], dict)
+    assert "standard_logging_guardrail_information" in request_data["metadata"]
 
 
 @pytest.mark.asyncio

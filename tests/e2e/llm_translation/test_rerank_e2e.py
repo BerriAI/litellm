@@ -60,7 +60,7 @@ class TestRerank:
         model_id = endpoints_client.create_model(
             model,
             LiteLLMParamsBody(
-                model="bedrock/amazon.rerank-v1:0",
+                model="bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0",
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                 aws_region_name="os.environ/AWS_REGION",

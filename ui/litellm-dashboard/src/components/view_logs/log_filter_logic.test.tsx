@@ -6,10 +6,13 @@ import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LOGS_SORTING,
+  formatLogsWindow,
   getFilterValue,
   getLiveTailRefetchInterval,
+  getLogsWindowEndBound,
   LIVE_TAIL_INTERVAL_MS,
   LOG_FILTER_IDS,
+  LOGS_WINDOW_TICK_MS,
   useLogFilterLogic,
   type PaginatedResponse,
 } from "./log_filter_logic";
@@ -23,6 +26,8 @@ vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
 }));
 
 import { uiSpendLogsCall } from "../networking";
+import { fetchAllTeams } from "@/components/key_team_helpers/filter_helpers";
+import type { Team } from "../key_team_helpers/key_list";
 
 const emptyResponse: PaginatedResponse = {
   data: [],
@@ -40,7 +45,6 @@ const defaultProps = {
   userRole: "Admin" as string | null,
   userID: "user-1" as string | null,
   columnFilters: [] as ColumnFiltersState,
-  filterByCurrentUser: false,
   activeTab: "request logs",
   isLiveTail: false,
   startTime: "2025-01-01T00:00:00",
@@ -176,23 +180,55 @@ describe("useLogFilterLogic", () => {
     });
   });
 
-  describe("filterByCurrentUser", () => {
-    it("scopes to the current user when no explicit user filter is set", async () => {
-      renderFilterHook({ filterByCurrentUser: true });
+  describe("user scope", () => {
+    it("leaves an empty user filter for the backend to authorize", async () => {
+      renderFilterHook();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
-      expect(lastCallParams()?.params).toMatchObject({ user_id: "user-1" });
+      expect(lastCallParams()?.params?.user_id).toBeUndefined();
     });
 
-    it("lets an explicit user filter win over the current-user scope", async () => {
+    it("sends an explicit user filter for the backend to intersect with authorization", async () => {
       renderFilterHook({
-        filterByCurrentUser: true,
         columnFilters: [{ id: LOG_FILTER_IDS.USER_ID, value: "someone-else" }],
       });
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCallParams()?.params).toMatchObject({ user_id: "someone-else" });
     });
+  });
+
+  describe("team filter list scope", () => {
+    const callerTeams = [{ team_id: "team-a" }, { team_id: "team-b" }] as Team[];
+
+    it("scopes /team/list to an internal user and still surfaces their teams", async () => {
+      vi.mocked(fetchAllTeams).mockResolvedValue(callerTeams);
+
+      const { result } = renderFilterHook({ userRole: "Internal User", userID: "member-7" });
+
+      await waitFor(() => expect(fetchAllTeams).toHaveBeenCalled());
+      expect(fetchAllTeams).toHaveBeenCalledWith("test-token", null, "member-7");
+      await waitFor(() => expect(result.current.allTeams).toEqual(callerTeams));
+    });
+
+    it("scopes /team/list for an internal viewer", async () => {
+      vi.mocked(fetchAllTeams).mockResolvedValue(callerTeams);
+
+      renderFilterHook({ userRole: "Internal Viewer", userID: "member-7" });
+
+      await waitFor(() => expect(fetchAllTeams).toHaveBeenCalledWith("test-token", null, "member-7"));
+    });
+
+    it.each(["Admin", "Admin Viewer", "Org Admin"])(
+      "leaves /team/list unscoped for %s so the broad list survives",
+      async (userRole) => {
+        vi.mocked(fetchAllTeams).mockResolvedValue(callerTeams);
+
+        renderFilterHook({ userRole, userID: "member-7" });
+
+        await waitFor(() => expect(fetchAllTeams).toHaveBeenCalledWith("test-token", null, null));
+      },
+    );
   });
 
   it("returns an empty payload and does not crash when the call fails", async () => {
@@ -231,5 +267,63 @@ describe("getLiveTailRefetchInterval", () => {
 
   it("does not poll past the first page, even with live tail on", () => {
     expect(getLiveTailRefetchInterval(true, 1)).toBe(false);
+  });
+});
+
+describe("formatLogsWindow", () => {
+  it("pins the end bound for a custom range", () => {
+    const w = formatLogsWindow("2026-07-23T00:00", "2026-07-24T06:00", true);
+
+    expect(w.start_date).toBe(moment("2026-07-23T00:00").utc().format("YYYY-MM-DD HH:mm:ss"));
+    expect(w.end_date).toBe(moment("2026-07-24T06:00").utc().format("YYYY-MM-DD HH:mm:ss"));
+  });
+
+  it("ends a preset range at now, not at the stored end time", () => {
+    const w = formatLogsWindow("2026-07-23T00:00", "1999-01-01T00:00", false);
+
+    expect(w.end_date > "2020-01-01 00:00:00").toBe(true);
+  });
+});
+
+describe("getLogsWindowEndBound", () => {
+  const BUCKET_START = 16666 * LOGS_WINDOW_TICK_MS;
+
+  it("holds steady inside a bucket so a memoized window does not refetch per render", () => {
+    expect(getLogsWindowEndBound(BUCKET_START)).toBe(getLogsWindowEndBound(BUCKET_START + LOGS_WINDOW_TICK_MS - 1));
+  });
+
+  it("advances once the bucket rolls over so a preset window follows the table", () => {
+    expect(getLogsWindowEndBound(BUCKET_START + LOGS_WINDOW_TICK_MS)).toBe(
+      getLogsWindowEndBound(BUCKET_START) + LOGS_WINDOW_TICK_MS,
+    );
+  });
+
+  it("never trails the fetch it was derived from", () => {
+    // Trailing is the live-tail bug: the table shows rows the filter window excludes.
+    for (const offset of [0, 1, LOGS_WINDOW_TICK_MS - 1]) {
+      expect(getLogsWindowEndBound(BUCKET_START + offset)).toBeGreaterThan(BUCKET_START + offset);
+    }
+  });
+
+  it("advances at least once per live-tail refetch interval", () => {
+    expect(LOGS_WINDOW_TICK_MS).toBeLessThanOrEqual(4 * LIVE_TAIL_INTERVAL_MS);
+  });
+});
+
+describe("formatLogsWindow preset end bound", () => {
+  it("uses the supplied bound for a preset range so callers can memoize it", () => {
+    const bound = Date.UTC(2026, 6, 24, 12, 0, 0);
+
+    expect(formatLogsWindow("2026-07-23T00:00", "1999-01-01T00:00", false, bound).end_date).toBe(
+      moment(bound).utc().format("YYYY-MM-DD HH:mm:ss"),
+    );
+  });
+
+  it("ignores the supplied bound for a custom range", () => {
+    const bound = Date.UTC(2026, 6, 24, 12, 0, 0);
+
+    expect(formatLogsWindow("2026-07-23T00:00", "2026-07-24T06:00", true, bound).end_date).toBe(
+      moment("2026-07-24T06:00").utc().format("YYYY-MM-DD HH:mm:ss"),
+    );
   });
 });
