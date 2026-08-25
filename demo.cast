@@ -1,0 +1,10 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1787683358,"command":"zsh /tmp/lit6102b/demo.sh","env":{"SHELL":"/bin/zsh"}}
+[0.029, "o", "# proxy: turn_off_message_logging=true, store_prompts_in_spend_logs=true (fix build)\r\n\r\n$ curl /v1/responses  (gemini tool call)\r\n"]
+[1.055, "o", "  -> function_call: get_weather {\"city\": \"Paris\"}\r\n"]
+[0.047, "o", "\r\n  (waiting for the spend-log write...)\r\n"]
+[16.046, "o", "\r\n$ psql: what the redacted spend log stored\r\n"]
+[0.199, "o", "  \"content\": null\r\n  \"arguments\": \"redacted-by-litellm\"\r\n"]
+[0.001, "o", "\r\n$ curl /v1/responses with previous_response_id  (replay the redacted session)\r\n"]
+[0.985, "o", "  -> HTTP 200\r\n"]
+[0.051, "o", "  -> response id resp_Omvxe55vNZhK750F66F...\r\n"]
+[0.002, "x", "0"]
