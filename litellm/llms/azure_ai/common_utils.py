@@ -113,9 +113,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         if AzureFoundryModelInfo.get_model_router_selected_model(hidden_params) is not None:
             return True
         deployment_model: Final = (
-            hidden_params.get("litellm_model_name") or hidden_params.get("model")
-            if hidden_params is not None
-            else None
+            hidden_params.get("litellm_model_name") or hidden_params.get("model") if hidden_params is not None else None
         )
         return any(
             isinstance(candidate, str) and AzureFoundryModelInfo.get_azure_ai_route(candidate) == "model_router"
