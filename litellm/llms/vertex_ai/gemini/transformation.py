@@ -1185,7 +1185,7 @@ def _transform_request_body(
     resolved_params: Final = resolve_response_schema_channel(
         optional_params=optional_params, litellm_params=litellm_params, model=model
     )
-    request_params: Final = {
+    optional_params = {
         k: v
         for k, v in resolved_params.items()
         if k not in remove_keys and k != VERTEX_AI_USE_RESPONSE_JSON_SCHEMA_PARAM
@@ -1200,18 +1200,18 @@ def _transform_request_body(
             content = litellm.VertexGeminiConfig()._transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
-        tools: Final[Tools | None] = request_params.pop("tools", None)
-        tool_choice: Final[ToolConfig | None] = request_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = request_params.pop("include_server_side_tool_invocations", False)
-        safety_settings: list[SafetSettingsConfig] | None = request_params.pop("safety_settings", None)
+        tools: Final[Tools | None] = optional_params.pop("tools", None)
+        tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
+        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
+        safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
-        request_params.pop("output_config", None)
+        optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
-        labels: Final = pop_vertex_request_labels(request_params, litellm_params)
+        labels: Final = pop_vertex_request_labels(optional_params, litellm_params)
 
-        filtered_params = {k: v for k, v in request_params.items() if _get_equivalent_key(k, set(config_fields))}
+        filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
 
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
 
@@ -1247,7 +1247,7 @@ def _transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
-        if service_tier := request_params.pop("service_tier", None):
+        if service_tier := optional_params.pop("service_tier", None):
             if isinstance(service_tier, str):
                 if service_tier.lower() == "default":
                     data["serviceTier"] = "standard"
@@ -1259,7 +1259,7 @@ def _transform_request_body(
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
-        _pop_and_merge_extra_body(data, request_params)
+        _pop_and_merge_extra_body(data, optional_params)
         _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
