@@ -117,11 +117,11 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding,
+        request_data: dict,  # mutable-ok: matches parent  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # matches OpenAIGPTConfig.transform_response
+        messages: list[AllMessageValues],  # mutable-ok: matches parent
+        optional_params: dict,  # mutable-ok: matches parent  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # matches OpenAIGPTConfig.transform_response
+        litellm_params: dict,  # mutable-ok: matches parent  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # matches OpenAIGPTConfig.transform_response
+        encoding,  # pyright: ignore[reportAny,reportMissingParameterType]  # matches OpenAIGPTConfig.transform_response
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -139,7 +139,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         confirm the whole-answer-in-<think> shape is expected behavior
         for this provider specifically.
         """
-        response = super().transform_response(
+        response = super().transform_response(  # pyright: ignore[reportUnknownMemberType]  # super() inherits partially unknown param types from parent
             model=model,
             raw_response=raw_response,
             model_response=model_response,
@@ -153,10 +153,8 @@ class MinimaxChatConfig(OpenAIGPTConfig):
             json_mode=json_mode,
         )
         for choice in response.choices:
-            message = getattr(choice, "message", None)
-            if message is None:
-                continue
-            reasoning_content = getattr(message, "reasoning_content", None)
+            message = choice.message
+            reasoning_content = getattr(message, "reasoning_content", None)  # pyright: ignore[reportAny]  # Message deletes reasoning_content when None
             if reasoning_content and not (message.content or "").strip():
                 message.content = reasoning_content
         return response
