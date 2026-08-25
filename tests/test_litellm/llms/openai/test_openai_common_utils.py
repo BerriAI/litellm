@@ -1,9 +1,8 @@
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
 import pytest
-
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -172,6 +171,94 @@ def test_get_openai_client_cache_key(client_type):
     )
     assert isinstance(key, str)
     assert "api_key=sk-test" in key
+
+
+def test_get_openai_client_cache_key_includes_ssl_verify():
+    first_key = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={"api_key": "sk-test", "ssl_verify": "/tmp/first-ca.pem"},
+        client_type="openai",
+    )
+    second_key = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={"api_key": "sk-test", "ssl_verify": "/tmp/second-ca.pem"},
+        client_type="openai",
+    )
+
+    assert first_key != second_key
+
+
+def test_get_sync_http_client_uses_per_call_ssl_verify(monkeypatch):
+    from litellm.llms.openai import common_utils
+
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False)
+    with (
+        patch.object(  # test-quality-ok: verify the per-call SSL setting reaches the resolver
+            common_utils, "get_ssl_configuration", return_value=False
+        ) as get_ssl_configuration,
+        patch.object(  # test-quality-ok: capture the constructed HTTP client options
+            common_utils.httpx, "Client"
+        ) as http_client,
+    ):
+        result = BaseOpenAILLM._get_sync_http_client(ssl_verify="/tmp/custom-ca.pem")
+
+    assert result is http_client.return_value
+    get_ssl_configuration.assert_called_once_with(ssl_verify="/tmp/custom-ca.pem")
+    http_client.assert_called_once_with(verify=False, follow_redirects=True)
+
+
+@pytest.mark.asyncio
+async def test_get_async_http_client_uses_per_call_ssl_verify(monkeypatch):
+    from litellm.llms.openai import common_utils
+
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False)
+    with (
+        patch.object(  # test-quality-ok: verify the per-call SSL setting reaches the resolver
+            common_utils, "get_ssl_configuration", return_value=False
+        ) as get_ssl_configuration,
+        patch.object(  # test-quality-ok: capture async transport options
+            common_utils.AsyncHTTPHandler, "_create_async_transport", return_value=None
+        ) as transport,
+        patch.object(  # test-quality-ok: capture the constructed HTTP client options
+            common_utils.httpx, "AsyncClient"
+        ) as http_client,
+    ):
+        result = BaseOpenAILLM._get_async_http_client(ssl_verify="/tmp/custom-ca.pem")
+
+    assert result is http_client.return_value
+    get_ssl_configuration.assert_called_once_with(ssl_verify="/tmp/custom-ca.pem")
+    transport.assert_called_once_with(ssl_context=None, ssl_verify=False, shared_session=None)
+    http_client.assert_called_once_with(verify=False, transport=None, follow_redirects=True)
+
+
+def test_openai_client_ssl_verify(monkeypatch):  # test-quality-ok: verifies per-call SSL reaches the client boundary
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", MagicMock())
+    with (
+        patch.object(  # test-quality-ok: force the fresh-client path
+            BaseOpenAILLM, "get_cached_openai_client", return_value=None
+        ),
+        patch.object(  # test-quality-ok: avoid mutating the shared client cache
+            BaseOpenAILLM, "set_cached_openai_client"
+        ),
+        patch.object(  # test-quality-ok: observe the HTTP client boundary
+            OpenAIChatCompletion, "_get_sync_http_client"
+        ) as get_http_client,
+        patch(  # test-quality-ok: avoid constructing a provider client
+            "litellm.llms.openai.openai.OpenAI"
+        ) as openai_client,
+    ):
+        OpenAIChatCompletion()._get_openai_client(
+            is_async=False,
+            api_key="sk-test",
+            api_base="https://example.test/v1",
+            max_retries=2,
+            ssl_verify="/tmp/custom-ca.pem",
+        )
+
+    get_http_client.assert_called_once_with(ssl_verify="/tmp/custom-ca.pem")
+    assert openai_client.call_count == 1
 
 
 def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open(monkeypatch):
