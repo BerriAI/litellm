@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -56,6 +56,26 @@ def safe_divide(
     if denominator == 0:
         return default
     return numerator / denominator
+
+
+def is_expected_client_error(exception: BaseException | None) -> bool:
+    """
+    True when the exception maps to an HTTP 4xx status.
+
+    ProxyException stores the status on .code (as a str), HTTPException and
+    litellm exceptions on .status_code.
+    """
+    if exception is None:
+        return False
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    if status_code is None or isinstance(status_code, bool):
+        return False
+    try:
+        status: Final = int(str(status_code))
+    except ValueError:
+        return False
+    return 400 <= status < 500
 
 
 def coerce_token_limit(value: object) -> int | None:
@@ -181,7 +201,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
 
 
 def get_metadata_variable_name_from_kwargs(
-    kwargs: dict,
+    kwargs: Mapping[str, object],
 ) -> Literal["metadata", "litellm_metadata"]:
     """
     Helper to return what the "metadata" field should be called in the request data

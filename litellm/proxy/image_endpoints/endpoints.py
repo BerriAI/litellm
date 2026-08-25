@@ -1,8 +1,11 @@
 import asyncio
+import io
 import traceback
+from collections.abc import Sequence
+from typing import Final
 
 import orjson
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
 
 import litellm
@@ -18,11 +21,6 @@ from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
 
-import io
-from typing import Final
-
-from fastapi import UploadFile
-
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     """
@@ -36,10 +34,10 @@ async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
 
 
 async def batch_to_bytesio(
-    uploads: list[UploadFile] | None,
+    uploads: Sequence[UploadFile] | None,
 ) -> list[io.BytesIO] | None:
     """
-    Convert a list of UploadFiles to a list of BytesIO buffers, or None.
+    Convert a sequence of UploadFiles to a list of BytesIO buffers, or None.
     """
     if not uploads:
         return None

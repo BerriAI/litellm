@@ -554,7 +554,7 @@ class TestProxyOAuthHeaderForwarding:
 
     def test_add_provider_specific_headers_forwards_oauth(self):
         """add_provider_specific_headers_to_request should forward OAuth Authorization
-        as a ProviderSpecificHeader scoped to Anthropic-compatible providers."""
+        as a ProviderSpecificHeader scoped to Anthropic and nothing else."""
         from litellm.proxy.litellm_pre_call_utils import (
             add_provider_specific_headers_to_request,
         )
@@ -569,9 +569,7 @@ class TestProxyOAuthHeaderForwarding:
 
         assert "provider_specific_header" in data
         psh = data["provider_specific_header"]
-        assert "anthropic" in psh["custom_llm_provider"]
-        assert "bedrock" in psh["custom_llm_provider"]
-        assert "vertex_ai" in psh["custom_llm_provider"]
+        assert psh["custom_llm_provider"] == "anthropic"
         assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_add_provider_specific_headers_ignores_non_oauth(self):
@@ -593,7 +591,10 @@ class TestProxyOAuthHeaderForwarding:
 
     def test_add_provider_specific_headers_combines_anthropic_and_oauth(self):
         """When both anthropic-beta and OAuth Authorization are present, both
-        should be included in the ProviderSpecificHeader."""
+        reach Anthropic."""
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            ProviderSpecificHeaderUtils,
+        )
         from litellm.proxy.litellm_pre_call_utils import (
             add_provider_specific_headers_to_request,
         )
@@ -608,9 +609,12 @@ class TestProxyOAuthHeaderForwarding:
         add_provider_specific_headers_to_request(data=data, headers=headers)
 
         assert "provider_specific_header" in data
-        psh = data["provider_specific_header"]
-        assert psh["extra_headers"]["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
-        assert psh["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+        anthropic_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"],
+            custom_llm_provider="anthropic",
+        )
+        assert anthropic_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert anthropic_headers["anthropic-beta"] == "oauth-2025-04-20"
 
     def test_clean_headers_forwards_x_api_key_when_authenticated_with_litellm_key(self):
         """clean_headers should forward x-api-key when user authenticated with x-litellm-api-key and forward_llm_provider_auth_headers=True."""
@@ -929,7 +933,7 @@ class TestValidateEnvironmentAuthToken:
         config = AnthropicModelInfo()
         with mock_patch.dict("os.environ", {}, clear=True):
             with pytest.raises(
-                Exception, match="ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
+                Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
             ):
                 config.validate_environment(
                     headers={},
@@ -1742,22 +1746,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert data["messages"] == []
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so detection doesn't depend on the
-    network-fetched ``main`` copy (which lacks this branch's flags until merge)."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
-
 
 class TestClaudeOpus48AdaptiveThinking:
     """Opus 4.8 requires adaptive thinking (``thinking.type='adaptive'`` +
@@ -2028,3 +2016,88 @@ class TestCapabilityProbeUsesCallerProvider:
             AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
             is True
         )
+def test_create_anthropic_model_list_response_shape():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {"id": "claude-opus-4-6", "object": "model", "created": 0, "owned_by": "openai"},
+            {"id": "gpt-4o", "object": "model", "created": 0, "owned_by": "openai"},
+            {"id": "claude-haiku-4-5", "object": "model", "created": 0, "owned_by": "openai"},
+        ]
+    )
+
+    assert "object" not in response
+    assert response["has_more"] is False
+    assert response["first_id"] == "claude-opus-4-6"
+    assert response["last_id"] == "claude-haiku-4-5"
+    assert [m["id"] for m in response["data"]] == [
+        "claude-opus-4-6",
+        "gpt-4o",
+        "claude-haiku-4-5",
+    ]
+    for entry in response["data"]:
+        assert entry["type"] == "model"
+        assert entry["display_name"] == entry["id"]
+        # ISO 8601 with a Z suffix, as the Anthropic Models API returns.
+        assert entry["created_at"].endswith("Z")
+        assert "+00:00" not in entry["created_at"]
+        assert entry["max_input_tokens"] is None
+        assert entry["max_tokens"] is None
+
+
+def test_create_anthropic_model_list_response_carries_token_limits():
+    """max_input_tokens and max_tokens are nullable in the Anthropic Models shape,
+    not optional, so both keys are emitted for every entry and carry null when the
+    limit is unknown."""
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response(
+        [
+            {
+                "id": "claude-opus-4-6",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 200000,
+                "max_output_tokens": 64000,
+            },
+            {
+                "id": "input-only",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 8192,
+            },
+            {"id": "unknown-limits", "object": "model", "created": 0, "owned_by": "openai"},
+        ]
+    )
+
+    opus, input_only, unknown = response["data"]
+    assert opus["max_input_tokens"] == 200000
+    assert opus["max_tokens"] == 64000
+    assert "max_output_tokens" not in opus
+    assert input_only["max_input_tokens"] == 8192
+    assert input_only["max_tokens"] is None
+    assert unknown["max_input_tokens"] is None
+    assert unknown["max_tokens"] is None
+    for entry in response["data"]:
+        assert "max_input_tokens" in entry
+        assert "max_tokens" in entry
+
+
+def test_create_anthropic_model_list_response_empty():
+    from litellm.llms.anthropic.common_utils import (
+        create_anthropic_model_list_response,
+    )
+
+    response = create_anthropic_model_list_response([])
+
+    assert response["data"] == []
+    assert response["has_more"] is False
+    assert response["first_id"] is None
+    assert response["last_id"] is None

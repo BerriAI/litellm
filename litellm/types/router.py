@@ -4,12 +4,13 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
+from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
 
@@ -17,7 +18,12 @@ from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
-from .utils import CustomPricingLiteLLMParams, ModelResponse, StandardLoggingRoutingDecision
+from .utils import (
+    CustomPricingLiteLLMParams,
+    MirroredPricingParams,
+    ModelResponse,
+    StandardLoggingRoutingDecision,
+)
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -118,11 +124,20 @@ class UpdateRouterConfig(BaseModel):
     context_window_fallbacks: list[dict] | None = None
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
+    tag_routing_prefix: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
 
-class ModelInfo(BaseModel):
+def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.timezone.utc)
+    return value.astimezone(datetime.timezone.utc)
+
+
+class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -146,12 +161,54 @@ class ModelInfo(BaseModel):
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
 
+    # Bounds live on the model rather than litellm.constants: names there reach
+    # litellm/__init__ through several modules' star re-exports, and a Final rebound that
+    # way trips the basedpyright gate.
+    MAX_PTU_COUNT: ClassVar[int] = 1_000_000
+    MAX_COST_PER_PTU_PER_HOUR: ClassVar[float] = 1_000_000.0
+
+    ptu_count: int | None = None
+    cost_per_ptu_per_hour: float | None = None
+    ptu_effective_from: datetime.datetime | None = None
+    ptu_effective_to: datetime.datetime | None = None
+
+    # when tag-based routing's "!" or "&" constraints eliminate every deployment
+    # in this model group, fall back to the default-tagged pool instead of
+    # raising no_deployments_with_tag_routing. Defaults to False (raise), so
+    # existing "!" negation behavior is unchanged unless explicitly opted in.
+    allow_fail_open: bool | None = None
+
+    # per-model-group override for router_settings.enable_tag_filtering; unset
+    # defers to the router-wide default. Checked against any deployment in the
+    # group, so set it consistently across every deployment sharing this
+    # model_name. A request-level enable_tag_filtering=True (from key/team
+    # settings) still wins over this, exactly as it already does over the
+    # router-wide default.
+    enable_tag_filtering: bool | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
         elif isinstance(id, int):
             id = str(id)
         super().__init__(id=id, **params)
+
+    @model_validator(mode="after")
+    def _validate_ptu_bounds(self) -> "ModelInfo":
+        if self.ptu_count is not None and not 0 < self.ptu_count <= self.MAX_PTU_COUNT:
+            raise ValueError(f"ptu_count must be a positive integer no greater than {self.MAX_PTU_COUNT}")
+        if (
+            self.cost_per_ptu_per_hour is not None
+            and not 0 <= self.cost_per_ptu_per_hour <= self.MAX_COST_PER_PTU_PER_HOUR
+        ):
+            raise ValueError(
+                f"cost_per_ptu_per_hour must be a finite number between 0 and {self.MAX_COST_PER_PTU_PER_HOUR}"
+            )
+        start: Final = _as_utc(self.ptu_effective_from)
+        end: Final = _as_utc(self.ptu_effective_to)
+        if start is not None and end is not None and end <= start:
+            raise ValueError("ptu_effective_to must be after ptu_effective_from")
+        return self
 
     model_config = ConfigDict(extra="allow")
 
@@ -196,13 +253,22 @@ class CredentialLiteLLMParams(BaseModel):
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
     aws_region_name: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
     aws_bedrock_runtime_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
+    s3_output_bucket_name: str | None = None
+    bedrock_tags: list | None = None
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
@@ -240,6 +306,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Deployment budgets
     max_budget: float | None = None
     budget_duration: str | None = None
+    keepalive_seconds: float | None = None
+    # keepalive_seconds is operator-only by default: a client's request-level
+    # value is ignored unless the deployment opts in here. Prevents a client
+    # from unilaterally enabling heartbeats (and the LB-idle-timeout evasion
+    # that comes with them) for a deployment that never configured them.
+    allow_client_keepalive_override: bool | None = False
     use_in_pass_through: bool | None = False
     use_litellm_proxy: bool | None = False
     use_chat_completions_api: bool | None = None
@@ -280,6 +352,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     milvus_text_field: str | None = None
     milvus_db_name: str | None = None
     milvus_partition_names: list[str] | None = None
+    valkey_host: str | None = None
+    valkey_port: int | None = None
+    valkey_password: str | None = None
+    valkey_ssl: bool | None = None
+    valkey_text_field: str | None = None
+    valkey_embedding_field: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -402,7 +480,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: float | None
     input_cost_per_second: float | None
     output_cost_per_second: float | None
+    output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##
     mock_response: str | ModelResponse | Exception | None
@@ -416,6 +496,11 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # deployment budgets
     max_budget: float | None
     budget_duration: str | None
+    keepalive_seconds: float | None
+    allow_client_keepalive_override: bool | None
+
+    # per-deployment cooldown override
+    cooldown_time: float | None
 
 
 class DeploymentTypedDict(TypedDict, total=False):
@@ -424,14 +509,7 @@ class DeploymentTypedDict(TypedDict, total=False):
     model_info: dict
 
 
-SPECIAL_MODEL_INFO_PARAMS = [
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "input_cost_per_character",
-    "output_cost_per_character",
-    "cache_read_input_token_cost",
-    "cache_creation_input_token_cost",
-]
+SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
 class Deployment(BaseModel):
@@ -515,6 +593,9 @@ class AllowedFailsPolicy(BaseModel):
     RateLimitErrorAllowedFails: int | None = None
     ContentPolicyViolationErrorAllowedFails: int | None = None
     InternalServerErrorAllowedFails: int | None = None
+    ServiceUnavailableErrorAllowedFails: int | None = None
+    BadGatewayErrorAllowedFails: int | None = None
+    NotFoundErrorAllowedFails: int | None = None
 
 
 class AlertingConfig(BaseModel):
@@ -556,6 +637,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
+    supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
@@ -818,6 +900,8 @@ class PreRoutingHookResponse(BaseModel):
     model: str
     messages: list[dict[str, Any]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
+    session_affinity_ttl_seconds: int | None = None
+    litellm_params: Mapping[str, object] | None = None
 
 
 _PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)
@@ -829,6 +913,14 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumedRequestTagsStamp:
+    """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
+
+    model_group: str
+    tags: tuple[str, ...]
 
 
 @runtime_checkable
@@ -873,6 +965,21 @@ class RoutingPlugin(Protocol):
     """Interface a custom routing plugin must implement to run in `Router(plugins=[...])`."""
 
     async def run(self, context: RoutingContext) -> RoutingContext: ...
+
+
+@runtime_checkable
+class ClassifierPlugin(Protocol):
+    """Interface a custom classifier must implement to run as the complexity router's classifier_type='custom'.
+
+    `classify` returns the name of the tier the request belongs to (a built-in tier value or label,
+    or a tier_definitions name), or None to decline and let classifier_fallback decide.
+
+    The context's `candidate_models` is an informational snapshot of every tier's models, unlike
+    the narrowing surface RoutingPlugin filters: the returned tier decides the pool, so mutating
+    the list is a no-op.
+    """
+
+    async def classify(self, context: RoutingContext) -> str | None: ...
 
 
 class RequestType(str, enum.Enum):

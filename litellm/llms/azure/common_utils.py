@@ -2,11 +2,13 @@ import asyncio
 import hashlib
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from functools import lru_cache
 from typing import Any, Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +23,22 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+
+
+class _AzureAdTokenJson(TypedDict, total=False):
+    access_token: ReadOnly[str]
+    expires_in: ReadOnly[int]
+
+
+class _AzureV1ClientParams(TypedDict, total=False, extra_items=object):
+    base_url: ReadOnly[str]
+
+
+class _AzureGatewayClientParams(TypedDict, total=False, extra_items=object):
+    api_version: ReadOnly[str]
+    base_url: ReadOnly[str]
+    max_retries: ReadOnly[int]
+    timeout: ReadOnly[float | httpx.Timeout]
 
 
 class AzureOpenAIError(BaseLLMException):
@@ -58,6 +76,24 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
+@lru_cache(maxsize=128)
+def _cached_entra_id_token_provider(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    scope: str,
+) -> Callable[[], str]:
+    """Build (once per credential set) a bearer token provider backed by a `ClientSecretCredential`.
+
+    The credential caches the access token internally and only talks to Entra ID when it is close
+    to expiry, so reusing the provider keeps one AAD round trip per token lifetime instead of one
+    per request.
+    """
+    from azure.identity import ClientSecretCredential, get_bearer_token_provider
+
+    return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
+
+
 def get_azure_ad_token_from_entra_id(
     tenant_id: str,
     client_id: str,
@@ -76,8 +112,6 @@ def get_azure_ad_token_from_entra_id(
     Returns:
         callable that returns a bearer token.
     """
-    from azure.identity import ClientSecretCredential, get_bearer_token_provider
-
     verbose_logger.debug("Getting Azure AD Token from Entra ID")
 
     if tenant_id.startswith("os.environ/"):
@@ -103,9 +137,13 @@ def get_azure_ad_token_from_entra_id(
     )
     if _tenant_id is None or _client_id is None or _client_secret is None:
         raise ValueError("tenant_id, client_id, and client_secret must be provided")
-    credential: Final = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
 
-    token_provider: Final = get_bearer_token_provider(credential, scope)
+    token_provider: Final = _cached_entra_id_token_provider(
+        tenant_id=_tenant_id,
+        client_id=_client_id,
+        client_secret=_client_secret,
+        scope=scope,
+    )
 
     verbose_logger.debug("token_provider %s", token_provider)
 
@@ -220,7 +258,7 @@ def get_azure_ad_token_from_oidc(
             message=req_token.text,
         )
 
-    azure_ad_token_json: Final = req_token.json()
+    azure_ad_token_json: Final[_AzureAdTokenJson] = req_token.json()
     azure_ad_token_access_token = azure_ad_token_json.get("access_token", None)
     azure_ad_token_expires_in: Final = azure_ad_token_json.get("expires_in", None)
 
@@ -486,7 +524,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
                 v1_api_key = _async_v1_api_key
 
-            v1_params: Final[dict[str, Any]] = {
+            v1_params: Final[_AzureV1ClientParams] = {
                 "api_key": v1_api_key,
                 "base_url": f"{api_base}/openai/v1/",
             }
@@ -643,7 +681,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_base += "/"
             api_base += f"{model}"
 
-            azure_client_params: Final[dict[str, Any]] = {
+            azure_client_params: Final[_AzureGatewayClientParams] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
                 "http_client": litellm.client_session,
@@ -702,7 +740,7 @@ class BaseAzureLLM(BaseOpenAILLM):
     @staticmethod
     def _get_base_azure_url(
         api_base: str | None,
-        litellm_params: GenericLiteLLMParams | dict[str, Any] | None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
         route: Literal["/openai/responses", "/openai/vector_stores"] | str,
         default_api_version: str | Literal["latest", "preview"] | None = None,
     ) -> str:
@@ -757,7 +795,9 @@ class BaseAzureLLM(BaseOpenAILLM):
             return False
         return api_version in {"preview", "latest", "v1"}
 
-    def _resolve_env_var(self, litellm_params: dict[str, Any], param_key: str, env_var_key: str) -> str | None:
+    def _resolve_env_var(
+        self, litellm_params: Mapping[str, str | None], param_key: str, env_var_key: str
+    ) -> str | None:
         """Resolve the environment variable for a given parameter key.
 
         The logic here is different from `params.get(key, os.getenv(env_var))` because

@@ -8,14 +8,12 @@ model_group, spend, etc.)
 
 import asyncio
 import os
-import sys
 import time
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm import Router
 from litellm.caching import DualCache

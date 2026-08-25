@@ -4,14 +4,11 @@ Tests for AgenticAnthropicStreamingIterator and SSE rebuild helpers.
 
 import asyncio
 import json
-import os
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
@@ -915,9 +912,13 @@ class TestAgenticStreamingIteratorHoldBack:
         )
 
         collected = []
-        with pytest.raises(RuntimeError, match="upstream died"):
+
+        async def _drain():
             async for chunk in iterator:
                 collected.append(chunk)
+
+        with pytest.raises(RuntimeError, match="upstream died"):
+            await _drain()
 
         assert all(c == STREAM_SSE_KEEPALIVE_PING_BYTES for c in collected)
         mock_handler._call_agentic_completion_hooks.assert_not_awaited()

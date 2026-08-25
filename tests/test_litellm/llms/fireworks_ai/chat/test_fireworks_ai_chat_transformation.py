@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
@@ -478,12 +473,14 @@ def test_transform_messages_helper_strips_thinking_blocks():
             "thinking_blocks": [
                 {"type": "thinking", "thinking": "internal", "signature": ""}
             ],
+            "reasoning_content": "internal",
         },
     ]
     out = config._transform_messages_helper(
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
+    assert "reasoning_content" not in out[1]
     assert out[1]["content"] == "I can help."
 
 
@@ -1153,6 +1150,17 @@ def test_reasoning_effort_integer_passthrough():
     assert isinstance(result["reasoning_effort"], int)
 
 
+def test_reasoning_effort_auto_dropped_to_model_default():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": "auto"},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
 def test_transform_response_captures_perf_metrics():
     body = {
         **_BASE_CHAT_COMPLETION_RESPONSE,
@@ -1282,3 +1290,408 @@ def test_streaming_surfaces_fireworks_response_fields():
     assert surfaced["fireworks_raw_outputs"] == [raw_output]
     assert surfaced["fireworks_perf_metrics"] == {"prompt-tokens": 5}
     assert surfaced["fireworks_prompt_token_ids"] == [1, 2, 3]
+
+
+def test_transform_request_routes_router_slug():
+    config = FireworksAIConfig()
+
+    data = config.transform_request(
+        model="routers/glm-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["model"] == "accounts/fireworks/routers/glm-latest"
+
+
+def test_transform_request_bare_slug_stays_model():
+    config = FireworksAIConfig()
+
+    data = config.transform_request(
+        model="glm-4p6",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["model"] == "accounts/fireworks/models/glm-4p6"
+
+
+def test_transform_request_direct_route_passthrough():
+    config = FireworksAIConfig()
+    model = "accounts/fireworks/models/qwen2p5-coder-7b#accounts/gitlab/deployments/2fb7764c"
+
+    data = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["model"] == model
+
+
+def test_map_extra_body_params_translates_truncate_prompt_tokens():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"truncate_prompt_tokens": 4096}}, _REASONING_MODEL
+    )
+    assert result == {"prompt_truncate_len": 4096}
+
+
+def test_map_extra_body_params_truncate_prompt_tokens_native_wins():
+    config = FireworksAIConfig()
+    top_level = config.map_extra_body_params(
+        {"prompt_truncate_len": 2048, "extra_body": {"truncate_prompt_tokens": 4096}},
+        _REASONING_MODEL,
+    )
+    assert top_level == {"prompt_truncate_len": 2048}
+
+    nested = config.map_extra_body_params(
+        {"extra_body": {"truncate_prompt_tokens": 4096, "prompt_truncate_len": 2048}},
+        _REASONING_MODEL,
+    )
+    assert nested == {"extra_body": {"prompt_truncate_len": 2048}}
+
+
+def test_map_extra_body_params_chat_template_kwargs_enable_thinking():
+    config = FireworksAIConfig()
+    disabled = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert disabled == {"reasoning_effort": "none"}
+
+    enabled = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": True}}},
+        _REASONING_MODEL,
+    )
+    assert enabled == {}
+
+
+def test_map_extra_body_params_chat_template_kwargs_thinking_alias():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "none"}
+
+
+def test_map_extra_body_params_chat_template_kwargs_enable_thinking_wins_over_thinking():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": True, "thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {}
+
+
+def test_map_extra_body_params_chat_template_kwargs_reasoning_budget():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"reasoning_budget": 512}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": 512}
+
+
+def test_map_extra_body_params_chat_template_kwargs_budget_ignored_when_thinking_off():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": False, "reasoning_budget": 512}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "none"}
+
+
+def test_map_extra_body_params_chat_template_kwargs_low_effort():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"low_effort": True}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "low"}
+
+    budget_wins = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"low_effort": True, "reasoning_budget": 256}}},
+        _REASONING_MODEL,
+    )
+    assert budget_wins == {"reasoning_effort": 256}
+
+
+def test_map_extra_body_params_chat_template_kwargs_effort_keys_dropped_for_non_reasoning_model():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"reasoning_budget": 512, "low_effort": True}}},
+        _NON_REASONING_MODEL,
+    )
+    assert result == {}
+
+
+def test_map_extra_body_params_chat_template_kwargs_native_reasoning_effort_wins():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {
+            "reasoning_effort": "high",
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+        },
+        _REASONING_MODEL,
+    )
+    assert result == {"reasoning_effort": "high"}
+
+
+def test_map_extra_body_params_chat_template_kwargs_native_thinking_wins():
+    config = FireworksAIConfig()
+    thinking = {"type": "enabled", "budget_tokens": 4096}
+    result = config.map_extra_body_params(
+        {
+            "thinking": thinking,
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+        },
+        _REASONING_MODEL,
+    )
+    assert result == {"thinking": thinking}
+
+
+def test_map_extra_body_params_chat_template_kwargs_extra_body_thinking_wins():
+    config = FireworksAIConfig()
+    thinking = {"type": "enabled", "budget_tokens": 4096}
+    result = config.map_extra_body_params(
+        {"extra_body": {"thinking": thinking, "chat_template_kwargs": {"enable_thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"extra_body": {"thinking": thinking}}
+
+
+def test_map_extra_body_params_chat_template_kwargs_extra_body_reasoning_effort_wins():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"reasoning_effort": "high", "chat_template_kwargs": {"enable_thinking": False}}},
+        _REASONING_MODEL,
+    )
+    assert result == {"extra_body": {"reasoning_effort": "high"}}
+
+
+def test_map_extra_body_params_chat_template_kwargs_dropped_for_non_reasoning_model():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": {"enable_thinking": False, "custom_flag": 1}}},
+        _NON_REASONING_MODEL,
+    )
+    assert result == {}
+
+
+def test_map_extra_body_params_non_dict_chat_template_kwargs_dropped():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"chat_template_kwargs": "enable_thinking"}},
+        _REASONING_MODEL,
+    )
+    assert result == {}
+
+
+def test_map_extra_body_params_guided_json():
+    config = FireworksAIConfig()
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+    result = config.map_extra_body_params(
+        {"extra_body": {"guided_json": schema}}, _REASONING_MODEL
+    )
+    assert result == {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": schema},
+        }
+    }
+
+
+def test_map_extra_body_params_guided_grammar_and_choice():
+    config = FireworksAIConfig()
+    grammar = config.map_extra_body_params(
+        {"extra_body": {"guided_grammar": "root ::= 'hello'"}}, _REASONING_MODEL
+    )
+    assert grammar == {
+        "response_format": {"type": "grammar", "grammar": "root ::= 'hello'"}
+    }
+
+    choice = config.map_extra_body_params(
+        {"extra_body": {"guided_choice": ["yes", "no"]}}, _REASONING_MODEL
+    )
+    assert choice == {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "choice",
+                "schema": {"type": "string", "enum": ["yes", "no"]},
+            },
+        }
+    }
+
+
+def test_map_extra_body_params_guided_native_response_format_wins():
+    config = FireworksAIConfig()
+    top_level = config.map_extra_body_params(
+        {
+            "response_format": {"type": "json_object"},
+            "extra_body": {"guided_json": {"type": "object"}},
+        },
+        _REASONING_MODEL,
+    )
+    assert top_level == {"response_format": {"type": "json_object"}}
+
+    nested_format = {"type": "json_object"}
+    nested = config.map_extra_body_params(
+        {"extra_body": {"guided_json": {"type": "object"}, "response_format": nested_format}},
+        _REASONING_MODEL,
+    )
+    assert nested == {"extra_body": {"response_format": nested_format}}
+
+
+def test_map_extra_body_params_top_level_response_format_beats_nested():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {
+            "response_format": {"type": "json_object"},
+            "extra_body": {
+                "guided_json": {"type": "object"},
+                "response_format": {"type": "json_schema", "json_schema": {"schema": {}}},
+            },
+        },
+        _REASONING_MODEL,
+    )
+    assert result == {"response_format": {"type": "json_object"}}
+
+
+def test_map_extra_body_params_multiple_guided_params_priority_order():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"guided_grammar": "root ::= 'x'", "guided_json": {"type": "object"}}},
+        _REASONING_MODEL,
+    )
+    assert result == {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": {"type": "object"}},
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "param,value",
+    [
+        ("stop_token_ids", [1, 2]),
+        ("include_stop_str_in_output", True),
+        ("skip_special_tokens", False),
+        ("spaces_between_special_tokens", True),
+        ("best_of", 2),
+        ("use_beam_search", True),
+        ("guided_decoding_backend", "outlines"),
+        ("guided_regex", "[0-9]+"),
+        ("add_generation_prompt", True),
+        ("continue_final_message", True),
+        ("add_special_tokens", False),
+        ("detokenize", True),
+        ("allowed_token_ids", [1]),
+        ("bad_words", ["foo"]),
+        ("include_reasoning", False),
+        ("nvext", {"verbosity": 1}),
+    ],
+)
+def test_map_extra_body_params_strips_unsupported_nim_vllm_params(param, value, caplog):
+    import logging
+
+    config = FireworksAIConfig()
+    with caplog.at_level(logging.DEBUG):
+        result = config.map_extra_body_params(
+            {"extra_body": {param: value}}, _REASONING_MODEL
+        )
+    assert result == {}
+    assert param in caplog.text
+
+
+def test_map_extra_body_params_preserves_unknown_passthrough():
+    config = FireworksAIConfig()
+    result = config.map_extra_body_params(
+        {"extra_body": {"top_k": 40, "some_future_param": "x", "truncate_prompt_tokens": 100}},
+        _REASONING_MODEL,
+    )
+    assert result == {
+        "prompt_truncate_len": 100,
+        "extra_body": {"top_k": 40, "some_future_param": "x"},
+    }
+
+
+def test_map_extra_body_params_no_extra_body():
+    config = FireworksAIConfig()
+    assert config.map_extra_body_params({}, _REASONING_MODEL) == {}
+    unchanged = {"temperature": 0.5, "extra_body": None}
+    assert config.map_extra_body_params(unchanged, _REASONING_MODEL) == unchanged
+
+
+def test_nim_vllm_extras_translated_end_to_end_in_request_body():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    model = "accounts/fireworks/models/glm-5p1"
+    body = {
+        "id": "chat-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.text = json.dumps(body)
+    raw_response.json = lambda: body
+
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = raw_response
+    litellm.completion(
+        model=f"fireworks_ai/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fw-test-key",
+        client=client,
+        truncate_prompt_tokens=4096,
+        chat_template_kwargs={"enable_thinking": False},
+        min_tokens=10,
+        include_reasoning=False,
+        top_k=40,
+    )
+
+    request_body = json.loads(client.post.call_args.kwargs["data"])
+    assert request_body["prompt_truncate_len"] == 4096
+    assert "truncate_prompt_tokens" not in request_body
+    assert request_body["reasoning_effort"] == "none"
+    assert "chat_template_kwargs" not in request_body
+    assert "include_reasoning" not in request_body
+    assert request_body["min_tokens"] == 10
+    assert request_body["top_k"] == 40
+
+
+def test_in_schema_unsupported_params_still_raise():
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model="accounts/fireworks/models/llama-v3-70b-instruct",
+            custom_llm_provider="fireworks_ai",
+            drop_params=False,
+            store=True,
+        )
+    optional_params = litellm.get_optional_params(
+        model="accounts/fireworks/models/llama-v3-70b-instruct",
+        custom_llm_provider="fireworks_ai",
+        drop_params=True,
+        store=True,
+    )
+    assert "store" not in optional_params

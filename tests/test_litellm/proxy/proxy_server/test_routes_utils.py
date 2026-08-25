@@ -8,6 +8,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -54,6 +55,31 @@ def test_token_counter_happy_path(client, auth_as, patched_token_counter):
         "error_message": None,
         "status_code": None,
     }
+
+
+def test_token_counter_counts_off_the_event_loop(client, auth_as, patched_token_counter, monkeypatch):
+    """
+    A large prompt must not stall the proxy: the count runs in a worker thread, where there
+    is no running event loop, rather than on the loop serving other requests.
+    """
+    counted_off_loop = []
+
+    def recording_counter(**kwargs):
+        try:
+            asyncio.get_running_loop()
+            counted_off_loop.append(False)
+        except RuntimeError:
+            counted_off_loop.append(True)
+        return 7
+
+    monkeypatch.setattr(litellm, "token_counter", recording_counter)
+
+    with auth_as():
+        response = client.post("/utils/token_counter", json={"model": "gpt-4", "prompt": "Hi there"})
+
+    assert response.status_code == 200
+    assert response.json()["total_tokens"] == 7
+    assert counted_off_loop == [True]
 
 
 def test_token_counter_missing_input_returns_400(

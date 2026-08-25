@@ -2,9 +2,7 @@
 ## This tests the braintrust integration
 
 import asyncio
-import os
 import random
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -13,12 +11,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,7 +22,6 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def test_braintrust_logging():
-    import litellm
 
     litellm.set_verbose = True
 
@@ -53,7 +45,6 @@ def test_braintrust_logging():
 
 
 def test_braintrust_logging_specific_project_id():
-    import litellm
 
     litellm.set_verbose = True
 

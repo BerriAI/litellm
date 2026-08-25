@@ -14,11 +14,11 @@ from litellm.proxy.auth.auth_checks import (
     _cache_access_object,
     _cache_key_object,
     _cache_team_object,
-    _delete_cache_access_object,
     _get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_cache
 from litellm.proxy.utils import get_prisma_client_or_throw
 from litellm.repositories.table_repositories import AccessGroupRepository
 from litellm.types.access_group import (
@@ -146,22 +146,6 @@ async def _cache_access_group_record(record: _AccessGroupRecord) -> None:
     )
 
 
-async def _invalidate_cache_access_group(access_group_id: str) -> None:
-    """
-    Invalidate (delete) an access group entry from both in-memory and Redis caches.
-
-    Uses a lazy import of user_api_key_cache and proxy_logging_obj from proxy_server
-    to avoid circular imports, following the same pattern as key_management_endpoints.
-    """
-    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
-
-    await _delete_cache_access_object(
-        access_group_id=access_group_id,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-
 # ---------------------------------------------------------------------------
 # DB sync helpers (called inside a Prisma transaction)
 # ---------------------------------------------------------------------------
@@ -226,7 +210,6 @@ async def _patch_team_caches_add_access_group(
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
             key=f"team_id:{team_id}",
-            proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -256,7 +239,6 @@ async def _patch_team_caches_remove_access_group(
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
             key=f"team_id:{team_id}",
-            proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -595,7 +577,7 @@ async def delete_access_group(
 
         from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-        await _invalidate_cache_access_group(access_group_id)
+        await invalidate_access_group_cache(access_group_id)
         await _patch_team_caches_remove_access_group(
             affected_team_ids, access_group_id, user_api_key_cache, proxy_logging_obj
         )

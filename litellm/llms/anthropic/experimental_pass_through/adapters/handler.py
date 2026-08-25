@@ -1,10 +1,12 @@
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
+    TypeAlias,
     cast,
 )
+
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +21,7 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    local_model_name,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -33,8 +36,17 @@ if TYPE_CHECKING:
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config"})
 
+_AnthropicMessages: TypeAlias = "list[dict[str, object]]"
+_AnthropicSystem: TypeAlias = "str | list[dict[str, object]] | None"
+_ContextManagementSpec: TypeAlias = "dict[str, object] | list[dict[str, object]] | None"
 
-def _messages_have_compaction_block(messages: list[dict]) -> bool:
+
+class _CompletionKwargs(TypedDict, total=False, extra_items=object):
+    model: str
+    custom_llm_provider: str
+
+
+def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
     """Return True when any message carries a ``compaction`` content block."""
     for msg in messages:
         content = msg.get("content")
@@ -54,8 +66,10 @@ def _proxy_router_fallback() -> "Router | None":
     return _proxy_router
 
 
-def _extract_proxy_litellm_metadata(kwargs: dict[str, Any]) -> dict[str, Any] | None:
-    """Return ``kwargs["litellm_metadata"]`` when it's a dict; ``None`` otherwise.
+def _extract_proxy_litellm_metadata(
+    kwargs: Mapping[str, object],
+) -> "tuple[dict[str, object], UserAPIKeyAuth | None] | tuple[None, None]":
+    """Return ``(kwargs["litellm_metadata"], its user_api_key_auth)`` when it's a dict; ``(None, None)`` otherwise.
 
     The proxy attaches its auth/spend-attribution fields (``user_api_key``,
     ``user_api_key_team_id``, ``litellm_call_id``, the full ``UserAPIKeyAuth``
@@ -68,18 +82,19 @@ def _extract_proxy_litellm_metadata(kwargs: dict[str, Any]) -> dict[str, Any] | 
     """
     litellm_metadata: Final = kwargs.get("litellm_metadata")
     if not isinstance(litellm_metadata, dict):
-        return None
-    return litellm_metadata
+        return None, None
+    user_api_key_auth: Final[UserAPIKeyAuth | None] = litellm_metadata.get("user_api_key_auth")
+    return litellm_metadata, user_api_key_auth
 
 
 async def _prepare_context_managed_request(
     *,
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
-    system: Any | None,
-    context_management_spec: Any,
-    litellm_metadata: dict | None,
+    messages: _AnthropicMessages,
+    tools: list[dict[str, object]] | None,
+    system: _AnthropicSystem,
+    context_management_spec: _ContextManagementSpec,
+    litellm_metadata: dict[str, object] | None,
     additional_drop_params: list[str] | None,
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
@@ -102,11 +117,11 @@ async def _prepare_context_managed_request(
 
     if polyfill_will_run:
         history_result: PolyfillResult | None = None
-        working_messages: list[dict] = messages
-        working_system: Any | None = system
+        working_messages: _AnthropicMessages = messages
+        working_system: _AnthropicSystem = system
     else:
         history_result = apply_client_compaction_block_history(
-            messages=cast(list[dict[str, Any]], messages),
+            messages=messages,
             system=system,
         )
         working_messages = history_result.messages if history_result is not None else messages
@@ -136,7 +151,7 @@ async def _prepare_context_managed_request(
     # to non-Anthropic backends that would reject them.
     if polyfill_will_run and history_result is None:
         history_result = apply_client_compaction_block_history(
-            messages=cast(list[dict[str, Any]], messages),
+            messages=messages,
             system=system,
         )
     return history_result
@@ -144,7 +159,7 @@ async def _prepare_context_managed_request(
 
 def _polyfill_will_run(
     *,
-    context_management_spec: Any,
+    context_management_spec: _ContextManagementSpec,
     additional_drop_params: list[str] | None,
 ) -> bool:
     """Return True when ``compact_20260112`` will run via the polyfill dispatcher.
@@ -171,7 +186,7 @@ def _polyfill_will_run(
 
 def _spec_has_non_compact_edits(
     *,
-    context_management_spec: Any,
+    context_management_spec: _ContextManagementSpec,
     additional_drop_params: list[str] | None,
 ) -> bool:
     """Return True when the spec includes edits other than ``compact_20260112``.
@@ -209,9 +224,9 @@ def _context_management_explicitly_dropped(additional_drop_params: list[str] | N
 
 def _normalize_spec_edits(
     *,
-    context_management_spec: Any,
+    context_management_spec: _ContextManagementSpec,
     additional_drop_params: list[str] | None,
-) -> list[dict[str, Any]] | None:
+) -> list[dict[str, object]] | None:
     """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run.
 
     Delegates spec-shape normalization to the dispatcher's ``_normalize_spec``
@@ -236,11 +251,11 @@ def _normalize_spec_edits(
 async def _run_polyfill_if_enabled(
     *,
     model: str,
-    messages: list[dict],
-    tools: list[dict] | None,
-    system: Any | None,
-    context_management_spec: Any,
-    litellm_metadata: dict | None,
+    messages: _AnthropicMessages,
+    tools: list[dict[str, object]] | None,
+    system: _AnthropicSystem,
+    context_management_spec: _ContextManagementSpec,
+    litellm_metadata: dict[str, object] | None,
     additional_drop_params: list[str] | None,
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
@@ -304,9 +319,9 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def _route_openai_thinking_to_responses_api_if_needed(
-        completion_kwargs: dict[str, Any],
+        completion_kwargs: _CompletionKwargs,
         *,
-        thinking: dict[str, Any] | None,
+        thinking: Mapping[str, object] | None,
     ) -> None:
         """
         When users call `litellm.anthropic.messages.*` with a non-Anthropic model and
@@ -344,9 +359,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         except Exception:
             pass
 
-        if isinstance(model, str) and model and not model.startswith("responses/"):
-            # Prefix model with "responses/" to route to OpenAI Responses API
-            completion_kwargs["model"] = f"responses/{model}"
+        if isinstance(model, str) and model and "responses/" not in model:
+            local_model: Final = model.removeprefix(f"{custom_llm_provider}/")
+            completion_kwargs["model"] = f"{custom_llm_provider}/responses/{local_model}"
 
         auto_summary: Final = is_reasoning_auto_summary_enabled()
 
@@ -369,7 +384,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
     @staticmethod
     def _normalize_reasoning_effort(
-        completion_kwargs: dict[str, Any],
+        completion_kwargs: _CompletionKwargs,
     ) -> None:
         """
         Normalize reasoning_effort values based on target model capabilities.
@@ -385,7 +400,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if reasoning_effort is None:
             return
 
-        model: Final = cast(str, completion_kwargs.get("model", ""))
+        model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
 
         if isinstance(reasoning_effort, str):
@@ -407,21 +422,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     def _prepare_completion_kwargs(
         *,
         max_tokens: int,
-        messages: list[dict],
+        messages: _AnthropicMessages,
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
-        system: str | list[dict[str, Any]] | None = None,
+        system: _AnthropicSystem = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
-        extra_kwargs: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, str]]:
+        output_format: dict[str, object] | None = None,
+        extra_kwargs: Mapping[str, object] | None = None,
+    ) -> tuple[_CompletionKwargs, dict[str, str]]:
         """Prepare kwargs for litellm.completion/acompletion.
 
         Returns:
@@ -433,7 +448,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             Logging as LiteLLMLoggingObject,
         )
 
-        request_data: Final = {
+        request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
@@ -470,15 +485,19 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
+        custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
         (
             openai_request,
             tool_name_mapping,
-        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(request_data)
+        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
+            request_data,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
 
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
 
-        completion_kwargs: Final[dict[str, Any]] = dict(openai_request)
+        completion_kwargs: Final[_CompletionKwargs] = {**openai_request}
 
         if stream:
             completion_kwargs["stream"] = stream
@@ -512,6 +531,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             if key not in excluded_keys and key not in completion_kwargs and value is not None:
                 completion_kwargs[key] = value
 
+        explicit_prompt_cache_key: Final = extra_kwargs.get("prompt_cache_key")
+        if explicit_prompt_cache_key is not None:
+            completion_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
+
         # Normalize reasoning_effort based on model capabilities
         # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
         # Must run BEFORE _route_openai_thinking, which prepends "responses/"
@@ -528,19 +551,19 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     async def async_anthropic_messages_handler(
         max_tokens: int,
-        messages: list[dict],
+        messages: _AnthropicMessages,
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: dict[str, object] | None = None,
         **kwargs,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes] | Iterator[bytes]:
         """Handle non-Anthropic models asynchronously using the adapter"""
@@ -551,10 +574,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             requested_router if requested_router is not None else _proxy_router_fallback()
         )
 
-        proxy_litellm_metadata: Final = _extract_proxy_litellm_metadata(kwargs)
-        user_api_key_auth: Final[UserAPIKeyAuth | None] = (
-            proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
-        )
+        proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
 
         polyfill_result: Final = await _prepare_context_managed_request(
             model=model,
@@ -597,7 +617,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
@@ -618,19 +638,19 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def anthropic_messages_handler(
         max_tokens: int,
-        messages: list[dict],
+        messages: _AnthropicMessages,
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: dict[str, object] | None = None,
         _is_async: bool = False,
         **kwargs,
     ) -> (
@@ -688,10 +708,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if context_management is None and not _messages_have_compaction_block(messages):
             polyfill_result: PolyfillResult | None = None
         else:
-            proxy_litellm_metadata: Final = _extract_proxy_litellm_metadata(kwargs)
-            user_api_key_auth: Final[UserAPIKeyAuth | None] = (
-                proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
-            )
+            proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
             polyfill_result = run_async_function(
                 _prepare_context_managed_request,
                 model=model,
@@ -734,7 +751,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,

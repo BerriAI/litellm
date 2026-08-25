@@ -18,9 +18,9 @@ import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKe
 const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, []);
 
 describe("autorouter_presets", () => {
-  it("loads exactly the two model-family presets", () => {
+  it("loads exactly the bundled presets", () => {
     const presets = getAllPresets();
-    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "OpenAI Family"]);
+    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family"]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
     for (const p of presets) {
       expect(p).toMatchObject({ key: expect.any(String), label: expect.any(String), description: expect.any(String) });
@@ -33,14 +33,63 @@ describe("autorouter_presets", () => {
     expect(getPresetByKey("does_not_exist")).toBeUndefined();
   });
 
-  it("keeps every preset a plain heuristic complexity router (no adaptive/quality settings)", () => {
+  it("keeps every preset free of adaptive/quality settings", () => {
     for (const { complexity_router_config: config } of getAllPresets()) {
-      expect(config.classifier_type).toBe("heuristic");
       expect(config.adaptive).toBeUndefined();
       expect(config.adaptive_weights).toBeUndefined();
       expect(config.adaptive_eligible).toBeUndefined();
       expect(config.tier_distance_penalty).toBeUndefined();
     }
+  });
+
+  it("keeps every preset on the shipped scorer knobs, so a preset cannot pin one to today's numbers", () => {
+    for (const { complexity_router_config: config } of getAllPresets()) {
+      expect(config.tier_boundaries).toBeUndefined();
+      expect(config.token_thresholds).toBeUndefined();
+      expect(config.dimension_weights).toBeUndefined();
+    }
+  });
+
+  it("keeps the model-family presets on the heuristic classifier", () => {
+    for (const key of ["anthropic_family", "gemini_family", "openai_family"]) {
+      expect(getPresetByKey(key)!.complexity_router_config.classifier_type).toBe("heuristic");
+    }
+  });
+
+  // The lite preset ships the LLM classifier with the bundled agentic rubric rather than an inline
+  // system_prompt, so rubric tuning in the backend reaches it without a JSON edit. Its classifier
+  // model doubles as the SIMPLE tier model, so availability gating stays at exactly four models.
+  it("pins the lite preset's LLM classifier config and required models", () => {
+    const lite = getPresetByKey("lite")!;
+    const config = lite.complexity_router_config;
+    expect(config.classifier_type).toBe("llm");
+    expect(config.classifier_llm_config).toEqual({
+      model: "deepseek-v4-flash",
+      timeout_ms: 3000,
+      classification_rubric: "agentic",
+    });
+    expect(config.classifier_context_window_size).toBe(0);
+    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+    expect(getRequiredModelsInPreset(lite)).toEqual(
+      new Set(["deepseek-v4-flash", "muse-spark-1.2", "kimi-k3", "claude-opus-5"]),
+    );
+  });
+
+  it("pins the gemini preset to concrete model ids, never Google's hot-swapping -latest aliases", () => {
+    const gemini = getPresetByKey("gemini_family")!;
+    const config = gemini.complexity_router_config;
+    expect(config.classifier_type).toBe("heuristic");
+    expect(config.classifier_llm_config).toBeUndefined();
+    const expectedTiers = {
+      SIMPLE: ["gemini-2.5-flash-lite"],
+      MEDIUM: ["gemini-3.1-flash-lite"],
+      COMPLEX: ["gemini-3.7-flash"],
+      REASONING: ["gemini-3.1-pro-preview"],
+    };
+    expect(config.tiers).toEqual(expectedTiers);
+    const required = getRequiredModelsInPreset(gemini);
+    for (const model of required) expect(model).not.toMatch(/-latest$/);
+    expect(required.size).toBe(4);
   });
 
   it("collects every tier model as a required model", () => {
@@ -111,6 +160,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(getMissingModels(config, availability)).toEqual([]);
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([group]);
@@ -153,6 +203,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["a-group"]);
     });
@@ -166,6 +217,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-opus-5"]);
     });
@@ -198,6 +250,7 @@ describe("autorouter_presets", () => {
       tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
       classifier_type: "heuristic" as const,
       session_affinity: false,
+      deployment_affinity: true,
     });
 
     it("resolves a preset model to a group expanded from a wildcard deployment", () => {
@@ -440,6 +493,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
         match_threshold: 0,
         escalation_keywords: [],
       };
@@ -454,6 +508,7 @@ describe("autorouter_presets", () => {
           tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
           classifier_type: "heuristic",
           session_affinity: false,
+          deployment_affinity: true,
         },
         groupsOnly(["gpt-5-nano"]),
       );
@@ -469,6 +524,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       const labeled = buildPresetPrefill(
         { ...base, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } },
@@ -483,6 +539,7 @@ describe("autorouter_presets", () => {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
         session_affinity: false,
+        deployment_affinity: true,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
       expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);

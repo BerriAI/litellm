@@ -113,18 +113,30 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
     expect(result.classifier_context_per_turn_chars).toBe(300);
   });
 
-  it("persists an edited classifier context window size and per-turn char limit", () => {
+  it("persists an edited classifier context window size", () => {
     const formValue = {
       tiers: STORED_LLM.tiers,
       classifier_type: "llm" as const,
       classifier_llm_config: STORED_LLM.classifier_llm_config,
       classifier_context_window_size: 10,
-      classifier_context_per_turn_chars: 500,
     };
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBe(10);
-    expect(result.classifier_context_per_turn_chars).toBe(500);
+  });
+
+  it("carries a stored per-turn cap through untouched now that no control sets it", () => {
+    // The modal stopped rendering a per-turn control, so the key left MANAGED_COMPLEXITY_ROUTER_KEYS.
+    // Had it stayed managed, every open-and-save would have silently dropped an operator's cap.
+    const formValue = {
+      tiers: STORED_LLM.tiers,
+      classifier_type: "llm" as const,
+      classifier_llm_config: STORED_LLM.classifier_llm_config,
+      classifier_context_window_size: 10,
+    };
+    const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(result.classifier_context_per_turn_chars).toBe(300);
   });
 
   it("omits classifier context fields when classifier_type is heuristic even if values linger in state", () => {
@@ -132,12 +144,12 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
       tiers: STORED_LLM.tiers,
       classifier_type: "heuristic" as const,
       classifier_context_window_size: 5,
-      classifier_context_per_turn_chars: 300,
+      classifier_context_budget_chars: 4000,
     };
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBeUndefined();
-    expect(result.classifier_context_per_turn_chars).toBeUndefined();
+    expect(result.classifier_context_budget_chars).toBeUndefined();
   });
 
   it("does not resurrect a stale stored classifier_context_window_size once the form's own value is unset", () => {
@@ -151,7 +163,6 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBeUndefined();
-    expect(result.classifier_context_per_turn_chars).toBeUndefined();
   });
 });
 
@@ -228,6 +239,31 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
   });
 });
 
+describe("buildUpdatedComplexityRouterConfig deployment affinity", () => {
+  it("writes deployment_affinity=false when the toggle is off", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, deployment_affinity: false });
+    expect(result.deployment_affinity).toBe(false);
+  });
+
+  it("writes deployment_affinity=true when the toggle is on", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, deployment_affinity: true });
+    expect(result.deployment_affinity).toBe(true);
+  });
+
+  it("re-asserts the backend's on-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, deployment_affinity: false }, FORM_VALUE);
+    expect(result.deployment_affinity).toBe(true);
+  });
+
+  it("stops a stored deployment_affinity=false from surviving a save that turned the toggle back on", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, deployment_affinity: false },
+      { ...FORM_VALUE, deployment_affinity: true },
+    );
+    expect(result.deployment_affinity).toBe(true);
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig tier labels", () => {
   const RENAMED = { ...STORED, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } };
 
@@ -264,5 +300,143 @@ describe("buildUpdatedComplexityRouterConfig tier labels", () => {
       tier_labels: { SIMPLE: "Cheap" },
     });
     expect(Object.keys(result.tiers as Record<string, unknown>)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const STORED_WITH_KNOBS = { ...STORED, tier_boundaries: BOUNDARIES };
+  const HYDRATED = { ...FORM_VALUE, tier_boundaries: BOUNDARIES };
+
+  it("round-trips explicit stored knobs through an untouched edit", () => {
+    // These keys are MANAGED now, so the stored copy is dropped before the rebuild and only a faithful
+    // hydration puts them back. A regression here silently resets a tuned router.
+    expect(buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, HYDRATED).tier_boundaries).toEqual(BOUNDARIES);
+  });
+
+  it("drops a stored knob when the operator resets it, instead of preserving the old value", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED_WITH_KNOBS, FORM_VALUE);
+
+    expect(result).not.toHaveProperty("tier_boundaries");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  it("never invents knobs for a router that never had them", () => {
+    expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("tier_boundaries");
+  });
+
+  // 0 is an unconditional reasoning override. Treating it as unset here would quietly retune the router
+  // back to tracking simple_medium on the next save.
+  it("round-trips a stored reasoning override floor of 0", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, reasoning_override_min_score: 0 },
+      { ...FORM_VALUE, reasoning_override_min_score: 0 },
+    );
+    expect(result.reasoning_override_min_score).toBe(0);
+  });
+
+  it("writes a newly set reasoning override floor over the stored one", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, reasoning_override_min_score: 0 },
+      { ...FORM_VALUE, reasoning_override_min_score: 0.5 },
+    );
+    expect(result.reasoning_override_min_score).toBe(0.5);
+  });
+
+  it("drops a stored reasoning override floor when the operator resets it", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, reasoning_override_min_score: 0.5 }, FORM_VALUE);
+
+    expect(result).not.toHaveProperty("reasoning_override_min_score");
+    expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  it("drops the reasoning override floor on a router whose scorer never runs", () => {
+    const neverScores = {
+      ...FORM_VALUE,
+      reasoning_override_min_score: 0,
+      classifier_type: "llm" as const,
+      classifier_fallback: "default_model" as const,
+    };
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, reasoning_override_min_score: 0 }, neverScores);
+    expect(result).not.toHaveProperty("reasoning_override_min_score");
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig plan-mode minimum tier", () => {
+  it("round-trips a stored tier through an untouched open-and-save", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "COMPLEX" },
+      { ...FORM_VALUE, plan_mode_min_tier: "COMPLEX" },
+    );
+    expect(result.plan_mode_min_tier).toBe("COMPLEX");
+  });
+
+  it("stops a stored tier from surviving a save that turned the override off", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, plan_mode_min_tier: "COMPLEX" }, FORM_VALUE);
+    expect(result).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("writes a newly selected tier over the stored one", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, plan_mode_min_tier: "COMPLEX" },
+      { ...FORM_VALUE, plan_mode_min_tier: "MEDIUM" },
+    );
+    expect(result.plan_mode_min_tier).toBe("MEDIUM");
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig tier model params", () => {
+  const storedWithParams = {
+    ...STORED,
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["opus"], COMPLEX: ["opus"], REASONING: [] },
+    tier_model_configs: {
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }],
+      COMPLEX: [{ model_name: "opus", litellm_params: { reasoning_effort: "high" } }],
+    },
+  };
+  const formValueWithParams = {
+    ...FORM_VALUE,
+    tiers: storedWithParams.tiers,
+    tier_model_params: {
+      MEDIUM: { opus: { reasoning_effort: "medium" } },
+      COMPLEX: { opus: { reasoning_effort: "high" } },
+    },
+  };
+
+  it("round-trips hydrated params on an untouched save", () => {
+    const result = buildUpdatedComplexityRouterConfig(storedWithParams, formValueWithParams, undefined, hydratedState);
+    expect(result.tier_model_configs).toEqual(storedWithParams.tier_model_configs);
+  });
+
+  // tier_model_configs is managed now that this modal renders a control for it. Before that, the
+  // stale stored key was carried through, so clearing the last effort could never persist.
+  it("drops the stored key entirely when the operator unsets every effort", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      storedWithParams,
+      { ...formValueWithParams, tier_model_params: undefined },
+      undefined,
+      hydratedState,
+    );
+    expect(result).not.toHaveProperty("tier_model_configs");
+  });
+
+  it("drops params for a model removed from its tier", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      storedWithParams,
+      {
+        ...formValueWithParams,
+        tiers: { ...storedWithParams.tiers, COMPLEX: ["gpt-4o-mini"] },
+      },
+      undefined,
+      hydratedState,
+    );
+    expect(result.tier_model_configs).toEqual({
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }],
+    });
+  });
+
+  it("emits no tier_model_configs for a config that never had params", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, hydratedState);
+    expect(result).not.toHaveProperty("tier_model_configs");
   });
 });
