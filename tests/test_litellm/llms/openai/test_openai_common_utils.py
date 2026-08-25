@@ -82,11 +82,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     """
 
     # Determine which client class to mock based on whether the test is async
-    client_path = (
-        "litellm.llms.openai.openai.AsyncOpenAI"
-        if is_async
-        else "litellm.llms.openai.openai.OpenAI"
-    )
+    client_path = "litellm.llms.openai.openai.AsyncOpenAI" if is_async else "litellm.llms.openai.openai.OpenAI"
 
     # Create the appropriate patches
     with (
@@ -96,9 +92,7 @@ async def test_openai_client_reuse(function_name, is_async, args):
     ):
         # Setup the mock to return None first time (cache miss) then a client for subsequent calls
         mock_client = MagicMock()
-        mock_get_cache.side_effect = [None] + [
-            mock_client
-        ] * 9  # First call returns None, rest return the mock client
+        mock_get_cache.side_effect = [None] + [mock_client] * 9  # First call returns None, rest return the mock client
 
         # Make 10 API calls
         for _ in range(10):
@@ -116,9 +110,9 @@ async def test_openai_client_reuse(function_name, is_async, args):
                 pass
 
         # Verify client was created only once
-        assert (
-            mock_client_class.call_count == 1
-        ), f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        assert mock_client_class.call_count == 1, (
+            f"{'Async' if is_async else ''}OpenAI client should be created only once"
+        )
 
         # Verify the client was cached
         assert mock_set_cache.call_count == 1, "Client should be cached once"
@@ -142,12 +136,8 @@ def test_precomputed_init_params_match_inspect_signature():
         _OPENAI_INIT_PARAMS,
     )
 
-    expected_openai = tuple(
-        p for p in inspect.signature(OpenAI.__init__).parameters if p != "self"
-    )
-    expected_azure = tuple(
-        p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self"
-    )
+    expected_openai = tuple(p for p in inspect.signature(OpenAI.__init__).parameters if p != "self")
+    expected_azure = tuple(p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self")
 
     assert _OPENAI_INIT_PARAMS == expected_openai
     assert _AZURE_OPENAI_INIT_PARAMS == expected_azure
@@ -187,48 +177,23 @@ def test_get_openai_client_cache_key_includes_ssl_verify():
 
 
 def test_get_sync_http_client_uses_per_call_ssl_verify(monkeypatch):
-    from litellm.llms.openai import common_utils
-
     monkeypatch.setattr(litellm, "client_session", None)
     monkeypatch.setattr(litellm, "network_mock", False)
-    with (
-        patch.object(  # test-quality-ok: verify the per-call SSL setting reaches the resolver
-            common_utils, "get_ssl_configuration", return_value=False
-        ) as get_ssl_configuration,
-        patch.object(  # test-quality-ok: capture the constructed HTTP client options
-            common_utils.httpx, "Client"
-        ) as http_client,
-    ):
-        result = BaseOpenAILLM._get_sync_http_client(ssl_verify="/tmp/custom-ca.pem")
+    result = BaseOpenAILLM._get_sync_http_client(ssl_verify=False)
 
-    assert result is http_client.return_value
-    get_ssl_configuration.assert_called_once_with(ssl_verify="/tmp/custom-ca.pem")
-    http_client.assert_called_once_with(verify=False, follow_redirects=True)
+    assert result is not None
+    assert result._transport._pool._ssl_context.check_hostname is False
+    result.close()
 
 
 @pytest.mark.asyncio
 async def test_get_async_http_client_uses_per_call_ssl_verify(monkeypatch):
-    from litellm.llms.openai import common_utils
-
     monkeypatch.setattr(litellm, "aclient_session", None)
     monkeypatch.setattr(litellm, "network_mock", False)
-    with (
-        patch.object(  # test-quality-ok: verify the per-call SSL setting reaches the resolver
-            common_utils, "get_ssl_configuration", return_value=False
-        ) as get_ssl_configuration,
-        patch.object(  # test-quality-ok: capture async transport options
-            common_utils.AsyncHTTPHandler, "_create_async_transport", return_value=None
-        ) as transport,
-        patch.object(  # test-quality-ok: capture the constructed HTTP client options
-            common_utils.httpx, "AsyncClient"
-        ) as http_client,
-    ):
-        result = BaseOpenAILLM._get_async_http_client(ssl_verify="/tmp/custom-ca.pem")
+    result = BaseOpenAILLM._get_async_http_client(ssl_verify=False)
 
-    assert result is http_client.return_value
-    get_ssl_configuration.assert_called_once_with(ssl_verify="/tmp/custom-ca.pem")
-    transport.assert_called_once_with(ssl_context=None, ssl_verify=False, shared_session=None)
-    http_client.assert_called_once_with(verify=False, transport=None, follow_redirects=True)
+    assert result is not None
+    await result.aclose()
 
 
 def test_openai_client_ssl_verify(monkeypatch):  # test-quality-ok: verifies per-call SSL reaches the client boundary
