@@ -77,7 +77,7 @@ class TestPerRequestJsonSchemaValidation:
     def test_per_request_on_overrides_global_off(self):
         """Global OFF + per-request ON -> validation runs and catches invalid response."""
         litellm.enable_json_schema_validation = False
-        with pytest.raises(litellm.JSONSchemaValidationError):
+        with pytest.raises(litellm.JSONSchemaValidationError) as exc:
             post_call_processing(
                 _make_response(INVALID_CONTENT),
                 "test-model",
@@ -88,6 +88,7 @@ class TestPerRequestJsonSchemaValidation:
                 _mock_completion,
                 Rules(),
             )
+        assert exc.value.raw_response == json.dumps(INVALID_CONTENT)
 
     def test_per_request_off_overrides_global_on(self):
         """Global ON + per-request OFF -> validation skipped (per-request wins)."""
@@ -107,7 +108,7 @@ class TestPerRequestJsonSchemaValidation:
     def test_global_on_no_per_request_validates(self):
         """Global ON + no per-request flag -> validation runs (backward compatible)."""
         litellm.enable_json_schema_validation = True
-        with pytest.raises(litellm.JSONSchemaValidationError):
+        with pytest.raises(litellm.JSONSchemaValidationError) as exc:
             post_call_processing(
                 _make_response(INVALID_CONTENT),
                 "test-model",
@@ -115,6 +116,7 @@ class TestPerRequestJsonSchemaValidation:
                 _mock_completion,
                 Rules(),
             )
+        assert exc.value.raw_response == json.dumps(INVALID_CONTENT)
 
     def test_valid_response_passes_with_per_request_on(self):
         """Per-request ON + valid response -> no error raised."""

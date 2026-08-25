@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
@@ -168,6 +168,42 @@ def _dict_to_response_format_helper(response_format: dict, ref_template: str | N
     return response_format
 
 
+def _is_basemodel_class(response_format: object) -> bool:
+    if not isinstance(response_format, type):
+        return False
+    try:
+        return issubclass(response_format, BaseModel)
+    except TypeError:
+        return False
+
+
+def _pydantic_model_json_schema(
+    response_format: type[BaseModel] | type,
+    ref_template: str | None = None,
+) -> dict:  # mutable-ok: pydantic JSON schema is a mutable dict
+    model_json_schema = getattr(response_format, "model_json_schema", None)
+    if callable(model_json_schema) and ref_template is not None:
+        return model_json_schema(ref_template=ref_template)
+    if callable(model_json_schema):
+        return model_json_schema()
+    schema_fn = getattr(response_format, "schema", None)
+    if callable(schema_fn):
+        return schema_fn()
+    raise TypeError(f"Unsupported response_format type - {response_format}")
+
+
+def _response_format_json_schema(
+    response_format: type[BaseModel],
+    ref_template: str | None = None,
+) -> dict:  # mutable-ok: pydantic JSON schema is a mutable dict
+    if ref_template is not None:
+        return _pydantic_model_json_schema(response_format, ref_template=ref_template)
+    try:
+        return _pydantic.to_strict_json_schema(response_format)
+    except (ValidationError, TypeError, ValueError, AttributeError):
+        return _pydantic_model_json_schema(response_format)
+
+
 def type_to_response_format_param(
     response_format: type[BaseModel] | dict | None,
     ref_template: str | None = None,
@@ -183,17 +219,10 @@ def type_to_response_format_param(
     if isinstance(response_format, dict):
         return _dict_to_response_format_helper(response_format, ref_template)
 
-    # type checkers don't narrow the negation of a `TypeGuard` as it isn't
-    # a safe default behaviour but we know that at this point the `response_format`
-    # can only be a `type`
-    if not _parsing._completions.is_basemodel_type(response_format):
+    if not _is_basemodel_class(response_format) and not _parsing._completions.is_basemodel_type(response_format):
         raise TypeError(f"Unsupported response_format type - {response_format}")
 
-    if ref_template is not None:
-        schema = response_format.model_json_schema(ref_template=ref_template)
-    else:
-        schema = _pydantic.to_strict_json_schema(response_format)
-
+    schema: Final = _response_format_json_schema(response_format, ref_template=ref_template)
     return {
         "type": "json_schema",
         "json_schema": {
