@@ -265,9 +265,14 @@ class LowestCostLoggingHandler(CustomLogger):
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
             item_cost = item_input_cost + item_output_cost
-            # falls back to the input price rather than 0 so a model with no cache-read entry is
-            # never ranked as though its cache reads were free
-            item_cache_read_cost = item_litellm_model_cost_map.get("cache_read_input_token_cost", item_input_cost)
+            # deployment override first, mirroring input/output above, then the cost map. An
+            # absent or explicitly null price falls back to the input price rather than 0, so a
+            # model without one is never ranked as though its cache reads were free
+            item_cache_read_cost = _deployment.get("litellm_params", {}).get("cache_read_input_token_cost")
+            if item_cache_read_cost is None:
+                item_cache_read_cost = item_litellm_model_cost_map.get("cache_read_input_token_cost")
+            if item_cache_read_cost is None:
+                item_cache_read_cost = item_input_cost
 
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
