@@ -1,18 +1,12 @@
 import asyncio
 import datetime
 import json
-import os
-import sys
 from datetime import timezone
 from typing import Any, Final, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
-
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -3505,6 +3499,50 @@ def test_get_logging_payload_failed_request_without_standard_logging_payload_lea
     assert payload["custom_llm_provider"] == ""
 
 
+class _ModelRouterSpendLogKwargs(TypedDict):
+    model: ReadOnly[str]
+    litellm_params: ReadOnly[dict[str, dict[str, str]]]
+    standard_logging_object: ReadOnly[StandardLoggingPayload]
+
+
+def _model_router_spend_log_kwargs(slp_model: str | None) -> _ModelRouterSpendLogKwargs:
+    standard_logging_payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "model": slp_model,
+            "metadata": {},
+            "model_map_information": StandardLoggingModelInformation(
+                model_map_key="azure_ai/model_router", model_map_value=None
+            ),
+        },
+    )
+    return {
+        "model": "azure_ai/model_router/model-router",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test-key"}},
+        "standard_logging_object": standard_logging_payload,
+    }
+
+
+def test_get_logging_payload_uses_standard_logging_payload_model():
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model="azure_ai/gpt-5-mini"),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == "azure_ai/gpt-5-mini"
+
+
+def test_get_logging_payload_falls_back_to_kwargs_model_when_slp_model_missing():
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model=None),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == "azure_ai/model_router/model-router"
+
+
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_empty_key_slp_none_is_empty_string_not_none_literal():
@@ -3569,3 +3607,38 @@ def test_redact_logged_api_key_bearer_sha256_without_flag_is_hashed():
     assert result is not None
     assert result != already_hashed
     assert result == hash_token(already_hashed)
+
+
+def test_autorouter_savings_flow_from_logging_payload_into_spend_log_metadata():
+    """The figure the logging path computed is what the spend writer reads back, so it
+    is threaded from the StandardLoggingPayload like cost_breakdown, never re-derived."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": {"autorouter_savings": 0.42, "metadata": {}, "model_map_information": None},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-ar-savings", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["autorouter_savings"] == 0.42
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_caller_forged_autorouter_savings_is_discarded(bucket):
+    """The raw request bucket is client-writable and _get_spend_logs_metadata projects
+    every SpendLogsMetadata key from it, so the logging payload's value must overwrite
+    unconditionally or a caller could report savings the router never produced."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {bucket: {"user_api_key": "test-key", "autorouter_savings": 999.0}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-forged-savings", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["autorouter_savings"] is None

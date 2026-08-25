@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,

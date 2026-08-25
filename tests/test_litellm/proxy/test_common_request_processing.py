@@ -32,7 +32,6 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
-    _UpstreamClosingStreamingResponse,
     open_sse_before_first_byte,
     ttft_keepalive_interval,
     _override_openai_response_model,
@@ -323,6 +322,62 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_refreshes_proxy_server_request_body_after_guardrails(
+        self, monkeypatch
+    ):
+        """
+        A guardrail (e.g. Presidio PII masking) mutates data["messages"] in place inside
+        pre_call_hook. The proxy_server_request.body snapshot is taken before that hook
+        runs, so it must be refreshed afterward or SpendLogs (when store_prompts_in_spend_logs
+        is enabled) persists the raw pre-guardrail body, bypassing the masking entirely.
+        """
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        raw_messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {
+                "messages": raw_messages,
+                "proxy_server_request": {
+                    "url": "http://testserver/chat/completions",
+                    "method": "POST",
+                    "body": {"messages": raw_messages},
+                },
+            }
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=MagicMock(spec=ProxyConfig),
+            route_type="acompletion",
+        )
+
+        persisted_body = returned_data["proxy_server_request"]["body"]
+        assert persisted_body["messages"] == returned_data["messages"]
+        assert "123-45-6789" not in json.dumps(persisted_body["messages"])
+        # litellm_logging_obj is stamped onto `data` by function_setup between the
+        # initial snapshot and pre_call_hook; it must never leak into the persisted
+        # audit body, which needs to stay plain-JSON-serializable end to end.
+        assert "litellm_logging_obj" not in persisted_body
+        json.dumps(persisted_body)
 
     def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
         mock_set_active_span_tag = MagicMock(return_value=True)
@@ -1337,11 +1392,25 @@ class TestProxyBaseLLMRequestProcessing:
             route_type=route_type,
         )
 
-        # Verify queue_time_seconds is set and non-negative
+        # Verify queue_time_seconds is set and non-negative. Ends at start_time
+        # (captured before this mock runs, so it can precede the mock's own
+        # time.time() by a handful of microseconds) rather than a freshly
+        # captured time.time(), so a tiny tolerance below 0.5 is expected and
+        # correct -- see LIT-6012.
         metadata = returned_data.get("metadata", {})
         assert "queue_time_seconds" in metadata, "queue_time_seconds should be set in metadata"
-        assert metadata["queue_time_seconds"] >= 0.5, (
-            f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
+        assert metadata["queue_time_seconds"] >= 0.49, (
+            f"queue_time_seconds should be at least ~0.5, got {metadata['queue_time_seconds']}"
+        )
+
+        # queue_time_seconds must end exactly where logging_obj.start_time begins
+        # (the same start_time litellm_request_total_latency_metric's window
+        # starts from) so the two windows share a boundary, not an overlap.
+        # A mutant that reintroduces a separately-captured processing_start_time
+        # would make this assertion fail.
+        arrival_time = returned_data["proxy_server_request"]["arrival_time"]
+        assert arrival_time + metadata["queue_time_seconds"] == pytest.approx(
+            logging_obj.start_time.timestamp(), abs=1e-6
         )
 
 
@@ -2224,6 +2293,54 @@ class TestOverrideOpenAIResponseModel:
         )
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
+
+    def test_override_model_preserves_model_router_model_for_alias_without_router_in_name(
+        self,
+    ):
+        """
+        The client sends a model group alias, which carries no model_router/ prefix, so the
+        name check alone only fires when the operator happened to put "model-router" in the
+        alias. With the stamp on the response the actual model survives whatever it is named.
+        """
+        from litellm.llms.azure_ai.common_utils import (
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+        )
+
+        requested_model = "smart-pick"
+        actual_model_used = "azure_ai/grok-4-1-fast-reasoning"
+
+        response_obj = MagicMock()
+        response_obj.model = actual_model_used
+        response_obj._hidden_params = {
+            "additional_headers": {},
+            AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: actual_model_used,
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == actual_model_used
+
+    def test_override_model_still_restamps_non_router_alias_without_stamp(self):
+        """
+        Control for the test above: absent the stamp, an ordinary deployment keeps being
+        restamped to the requested model, so the stamp is doing the work rather than the
+        preserve branch having gone unconditional.
+        """
+        requested_model = "smart-pick"
+
+        response_obj = MagicMock()
+        response_obj.model = "azure_ai/grok-4-1-fast-reasoning"
+        response_obj._hidden_params = {"additional_headers": {}}
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        assert response_obj.model == requested_model
 
     def test_override_model_uses_winning_model_for_fastest_response(self):
         """
@@ -7226,3 +7343,31 @@ class TestRouterModelNameOnNonStreamingResponse:
         )
 
         assert response[ROUTER_MODEL_NAME_RESPONSE_FIELD] == "deep-model"
+
+
+@pytest.mark.parametrize(
+    "exc,expect_traceback",
+    [
+        pytest.param(HTTPException(status_code=400, detail="Invalid model name passed in"), False, id="expected_400"),
+        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error"),
+    ],
+)
+def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_traceback, caplog):
+    """Regression for LIT-6043: expected 4xx errors log without formatting a
+    traceback; unexpected errors keep logger.exception behavior."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.common_request_processing import _log_llm_api_exception
+
+    verbose_proxy_logger.propagate = True
+    try:
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            try:
+                raise exc
+            except Exception as raised:
+                _log_llm_api_exception(raised)
+    finally:
+        verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert (records[0].exc_info is not None) is expect_traceback

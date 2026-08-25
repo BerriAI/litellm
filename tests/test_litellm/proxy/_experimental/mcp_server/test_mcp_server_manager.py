@@ -18,7 +18,6 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../../../")
 
 
 import httpx
@@ -4850,7 +4849,9 @@ class TestMCPServerManager:
     @staticmethod
     def _manager_with_deepwiki_and_huggingface() -> MCPServerManager:
         manager = MCPServerManager()
-        deepwiki = MCPServer(server_id="deepwiki-id", name="deepwiki", server_name="deepwiki", transport=MCPTransport.http)
+        deepwiki = MCPServer(
+            server_id="deepwiki-id", name="deepwiki", server_name="deepwiki", transport=MCPTransport.http
+        )
         huggingface = MCPServer(
             server_id="huggingface-id", name="huggingface", server_name="huggingface", transport=MCPTransport.http
         )
@@ -4871,8 +4872,14 @@ class TestMCPServerManager:
         with pytest.raises(ValueError, match="Tool hub_repo_search not found"):
             manager._resolve_mcp_server_for_tool_call("deepwiki", "hub_repo_search")
 
-        assert manager._resolve_mcp_server_for_tool_call("deepwiki", "read_wiki_structure") is manager.registry["deepwiki-id"]
-        assert manager._resolve_mcp_server_for_tool_call("huggingface", "hub_repo_search") is manager.registry["huggingface-id"]
+        assert (
+            manager._resolve_mcp_server_for_tool_call("deepwiki", "read_wiki_structure")
+            is manager.registry["deepwiki-id"]
+        )
+        assert (
+            manager._resolve_mcp_server_for_tool_call("huggingface", "hub_repo_search")
+            is manager.registry["huggingface-id"]
+        )
 
     def test_get_mcp_server_from_tool_name_rejects_other_servers_prefix(self):
         manager = self._manager_with_deepwiki_and_huggingface()
@@ -4880,7 +4887,9 @@ class TestMCPServerManager:
         assert manager._get_mcp_server_from_tool_name("huggingface-read_wiki_structure") is None
         assert manager._get_mcp_server_from_tool_name("deepwiki-hub_repo_search") is None
         assert manager._get_mcp_server_from_tool_name("deepwiki-read_wiki_structure") is manager.registry["deepwiki-id"]
-        assert manager._get_mcp_server_from_tool_name("huggingface-hub_repo_search") is manager.registry["huggingface-id"]
+        assert (
+            manager._get_mcp_server_from_tool_name("huggingface-hub_repo_search") is manager.registry["huggingface-id"]
+        )
 
     def test_resolve_mcp_server_for_tool_call_shared_bare_name_resolves_via_own_prefixed_spelling(self):
         manager = MCPServerManager()
@@ -10505,6 +10514,39 @@ class TestSessionResourceScopeIntersect:
         assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == "b"
 
     @pytest.mark.asyncio
+    async def test_admin_registry_seed_still_bounded_by_session_resource_scope(self):
+        """The admin-view registry seed flows through the same scoped exit as every union: a
+        session envelope sealed to one server never widens past it, even held by an admin whose
+        role resolves the whole registry. Pin for the connect-page-parity change; without the
+        single-exit shape, the old early return would hand a per-server bearer the registry."""
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        for sid in ("granted-id", "other-id"):
+            manager.registry[sid] = MCPServer(
+                server_id=sid, name=sid, server_name=sid, url="https://example.com/mcp", transport=MCPTransport.http
+            )
+        auth = self._admitted_auth("granted-id")
+        auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            assert await manager.get_allowed_mcp_servers(auth) == ["granted-id"]
+            auth.mcp_session_resource_server_id = None
+            assert set(await manager.get_allowed_mcp_servers(auth)) == {"granted-id", "other-id"}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_scopes_past_operator_open_union(self):
         """The intersect applies AFTER the operator-open (allow_all_keys) union, so a scoped
         bearer cannot reach an allow-all server outside its scope, and applies on the
@@ -10523,7 +10565,12 @@ class TestSessionResourceScopeIntersect:
                 new_callable=AsyncMock,
                 return_value=["granted-id", "other-id"],
             ),
-            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
         ):
             allowed = await manager.get_allowed_mcp_servers(auth)
         assert allowed == ["granted-id"]
@@ -10535,7 +10582,12 @@ class TestSessionResourceScopeIntersect:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("resolver down"),
             ),
-            patch.object(MCPServerManager, "_get_active_submitted_mcp_server_ids_for_user", new_callable=AsyncMock, return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
         ):
             fallback = await manager.get_allowed_mcp_servers(auth)
         assert fallback == ["granted-id"]
@@ -10649,9 +10701,7 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
 
     @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
     @pytest.mark.asyncio
-    async def test_client_forwarded_servers_keep_discovering_their_front_door_endpoints(
-        self, auth_type: MCPAuthType
-    ):
+    async def test_client_forwarded_servers_keep_discovering_their_front_door_endpoints(self, auth_type: MCPAuthType):
         """Exempting these modes from the FAILURE must not exempt them from discovery itself.
 
         ``/authorize``, ``/token`` and ``/register`` read the discovered endpoints for these servers

@@ -1,7 +1,6 @@
 import ast
 import asyncio
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -9,9 +8,7 @@ from typing import List
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 import logging
-import sys
 
 import litellm
 from litellm._logging import (

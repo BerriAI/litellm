@@ -1,10 +1,7 @@
 import asyncio
-import os
-import sys
 import time
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 

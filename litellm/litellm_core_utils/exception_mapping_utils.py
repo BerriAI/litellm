@@ -811,6 +811,24 @@ def _map_openai_like_exception(
             )
 
 
+_BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN: Final = re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)")
+
+
+def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
+    """
+    Mantle reports context overflow as a structured validation error rather than
+    the plain-text patterns Bedrock itself uses, so it needs its own detection and a
+    message clients recognize as context overflow (litellm/litellm#36546).
+    """
+    if "invalid_request_error" not in error_str and "validation_error" not in error_str:
+        return None
+    match = _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN.search(error_str)
+    if match is None:
+        return None
+    prompt_tokens, max_tokens = match.groups()
+    return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+
+
 def _map_bedrock_exception(
     *,
     model: str,
@@ -821,6 +839,14 @@ def _map_bedrock_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    if custom_llm_provider == "bedrock_mantle":
+        mantle_context_window_message = _get_bedrock_mantle_context_window_message(error_str)
+        if mantle_context_window_message is not None:
+            raise ContextWindowExceededError(
+                message=mantle_context_window_message,
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
     if (
         "too many tokens" in error_str
         or "expected maxLength:" in error_str
@@ -2275,6 +2301,7 @@ def exception_type(
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
                 or custom_llm_provider == "mistral"
+                or custom_llm_provider == "runwayml"
             ):
                 _map_openai_exception(
                     model=model,

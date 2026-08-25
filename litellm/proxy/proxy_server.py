@@ -254,6 +254,9 @@ from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.litellm_core_utils.agentic_loop_settings import (
+    validated_max_agentic_loops,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -2552,6 +2555,12 @@ async def _authoritative_floor_spend(
     if db_spend is None:
         return None
 
+    # a spend reset that committed during the DB read above wrote the post-reset
+    # floor to the marker; keep it over this read's now-stale pre-commit value
+    rechecked: Final = spend_counter_cache.in_memory_cache.get_cache(key=marker_key)
+    if rechecked is not None:
+        return float(rechecked)
+
     spend_counter_cache.in_memory_cache.set_cache(
         key=marker_key,
         value=db_spend,
@@ -4081,6 +4090,27 @@ def resolve_complexity_router_plugins(
         complexity_router_config["classifier_plugin"] = resolved_classifier  # rebind-ok: out-param, resolved in place
 
 
+def validate_deployment_max_agentic_loops(model: Mapping[str, Any]) -> None:
+    """
+    Reject a per-deployment `max_agentic_loops` the agentic loop cannot honor.
+
+    Checked here rather than on `LiteLLM_Params` because the proxy builds its
+    router with `ignore_invalid_deployments=True`, so a validator down there
+    turns a bad value into a silently missing model instead of a refusal to
+    start. Left unchecked entirely, a `0` used to read as the default ceiling
+    of 3 and a non-integer failed every request to that model instead.
+    """
+    litellm_params: Final = model.get("litellm_params") or {}
+    if "max_agentic_loops" not in litellm_params:
+        return
+
+    model_name: Final = model.get("model_name", "")
+    validated_max_agentic_loops(
+        litellm_params["max_agentic_loops"],
+        field=f"litellm_params.max_agentic_loops on model {model_name!r}",
+    )
+
+
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
     """
     Stamps `model_info.id` from the raw litellm_params before plugin resolution swaps
@@ -5416,6 +5446,7 @@ class ProxyConfig:
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         model["litellm_params"][k] = get_secret(v)
+                validate_deployment_max_agentic_loops(model)
                 pin_complexity_router_model_id(model)
                 complexity_router_config = model["litellm_params"].get("complexity_router_config")
                 if isinstance(complexity_router_config, dict):
@@ -6773,6 +6804,7 @@ class ProxyConfig:
         subscriber: Final = AuthCacheInvalidationSubscriber(
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
+            additional_in_memory_caches=(spend_counter_cache.in_memory_cache,),
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()

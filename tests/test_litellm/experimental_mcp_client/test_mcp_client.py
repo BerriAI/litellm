@@ -21,7 +21,6 @@ from mcp.types import (
 )
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../")
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (

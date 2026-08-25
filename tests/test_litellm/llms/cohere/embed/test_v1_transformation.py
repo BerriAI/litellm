@@ -1,10 +1,5 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse

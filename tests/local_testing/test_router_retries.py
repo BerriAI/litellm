@@ -3,15 +3,11 @@
 
 import asyncio
 import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import httpx
 import openai
@@ -927,35 +923,33 @@ async def test_router_retry_num_retries_tracking():
             with patch.object(
                 router, "_time_to_sleep_before_retry", return_value=0.01
             ):  # Fast retries for testing
-                try:
+                with pytest.raises(litellm.RateLimitError) as exc_info:
                     await router.acompletion(
                         model="gpt-3.5-turbo",
                         messages=[{"role": "user", "content": "Hello"}],
                     )
-                    pytest.fail("Expected exception to be raised")
-                except litellm.RateLimitError as e:
-                    # Verify num_retries is correctly set to 3 (not 2, which would be current_attempt)
-                    assert hasattr(
-                        e, "num_retries"
-                    ), "Exception should have num_retries attribute"
-                    assert hasattr(
-                        e, "max_retries"
-                    ), "Exception should have max_retries attribute"
-                    assert (
-                        e.num_retries == 3
-                    ), f"Expected num_retries to be 3, got {e.num_retries}"
-                    assert (
-                        e.max_retries == 3
-                    ), f"Expected max_retries to be 3, got {e.max_retries}"
+                e = exc_info.value
+                assert hasattr(
+                    e, "num_retries"
+                ), "Exception should have num_retries attribute"
+                assert hasattr(
+                    e, "max_retries"
+                ), "Exception should have max_retries attribute"
+                assert (
+                    e.num_retries == 3
+                ), f"Expected num_retries to be 3, got {e.num_retries}"
+                assert (
+                    e.max_retries == 3
+                ), f"Expected max_retries to be 3, got {e.max_retries}"
 
-                    # Verify the error message includes correct retry information
-                    error_str = str(e)
-                    assert (
-                        "LiteLLM Retried: 3 times" in error_str
-                    ), f"Error message should indicate 3 retries: {error_str}"
-                    assert (
-                        "LiteLLM Max Retries: 3" in error_str
-                    ), f"Error message should show max retries: {error_str}"
+                # Verify the error message includes correct retry information
+                error_str = str(e)
+                assert (
+                    "LiteLLM Retried: 3 times" in error_str
+                ), f"Error message should indicate 3 retries: {error_str}"
+                assert (
+                    "LiteLLM Max Retries: 3" in error_str
+                ), f"Error message should show max retries: {error_str}"
 
 
 @pytest.mark.asyncio
@@ -996,17 +990,15 @@ async def test_router_retry_num_retries_single_retry():
             ),
         ):
             with patch.object(router, "_time_to_sleep_before_retry", return_value=0.01):
-                try:
+                with pytest.raises(litellm.Timeout) as exc_info:
                     await router.acompletion(
                         model="gpt-3.5-turbo",
                         messages=[{"role": "user", "content": "Hello"}],
                     )
-                    pytest.fail("Expected exception to be raised")
-                except litellm.Timeout as e:
-                    # With num_retries=1, we should attempt 1 retry
-                    assert (
-                        e.num_retries == 1
-                    ), f"Expected num_retries to be 1, got {e.num_retries}"
-                    assert (
-                        e.max_retries == 1
-                    ), f"Expected max_retries to be 1, got {e.max_retries}"
+                e = exc_info.value
+                assert (
+                    e.num_retries == 1
+                ), f"Expected num_retries to be 1, got {e.num_retries}"
+                assert (
+                    e.max_retries == 1
+                ), f"Expected max_retries to be 1, got {e.max_retries}"

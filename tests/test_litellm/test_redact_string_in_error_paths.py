@@ -9,14 +9,11 @@ Covers actual execution of redaction in:
 """
 
 import logging
-import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string
 

@@ -100,6 +100,7 @@ def _get_spend_logs_metadata(
     litellm_overhead_time_ms: float | None = None,
     cost_breakdown: CostBreakdown | None = None,
     litellm_call_id: str | None = None,
+    autorouter_savings: float | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -132,6 +133,7 @@ def _get_spend_logs_metadata(
             max_retries=None,
             cost_breakdown=None,
             compression_savings=None,
+            autorouter_savings=autorouter_savings,
             litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
@@ -158,6 +160,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["autorouter_savings"] = autorouter_savings
     clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
@@ -385,6 +388,9 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         cost_breakdown=(
             standard_logging_payload.get("cost_breakdown", None) if standard_logging_payload is not None else None
         ),
+        autorouter_savings=(
+            standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
+        ),
         litellm_call_id=cast(
             str | None,
             kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
@@ -438,7 +444,9 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         or None
     )
     raw_model: Final = cast(str, kwargs.get("model") or "")
-    model_name: Final = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    model_name: Final = (
+        standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: Final[SpendLogsPayload] = SpendLogsPayload(

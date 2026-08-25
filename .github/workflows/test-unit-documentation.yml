@@ -67,6 +67,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |

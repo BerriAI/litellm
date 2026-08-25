@@ -14,7 +14,6 @@ from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor

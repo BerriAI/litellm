@@ -66,8 +66,12 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.ptu_pricing import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    declares_ptu,
     is_ptu_cost_attribution_enabled,
     ptu_config_error,
+    ptu_identity_error,
+    ptu_terms,
     zeroed_ptu_pricing,
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
@@ -76,6 +80,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
+    mask_credentials_in_payload,
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -162,6 +167,11 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+)
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -371,10 +381,17 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
-# Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
-# logs and logging callbacks, and these carry either the request payload or router-internal
-# walk state rather than anything that identifies the failed attempt.
-RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(("messages", "original_function", "attempted_targets"))
+# Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
+# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
+# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
+# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
+    (
+        "messages",
+        "original_function",
+        "attempted_targets",
+    )
+)
 
 
 class Router:
@@ -7343,7 +7360,8 @@ class Router:
             if len(self.previous_models) > 3:
                 self.previous_models.pop(0)
 
-            self.previous_models.append(previous_model)
+            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
+            self.previous_models.append(scrubbed_previous_model)
             kwargs[_metadata_var]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
@@ -7695,6 +7713,9 @@ class Router:
         _model_name: str,
         _litellm_params: dict,
         _model_info: dict,
+        *,
+        declared_id: str | None = None,
+        duplicate_ids: frozenset[str] = frozenset(),
     ) -> Deployment | None:
         """
         Create a deployment object and add it to the model list
@@ -7707,7 +7728,19 @@ class Router:
         """
         try:
             config_sourced: Final = _model_info.get("db_model") is not True
-            ptu_error: Final = ptu_config_error(_model_info, model_name=_model_name) if config_sourced else None
+            identity_error: Final = (
+                ptu_identity_error(
+                    declared_id=declared_id,
+                    taken=declared_id in duplicate_ids,
+                    current_id=_model_info.get("id"),
+                    model_name=_model_name,
+                )
+                if config_sourced and ptu_terms(_model_info) is not None
+                else None
+            )
+            ptu_error: Final = (
+                (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
+            )
             if ptu_error is not None and is_ptu_cost_attribution_enabled():
                 raise ValueError(ptu_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
@@ -8210,6 +8243,28 @@ class Router:
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
+        declared_ids: Final = tuple(
+            str(entry["model_info"]["id"])
+            for entry in original_model_list
+            if isinstance(entry.get("model_info"), dict) and entry["model_info"].get("id") is not None
+        )
+        duplicate_ids: Final = frozenset(model_id for model_id in declared_ids if declared_ids.count(model_id) > 1)
+
+        ptu_declared: Final = tuple(
+            str(entry.get("model_name"))
+            for entry in original_model_list
+            if isinstance(entry.get("model_info"), dict)
+            and entry["model_info"].get("db_model") is not True
+            and declares_ptu(entry["model_info"])
+        )
+        if ptu_declared and not is_ptu_cost_attribution_enabled():
+            verbose_router_logger.warning(
+                "PTU fields are set on config.yaml deployment(s) %s, but PTU cost attribution is disabled, so no "
+                "flat cost accrues and this traffic is billed per token. Set %s=True to enable it",
+                ", ".join(ptu_declared),
+                PTU_COST_ATTRIBUTION_ENV_VAR,
+            )
+
         for model in original_model_list:
             _model_name = model.pop("model_name")
             _litellm_params = model.pop("litellm_params")
@@ -8220,6 +8275,8 @@ class Router:
                         _litellm_params[k] = get_secret(v)
 
             _model_info: dict = model.pop("model_info", {})
+
+            declared_id = None if _model_info.get("id") is None else str(_model_info["id"])
 
             # check if model info has id
             if "id" not in _model_info:
@@ -8236,6 +8293,8 @@ class Router:
                         _model_name=_model_name,
                         _litellm_params=_litellm_params,
                         _model_info=_model_info,
+                        declared_id=declared_id,
+                        duplicate_ids=duplicate_ids,
                     )
             else:
                 self._create_deployment(
@@ -8243,6 +8302,8 @@ class Router:
                     _model_name=_model_name,
                     _litellm_params=_litellm_params,
                     _model_info=_model_info,
+                    declared_id=declared_id,
+                    duplicate_ids=duplicate_ids,
                 )
 
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
@@ -8285,6 +8346,7 @@ class Router:
             ) = litellm.get_llm_provider(
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
+                api_base=deployment.litellm_params.api_base,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -9154,10 +9216,27 @@ class Router:
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
-            verbose_router_logger.error(
-                "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
-                _model,
+            # Router init auto-registers every deployment name into
+            # litellm.model_cost as a zeroed stub, so membership alone can't
+            # tell a resolvable name apart; require usable limits/costs.
+            _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
+            _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
+            _fallback_resolves = _fallback_entry is not None and (
+                (_fallback_entry.get("max_input_tokens") or 0) > 0
+                or (_fallback_entry.get("max_tokens") or 0) > 0
+                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
+            if _fallback_resolves:
+                verbose_router_logger.debug(
+                    "Azure deployment '%s' has no base_model set; using '%s' from the model cost map for max tokens, cost tracking, etc.",
+                    _model,
+                    _azure_fallback_key,
+                )
+            else:
+                verbose_router_logger.error(
+                    "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
+                    _model,
+                )
         elif custom_llm_provider != "azure":
             model = _model
 
@@ -9375,6 +9454,8 @@ class Router:
             except Exception:
                 model_info = None
 
+            deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
@@ -9417,6 +9498,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supported_reasoning_efforts": None,
                     }
                 )
             else:
@@ -9493,6 +9575,11 @@ class Router:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
+
+            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                model_group_info.supported_reasoning_efforts,
+                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:

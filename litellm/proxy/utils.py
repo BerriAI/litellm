@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -91,7 +91,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.core_helpers import coerce_token_limit
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit, is_expected_client_error
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -186,6 +186,7 @@ if TYPE_CHECKING:
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
     Span = _Span | object
 else:
@@ -408,6 +409,46 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
 
 
+def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Return the metadata bucket the policy engine wrote its pipeline state into.
+
+    The route decides the bucket (``litellm_metadata`` for ``/v1/messages``,
+    responses, batches, files and bedrock, ``metadata`` everywhere else), and both
+    buckets can be present at once because callers send their own provider-facing
+    ``metadata`` (Claude Code sends ``metadata.user_id``) or their own
+    ``litellm_metadata``. Pipeline slots are stripped from caller input before the
+    policy engine runs, so whichever bucket carries them is the proxy's own write.
+    """
+    return next(
+        (
+            bucket
+            for bucket in (data.get("metadata"), data.get("litellm_metadata"))
+            if isinstance(bucket, dict)
+            and ("_guardrail_pipelines" in bucket or "_pipeline_managed_guardrails" in bucket)
+        ),
+        {},
+    )
+
+
+def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
+    pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
+    return (
+        tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines))  # cast-ok: the policy engine wrote the slot
+        if pipelines
+        else ()
+    )
+
+
+def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
+    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
+    return (
+        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
+        if managed
+        else frozenset()
+    )
+
+
 def _prompt_block_text(block: object) -> str:
     if isinstance(block, str):
         return block
@@ -564,6 +605,7 @@ class _CallbackCapabilities:
     has_streaming_chunk_override: bool = False
     has_guardrail: bool = False
     has_pre_call_override: bool = False
+    has_content_enforcer: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
@@ -1445,8 +1487,7 @@ class ProxyLogging:
 
         Returns the (possibly modified) data dict.
         """
-        metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-        pipelines: Final = metadata.get("_guardrail_pipelines")
+        pipelines: Final = _policy_pipelines(data)
         if not pipelines:
             return data
 
@@ -1530,19 +1571,26 @@ class ProxyLogging:
 
     def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
         """
-        Whether any guardrail or guardrail pipeline would inspect a request carrying this metadata.
+        Whether anything configured would inspect the content of a request carrying this metadata.
 
         Evaluated with the same predicate the pre-call loop uses, so a proxy configured only with
         post-call guardrails answers False. Callers that must pay a real cost to build the hook's
         input, such as streaming a batch input file off disk, use this to skip that work.
+
+        A content-enforcing ``CustomLogger`` counts too. It is not a guardrail and has no event
+        hook to consult, but it judges the payload the same way, so a proxy configured only with
+        one of those still has something to say about every record.
         """
         if request_metadata.get("_guardrail_pipelines"):
+            return True
+        caps: Final = ProxyLogging._callback_capabilities()
+        if caps.has_content_enforcer:
             return True
         probe: Final = {"metadata": dict(request_metadata)}  # mutable-ok: should_run_guardrail takes a dict
         return any(
             isinstance(callback, CustomGuardrail)
             and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
-            for callback in ProxyLogging._callback_capabilities().resolved_callbacks
+            for callback in caps.resolved_callbacks
         )
 
     # The actual implementation of the function
@@ -1623,8 +1671,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-            pipeline_managed: Final[set] = metadata.get("_pipeline_managed_guardrails", set())
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -1632,7 +1679,11 @@ class ProxyLogging:
             # CustomGuardrail is configured. Saves the loop overhead +
             # ``time.time()`` x2 per registered callback for the common
             # "callbacks=[]" case on small / dev deployments.
-            if not caps.has_guardrail and (guardrails_only or not caps.has_pre_call_override):
+            if (
+                not caps.has_guardrail
+                and not caps.has_content_enforcer
+                and (guardrails_only or not caps.has_pre_call_override)
+            ):
                 if data is not None:
                     self._process_guardrail_metadata(data)
                 return data
@@ -1669,9 +1720,9 @@ class ProxyLogging:
                         data = result
 
                     elif (
-                        not guardrails_only
-                        and _callback is not None
+                        _callback is not None
                         and isinstance(_callback, CustomLogger)
+                        and (not guardrails_only or _callback.enforces_request_content)
                         and "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
@@ -1923,6 +1974,7 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
+        has_content_enforcer = False
         iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
         resolved_callbacks: Final[list[CustomLogger]] = []
 
@@ -1974,6 +2026,8 @@ class ProxyLogging:
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
+                if resolved.enforces_request_content is True:
+                    has_content_enforcer = True
 
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,
@@ -1982,6 +2036,7 @@ class ProxyLogging:
             has_streaming_chunk_override=has_streaming_chunk_override,
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
+            has_content_enforcer=has_content_enforcer,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
         )
@@ -2520,20 +2575,36 @@ class ProxyLogging:
                 api_key="",
             )
 
-            # log the custom exception
-            await litellm_logging_obj.async_failure_handler(
-                exception=original_exception,
-                traceback_exception=traceback.format_exc(),
+            await self._dispatch_proxy_only_failure_handlers(
+                litellm_logging_obj=litellm_logging_obj,
+                original_exception=original_exception,
             )
 
-            threading.Thread(
-                target=litellm_logging_obj.failure_handler,
-                args=(
-                    original_exception,
-                    traceback.format_exc(),
-                ),
-                daemon=True,
-            ).start()
+    @staticmethod
+    async def _dispatch_proxy_only_failure_handlers(
+        litellm_logging_obj: Logging,
+        original_exception: Exception | None,
+    ) -> None:
+        """Runs the async failure handler plus the threaded sync handler. Expected
+        client (4xx) errors skip traceback formatting unless
+        litellm.log_client_error_tracebacks is set."""
+        include_traceback: Final = litellm.log_client_error_tracebacks or not is_expected_client_error(
+            original_exception
+        )
+        traceback_str: Final = traceback.format_exc() if include_traceback else ""
+        await litellm_logging_obj.async_failure_handler(
+            exception=original_exception,
+            traceback_exception=traceback_str,
+        )
+
+        threading.Thread(
+            target=litellm_logging_obj.failure_handler,
+            args=(
+                original_exception,
+                traceback_str,
+            ),
+            daemon=True,
+        ).start()
 
     async def post_call_success_hook(
         self,
@@ -3286,6 +3357,7 @@ class _StaleReadEngine:
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
+    spend_log_flush_requested: ClassVar[asyncio.Event] = asyncio.Event()
     spend_log_queue_bytes: ClassVar[int] = 0
     spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     tool_usage_transactions: list["ToolUsageTransaction"] = []
@@ -5950,6 +6022,26 @@ async def enqueue_spend_logs(
         )
 
 
+def request_spend_log_flush() -> None:
+    """Wake the queue monitor now rather than leaving the rows for its next poll.
+
+    The Responses API hands the client an id it can chain from straight away, and that
+    lookup reads the DB, so the row cannot sit in this worker's queue for a poll interval.
+    Repeated requests coalesce into the monitor's next pass, so the batching holds.
+    """
+    PrismaClient.spend_log_flush_requested.set()
+
+
+async def _wait_for_spend_log_flush_request(interval: float) -> bool:
+    """Wait out ``interval``, returning early and True when a flush was requested."""
+    try:
+        await asyncio.wait_for(PrismaClient.spend_log_flush_requested.wait(), timeout=interval)
+    except asyncio.TimeoutError:
+        return False
+    PrismaClient.spend_log_flush_requested.clear()
+    return True
+
+
 async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[dict[str, object]]:
     """Take up to ``limit`` of the oldest queued spend logs off the queue.
 
@@ -6395,7 +6487,8 @@ async def _monitor_spend_logs_queue(
                 # Exponential backoff when no logs to process
                 current_interval = min(current_interval * backoff_multiplier, max_backoff)
 
-            await asyncio.sleep(current_interval)
+            if await _wait_for_spend_log_flush_request(current_interval):
+                current_interval = base_interval
         except Exception as e:
             spend_log_error("Error in spend logs queue monitor: %s", str(e), exc=e)
             # Continue monitoring even if there's an error, with exponential backoff
