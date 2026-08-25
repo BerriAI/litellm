@@ -6,6 +6,7 @@ import os
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 
@@ -7305,6 +7306,78 @@ async def test_acreate_batch_surfaces_owning_provider_error_without_disable_fall
 
 
 @pytest.mark.asyncio
+async def test_acreate_batch_still_falls_back_within_the_owning_model_group():
+    """Holding a batch inside the model group that owns its input file must not
+    disable fallbacks outright (#35359): the owning group's second deployment is
+    still tried in `order`, and only the cross-group target is skipped."""
+    completion_window_error = "Invalid value: '5m'. Supported values are: '24h'."
+    attempted_models = []
+
+    async def _acreate_batch(**kwargs):
+        model = kwargs["model"]
+        attempted_models.append(model)
+        if model.startswith("azure/"):
+            raise litellm.BadRequestError(
+                message="Error code: 400 - {'error': {'code': 'quotaExceeded'}}",
+                model=model,
+                llm_provider="azure",
+            )
+        raise litellm.BadRequestError(
+            message=completion_window_error,
+            model=model,
+            llm_provider="openai",
+        )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-owning",
+                    "order": 1,
+                },
+                "model_info": {"id": "my-gpt-1"},
+            },
+            {
+                "model_name": "my-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini-backup",
+                    "api_key": "sk-owning",
+                    "order": 2,
+                },
+                "model_info": {"id": "my-gpt-2"},
+            },
+            {
+                "model_name": "my-azure-gpt",
+                "litellm_params": {
+                    "model": "azure/gpt-4o-mini",
+                    "api_key": "sk-fallback",
+                    "api_base": "https://fallback.openai.azure.com",
+                    "api_version": "2024-08-01-preview",
+                },
+                "model_info": {"id": "my-azure-gpt-1"},
+            },
+        ],
+        fallbacks=[{"my-gpt": ["my-azure-gpt"]}],
+        num_retries=0,
+    )
+
+    with patch.object(litellm, "acreate_batch", new=_acreate_batch):
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acreate_batch(
+                model="my-gpt",
+                input_file_id="file-owned-by-my-gpt",
+                endpoint="/v1/chat/completions",
+                completion_window="5m",
+            )
+
+    assert "24h" in str(raised.value)
+    assert "quotaExceeded" not in str(raised.value)
+    assert attempted_models == ["openai/gpt-4o-mini", "openai/gpt-4o-mini-backup"]
+
+
+@pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     import httpx
 
@@ -8264,6 +8337,94 @@ class TestTaggedAutoRouterOnSharedModelName:
         assert marker_only._model_name_has_plain_deployments("gpt4o") is False
 
 
+class TestAutoRouterSharedModelNameConnectionParams:
+    """A plain deployment sharing its model_name with an `auto_router/` marker must not have
+    its api_base and api_key grafted onto the routed tier's outbound call (#36619)."""
+
+    PLAIN_API_BASE = "https://plain-sibling.openai.example/v1"
+    PLAIN_API_KEY = "sk-plain-sibling-secret"
+
+    class _FixedRouteLayer:
+        def __call__(self, text: str):
+            from semantic_router.schema import RouteChoice
+
+            return RouteChoice(name="gemini-flash")
+
+    @classmethod
+    def _router(cls, plain_entry_first: bool) -> "litellm.Router":
+        pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
+        plain = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": cls.PLAIN_API_KEY,
+                "api_base": cls.PLAIN_API_BASE,
+            },
+        }
+        marker = {
+            "model_name": "gpt4o",
+            "litellm_params": {
+                "model": "auto_router/gpt4o-router",
+                "auto_router_config": json.dumps(
+                    {"routes": [{"name": "gemini-flash", "utterances": ["capital city questions"]}]}
+                ),
+                "auto_router_default_model": "gemini-flash",
+                "auto_router_embedding_model": "text-embedding-3-small",
+                "drop_params": True,
+            },
+        }
+        tier = {
+            "model_name": "gemini-flash",
+            "litellm_params": {"model": "gemini/gemini-3.6-flash", "api_key": "sk-tier-key"},
+        }
+        shared_name_entries = [plain, marker] if plain_entry_first else [marker, plain]
+        router = litellm.Router(model_list=[*shared_name_entries, tier])
+        router.auto_routers["gpt4o"][0].strategy.routelayer = cls._FixedRouteLayer()
+        return router
+
+    @staticmethod
+    def _gemini_response() -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": "Paris"}], "role": "model"}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6},
+                "modelVersion": "gemini-3.6-flash",
+            },
+            request=httpx.Request("POST", "https://generativelanguage.googleapis.com"),
+        )
+
+    @pytest.mark.parametrize(
+        "plain_entry_first", [True, False], ids=["plain_entry_first", "marker_entry_first"]
+    )
+    async def test_routed_tier_call_goes_out_on_its_own_endpoint_and_credentials(self, plain_entry_first):
+        """The outbound provider request for the routed tier hits the tier's own Gemini host
+        with the tier's own key, never the plain sibling's api_base or api_key."""
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        router = self._router(plain_entry_first)
+
+        with patch.object(
+            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=self._gemini_response()
+        ) as mock_post:
+            await router.acompletion(
+                model="gpt4o",
+                messages=[{"role": "user", "content": "What is the capital of France?"}],
+            )
+
+        call = mock_post.call_args
+        outbound_url = str(call.kwargs["url"] if "url" in call.kwargs else call.args[0])
+        outbound_headers = dict(call.kwargs.get("headers") or {})
+
+        assert "generativelanguage.googleapis.com" in outbound_url
+        assert "gemini-3.6-flash" in outbound_url
+        assert self.PLAIN_API_BASE not in outbound_url
+        assert self.PLAIN_API_KEY not in outbound_url
+        assert self.PLAIN_API_KEY not in json.dumps(outbound_headers)
+
+
 class TestGetAllowedFailsFromPolicy:
     def _make_router(self, **policy_kwargs) -> litellm.Router:
         from litellm.types.router import AllowedFailsPolicy
@@ -8402,6 +8563,49 @@ async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
     ), "no breadcrumb carried router walk state, so this test cannot see the leak"
     for breadcrumb in router.previous_models:
         assert "attempted_targets" not in breadcrumb
+
+
+_BREADCRUMB_CREDENTIAL_CANARY = "Bearer sk-ant-oat01-RETRY-BREADCRUMB-CANARY-doNotShip"
+
+
+@pytest.mark.parametrize(
+    "container_key, request_kwargs",
+    [
+        (
+            "provider_specific_header",
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "openai",
+                    "extra_headers": {"authorization": _BREADCRUMB_CREDENTIAL_CANARY},
+                }
+            },
+        ),
+        (
+            "extra_headers",
+            {"extra_headers": {"authorization": _BREADCRUMB_CREDENTIAL_CANARY}},
+        ),
+        (
+            "api_key",
+            {"api_key": _BREADCRUMB_CREDENTIAL_CANARY},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_retry_breadcrumbs_never_carry_a_forwarded_credential(container_key, request_kwargs):
+    """log_retry copies kwargs into previous_models, which reaches spend logs and logging callbacks.
+    Any of these kwargs can carry a client's forwarded Authorization token or a provider key, and a
+    breadcrumb has no diagnostic use for the raw secret. A denylist of key names is always one new
+    credential kwarg behind, so log_retry scrubs credential-named values by pattern instead: the
+    container still reaches the breadcrumb, but the raw secret never does, whatever key holds it."""
+    router = _cyclic_fallback_router(num_retries=1)
+    capture = _LogCapture(logging.ERROR)
+
+    await _drive_cyclic_fallback(router, capture, **request_kwargs)
+
+    assert router.previous_models, "no retry breadcrumbs were recorded"
+    dumped = json.dumps(router.previous_models, default=str)
+    assert container_key in dumped, "the credential-bearing kwarg never reached the breadcrumb, so this test cannot see the leak"
+    assert _BREADCRUMB_CREDENTIAL_CANARY not in dumped
 
 
 @pytest.mark.asyncio
@@ -8717,3 +8921,306 @@ class TestAzureBaseModelFallbackLogging:
             deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
+
+def test_model_group_info_intersects_supported_reasoning_efforts():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/mini-like"},
+                "model_info": {"id": "mini-like-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_xhigh_reasoning_effort": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": False,
+            "supports_minimal_reasoning_effort": True,
+            "supports_xhigh_reasoning_effort": False,
+        }
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="smart-group",
+            user_facing_model_group_name="smart-group",
+        )
+
+    assert result is not None
+    # opus-like offers all seven levels, mini-like lacks none/xhigh/max; only the common set survives,
+    # so the group never advertises an effort routing could hand to a deployment that rejects it.
+    assert result.supported_reasoning_efforts == ("minimal", "low", "medium", "high")
+
+
+def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
+    """The router fills every ModelInfo key, so a deployment absent from the model map arrives with
+    supports_reasoning None rather than with the key missing. Its synthesized entry carries no mode,
+    which is what separates it from a mapped non-reasoning model, and nothing being known about it is
+    no reason to drop the levels the rest of the group agrees on."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/unmapped-model"},
+                "model_info": {"id": "unmapped-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {"key": model_name, "litellm_provider": "openai", "mode": None, "supports_reasoning": None}
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="smart-group",
+            user_facing_model_group_name="smart-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")
+
+
+def test_model_group_info_reasoning_efforts_empty_on_a_mapped_non_reasoning_deployment():
+    """A group mixing a reasoning model with one the map knows is not a reasoning model shares no
+    level, so it advertises none and the picker offers nothing rather than a level routing would
+    hand to a deployment that rejects it."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "openai/plain-chat"},
+                "model_info": {"id": "plain-chat-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {"key": model_name, "litellm_provider": "openai", "mode": "chat", "supports_reasoning": None}
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="mixed-group",
+            user_facing_model_group_name="mixed-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ()
+
+
+def test_model_group_info_reasoning_efforts_ignore_a_value_declared_in_model_info():
+    """The group's levels are computed from its deployments, so a value an operator left in one
+    deployment's model_info must not seed them. Seeding let the first deployment read narrow the
+    whole group while the same value on any other deployment was silently ignored."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "declared-group",
+                "litellm_params": {"model": "openai/first-reasoner"},
+                "model_info": {"id": "first-deployment"},
+            },
+            {
+                "model_name": "declared-group",
+                "litellm_params": {"model": "openai/second-reasoner"},
+                "model_info": {"id": "second-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        info = {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+        }
+        if model_id == "first-deployment":
+            info["supported_reasoning_efforts"] = ("high",)
+        return info
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="declared-group",
+            user_facing_model_group_name="declared-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
+
+
+def test_model_group_info_survives_a_junk_typed_operator_effort_value():
+    """A deployment's registered model_info reads back with whatever the operator wrote under any
+    key, so a wrong-typed supported_reasoning_efforts must not fail the group's info. Only the
+    constructor's trailing override keeps the junk away from ModelGroupInfo validation."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "junk-declared-group",
+                "litellm_params": {"model": "openai/lone-reasoner"},
+                "model_info": {"id": "junk-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        return {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+            "supported_reasoning_efforts": "high",
+        }
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="junk-declared-group",
+            user_facing_model_group_name="junk-declared-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
+
+
+def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared():
+    """A deployment is registered in the cost map under its own id with whatever model_info the
+    operator wrote, so a mode they set themselves reads back exactly like one the map supplied. Only
+    a mode the map supplied marks the deployment as known, or an off-map deployment carrying any
+    mode empties the group it sits in."""
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+
+    mapped_model = "openai/gpt-5.6-sol"
+    expected = resolve_supported_reasoning_efforts(
+        litellm.get_model_info(model=mapped_model),
+        deployment_is_mapped=True,
+    )
+    assert expected
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": mapped_model, "api_key": "sk-fake"},
+                "model_info": {"id": "mapped-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/a-model-the-map-never-heard-of", "api_key": "sk-fake"},
+                "model_info": {"id": "off-map-deployment", "mode": "chat"},
+            },
+        ]
+    )
+
+    result = router._set_model_group_info(
+        model_group="smart-group",
+        user_facing_model_group_name="smart-group",
+    )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == expected
+
+
+class TestAddDeploymentApiBaseProviderResolution:
+    def test_bare_model_with_known_api_base_initializes(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "groq-pinned",
+                    "litellm_params": {
+                        "model": "llama-3.3-70b-versatile",
+                        "api_base": "https://api.groq.com/openai/v1",
+                        "api_key": "fake-key",
+                    },
+                },
+                {
+                    "model_name": "deepseek-pinned",
+                    "litellm_params": {
+                        "model": "deepseek-chat",
+                        "api_base": "https://api.deepseek.com/v1",
+                        "api_key": "fake-key",
+                    },
+                },
+            ]
+        )
+
+        model_list = router.get_model_list()
+        assert model_list is not None
+        assert {m["model_name"] for m in model_list} == {"groq-pinned", "deepseek-pinned"}
+
+    def test_bare_model_with_unknown_api_base_still_raises(self):
+        with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+            litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "mystery",
+                        "litellm_params": {
+                            "model": "some-unknown-model",
+                            "api_base": "https://llm.internal.example.com/v1",
+                            "api_key": "fake-key",
+                        },
+                    }
+                ]
+            )
+
+    def test_explicit_custom_llm_provider_beats_api_base_endpoint_match(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai-via-gateway",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "custom_llm_provider": "openai",
+                        "api_base": "https://api.groq.com/openai/v1",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        deployment = router.get_deployment_by_model_group_name("openai-via-gateway")
+        assert deployment is not None
+        assert deployment.litellm_params.custom_llm_provider == "openai"

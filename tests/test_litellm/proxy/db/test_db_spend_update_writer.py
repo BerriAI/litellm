@@ -2712,3 +2712,31 @@ async def test_commit_spend_updates_retries_deadlock_on_every_entity_path(monkey
 
     assert mock_prisma_client.db.tx.call_count == 2
     proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, expects_flush",
+    [("aresponses", True), ("responses", True), ("acompletion", False)],
+)
+async def test_insert_spend_log_asks_for_an_immediate_flush_on_responses_calls(
+    call_type: str, expects_flush: bool
+):
+    """
+    A `previous_response_id` chained straight off the previous turn reads the DB, so a
+    Responses row cannot sit in this worker's queue until the monitor's next poll.
+    """
+    from litellm.proxy.utils import PrismaClient
+
+    db_writer = DBSpendUpdateWriter()
+    prisma = _tool_usage_prisma()
+    PrismaClient.spend_log_flush_requested.clear()
+
+    await db_writer._insert_spend_log_to_db(
+        payload={"request_id": "req-1", "call_type": call_type},
+        prisma_client=prisma,
+    )
+
+    assert prisma.spend_log_transactions == [{"request_id": "req-1", "call_type": call_type}]
+    assert PrismaClient.spend_log_flush_requested.is_set() is expects_flush
+    PrismaClient.spend_log_flush_requested.clear()

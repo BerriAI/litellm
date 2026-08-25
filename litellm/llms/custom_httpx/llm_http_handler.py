@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, Type
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -19,7 +20,12 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.agentic_loop_settings import (
+    DEFAULT_MAX_AGENTIC_LOOPS,
+    validated_max_agentic_loops,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -89,6 +95,7 @@ from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadCon
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
+    AgenticLoopSafetyError,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -1103,6 +1110,7 @@ class BaseLLMHTTPHandler:
             headers=headers or {},
             model=model,
             optional_params=optional_rerank_params,
+            litellm_params=litellm_params,
         )
 
         api_base = provider_config.get_complete_url(
@@ -1839,6 +1847,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def async_search(
@@ -1937,6 +1946,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def _async_post_anthropic_messages_with_http_error_retry(
@@ -5077,9 +5087,12 @@ class BaseLLMHTTPHandler:
     @staticmethod
     def _get_agentic_loop_settings(kwargs: dict) -> tuple[int, int, list[str]]:
         depth: Final = int(kwargs.get("_agentic_loop_depth", 0) or 0)
-        max_loops: Final = int(kwargs.get("max_agentic_loops", 3) or 3)
+        configured: Final = validated_max_agentic_loops(
+            kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
+        )
+        max_loops: Final = DEFAULT_MAX_AGENTIC_LOOPS if configured is None else configured
         fingerprints: Final = list(kwargs.get("_agentic_loop_fingerprints", []) or [])
-        return depth, max(max_loops, 1), fingerprints
+        return depth, max_loops, fingerprints
 
     @staticmethod
     def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
@@ -5122,7 +5135,8 @@ class BaseLLMHTTPHandler:
         """
         Evaluate agentic-loop safety guards (fingerprint cycle / max depth).
 
-        Raises ValueError on abort.  Returns the current fingerprint on success.
+        Raises AgenticLoopSafetyError on abort.  Returns the current fingerprint
+        on success.
 
         These checks must not be swallowed by the per-callback ``except Exception``
         block that wraps callback dispatch — they are bounded-loop / cycle-break
@@ -5130,9 +5144,9 @@ class BaseLLMHTTPHandler:
         """
         fingerprint: Final = BaseLLMHTTPHandler._fingerprint_agentic_tools(tool_calls)
         if fingerprint in fingerprints:
-            raise ValueError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
+            raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
         if depth >= max_loops:
-            raise ValueError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
+            raise AgenticLoopSafetyError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
         return fingerprint
 
     @staticmethod
@@ -5141,6 +5155,97 @@ class BaseLLMHTTPHandler:
             return json.dumps(tools, sort_keys=True, default=str)
         except Exception:
             return str(tools)
+
+    @staticmethod
+    def _refused_agentic_tool_identifiers(tool_calls: object) -> tuple[frozenset[str], frozenset[str]]:
+        """
+        Collect the ids and names of the tool calls a safety rail just refused.
+
+        Callbacks hand back either a bare list of tool calls or a dict wrapping
+        that list under ``tool_calls``, and both the anthropic and responses
+        shapes carry an ``id`` (or ``call_id``) plus a ``name``.
+        """
+        calls: Final = tool_calls.get("tool_calls") if isinstance(tool_calls, dict) else tool_calls
+        if not isinstance(calls, list):
+            return frozenset(), frozenset()
+        dict_calls: Final = (call for call in calls if isinstance(call, dict))
+        fields: Final = tuple((call.get("id"), call.get("call_id"), call.get("name")) for call in dict_calls)
+        ids: Final = frozenset(
+            value for call_id, caller_id, _ in fields for value in (call_id, caller_id) if isinstance(value, str)
+        )
+        names: Final = frozenset(name for _, _, name in fields if isinstance(name, str))
+        return ids, names
+
+    @staticmethod
+    def _is_refused_tool_use_block(block: object, refused_ids: frozenset[str], refused_names: frozenset[str]) -> bool:
+        """
+        Whether this response block belongs to a tool call the rail refused.
+
+        An id settles it on its own, so a block carrying one is matched on the id
+        alone and a client's own tool call survives even where it happens to
+        share a name with a refused one. The name is only consulted for tool call
+        shapes that arrive without an id.
+        """
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            return False
+        block_id: Final = block.get("id")
+        if isinstance(block_id, str) and refused_ids:
+            return block_id in refused_ids
+        return block.get("name") in refused_names
+
+    @staticmethod
+    def _can_replace_turn_with_terminal_response(stream: bool, api_surface: str) -> bool:
+        """
+        Whether a refused rerun can still be answered with a finalized turn.
+
+        Only the anthropic messages surface can. The responses surface carries a
+        pydantic model the finalizer does not rewrite, so it keeps raising, which
+        is what every surface did before this path learned to end the turn.
+
+        The messages and responses call sites pass ``stream=False``, because
+        interception converts an intercepted stream to non-streaming before the
+        loop runs and rebuilds the SSE stream from the finalized turn
+        afterwards. ``AgenticStreamingIterator`` passes ``stream=True``, and
+        that path keeps raising: its events are already on the wire, so a
+        finalized turn would reach the client as a second message rather than
+        as a replacement.
+        """
+        return not stream and api_surface == "anthropic_messages"
+
+    @staticmethod
+    def _finalize_refused_agentic_response(response: object, tool_calls: object) -> object:
+        """
+        Turn the response into a terminal turn after a safety rail refused the rerun.
+
+        The refused tool calls target tools LiteLLM injected on the client's
+        behalf, so a client that never declared them cannot send back a matching
+        ``tool_result``. Their blocks are dropped and a ``tool_use`` stop reason
+        is closed out as ``end_turn``, which is what a provider-native web search
+        turn returns once it stops calling tools.
+
+        A ``tool_use`` block the client itself declared is left alone, and while
+        one is still in the response the stop reason stays ``tool_use`` so the
+        client knows to answer it.
+        """
+        if not isinstance(response, dict):
+            return response
+
+        refused_ids, refused_names = BaseLLMHTTPHandler._refused_agentic_tool_identifiers(tool_calls)
+        finalized: Final = dict(response)
+        content: Final = finalized.get("content")
+        if isinstance(content, list):
+            kept_blocks: Final = [
+                block
+                for block in content
+                if not BaseLLMHTTPHandler._is_refused_tool_use_block(block, refused_ids, refused_names)
+            ]
+            finalized["content"] = kept_blocks
+            client_tool_use_remains: Final = any(
+                isinstance(block, dict) and block.get("type") == "tool_use" for block in kept_blocks
+            )
+            if not client_tool_use_remains and finalized.get("stop_reason") == "tool_use":
+                finalized["stop_reason"] = "end_turn"
+        return finalized
 
     async def _execute_anthropic_agentic_plan(
         self,
@@ -5507,14 +5612,30 @@ class BaseLLMHTTPHandler:
                 continue
 
             # Safety guards must run OUTSIDE the callback try/except — they are
-            # bounded-loop / cycle-break rails that must propagate to the caller.
-            fingerprint = self._check_agentic_loop_safety(
-                tool_calls=tool_calls,
-                fingerprints=fingerprints,
-                depth=depth,
-                max_loops=max_loops,
-                model=model,
-            )
+            # bounded-loop / cycle-break rails, not callback bugs.
+            try:
+                fingerprint = self._check_agentic_loop_safety(
+                    tool_calls=tool_calls,
+                    fingerprints=fingerprints,
+                    depth=depth,
+                    max_loops=max_loops,
+                    model=model,
+                )
+            except AgenticLoopSafetyError as e:
+                if not self._can_replace_turn_with_terminal_response(stream, api_surface):
+                    raise
+                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+                verbose_logger.warning(
+                    "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
+                    _call_id,
+                    model,
+                    str(e),
+                )
+                return self._maybe_wrap_in_fake_stream(
+                    self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                    logging_obj,
+                    api_surface,
+                )
 
             try:
                 kwargs_with_provider = hook_kwargs.copy()
@@ -6934,9 +7055,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Use JSON when no files, otherwise use form data with files
             if files and len(files) > 0:
-                # Use multipart/form-data when files are present
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -6944,9 +7063,14 @@ class BaseLLMHTTPHandler:
                     files=files,
                     timeout=timeout,
                 )
-
+            elif video_generation_provider_config.use_multipart_form_data():
+                response = sync_httpx_client.post(  # rebind-ok: one of three mutually-exclusive branches
+                    url=api_base,
+                    headers=headers,
+                    files=serialize_multipart_form_fields(data),
+                    timeout=timeout,
+                )
             else:
-                # Use JSON content type for POST requests without files
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7038,20 +7162,26 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            # Use JSON when no files, otherwise use form data with files
-            if files is None or len(files) == 0:
+            if files and len(files) > 0:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
+                    data=data,
+                    files=files,
+                    timeout=timeout,
+                )
+            elif video_generation_provider_config.use_multipart_form_data():
+                response = await async_httpx_client.post(  # rebind-ok: one of three mutually-exclusive branches
+                    url=api_base,
+                    headers=headers,
+                    files=serialize_multipart_form_fields(data),
                     timeout=timeout,
                 )
             else:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                 )
 
@@ -7711,6 +7841,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
+        video_file: FileContent | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | None = None,
@@ -7722,6 +7853,7 @@ class BaseLLMHTTPHandler:
             return self.async_video_edit_handler(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 video_provider_config=video_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -7775,9 +7907,10 @@ class BaseLLMHTTPHandler:
             prefetched_source_data = prefetch_resp.json()
 
         try:
-            url, data = video_provider_config.transform_video_edit_request(
+            url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 headers=headers,
@@ -7796,11 +7929,10 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            response: Final = sync_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
+            response: Final = (
+                sync_httpx_client.post(url=url, headers=headers, data=data, files=files, timeout=timeout)
+                if files
+                else sync_httpx_client.post(url=url, headers=headers, json=data, timeout=timeout)
             )
             response.raise_for_status()
             return video_provider_config.transform_video_edit_response(
@@ -7820,6 +7952,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
+        video_file: FileContent | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | None = None,
@@ -7871,9 +8004,10 @@ class BaseLLMHTTPHandler:
             prefetched_source_data = prefetch_resp.json()
 
         try:
-            url, data = video_provider_config.transform_video_edit_request(
+            url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 headers=headers,
@@ -7892,11 +8026,10 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            response: Final = await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
+            response: Final = await (
+                async_httpx_client.post(url=url, headers=headers, data=data, files=files, timeout=timeout)
+                if files
+                else async_httpx_client.post(url=url, headers=headers, json=data, timeout=timeout)
             )
             response.raise_for_status()
             return video_provider_config.transform_video_edit_response(

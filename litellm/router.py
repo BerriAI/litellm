@@ -80,6 +80,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
+    mask_credentials_in_payload,
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -166,6 +167,11 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+)
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -375,10 +381,17 @@ def _replay_live_router_model_cost() -> None:
 set_live_deployment_replay(_replay_live_router_model_cost)
 
 
-# Kwargs that log_retry must not copy into a retry breadcrumb. The breadcrumbs reach spend
-# logs and logging callbacks, and these carry either the request payload or router-internal
-# walk state rather than anything that identifies the failed attempt.
-RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(("messages", "original_function", "attempted_targets"))
+# Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
+# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
+# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
+# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
+    (
+        "messages",
+        "original_function",
+        "attempted_targets",
+    )
+)
 
 
 class Router:
@@ -7347,7 +7360,8 @@ class Router:
             if len(self.previous_models) > 3:
                 self.previous_models.pop(0)
 
-            self.previous_models.append(previous_model)
+            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
+            self.previous_models.append(scrubbed_previous_model)
             kwargs[_metadata_var]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
@@ -8332,6 +8346,7 @@ class Router:
             ) = litellm.get_llm_provider(
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
+                api_base=deployment.litellm_params.api_base,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -9439,6 +9454,8 @@ class Router:
             except Exception:
                 model_info = None
 
+            deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
@@ -9481,6 +9498,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supported_reasoning_efforts": None,
                     }
                 )
             else:
@@ -9557,6 +9575,11 @@ class Router:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
+
+            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                model_group_info.supported_reasoning_efforts,
+                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:

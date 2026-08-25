@@ -416,7 +416,7 @@ async def acompletion(
     logprobs: bool | None = None,
     top_logprobs: int | None = None,
     deployment_id=None,
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None = None,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
@@ -602,7 +602,7 @@ async def acompletion(
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=base_url,
+            api_base=kwargs.get("api_base") or base_url,
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -4920,7 +4920,7 @@ def completion(
     logit_bias: dict | None = None,
     user: str | None = None,
     # openai v1.0+ new params
-    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "default"] | None = None,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
     response_format: dict | type[BaseModel] | None = None,
     seed: int | None = None,
@@ -6828,6 +6828,8 @@ def embedding(
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import get_azure_ai_entra_token
+
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
@@ -6837,8 +6839,8 @@ def embedding(
             api_key = (
                 api_key
                 or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
                 or get_secret_str("AZURE_AI_API_KEY")
+                or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
             )
 
             ## EMBEDDING CALL
@@ -7537,6 +7539,15 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
+        moderation_request: Final = {"input": input, "model": model}  # mutable-ok: logged as the raw request body
+        litellm_logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": moderation_request,
+                "api_base": str(_openai_client.base_url),
+            },
+        )
 
     if model is not None:
         response = await _openai_client.moderations.create(input=input, model=model)
@@ -8042,6 +8053,7 @@ def speech(
             project=project,
             max_retries=max_retries,
             timeout=timeout,
+            logging_obj=logging_obj,
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
@@ -8120,6 +8132,7 @@ def speech(
                 organization=organization,
                 max_retries=max_retries,
                 timeout=timeout,
+                logging_obj=logging_obj,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,
@@ -8555,7 +8568,7 @@ def stream_chunk_builder(
         if len(chunks) == 0:
             return None
         ## Route to the text completion logic
-        first_chunk_with_choices: Final = next((c for c in chunks if c["choices"]), None)
+        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), None)
         if first_chunk_with_choices is not None and isinstance(
             first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
@@ -8570,7 +8583,7 @@ def stream_chunk_builder(
         simple_content_parts: Final[list[str]] = []
         is_simple_text_stream = True
         for chunk in chunks:
-            if len(chunk["choices"]) == 0:
+            if not chunk.get("choices"):
                 continue
 
             choice = chunk["choices"][0]
@@ -8636,7 +8649,7 @@ def stream_chunk_builder(
         tool_call_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "tool_calls" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["tool_calls"] is not None
         ]
@@ -8650,7 +8663,7 @@ def stream_chunk_builder(
         function_call_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "function_call" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["function_call"] is not None
         ]
@@ -8663,7 +8676,7 @@ def stream_chunk_builder(
         content_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "content" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["content"] is not None
         ]
@@ -8674,7 +8687,7 @@ def stream_chunk_builder(
         thinking_blocks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "thinking_blocks" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
         ]
@@ -8687,7 +8700,7 @@ def stream_chunk_builder(
         reasoning_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "reasoning_content" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["reasoning_content"] is not None
         ]
@@ -8700,7 +8713,7 @@ def stream_chunk_builder(
         annotation_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "annotations" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["annotations"] is not None
         ]
@@ -8717,7 +8730,7 @@ def stream_chunk_builder(
         audio_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "audio" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["audio"] is not None
         ]
@@ -8731,7 +8744,7 @@ def stream_chunk_builder(
         image_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "images" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["images"] is not None
         ]
@@ -8748,7 +8761,7 @@ def stream_chunk_builder(
         provider_specific_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "provider_specific_fields" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
         ]

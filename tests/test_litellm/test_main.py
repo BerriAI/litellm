@@ -850,6 +850,36 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"])
+def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_to_responses(
+    monkeypatch, model_name
+):
+    """
+    The whole gpt-5.6 family must bridge on function tools alone. The bridge used to
+    require an explicit reasoning_effort, so a gpt-5.6 call carrying tools and no effort
+    was rejected with "Function tools with reasoning_effort are not supported for
+    gpt-5.6-sol in /v1/chat/completions".
+    """
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, model = responses_api_bridge_check(
+            model=model_name,
+            custom_llm_provider="openai",
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort=None,
+        )
+
+    assert model == model_name
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_gpt_5_4_tools_with_reasoning_none_stays_chat():
     """
     Explicit reasoning_effort "none" is OpenAI's documented escape hatch that keeps
@@ -2833,9 +2863,17 @@ def _priced_at(prompt_tokens, completion_tokens):
 @pytest.fixture
 def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
-    variable alone does not reload the map, so pin the map itself."""
+    variable alone does not reload the map, so pin the map itself.
+
+    ``get_model_info`` is lru_cached, so pinning ``model_cost`` is not enough on its
+    own: a cached entry warmed against the network-fetched map keeps its old prices
+    and ``completion_cost`` bills at those while the assertions read the pinned map.
+    Clear on the way in and out so entries never leak across tests in either direction."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):
@@ -2906,3 +2944,16 @@ def test_a_stream_that_reported_no_usage_is_still_billed(local_cost_map):
     assert cost == pytest.approx(
         _priced_at(rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens)
     )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_resolves_provider_from_api_base():
+    response = await litellm.acompletion(
+        model="deepseek-chat",
+        api_base="https://api.deepseek.com/v1",
+        api_key="fake-key",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="resolved",
+    )
+
+    assert response.choices[0].message.content == "resolved"

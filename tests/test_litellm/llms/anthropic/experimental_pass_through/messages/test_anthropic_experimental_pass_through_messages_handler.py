@@ -1,5 +1,8 @@
+import asyncio
 import json
 import os
+import uuid
+from typing import Any, Dict, List
 
 import httpx
 import pytest
@@ -10,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.anthropic_interface import messages
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
@@ -1103,3 +1108,181 @@ def test_messages_sync_streaming_reports_provider_local_model():
         first_event = next(iter(stream))
 
     assert json.loads(first_event.decode().split("data: ", 1)[1])["message"]["model"] == "perplexity/kimi-k3"
+
+
+_RESPONSES_COMPLETED_BODY: Dict[str, Any] = {
+    "id": "resp-1",
+    "object": "response",
+    "created_at": 0,
+    "model": "gpt-4o-mini",
+    "status": "completed",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg-1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hello there"}],
+        }
+    ],
+    "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+}
+
+_RESPONSES_SSE_EVENTS: List[Dict[str, Any]] = [
+    {
+        "type": "response.created",
+        "response": {
+            **_RESPONSES_COMPLETED_BODY,
+            "status": "in_progress",
+            "output": [],
+            "usage": None,
+        },
+    },
+    {
+        "type": "response.output_text.delta",
+        "item_id": "msg-1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "hello there",
+    },
+    {"type": "response.completed", "response": _RESPONSES_COMPLETED_BODY},
+]
+
+
+def _sse_body(events: List[Dict[str, Any]]) -> bytes:
+    return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+class _SuccessPayloadCapture(CustomLogger):
+    def __init__(self, tracking_id: str):
+        super().__init__()
+        self.tracking_id = tracking_id
+        self.payloads: List[Dict[str, Any]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if kwargs.get("litellm_call_id") == self.tracking_id:
+            self.payloads.append(kwargs.get("standard_logging_object") or {})
+
+
+@pytest.fixture
+def capture_success_payloads(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    capture = _SuccessPayloadCapture(tracking_id=f"messages-stream-{uuid.uuid4()}")
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    return capture
+
+
+async def _drain(sse_stream) -> List[bytes]:
+    return [chunk async for chunk in sse_stream]
+
+
+def _bind_logging_worker_to_running_loop() -> None:
+    """The worker's queue keeps the loop it was built on, so one left over from an earlier
+    test makes ``flush`` raise "bound to a different event loop". ``start`` runs
+    ``_ensure_queue``, which rebinds the queue when the running loop has changed."""
+    GLOBAL_LOGGING_WORKER.start()
+
+
+async def _flush_logging_worker(capture: "_SuccessPayloadCapture") -> None:
+    await asyncio.sleep(0)
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+    except (asyncio.TimeoutError, RuntimeError):
+        pass
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while not capture.payloads and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.05)
+
+
+def _assert_anthropic_sse(chunks: List[bytes]) -> None:
+    body = b"".join(chunks).decode()
+    assert "message_start" in body
+    assert "message_stop" in body
+
+
+class TestMessagesStreamingSuccessLogging:
+    """A streamed /v1/messages call routed to an ``openai/`` backend must still reach
+    success logging once the SSE stream is drained. The client gets a correct Anthropic
+    SSE body and the provider bills the call, but no StandardLoggingPayload is produced,
+    so the request is invisible to spend tracking and every success-logging integration.
+
+    Logging is fired by the inner CustomStreamWrapper / ResponsesAPIStreamingIterator the
+    Anthropic wrappers drain, not by the wrappers themselves, so these assert on the
+    callback that actually reaches an integration rather than on a wrapper attribute.
+    """
+
+    MESSAGES = [{"role": "user", "content": "hi"}]
+
+    @pytest.mark.asyncio
+    async def test_responses_bridge_streaming_emits_success_logging(self, capture_success_payloads):
+        """The Responses bridge, which is the default for openai/ deployments."""
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            LiteLLMMessagesToResponsesAPIHandler,
+        )
+
+        _bind_logging_worker_to_running_loop()
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = httpx.Response(
+                200,
+                content=_sse_body(_RESPONSES_SSE_EVENTS),
+                headers={"content-type": "text/event-stream"},
+            )
+            sse_stream = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+                max_tokens=100,
+                messages=self.MESSAGES,
+                model="openai/gpt-4o-mini",
+                stream=True,
+                custom_llm_provider="openai",
+                litellm_call_id=capture_success_payloads.tracking_id,
+            )
+            chunks = await _drain(sse_stream)
+
+        await _flush_logging_worker(capture_success_payloads)
+
+        _assert_anthropic_sse(chunks)
+        assert len(capture_success_payloads.payloads) == 1
+        payload = capture_success_payloads.payloads[0]
+        assert payload["call_type"] == "aresponses"
+        assert payload["prompt_tokens"] == 11
+        assert payload["completion_tokens"] == 7
+        assert payload["total_tokens"] == 18
+        assert payload["response_cost"] > 0
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_bridge_streaming_emits_success_logging(self, capture_success_payloads):
+        """The chat-completions bridge, reached via
+        litellm.use_chat_completions_url_for_anthropic_messages. Its router lookup is
+        stubbed to what an SDK caller with no proxy running already resolves to."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        _bind_logging_worker_to_running_loop()
+
+        with patch(
+            "litellm.llms.anthropic.experimental_pass_through.adapters.handler._proxy_router_fallback",
+            return_value=None,
+        ):
+            sse_stream = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                max_tokens=100,
+                messages=self.MESSAGES,
+                model="openai/gpt-4o-mini",
+                stream=True,
+                custom_llm_provider="openai",
+                mock_response="hello there",
+                litellm_call_id=capture_success_payloads.tracking_id,
+            )
+            chunks = await _drain(sse_stream)
+
+        await _flush_logging_worker(capture_success_payloads)
+
+        _assert_anthropic_sse(chunks)
+        assert len(capture_success_payloads.payloads) == 1
+        payload = capture_success_payloads.payloads[0]
+        assert payload["call_type"] == "acompletion"
+        assert payload["total_tokens"] > 0
+        assert payload["response_cost"] > 0

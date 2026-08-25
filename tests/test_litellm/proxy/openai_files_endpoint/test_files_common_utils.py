@@ -428,3 +428,47 @@ def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
     add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-gone")
 
     assert data == {"batch_id": "unified-batch-id"}
+
+
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _completed_batch_safe_to_retire,
+)
+
+
+def _completed_batch_for_retire(
+    output_file_id: str | None, completed: int | None = None
+) -> LiteLLMBatch:
+    kwargs = dict(
+        id="batch-1",
+        completion_window="24h",
+        created_at=1234567890,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="completed",
+        output_file_id=output_file_id,
+        error_file_id=None,
+    )
+    if completed is not None:
+        kwargs["request_counts"] = {"total": completed, "completed": completed, "failed": 0}
+    return LiteLLMBatch(**kwargs)
+
+
+class TestCompletedBatchSafeToRetire:
+    """A completed batch is only safe to retire from cost recovery once its output
+    file has arrived or the provider proves no successful lines (#37713)."""
+
+    def test_output_file_present_is_safe(self):
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire("file-out")) is True
+
+    def test_no_output_and_no_successful_lines_is_safe(self):
+        # Every request line errored -> nothing left to recover.
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, completed=0)) is True
+
+    def test_no_output_but_successful_lines_is_not_safe(self):
+        # The bug: output_file_id is lagging; retiring here loses the spend record.
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, completed=5)) is False
+
+    def test_no_output_and_unknown_counts_is_not_safe(self):
+        # Counts unknown -> stay eligible so the next poller pass revisits it.
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None)) is False

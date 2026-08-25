@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -396,7 +397,7 @@ class OutputConfigBlock(TypedDict, total=False):
 
 class CommonRequestObject(TypedDict, total=False):  # common request object across sync + async flows
     additionalModelRequestFields: dict
-    additionalModelResponseFieldPaths: list[str]
+    additionalModelResponseFieldPaths: Sequence[str]
     inferenceConfig: InferenceConfig
     system: list[SystemContentBlock]
     toolConfig: ToolConfigBlock

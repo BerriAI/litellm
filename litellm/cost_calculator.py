@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -149,6 +150,7 @@ _VIDEO_CALL_TYPES: Final = frozenset(
         CallTypes.avideo_remix.value,
     }
 )
+
 
 _SPEECH_CALL_TYPES: Final = frozenset(
     {
@@ -912,6 +914,8 @@ def _get_usage_object(
                 usage_obj,
             )
         )
+    elif isinstance(usage_obj, dict) and InteractionsUsageObjectTransformation.is_interactions_usage_object(usage_obj):
+        return InteractionsUsageObjectTransformation.transform_interactions_usage_object(usage_obj)
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
@@ -1288,6 +1292,10 @@ def completion_cost(
                         )
                         if tr_usage is not None:
                             _usage = tr_usage.model_dump()
+                    elif InteractionsUsageObjectTransformation.is_interactions_usage_object(_usage):
+                        _usage = InteractionsUsageObjectTransformation.transform_interactions_usage_object(
+                            _usage
+                        ).model_dump()
                     else:
                         _usage = _usage
 
@@ -1372,22 +1380,35 @@ def completion_cost(
                     if custom_pricing and litellm_logging_obj is not None:
                         _litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
                         if _litellm_params is not None:
-                            _metadata = _litellm_params.get("metadata", {}) or {}
-                            _video_model_info = _metadata.get("model_info", None)
+                            _video_model_info = next(
+                                (
+                                    model_info
+                                    for _metadata_key in ("metadata", "litellm_metadata")
+                                    if (model_info := (_litellm_params.get(_metadata_key) or {}).get("model_info"))
+                                    is not None
+                                ),
+                                None,
+                            )
 
                     usage_obj = getattr(completion_response, "usage", None)
                     duration_seconds: float | None = None
                     video_resolution: str | None = None
+                    provider_reported_cost: float | None = None
                     if completion_response is not None and usage_obj:
                         # Handle both dict and Pydantic Usage object
                         if isinstance(usage_obj, dict):
                             duration_seconds = usage_obj.get("duration_seconds", None)
                             _vr = usage_obj.get("video_resolution", None)
+                            provider_reported_cost = usage_obj.get("provider_reported_cost_usd", None)
                         else:
                             duration_seconds = getattr(usage_obj, "duration_seconds", None)
                             _vr = getattr(usage_obj, "video_resolution", None)
+                            provider_reported_cost = getattr(usage_obj, "provider_reported_cost_usd", None)
                         if _vr is not None:
                             video_resolution = str(_vr).strip().lower()
+
+                        if _video_model_info is None and provider_reported_cost is not None:
+                            return float(provider_reported_cost)
 
                         if duration_seconds is not None:
                             # Calculate cost based on video duration using video-specific cost calculation

@@ -2,6 +2,9 @@ import asyncio
 import copy
 import json
 import os
+import time
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -266,6 +269,75 @@ async def test_stamped_auth_object_reflects_header_derived_identity():
 
     stamped = updated_data["metadata"]["user_api_key_auth"]
     assert stamped.end_user_id == "end-user-from-header"
+
+
+@pytest.mark.asyncio
+async def test_arrival_time_prefers_litellm_received_at_over_time_time():
+    """LIT-6012: by the time this function runs, auth has already completed, so
+    time.time() here would silently exclude the whole auth phase from the
+    queue-time window. request.state.litellm_received_at (stamped at the top of
+    user_api_key_auth, before auth work) must win when present."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    received_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    request_mock.state = SimpleNamespace(litellm_received_at=received_at)
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated_data["proxy_server_request"]["arrival_time"] == received_at.timestamp()
+
+
+@pytest.mark.asyncio
+async def test_arrival_time_falls_back_to_time_time_without_litellm_received_at():
+    """Callers that never went through user_api_key_auth (no stamp on request.state)
+    must still get a usable arrival_time instead of erroring."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = SimpleNamespace()  # no litellm_received_at attribute
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    before = time.time()
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    after = time.time()
+
+    arrival_time = updated_data["proxy_server_request"]["arrival_time"]
+    assert isinstance(arrival_time, float)
+    assert before <= arrival_time <= after
 
 
 @pytest.mark.asyncio
@@ -708,6 +780,54 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
         "proxy_server_request must be excluded from its own body snapshot "
         "to prevent the body from self-referencing"
     )
+
+
+def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking():
+    """
+    Regression: proxy_server_request['body'] is snapshotted by
+    add_litellm_data_to_request BEFORE guardrails (e.g. Presidio PII masking) run
+    in pre_call_hook. Without a refresh after pre_call_hook, the persisted body
+    silently bypasses whatever masking the guardrail applied, so raw PII/PCI
+    lands in SpendLogs when store_prompts_in_spend_logs is enabled.
+    """
+    from litellm.proxy.litellm_pre_call_utils import (
+        refresh_proxy_server_request_body_snapshot,
+    )
+
+    class _FakeLoggingObj:
+        """Stands in for the live, non-JSON-serializable Logging instance that
+        litellm.utils.function_setup stamps onto `data` between the initial
+        snapshot and pre_call_hook."""
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+        "secret_fields": {"raw_headers": {"authorization": "Bearer sk-secret"}},
+        "litellm_logging_obj": _FakeLoggingObj(),
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "method": "POST",
+            "body": {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+            },
+        },
+    }
+
+    # Simulate a PII-masking guardrail mutating `messages` in place, like Presidio's
+    # async_pre_call_hook does, after the initial snapshot was already taken.
+    data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    refreshed_body = data["proxy_server_request"]["body"]
+    assert refreshed_body["messages"] == data["messages"]
+    # Still excludes secrets, self-reference, and the live logging object, same as
+    # the initial snapshot -- and proves the persisted body stays JSON-serializable.
+    assert "secret_fields" not in refreshed_body
+    assert "proxy_server_request" not in refreshed_body
+    assert "litellm_logging_obj" not in refreshed_body
+    assert "123-45-6789" not in json.dumps(refreshed_body)
 
 
 @pytest.mark.asyncio
@@ -2738,7 +2858,6 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-import time
 from typing import Optional
 
 from fastapi.responses import Response
@@ -7210,3 +7329,92 @@ def test_vertex_sends_exactly_one_authorization_header():
     vertex_request_headers.update(forwarded)
 
     assert _authorization_values(vertex_request_headers) == [GOOGLE_ACCESS_TOKEN]
+@pytest.mark.asyncio
+async def test_newrelic_team_callback_vars_reach_trusted_field():
+    """A key with a newrelic team callback stamps its vars into the proxy-owned
+    trusted field, and a caller-supplied newrelic_api_key in the body is
+    stripped rather than merged."""
+    key_with_newrelic_callback = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "newrelic",
+                    "callback_type": "success",
+                    "callback_vars": {"newrelic_api_key": "team-nr-key", "newrelic_region": "eu"},
+                }
+            ]
+        },
+    )
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "newrelic_api_key": "attacker-key",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=key_with_newrelic_callback,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {
+        "newrelic_api_key": "team-nr-key",
+        "newrelic_region": "eu",
+    }
+    assert updated["success_callback"] == ["newrelic"]
+
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+
+    params = initialize_standard_callback_dynamic_params(updated)
+    assert params.get("newrelic_api_key") == "team-nr-key"
+    assert params.get("newrelic_region") == "eu"
+
+    from litellm.integrations.otel.presets import dynamic_otlp_endpoint, dynamic_otlp_headers
+
+    assert dynamic_otlp_headers("newrelic", params) == {"api-key": "team-nr-key"}
+    assert dynamic_otlp_endpoint("newrelic", params) == "https://otlp.eu01.nr-data.net"
+
+    from litellm.utils import get_non_default_completion_params
+
+    forwarded = get_non_default_completion_params(updated)
+    assert not any(param.startswith("newrelic_") for param in forwarded)
+    assert TRUSTED_CALLBACK_VARS_FIELD not in forwarded
+
+
+def test_newrelic_vars_scoped_to_newrelic_callback_entry():
+    """New Relic routing reads these vars from the trusted overlay with no
+    callback-name check, so a team that puts newrelic_* under a different
+    callback's vars must not have them enter the shared bag (and so never
+    exports to New Relic). Vars under a real newrelic entry are kept."""
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    smuggled = convert_key_logging_metadata_to_callback(
+        AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={
+                "langfuse_public_key": "pk",
+                "newrelic_api_key": "SMUGGLED",
+                "newrelic_region": "eu",
+            },
+        ),
+        None,
+    )
+    assert smuggled.callback_vars == {"langfuse_public_key": "pk"}
+
+    legit = convert_key_logging_metadata_to_callback(
+        AddTeamCallback(
+            callback_name="newrelic",
+            callback_type="success",
+            callback_vars={"newrelic_api_key": "REAL", "newrelic_region": "us"},
+        ),
+        None,
+    )
+    assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}

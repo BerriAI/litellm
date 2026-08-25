@@ -64,6 +64,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
+    reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -592,6 +593,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     assistant_message["tool_calls"] = tool_calls
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks
+                reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
                 new_messages.append(assistant_message)
 
         return new_messages

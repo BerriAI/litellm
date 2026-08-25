@@ -70,6 +70,7 @@ from e2e_config import (
     POLL_TIMEOUT,
     PROXY_BASE_URL,
     REQUEST_TIMEOUT,
+    SLOW_PROVIDER_TIMEOUT_SECONDS,
     settle_propagation,
 )
 from transport import HttpTransport, SplitTransport, Transport
@@ -425,6 +426,7 @@ class ProxyClient:
             headers=self.transport.bearer(key),
             json=body,
             response_type=OcrResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     def count_tokens(self, key: str, body: CountTokensBody) -> Result[CountTokensResponse]:
