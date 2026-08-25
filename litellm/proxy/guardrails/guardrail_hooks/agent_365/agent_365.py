@@ -105,6 +105,12 @@ class Agent365MalformedResponseError(Exception):
     pass
 
 
+class Agent365ThrottledError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
 class Agent365Guardrail(CustomGuardrail):
     """Pre-MCP-call guardrail enforcing Microsoft Agent 365 tool-evaluation verdicts."""
 
@@ -192,6 +198,13 @@ class Agent365Guardrail(CustomGuardrail):
                 status_code=401,
                 reason=f"the Entra On-Behalf-Of token exchange was rejected ({exc.error_code})",
             )
+        except Agent365ThrottledError as exc:
+            self._handle_throttled(
+                data=data,
+                tool_name=tool_name,
+                reason=f"the Entra token endpoint returned HTTP {exc.status_code}",
+                latency_ms=None,
+            )
         except (httpx.HTTPError, LitellmTimeout, TimeoutError) as exc:
             return self._handle_unavailable(
                 data=data,
@@ -235,22 +248,12 @@ class Agent365Guardrail(CustomGuardrail):
         latency_ms: float,
     ) -> dict | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
         if response.status_code in (408, 429):
-            self._record_verdict(
+            self._handle_throttled(
                 data=data,
-                verdict="Throttled",
-                guardrail_status="guardrail_failed_to_respond",
-                defender_status=None,
-                correlation_id=None,
-                latency_ms=latency_ms,
+                tool_name=tool_name,
                 reason=f"the Agent 365 endpoint returned HTTP {response.status_code}",
+                latency_ms=latency_ms,
             )
-            throttled_detail: Final[_UnavailableDetail] = {
-                "error": "Agent 365 guardrail could not authorize the tool call",
-                "message": f"Tool call '{tool_name}' was blocked because the Agent 365 endpoint returned "
-                f"HTTP {response.status_code}; throttled evaluations block regardless of unreachable_fallback.",
-                "tool": tool_name,
-            }
-            raise HTTPException(status_code=503, detail=throttled_detail)
         if 400 <= response.status_code < 500:
             if response.status_code == 401:
                 self._evict_obo_token(assertion)
@@ -398,6 +401,8 @@ class Agent365Guardrail(CustomGuardrail):
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},  # mutable-ok: httpx header dict
         )
+        if response.status_code in (408, 429):
+            raise Agent365ThrottledError(status_code=response.status_code)
         if response.status_code >= 500:
             raise httpx.HTTPStatusError(
                 f"Entra token endpoint returned {response.status_code}",
@@ -471,6 +476,30 @@ class Agent365Guardrail(CustomGuardrail):
             "tool": tool_name,
         }
         raise HTTPException(status_code=status_code, detail=caller_fault_detail)
+
+    def _handle_throttled(
+        self,
+        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        tool_name: str,
+        reason: str,
+        latency_ms: float | None,
+    ) -> NoReturn:
+        self._record_verdict(
+            data=data,
+            verdict="Throttled",
+            guardrail_status="guardrail_failed_to_respond",
+            defender_status=None,
+            correlation_id=None,
+            latency_ms=latency_ms,
+            reason=reason,
+        )
+        throttled_detail: Final[_UnavailableDetail] = {
+            "error": "Agent 365 guardrail could not authorize the tool call",
+            "message": f"Tool call '{tool_name}' was blocked because {reason}; "
+            "throttled evaluations block regardless of unreachable_fallback.",
+            "tool": tool_name,
+        }
+        raise HTTPException(status_code=503, detail=throttled_detail)
 
     def _evict_obo_token(self, assertion: str) -> None:
         cache_key: Final = hashlib.sha256(assertion.encode("utf-8")).hexdigest()
