@@ -127,7 +127,7 @@ def test_transform_response_promotes_reasoning_content_when_content_empty():
         reasoning_content="The answer to 2+2 is 4.",
     )
 
-    with patch(
+    with patch(  # test-quality-ok: isolates override's reasoning_content fallback from parent's HTTP/parsing machinery; no injection seam for super().transform_response
         "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_response",
         return_value=original,
     ):
@@ -156,7 +156,7 @@ def test_transform_response_keeps_content_when_already_present():
         reasoning_content="Let me work this out.",
     )
 
-    with patch(
+    with patch(  # test-quality-ok: isolates override's no-clobber path from parent's HTTP/parsing machinery; no injection seam for super().transform_response
         "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_response",
         return_value=original,
     ):
@@ -185,7 +185,7 @@ def test_transform_response_noop_without_reasoning_content():
         reasoning_content=None,
     )
 
-    with patch(
+    with patch(  # test-quality-ok: isolates override's no-op path from parent's HTTP/parsing machinery; no injection seam for super().transform_response
         "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_response",
         return_value=original,
     ):
