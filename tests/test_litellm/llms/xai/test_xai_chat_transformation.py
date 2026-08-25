@@ -119,6 +119,24 @@ class TestXAIParallelToolCalls:
         assert result["messages"][0]["role"] == "user"
 
 
+class TestXAIChatWebSearchOptions:
+    """XAI answers /chat/completions requests carrying web_search_options with a 410 (Live Search retired)"""
+
+    def test_transform_request_drops_web_search_options(self):
+        config = XAIChatConfig()
+
+        result = config.transform_request(
+            model="xai/grok-4.6",
+            messages=[{"role": "user", "content": "newest litellm version?"}],
+            optional_params={"web_search_options": {"search_context_size": "medium"}, "temperature": 0.5},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "web_search_options" not in result
+        assert result["temperature"] == 0.5
+
+
 class TestXAIUsageNormalization:
     def test_preserves_reasoning_tokens_in_total_usage(self):
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=200)
