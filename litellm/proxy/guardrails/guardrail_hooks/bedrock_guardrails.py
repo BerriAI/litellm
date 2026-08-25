@@ -338,13 +338,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return cleaned or None
 
     async def _create_bedrock_input_content_request(self, messages: list[AllMessageValues] | None) -> BedrockRequest:
-        """
-        Create a bedrock request for the input content - the LLM request.
-
-        Text and image parts are both sent, so a guardrail with the IMAGE modality
-        enabled inspects the image the caller actually sent instead of only the text
-        that happened to sit next to it.
-        """
+        """Create a bedrock request for the input content - the LLM request."""
         bedrock_request: Final[BedrockRequest] = BedrockRequest(source="INPUT")
         if messages is None:
             return bedrock_request
@@ -357,10 +351,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _build_input_content_items(self, message: AllMessageValues) -> tuple[BedrockContentItem, ...]:
         """Flatten one request message into ApplyGuardrail INPUT content items.
 
-        INPUT scans send text and image parts. Grounding qualifiers are attached
-        exclusively when assembling the OUTPUT request, so a caller cannot use a
-        grounding_source/query tag to change how input-safety policies treat their
-        content (which would be an input-guardrail bypass).
+        Grounding qualifiers are attached only when assembling the OUTPUT request, so a
+        grounding_source/query tag cannot change how input-safety policies treat content
         """
         content = message.get("content")
         if content is None:
@@ -381,11 +373,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not isinstance(item, dict):
             return None
         part: Final = cast(Mapping[str, object], item)  # cast-ok: narrowed to dict on the line above
-        # Classify by the declared type before reading any field. Provider
-        # transformations branch on `type`, so a part tagged image_url reaches the
-        # model as an image even when it also carries a `text` key. Reading `text`
-        # first would scan that decoy and forward the image unscanned, which is the
-        # bypass this whole extractor exists to close.
+        # Provider transformations branch on `type`, so an image_url part reaches the
+        # model as an image even when it also carries `text`. Reading `text` first would
+        # scan that decoy and forward the image unscanned
         if part.get("type") == "image_url":
             image_url: Final = self._get_image_url(item=part)
             if image_url is None:
@@ -409,15 +399,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return None
 
     def _handle_unscannable_image(self, reason: str) -> None:
-        """Decide what to do with an image part ApplyGuardrail cannot scan.
+        """Block or warn for an image part ApplyGuardrail cannot scan.
 
-        The image still reaches the model either way, so skipping it silently would
-        let a caller defeat an IMAGE-modality guardrail just by picking a format the
-        API does not accept. `on_unscannable_image` defaults to "block" for that
-        reason; "allow" restores the permissive behavior for deployments that would
-        rather serve the request than fail it.
-
-        Returns None so callers can `return self._handle_unscannable_image(...)`.
+        The image reaches the model either way, so skipping it silently would let a
+        caller defeat an IMAGE-modality guardrail by picking a format the API rejects
         """
         if self.on_unscannable_image == "block":
             raise HTTPException(
@@ -440,13 +425,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem | None:
-        """Decode/fetch an image part into an ApplyGuardrail image block.
+        """Decode or fetch an image part into an ApplyGuardrail image block.
 
-        Remote URLs are only fetched while LiteLLM's URL validation is on. With
-        validation disabled `async_safe_get` degrades to an unrestricted, redirect
-        following GET, and the URL comes straight from the caller, so fetching here
-        would turn the guardrail into an SSRF primitive. Such an image is treated as
-        unscannable instead.
+        With `user_url_validation` off, `async_safe_get` degrades to an unrestricted,
+        redirect-following GET on a caller-supplied URL, so it is not fetched at all
         """
         if not image_url.startswith("data:") and not getattr(litellm, "user_url_validation", True):
             self._handle_unscannable_image(
