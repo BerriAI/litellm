@@ -12382,8 +12382,6 @@ def get_direct_access_models(
 
     The 'all-proxy-models' sentinel grants direct access to every non-team
     deployment, mirroring how get_key_models expands it for the key/team path.
-    An empty models list means unrestricted access at call time (see
-    can_user_call_model), so it resolves the same way.
     """
     if not user_db_object.models or SpecialModelNames.all_proxy_models.value in user_db_object.models:
         return llm_router.get_model_ids(exclude_team_models=True)
