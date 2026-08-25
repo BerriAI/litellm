@@ -81,6 +81,6 @@ def test_enterprise_hooks_import_failure_logs_warning(monkeypatch, caplog):
         for record in caplog.records
     ), "Expected a warning to be logged when enterprise hooks import fails"
 
-    monkeypatch.undo()
+    monkeypatch.setattr(builtins, "__import__", real_import)
     sys.modules.pop("litellm.proxy.hooks", None)
     importlib.import_module("litellm.proxy.hooks")
