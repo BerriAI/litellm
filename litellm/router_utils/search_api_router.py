@@ -227,7 +227,12 @@ class SearchAPIRouter:
 
             verbose_router_logger.debug("Selected search tool with provider: %s", search_provider)
 
-            # Call the original search function with the provider config
+            # Call the original search function with the provider config.
+            # Provider-specific yaml `litellm_params` (e.g. agentcore `tool_name`)
+            # and request-body params are forwarded via `search_params` (see
+            # #37538); credential keys are separated from the logged/transformed
+            # optional params downstream in `litellm.search` and are only exposed
+            # to request signing.
             response: Final = await original_generic_function(
                 search_provider=search_provider,
                 api_key=api_key,
