@@ -25,12 +25,14 @@ it above.
 """
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, get_args
 
 import litellm
 from litellm.types.llms.openai import REASONING_EFFORT
 
 REASONING_EFFORT_ADVERTISEMENT_ORDER: Final = get_args(REASONING_EFFORT)
+_EMPTY_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
 
 _EFFORT_FLAGS: Final = (
     ("none", "supports_none_reasoning_effort"),
@@ -52,17 +54,19 @@ def _bare_model_entry(model_info: Mapping[str, object]) -> Mapping[str, object]:
     key: Final = model_info.get("key")
     provider: Final = model_info.get("litellm_provider")
     if not isinstance(key, str) or not isinstance(provider, str) or not key.startswith(f"{provider}/"):
-        return {}
+        return _EMPTY_ENTRY
     entry: Final[Mapping[str, object] | None] = litellm.model_cost.get(key.removeprefix(f"{provider}/"))
-    return entry if entry is not None else {}
+    return entry if entry is not None else _EMPTY_ENTRY
 
 
 def _declared_effort_flags(model_info: Mapping[str, object]) -> Mapping[str, object]:
     bare: Final = _bare_model_entry(model_info)
-    return {
-        effort: model_info.get(flag) if model_info.get(flag) is not None else bare.get(flag)
-        for effort, flag in _EFFORT_FLAGS
-    }
+    return MappingProxyType(
+        {
+            effort: model_info.get(flag) if model_info.get(flag) is not None else bare.get(flag)
+            for effort, flag in _EFFORT_FLAGS
+        }
+    )
 
 
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
