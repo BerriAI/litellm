@@ -127,6 +127,7 @@ class A2ACompletionBridgeHandler:
         litellm_params: dict[str, Any],
         api_base: str | None = None,
         agent_extra_headers: dict[str, str] | None = None,
+        agent_static_headers: Mapping[str, str] | None = None,
         *,
         _skip_a2a_provider_routing: bool = False,
     ) -> dict[str, object]:
@@ -140,6 +141,7 @@ class A2ACompletionBridgeHandler:
             api_base: API base URL from agent_card_params
             agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
                 admin extra_headers) to forward on the upstream HTTP call.
+            agent_static_headers: Configured headers for provider-specific routing.
 
         Returns:
             A2A SendMessageResponse dict
@@ -161,6 +163,7 @@ class A2ACompletionBridgeHandler:
                     "api_base": api_base,
                     "litellm_params": litellm_params,
                     "agent_extra_headers": agent_extra_headers,
+                    "agent_static_headers": agent_static_headers,
                 }
                 if litellm_params.get("timeout") is not None:
                     provider_kwargs["timeout"] = litellm_params["timeout"]
@@ -194,6 +197,7 @@ class A2ACompletionBridgeHandler:
         litellm_params: dict[str, Any],
         api_base: str | None = None,
         agent_extra_headers: dict[str, str] | None = None,
+        agent_static_headers: Mapping[str, str] | None = None,
         *,
         _skip_a2a_provider_routing: bool = False,
     ) -> AsyncIterator[dict[str, object]]:
@@ -213,6 +217,7 @@ class A2ACompletionBridgeHandler:
             api_base: API base URL from agent_card_params
             agent_extra_headers: Per-request headers (from x-a2a-{agent}-* rewrite and
                 admin extra_headers) to forward on the upstream HTTP call.
+            agent_static_headers: Configured headers for provider-specific routing.
 
         Yields:
             A2A streaming response events
@@ -234,6 +239,7 @@ class A2ACompletionBridgeHandler:
                     "api_base": api_base,
                     "litellm_params": litellm_params,
                     "agent_extra_headers": agent_extra_headers,
+                    "agent_static_headers": agent_static_headers,
                 }
                 if litellm_params.get("timeout") is not None:
                     provider_kwargs["timeout"] = litellm_params["timeout"]

@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final, NamedTuple, Protocol
 
 import httpx
@@ -26,7 +26,34 @@ _IBM_CLOUD_IAM_URL: Final = "https://iam.cloud.ibm.com/identity/token"
 _POLL_INTERVAL_S: Final = 2.0
 _MAX_POLL_ATTEMPTS: Final = 90
 _TOKEN_CACHE_TTL_BUFFER_S: Final = 60
+_WXO_RESERVED_HEADERS: Final = frozenset({"accept", "authorization", "content-type"})
 _token_cache: Final[dict[str, tuple[str, float]]] = {}
+
+
+def _build_wxo_headers(
+    token: str,
+    accept: str,
+    static_headers: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    headers: dict[str, str] = (
+        {
+            key: value
+            for key, value in static_headers.items()
+            if isinstance(key, str)
+            and isinstance(value, str)
+            and key.lower() not in _WXO_RESERVED_HEADERS
+        }
+        if isinstance(static_headers, Mapping)
+        else {}
+    )
+    headers.update(
+        {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": accept,
+        }
+    )
+    return headers
 
 
 class WXORequestParams(NamedTuple):
@@ -277,6 +304,7 @@ class WatsonxOrchestrateHandler:
         request_id: str,
         params: dict[str, object],
         litellm_params: WXOLitellmParams,
+        static_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
@@ -289,11 +317,11 @@ class WatsonxOrchestrateHandler:
             client=client,
         )
         base_url: Final = WatsonxOrchestrateTransformation.get_api_base_url(wxo.cp4d_host, wxo.instance_id)
-        auth_headers: Final = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        auth_headers: Final = _build_wxo_headers(
+            token=token,
+            accept="application/json",
+            static_headers=static_headers,
+        )
 
         text: Final = WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
         body: Final = WatsonxOrchestrateTransformation.build_wxo_run_body(
@@ -326,6 +354,7 @@ class WatsonxOrchestrateHandler:
         litellm_params: WXOLitellmParams,
         chunk_size: int = 50,
         delay_ms: int = 10,
+        static_headers: Mapping[str, str] | None = None,
     ) -> AsyncIterator[dict[str, object]]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
@@ -338,11 +367,11 @@ class WatsonxOrchestrateHandler:
             client=client,
         )
         base_url: Final = WatsonxOrchestrateTransformation.get_api_base_url(wxo.cp4d_host, wxo.instance_id)
-        auth_headers: Final = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream, application/json",
-        }
+        auth_headers: Final = _build_wxo_headers(
+            token=token,
+            accept="text/event-stream, application/json",
+            static_headers=static_headers,
+        )
         text: Final = WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
         body: Final = WatsonxOrchestrateTransformation.build_wxo_run_body(
             wxo_agent_id=wxo.wxo_agent_id, text=text, thread_id=wxo.thread_id
@@ -366,6 +395,7 @@ class WatsonxOrchestrateHandler:
                 request_id=request_id,
                 params=params,
                 litellm_params=litellm_params,
+                static_headers=static_headers,
             )
             response_text: Final = WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(result)
             async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(

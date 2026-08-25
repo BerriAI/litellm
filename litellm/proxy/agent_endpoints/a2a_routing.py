@@ -188,6 +188,7 @@ async def _route_registered_provider(
             litellm_params=provider_params,
             api_base=api_base,
             agent_extra_headers=agent_extra_headers,
+            agent_static_headers=static_headers,
         )
         completion_stream: Final = A2AModelResponseIterator(
             streaming_response=streaming_response,
@@ -210,6 +211,7 @@ async def _route_registered_provider(
         litellm_params=provider_params,
         api_base=api_base,
         agent_extra_headers=agent_extra_headers,
+        agent_static_headers=static_headers,
     )
     error_value: Final = response.get("error")
     if isinstance(error_value, dict):
