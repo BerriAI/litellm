@@ -1,6 +1,8 @@
 import asyncio
 import concurrent.futures
+import base64
 import json
+from urllib.parse import quote
 import logging
 import threading
 import time
@@ -602,6 +604,40 @@ class TestRedactionAndCaps:
 
         assert "PAYLOADMIDDLE" not in result.redacted_body
         assert tail[:40] not in result.redacted_body
+
+    def test_a_secret_carrying_spaces_is_dropped_when_echoed_whole(self):
+        """Regression on the redactor itself: comparing a compacted response against an
+        uncompacted secret stopped matching hand-set passphrases, which are exactly the secrets
+        most likely to be echoed and the ones an earlier contiguous match had caught."""
+        assertion = SecretStr("correct horse battery staple, 42!")
+        echoed = assertion.get_secret_value()
+        body = {"error": "invalid_client", "error_description": f"secret {echoed} rejected"}
+
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert echoed not in result.redacted_body
+
+    def test_a_percent_encoded_secret_is_dropped(self):
+        """A form-encoded grant puts the secret on the wire percent-escaped, so an echo of that
+        shape has to be recognised without every caller enumerating it."""
+        assertion = SecretStr("sUp3r+S3cret/Value=123")
+        echoed = quote(assertion.get_secret_value(), safe="")
+        body = {"error": "invalid_client", "error_description": f"rejected {echoed}"}
+
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert echoed not in result.redacted_body
+
+    def test_several_wire_forms_are_all_compared(self):
+        """The caller declares each shape it sent, since an encoding the redactor cannot reverse
+        (base64 of id:secret) is only knowable there."""
+        raw = SecretStr("sUp3rS3cretValue123")
+        blob = SecretStr(base64.b64encode(b"litellm:sUp3rS3cretValue123").decode())
+        body = {"error": "invalid_client", "error_description": f"bad {blob.get_secret_value()}"}
+
+        result = redact_oauth_error_body(400, json.dumps(body), (raw, blob))
+
+        assert blob.get_secret_value() not in result.redacted_body
 
     def test_a_fragment_shorter_than_a_long_run_is_dropped(self):
         """A slice too short to share a long contiguous run with the assertion is still assertion

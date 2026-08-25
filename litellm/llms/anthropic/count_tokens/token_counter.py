@@ -61,9 +61,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
         # None and the caller silently falls back to the local tokenizer, so a workload identity
         # deployment would never reach Anthropic's authoritative count. The minted token is an
         # sk-ant-oat, which get_required_headers already sends as a Bearer rather than x-api-key.
-        api_key: Final = static_key or await aget_anthropic_wif_token(
-            litellm_params, litellm_params.get("api_base"), model_to_use
-        )
+        api_base: Final = litellm_params.get("api_base")
+        api_key: Final = static_key or await aget_anthropic_wif_token(litellm_params, api_base, model_to_use)
 
         if not api_key:
             verbose_logger.warning("No Anthropic credential found for token counting")
@@ -74,6 +73,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 model=model_to_use,
                 messages=messages,
                 api_key=api_key,
+                # The token is minted for this base, so the count has to be asked of the same host.
+                api_base=api_base,
                 tools=tools,
                 system=system,
             )

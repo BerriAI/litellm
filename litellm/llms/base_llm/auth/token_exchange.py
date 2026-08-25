@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from math import inf
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
@@ -141,28 +141,43 @@ def redact_oauth_error_body(
 
 
 def _drop_reflected_assertion(rendered: str, assertion: SecretStr | None) -> str:
-    """A token endpoint that echoes the submitted assertion back would otherwise put it in the
-    operator log and in the error handed to the caller.
+    """Catches an endpoint that echoes the submitted credential back, verbatim or in fragments,
+    however it split or percent-encoded it.
 
-    Matching a contiguous slice is not enough. An endpoint that returns a short piece of the
-    assertion, or returns it broken up by delimiters, shares no long run with it, so the credential
-    material would travel on unredacted. The rendered text is therefore stripped down to the
-    characters a credential is made of and scanned against the assertion, which catches a fragment
-    wherever it starts and however it was split. Over-redacting an error that merely happens to
-    contain such a run is the right way to be wrong here.
+    Both sides are reduced to the characters a credential is made of before comparison. Stripping
+    only the rendered side would stop matching a secret that carries spaces or punctuation of its
+    own, which is exactly the hand-set passphrase most at risk of being echoed.
+
+    This stops an accidental or naive echo. It cannot stop an endpoint that deliberately re-encodes
+    or interleaves the credential, and it is not what keeps the credential from the endpoint, which
+    already holds it. What it protects is blast radius: keeping the value out of the caller's error
+    and out of third-party log sinks.
     """
     if assertion is None:
         return rendered
     secret: Final = assertion.get_secret_value()
     if not secret:
         return rendered
-    if len(secret) <= _REFLECTION_MIN_RUN:
-        return _REFLECTED_VALUE_MESSAGE if secret in rendered else rendered
-    compacted: Final = _CREDENTIAL_CHARS.sub("", rendered)
-    runs: Final = (
-        compacted[start : start + _REFLECTION_MIN_RUN] for start in range(len(compacted) - _REFLECTION_MIN_RUN + 1)
-    )
-    return _REFLECTED_VALUE_MESSAGE if any(run in secret for run in runs) else rendered
+    if secret in rendered:
+        return _REFLECTED_VALUE_MESSAGE
+    compacted_secret: Final = _CREDENTIAL_CHARS.sub("", secret)
+    if not compacted_secret:
+        return rendered
+    return _REFLECTED_VALUE_MESSAGE if _shares_a_credential_run(rendered, compacted_secret) else rendered
+
+
+def _shares_a_credential_run(rendered: str, compacted_secret: str) -> bool:
+    """``unquote`` covers a credential sent form-encoded, without every caller enumerating that
+    shape for itself: percent-escaping is reversible and applies to any field, query string
+    included."""
+    for candidate in (rendered, unquote(rendered)):
+        compacted: Final = _CREDENTIAL_CHARS.sub("", candidate)
+        if any(
+            compacted[start : start + _REFLECTION_MIN_RUN] in compacted_secret
+            for start in range(len(compacted) - _REFLECTION_MIN_RUN + 1)
+        ):
+            return True
+    return False
 
 
 def _redact_body_text(body_text: str) -> str:

@@ -148,14 +148,21 @@ def _resolve_client_secret(config: KeycloakSource, secret_reader: SecretReader) 
 def _wire_forms_of_secret(config: KeycloakSource, client_secret: str) -> tuple[SecretStr, ...]:
     """Every shape the secret leaves this process in, so an echo of any of them is caught.
 
-    client_secret_basic sends base64 of ``id:secret``, which decodes straight back to the secret,
-    so an endpoint echoing that blob hands over reversible material that a raw comparison misses.
+    Neither grant sends the secret verbatim. client_secret_basic base64s ``id:secret``, which
+    decodes straight back to it, and client_secret_post percent-escapes it. An endpoint echoing
+    either shape hands over reversible material a raw comparison would miss.
     """
     raw: Final = SecretStr(client_secret)
-    if config.auth_method != "client_secret_basic":
-        return (raw,)
-    encoded_pair: Final = f"{_form_encode(config.client_id)}:{_form_encode(client_secret)}"
-    return (raw, SecretStr(base64.b64encode(encoded_pair.encode()).decode("ascii")))
+    match config.auth_method:
+        case "client_secret_basic":
+            encoded_pair: Final = f"{_form_encode(config.client_id)}:{_form_encode(client_secret)}"
+            return (raw, SecretStr(base64.b64encode(encoded_pair.encode()).decode("ascii")))
+        case "client_secret_post":
+            # urlencode percent-escapes reserved characters, so a secret containing any of them
+            # leaves in a shape the raw comparison would not recognise coming back.
+            return (raw, SecretStr(quote(client_secret, safe="")))
+        case _:
+            assert_never(config.auth_method)
 
 
 def _endpoint_error_message(config: KeycloakSource, response: httpx.Response, client_secret: str) -> str:
