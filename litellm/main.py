@@ -8744,7 +8744,7 @@ def stream_chunk_builder(
 
         # Reasoning items carry the provider's encrypted reasoning state, which the
         # Responses API bridge reads back off the assembled assistant message.
-        reasoning_item_chunks: Final = [
+        reasoning_item_chunks: Final = [  # mutable-ok: local filter over chunks, never escapes this function
             chunk
             for chunk in chunks
             if len(chunk["choices"]) > 0
@@ -8753,7 +8753,7 @@ def stream_chunk_builder(
         ]
 
         if len(reasoning_item_chunks) > 0:
-            all_reasoning_items: Final[list] = []
+            all_reasoning_items: Final[list] = []  # mutable-ok: accumulator, extended in the loop below
             for chunk in reasoning_item_chunks:
                 all_reasoning_items.extend(chunk["choices"][0]["delta"]["reasoning_items"])
             response["choices"][0]["message"]["reasoning_items"] = all_reasoning_items
