@@ -38,6 +38,27 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
 
+    @staticmethod
+    def _normalized_responses_input(
+        request_input: str | list[Any],  # mutable-ok: outbound Responses payload is a JSON list by spec
+    ) -> list[Any]:  # mutable-ok: same — the ChatGPT backend requires the message-list form
+        """Return the ChatGPT-compatible form of a Responses API ``input`` value.
+
+        The public Responses API accepts the string shorthand; the ChatGPT OAuth
+        backend requires the message-list form. Non-string values are returned
+        unchanged.
+        """
+        if isinstance(request_input, str):
+            return [  # mutable-ok: ChatGPT backend requires a JSON message list
+                {  # mutable-ok: message payload is inherently a JSON object
+                    "role": "user",
+                    "content": [  # mutable-ok: ditto
+                        {"type": "input_text", "text": request_input},  # mutable-ok: ditto
+                    ],
+                }
+            ]
+        return request_input
+
     def validate_environment(
         self,
         headers: dict,
@@ -72,6 +93,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             response_api_optional_request_params,
             litellm_params,
             headers,
+        )
+        request["input"] = self._normalized_responses_input(
+            request_input=request.get("input", []),
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")
