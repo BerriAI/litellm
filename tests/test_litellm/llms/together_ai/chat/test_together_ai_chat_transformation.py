@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from unittest.mock import MagicMock
 
 import httpx
@@ -266,6 +267,96 @@ def test_streaming_chunk_preserves_tool_call_index_and_id():
     assert opener["function"]["name"] == "get_weather"
     assert continuation["index"] == 1
     assert continuation["function"]["arguments"] == '{"city": "San'
+
+
+REPLAYED_ASSISTANT_MESSAGE = {
+    "role": "assistant",
+    "content": "The digit sum is 11.",
+    "reasoning_content": "The secret number is 47. 4 + 7 = 11.",
+    "thinking_blocks": [{"type": "thinking", "thinking": "The secret number is 47.", "signature": ""}],
+    "provider_specific_fields": {"thinking_blocks": [{"type": "thinking", "thinking": "The secret number is 47."}]},
+}
+
+PRESERVED_THINKING_MESSAGES = [
+    {"role": "user", "content": "Pick a secret two-digit number and tell me only its digit sum."},
+    REPLAYED_ASSISTANT_MESSAGE,
+    {"role": "user", "content": "What was the secret number?"},
+]
+
+
+def _assert_internal_fields_stripped_reasoning_kept(transformed_messages: Sequence[Mapping[str, object]]):
+    assistant_message = transformed_messages[1]
+    assert assistant_message["reasoning_content"] == REPLAYED_ASSISTANT_MESSAGE["reasoning_content"]
+    assert "thinking_blocks" not in assistant_message
+    assert "provider_specific_fields" not in assistant_message
+    assert assistant_message["content"] == REPLAYED_ASSISTANT_MESSAGE["content"]
+    assert transformed_messages[0] == PRESERVED_THINKING_MESSAGES[0]
+    assert transformed_messages[2] == PRESERVED_THINKING_MESSAGES[2]
+
+
+def test_transform_request_keeps_reasoning_content_strips_internal_fields():
+    request = TogetherAIChatConfig().transform_request(
+        model=REASONING_MODEL,
+        messages=[dict(message) for message in PRESERVED_THINKING_MESSAGES],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "together_ai"},
+        headers={},
+    )
+
+    _assert_internal_fields_stripped_reasoning_kept(request["messages"])
+
+
+async def test_async_transform_request_keeps_reasoning_content_strips_internal_fields():
+    request = await TogetherAIChatConfig().async_transform_request(
+        model=REASONING_MODEL,
+        messages=[dict(message) for message in PRESERVED_THINKING_MESSAGES],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "together_ai"},
+        headers={},
+    )
+
+    _assert_internal_fields_stripped_reasoning_kept(request["messages"])
+
+
+def test_completion_sends_chat_template_kwargs_and_preserved_reasoning():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-together-preserved",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": REASONING_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "47"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+    litellm.completion(
+        model=f"together_ai/{REASONING_MODEL}",
+        messages=[dict(message) for message in PRESERVED_THINKING_MESSAGES],
+        chat_template_kwargs={"clear_thinking": False},
+        api_key="fake-key",
+        client=client,
+    )
+
+    request_body = json.loads(captured_requests[0].content)
+    assert request_body["chat_template_kwargs"] == {"clear_thinking": False}
+    assert "extra_body" not in request_body
+    _assert_internal_fields_stripped_reasoning_kept(request_body["messages"])
 
 
 def test_together_ai_config_alias_points_at_chat_config():
