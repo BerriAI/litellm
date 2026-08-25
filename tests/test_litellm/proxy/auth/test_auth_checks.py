@@ -6978,8 +6978,8 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 0.0
     assert (
         real_spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:team_member:user-1:team-1")
-        is None
-    ), "the DB-floor marker survived the reset; a stale-floor read can raise the counter right back up"
+        == 0.0
+    ), "the DB-floor marker kept the pre-reset value; a stale-floor read can raise the counter right back up"
 
 
 @pytest.mark.asyncio
@@ -7066,6 +7066,39 @@ async def test_invalidate_team_member_spend_state_deletes_redis_counter_when_set
         )
 
     fake_redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1")
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_raises_503_when_both_redis_writes_fail():
+    """If the Redis SET fails AND the fallback DELETE fails, the stale pre-reset counter is still
+    authoritative in Redis for every worker. Reporting success would silently keep 429ing the
+    member, so the reset must surface a 503 instead (regression: PR #37971 Greptile finding)."""
+    from fastapi import HTTPException
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    real_cache = UserApiKeyCache()
+    real_spend_counter_cache = DualCache()
+    fake_redis_cache = MagicMock()
+    fake_redis_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    fake_redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis still down"))
+    real_spend_counter_cache.redis_cache = fake_redis_cache
+
+    with (
+        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=real_cache,
+            new_spend=2.5,
+        )
+
+    assert exc_info.value.status_code == 503
 
 
 @pytest.mark.asyncio

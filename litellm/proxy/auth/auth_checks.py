@@ -2441,12 +2441,16 @@ async def invalidate_team_member_spend_state(
     _authoritative_floor_spend) caches the pre-reset DB spend for
     SPEND_DB_FLOOR_CACHE_TTL_SECONDS; left stale after a real reset, a request
     landing on the pod that cached it can read that higher floor and raise the
-    counter right back above the just-reset spend. Invalidating it here closes
-    that window for any read that starts after this function returns; a read
-    already in flight when the DB write commits can still repopulate it with
-    the pre-reset value for up to that TTL, a race inherent to every
-    best-effort cache invalidation in this pub/sub (LIT-3803) and not specific
-    to this endpoint.
+    counter right back above the just-reset spend. It is overwritten here with
+    the post-reset floor (not merely deleted) and _authoritative_floor_spend
+    re-checks the marker after its DB read, so a floor read already in flight
+    on this pod when the reset commits cannot clobber it with the pre-reset
+    value; on remote pods the broadcast delete clears it.
+
+    Raises HTTPException(503) if Redis still holds the stale pre-reset counter
+    after both the SET and the fallback DELETE fail: budget checks read Redis
+    first, so returning success would leave the old value authoritative for
+    every worker despite the DB write having committed.
     """
     from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
         evict_and_broadcast,
@@ -2454,7 +2458,7 @@ async def invalidate_team_member_spend_state(
     )
 
     if new_spend is not None:
-        from litellm.proxy.proxy_server import spend_counter_cache
+        from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
 
         spend_counter_key: Final = f"spend:team_member:{user_id}:{team_id}"
         spend_db_floor_key: Final = f"spend_db_floor:{spend_counter_key}"
@@ -2463,7 +2467,7 @@ async def invalidate_team_member_spend_state(
         if spend_counter_cache.redis_cache is not None:
             try:
                 await spend_counter_cache.redis_cache.async_set_cache(key=spend_counter_key, value=new_spend, ttl=60)
-            except Exception as e:  # noqa: BLE001  # best-effort set; a Redis error must not fail the reset
+            except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
                 verbose_proxy_logger.warning(
                     "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
                     "read reseeds from the DB rather than keeping the stale pre-reset value authoritative",
@@ -2472,14 +2476,25 @@ async def invalidate_team_member_spend_state(
                 )
                 try:
                     await spend_counter_cache.redis_cache.async_delete_cache(key=spend_counter_key)
-                except Exception:  # noqa: BLE001  # best-effort cleanup; a second Redis error must not fail the reset
+                except Exception:  # noqa: BLE001  # stale value now authoritative in Redis; surface instead of reporting success
                     verbose_proxy_logger.warning(
                         "Failed to delete stale spend counter %s in Redis after a failed reset write",
                         spend_counter_key,
                         exc_info=True,
                     )
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={  # mutable-ok: HTTPException.detail takes a dict
+                            "error": "Spend was reset in the database, but Redis is unreachable and still "
+                            "holds the pre-reset counter. Retry once Redis is reachable."
+                        },
+                    ) from e
 
-        spend_counter_cache.in_memory_cache.delete_cache(key=spend_db_floor_key)
+        spend_counter_cache.in_memory_cache.set_cache(
+            key=spend_db_floor_key,
+            value=new_spend,
+            ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+        )
         await publish_auth_cache_invalidation(cache_key=spend_counter_key)
         await publish_auth_cache_invalidation(cache_key=spend_db_floor_key)
 

@@ -2555,6 +2555,12 @@ async def _authoritative_floor_spend(
     if db_spend is None:
         return None
 
+    # a spend reset that committed during the DB read above wrote the post-reset
+    # floor to the marker; keep it over this read's now-stale pre-commit value
+    rechecked: Final = spend_counter_cache.in_memory_cache.get_cache(key=marker_key)
+    if rechecked is not None:
+        return float(rechecked)
+
     spend_counter_cache.in_memory_cache.set_cache(
         key=marker_key,
         value=db_spend,
