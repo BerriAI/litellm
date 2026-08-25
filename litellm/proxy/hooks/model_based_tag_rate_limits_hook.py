@@ -654,6 +654,28 @@ _CONCURRENCY_MIN_SAFETY_TTL_SECONDS: Final = 3600
 # can't be forged or guessed.
 _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_concurrency_keys"
 
+# Same `model_call_details`-stashing rationale as the field above, for a
+# different unit: "requests" is atomic and admitted once per hop (see
+# _ATOMIC_UNITS), same as concurrency, but a "requests" limit is meant to cap
+# logical client requests, not internal routing attempts -- a chain that
+# fails once before succeeding must still consume exactly one unit overall,
+# not one per hop. _release_stale_hop_reservations refunds a stale entry
+# here the same way it releases a stale concurrency reservation, since its
+# own invariant (a queued entry still present when a new hop's admission
+# runs can only belong to an earlier hop of this same request that already
+# failed) holds identically for either unit. Unlike concurrency, a
+# successful (or chain-final-failing) hop's own entry here is deliberately
+# never refunded -- exactly one unit must survive per logical request -- so
+# async_log_success_event/async_log_failure_event must leave this field
+# completely untouched: litellm's has_logged_async_failure dedup lets the
+# *first* failing hop's own failure event through (not only a chain's final
+# failure), so popping this field there -- even just to discard it -- would
+# strand the very entry the *next* hop's admission is relying on being able
+# to refund. There is no final-hop/cache-mirror problem to solve for this
+# field either: the one hop that never gets superseded is exactly the one
+# whose charge should stick, with nothing left to clean up.
+_PENDING_REQUEST_INCREMENTS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_request_increments"
+
 # Mirrors the latest hop's own queued reservation in the same external cache
 # the reservations themselves live in, keyed by (litellm_call_id, key_hash),
 # for the one release path that cannot reach model_call_details at all:
@@ -694,7 +716,10 @@ _PENDING_RESERVATIONS_CACHE_KEY_PREFIX: Final = "model_based_tag_rate_limits:pen
 
 
 def _pending_reservations_cache_key(call_id: str, key_hash: str | None) -> str:
-    return f"{_PENDING_RESERVATIONS_CACHE_KEY_PREFIX}{call_id}:{key_hash or ''}"
+    # call_id is caller-controlled (the x-litellm-call-id header) with no
+    # length bound -- same unbounded-cache-key concern _fixed_length_identity
+    # documents for tag values, reused here rather than duplicated.
+    return f"{_PENDING_RESERVATIONS_CACHE_KEY_PREFIX}{_fixed_length_identity(call_id)}:{key_hash or ''}"
 
 
 def _encode_reservations(reservations: Sequence[tuple[str, "_PartitionKey"]]) -> str:
@@ -1004,24 +1029,47 @@ def _partition_key(entry: TagRateLimitEntry) -> _PartitionKey:
     )
 
 
-def _queue_pending_concurrency_reservations(
-    request_kwargs: Mapping[str, object], reservations: Sequence[tuple[str, _PartitionKey]]
+def _queue_pending_reservations(
+    request_kwargs: Mapping[str, object], field: str, reservations: Sequence[tuple[str, _PartitionKey]]
 ) -> None:
-    """Stash reservations on the request's own `model_call_details` -- see
-    `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring for why this, not a
-    ContextVar or `litellm_call_id`. Silently a no-op without a real logging
-    object (defensive only; every real request has one): the reservation
-    still self-heals via `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS`, just later.
+    """Stash reservations on the request's own `model_call_details`, under
+    `field` -- see `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring for why this,
+    not a ContextVar or `litellm_call_id`. Silently a no-op without a real
+    logging object (defensive only; every real request has one): a queued
+    concurrency reservation still self-heals via
+    `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS`, just later.
     """
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     model_call_details: Final = getattr(logging_obj, "model_call_details", None)
     if not isinstance(model_call_details, dict):
         return
-    pending = model_call_details.get(_PENDING_CONCURRENCY_KEYS_FIELD)  # rebind-ok: lazily initialized below when absent
+    pending = model_call_details.get(field)  # rebind-ok: lazily initialized below when absent
     if pending is None:
         pending = []  # mutable-ok: shared, request-scoped accumulator; see field's own docstring  # rebind-ok: lazily initialized only when absent
-        model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] = pending
+        model_call_details[field] = pending
     pending.extend(reservations)  # mutable-ok: see comment above
+
+
+def _pop_reservations(model_call_details: Mapping[str, object], field: str) -> tuple[tuple[str, "_PartitionKey"], ...]:
+    """No external cache-mirror interaction -- only
+    `_PENDING_CONCURRENCY_KEYS_FIELD` needs that (see its docstring); a
+    "requests" entry here never needs a final-hop release path, so this is
+    the whole mechanism. Snapshots then removes individual items from the
+    same list object rather than a blanket pop of `field` itself, matching
+    `_pop_pending_concurrency_keys`'s own reasoning: a sibling hop sharing
+    this request's `model_call_details` can still be live and appending
+    concurrently, so clearing the whole field here could silently strand
+    that entry instead of it being refunded or left to stand later."""
+    pending = model_call_details.get(field)
+    if not isinstance(pending, list) or not pending:
+        return ()
+    keys: Final = tuple(pending)
+    for key in keys:
+        try:
+            pending.remove(key)  # mutable-ok: see queuing helper above
+        except ValueError:
+            pass
+    return keys
 
 
 def _record_admission_time(request_kwargs: Mapping[str, object], now: float) -> None:
@@ -1340,11 +1388,23 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                 if configured_limit.unit == "concurrency"
             )
             if concurrency_reservations:
-                _queue_pending_concurrency_reservations(resolved_request_kwargs, concurrency_reservations)
+                _queue_pending_reservations(
+                    resolved_request_kwargs, _PENDING_CONCURRENCY_KEYS_FIELD, concurrency_reservations
+                )
                 await self._mirror_pending_reservations(
                     resolved_request_kwargs.get("litellm_call_id"),
                     _extract_key_hash(resolved_request_kwargs, metadata_variable_name),
                     concurrency_reservations,
+                )
+
+            request_increments: Final = tuple(
+                (key, _partition_key(configured_limit.entry))
+                for configured_limit, _tag_value, key in atomic_checks
+                if configured_limit.unit == "requests"
+            )
+            if request_increments:
+                _queue_pending_reservations(
+                    resolved_request_kwargs, _PENDING_REQUEST_INCREMENTS_FIELD, request_increments
                 )
 
         return healthy_deployments
@@ -1533,6 +1593,13 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         whose own failure exhausts the retry chain -- async_post_call_failure_hook
         closes that residual case instead, via the cache mirror
         `_PENDING_RESERVATIONS_CACHE_KEY_PREFIX` documents.
+
+        The identical invariant -- a queued entry still present here can only
+        belong to an already-failed earlier hop -- holds for a "requests"
+        atomic increment too, so this also refunds any stale entry queued
+        under `_PENDING_REQUEST_INCREMENTS_FIELD`; see that field's own
+        docstring for why, unlike concurrency, a hop that goes on to succeed
+        (or is the chain's own final failure) is deliberately never refunded.
         """
         logging_obj: Final = request_kwargs.get("litellm_logging_obj")
         model_call_details: Final = getattr(logging_obj, "model_call_details", None)
@@ -1541,6 +1608,9 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         release_keys: Final = await self._pop_pending_concurrency_keys(model_call_details)
         if release_keys:
             await self._release_keys(release_keys)
+        stale_request_increments: Final = _pop_reservations(model_call_details, _PENDING_REQUEST_INCREMENTS_FIELD)
+        if stale_request_increments:
+            await self._release_keys(stale_request_increments)
 
     async def _pop_pending_concurrency_keys(
         self, kwargs: Mapping[str, object]

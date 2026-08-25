@@ -34,6 +34,7 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _fixed_length_identity,
     _inflight_key,
     _partition_key,
+    _pending_reservations_cache_key,
     _PROXY_ModelBasedTagRateLimitsHook,
 )
 from litellm.types.router import RoutingGroup, TagRateLimitEntry, TagRateLimitScope
@@ -185,6 +186,26 @@ def test_fixed_length_identity_preserves_distinctness():
     """Hashing must not collapse two different tag values onto one bucket."""
     assert _fixed_length_identity("user-a") != _fixed_length_identity("user-b")
     assert _fixed_length_identity("user-a") == _fixed_length_identity("user-a")
+
+
+def test_pending_reservations_cache_key_bounds_call_id_regardless_of_input_size():
+    """
+    veria-ai finding on PR #36541: litellm_call_id comes straight from the
+    caller-controlled x-litellm-call-id header with no length bound, and was
+    embedded directly in the pending-reservations mirror key -- a caller
+    submitting long ids across many in-flight tagged requests could inflate
+    Redis/in-memory key size disproportionately. Hashed via
+    _fixed_length_identity, same as every other caller-controlled value this
+    hook puts in a cache key.
+    """
+    huge_call_id = "x" * 5_000_000
+    key = _pending_reservations_cache_key(huge_call_id, "some-key-hash")
+    assert len(key) < 200
+
+
+def test_pending_reservations_cache_key_preserves_distinctness():
+    assert _pending_reservations_cache_key("call-a", "kh") != _pending_reservations_cache_key("call-b", "kh")
+    assert _pending_reservations_cache_key("call-a", "kh") == _pending_reservations_cache_key("call-a", "kh")
 
 
 @pytest.mark.asyncio
@@ -2856,6 +2877,133 @@ async def test_next_hops_admission_releases_a_prior_hops_leaked_reservation(time
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
     assert result == healthy
+
+
+def _request_limit_router(limit: int) -> "litellm.Router":
+    return litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_period", "tag_id": "end_user_id", "limit": limit, "period_seconds": 300}]
+                    }
+                },
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_next_hops_admission_refunds_a_prior_failed_hops_request_increment(time_controller):
+    """
+    Regression test for Cursor Bugbot's "fallback hops burn request budget"
+    finding on PR #36541, live-confirmed against a real proxy: a "requests"
+    limit is meant to cap logical client requests, not internal routing
+    attempts, but without a refund a chain that fails once before succeeding
+    burned 2 units of a 1-request-per-period budget for one logical call --
+    live reproduction showed the retry's own admission rejected with
+    current=1.0 limit=1.0 even though the client only made one call.
+
+    Concurrency's next-hop-releases-the-prior-hop's-stale-reservation pattern
+    (see test_next_hops_admission_releases_a_prior_hops_leaked_reservation)
+    generalizes cleanly here: since Router only re-enters admission for a hop
+    that already failed, the prior hop's own "requests" increment must be
+    refunded there too, before this hop's own check runs.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _request_limit_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
+
+    # Hop 1 admits (the only unit) then fails -- no failure event follows,
+    # mirroring the "already consumed litellm's one dedup-allowed failure
+    # event" scenario the sibling concurrency test documents.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+    # Hop 2's own admission must refund hop 1's now-stale "requests"
+    # increment before checking its own -- if it didn't, this raises
+    # ProxyRateLimitError against a bucket a real client only asked to use
+    # once.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_next_hops_admission_refunds_a_request_increment_even_after_the_first_hops_own_failure_event_fires(
+    time_controller,
+):
+    """
+    Tighter regression than the test above: this reproduces the exact live
+    failure this fix first shipped with. litellm's has_logged_async_failure
+    dedup allows exactly the *first* failing hop's own async_log_failure_event
+    through -- unlike a hop after that one, hop 1 here genuinely gets a real
+    failure event, not silence. An earlier version of this fix popped
+    _PENDING_REQUEST_INCREMENTS_FIELD in async_log_failure_event "for
+    hygiene", discarding hop 1's entry before hop 2's own admission
+    (_release_stale_hop_reservations) ever got a chance to refund it --
+    silently and permanently stranding the charge, so hop 2 was rejected
+    against a bucket a real client only asked to use once, live-confirmed
+    against a real proxy. async_log_failure_event must leave this field
+    completely untouched.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _request_limit_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+    # Hop 1's own, real failure event -- the one has_logged_async_failure
+    # lets through.
+    await limiter.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # Hop 2's own admission must still refund hop 1's now-stale "requests"
+    # increment before checking its own.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_successful_hops_own_request_increment_is_not_refunded(time_controller):
+    """
+    The fix above must not swing the other way and refund every hop's
+    "requests" increment unconditionally -- exactly one unit must survive
+    per logical request, or the limit stops limiting anything. Simulates the
+    full lifecycle (admission, then the success event a real request would
+    fire) and confirms a second, unrelated logical request against the same
+    tag is correctly rejected: the first request's own successful hop
+    already spent the only unit for this period.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _request_limit_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    fresh_request_kwargs, _fresh_kwargs = _call_context(["end_user_id:u1"])
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=fresh_request_kwargs
+        )
 
 
 @pytest.mark.asyncio
