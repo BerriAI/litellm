@@ -1,6 +1,6 @@
 {
   "ANN001": {
-    "limit": 3018
+    "limit": 3014
   },
   "ANN002": {
     "limit": 71
@@ -15,7 +15,7 @@
     "limit": 852
   },
   "ANN204": {
-    "limit": 711
+    "limit": 705
   },
   "ANN205": {
     "limit": 112
@@ -165,7 +165,7 @@
     "limit": 2
   },
   "PYI036": {
-    "limit": 3
+    "limit": 0
   },
   "RET504": {
     "limit": 176

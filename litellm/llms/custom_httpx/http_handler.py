@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, TypedDict
 
 import certifi
@@ -624,8 +625,12 @@ class AsyncHTTPHandler:
     async def __aenter__(self):
         return self.client
 
-    async def __aexit__(self):
-        # close the client when exiting
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_val: BaseException | None = None,
+        exc_tb: TracebackType | None = None,
+    ) -> None:
         await self.close()
 
     async def get(
