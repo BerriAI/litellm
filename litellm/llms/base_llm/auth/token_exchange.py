@@ -170,14 +170,14 @@ def _shares_a_credential_run(rendered: str, compacted_secret: str) -> bool:
     """``unquote`` covers a credential sent form-encoded, without every caller enumerating that
     shape for itself: percent-escaping is reversible and applies to any field, query string
     included."""
-    for candidate in (rendered, unquote(rendered)):
-        compacted: Final = _CREDENTIAL_CHARS.sub("", candidate)
-        if any(
-            compacted[start : start + _REFLECTION_MIN_RUN] in compacted_secret
-            for start in range(len(compacted) - _REFLECTION_MIN_RUN + 1)
-        ):
-            return True
-    return False
+    compacted_candidates: Final = tuple(
+        _CREDENTIAL_CHARS.sub("", candidate) for candidate in (rendered, unquote(rendered))
+    )
+    return any(
+        compacted[start : start + _REFLECTION_MIN_RUN] in compacted_secret
+        for compacted in compacted_candidates
+        for start in range(len(compacted) - _REFLECTION_MIN_RUN + 1)
+    )
 
 
 def _redact_body_text(body_text: str) -> str:

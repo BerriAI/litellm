@@ -300,6 +300,8 @@ class TestAnthropicWifIdentitySourceKeys:
         "anthropic_keycloak_auth_method": "client_secret_basic",
         "anthropic_keycloak_client_secret_ref": "oidc/env/KC_SECRET",
         "anthropic_keycloak_scope": "anthropic-wif",
+        # Server-set when a client redirects api_base; carried here so it is not dropped in transit
+        "anthropic_disable_workload_identity_federation": True,
     }
 
     def test_new_keys_are_exactly_the_non_legacy_registered_set(self):

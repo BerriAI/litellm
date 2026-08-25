@@ -27463,6 +27463,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
             /** Anthropic Federation Rule Id */
             anthropic_federation_rule_id?: string | null;
             /** Anthropic Identity Source */
@@ -36781,6 +36783,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
             /** Anthropic Federation Rule Id */
             anthropic_federation_rule_id?: string | null;
             /** Anthropic Identity Source */
