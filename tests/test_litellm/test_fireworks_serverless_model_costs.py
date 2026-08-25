@@ -20,11 +20,27 @@ import os
 
 import pytest
 
-# Force litellm to load the cost map from the bundled backup file instead of
-# fetching it from GitHub, so the entries added in this PR are the ones tested
-os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+import litellm
+from litellm.utils import get_model_info
 
-from litellm.utils import get_model_info  # noqa: E402
+
+@pytest.fixture(scope="module", autouse=True)
+def _local_model_cost_map():
+    """
+    Point litellm at the bundled cost map (the one this PR updates) for the
+    duration of this module only.
+
+    Uses an explicit MonkeyPatch instance because the built-in ``monkeypatch``
+    fixture is function-scoped; ``mp.undo()`` restores both the environment
+    variable and ``litellm.model_cost`` so nothing leaks into later tests.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    mp.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    get_model_info.cache_clear()
+    yield
+    mp.undo()
+    get_model_info.cache_clear()
 
 NEW_ENTRIES = {
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813": {
@@ -79,5 +95,11 @@ def test_bare_fireworks_ids_resolve_through_prefixed_entries():
         ),
     ]:
         info = get_model_info(model=bare_id, custom_llm_provider="fireworks_ai")
+        expected = NEW_ENTRIES[prefixed_key]
+        assert info.get("key") == prefixed_key
         assert info["litellm_provider"] == "fireworks_ai"
-        assert info["input_cost_per_token"] == pytest.approx(NEW_ENTRIES[prefixed_key]["input_cost_per_token"])
+        assert info["input_cost_per_token"] == pytest.approx(expected["input_cost_per_token"])
+        assert info["cache_read_input_token_cost"] == pytest.approx(expected["cache_read_input_token_cost"])
+        assert info["output_cost_per_token"] == pytest.approx(expected["output_cost_per_token"])
+        assert info["max_input_tokens"] == expected["max_input_tokens"]
+        assert info["max_output_tokens"] == expected["max_output_tokens"]
