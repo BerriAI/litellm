@@ -193,6 +193,7 @@ def test_cached_input_appearing_and_disappearing() -> None:
     catalog = [_chat_model("acme/chat-1"), _chat_model("acme/chat-2", cached=0.25999999999999995)]
     outcome = sync.compute_sync(registry, catalog, _doc({"x": "2026-01-01"}))
     assert "cache_read_input_token_cost" not in outcome.cost_map["together_ai/acme/chat-1"]
+    assert "supports_prompt_caching" not in outcome.cost_map["together_ai/acme/chat-1"]
     assert outcome.cost_map["together_ai/acme/chat-2"]["cache_read_input_token_cost"] == 2.6e-07
     assert outcome.cost_map["together_ai/acme/chat-2"]["supports_prompt_caching"] is True
 
