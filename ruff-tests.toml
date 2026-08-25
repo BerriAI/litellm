@@ -51,6 +51,10 @@
 # F632    `is` against a literal. It compares identity, so it passes only where CPython
 #         happens to intern the value and stops meaning what it says the moment the
 #         value is built at runtime
+# B003    `os.environ = {...}` rebinds the mapping instead of mutating it, so `putenv`
+#         never fires and a subprocess still reads the real keys the test believes it
+#         cleared. The manual restore underneath is skipped whenever the body raises,
+#         so every later test in that worker inherits a plain dict for an environment
 #
 # No target-version here on purpose: it resolves from requires-python (>=3.10), so
 # 3.11-only builtins like BaseExceptionGroup are correctly flagged in a tree that
@@ -78,4 +82,5 @@ lint.select = [
     "B023",
     "B025",
     "F632",
+    "B003",
 ]
