@@ -285,6 +285,19 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "client_disconnected",
     "error_information",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    # Guardrail selection fields. ``guardrails`` and ``guardrail_config`` are
+    # admin-authoritative: they are populated by ``move_guardrails_to_metadata``
+    # (from key/team/project metadata) and ``_check_and_merge_model_level_guardrails``
+    # (from model-level config) AFTER this strip runs. A caller that supplies
+    # ``metadata: {"guardrails": []}`` on /v1/messages could otherwise shadow
+    # the admin-merged list in ``litellm_metadata`` via
+    # ``get_guardrail_from_metadata`` (which checks ``metadata`` first),
+    # silently bypassing all model-level and key/team guardrails
+    # (veria-ai HIGH on #36085). The top-level ``data["guardrails"]`` feature
+    # (popped by ``move_guardrails_to_metadata``) is unaffected: this strip
+    # only removes keys from the ``metadata`` / ``litellm_metadata`` sub-dicts.
+    "guardrails",
+    "guardrail_config",
 )
 
 UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS: Final = frozenset(

@@ -91,7 +91,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.core_helpers import coerce_token_limit
+from litellm.litellm_core_utils.core_helpers import (
+    coerce_token_limit,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -6682,7 +6685,9 @@ def _check_and_merge_model_level_guardrails(
 
     metadata: Final = data.get("metadata") or {}
     litellm_metadata: Final = data.get("litellm_metadata") or {}
-    model_info: Final = metadata.get("model_info") or {}
+    # model_info may live in either metadata bucket depending on the route
+    # (/v1/messages, batches, files, responses use litellm_metadata).
+    model_info: Final = metadata.get("model_info") or litellm_metadata.get("model_info") or {}
     model_id: Final = model_info.get("id") if trust_client_model_info else None
     # route_request resolves team-scoped public model names with the
     # server-populated team id; pre_call lookup must do the same so
@@ -6749,9 +6754,15 @@ def _merge_guardrails_with_existing(data: dict, model_level_guardrails: object) 
 
     Returns:
         Modified data dict with merged guardrails in metadata
+
+    Uses ``litellm_metadata`` when present (e.g. /v1/messages, batches, files,
+    responses) so litellm-internal guardrails are not injected into the
+    provider-facing ``metadata`` field. On legacy endpoints that only have
+    ``metadata``, the behaviour is unchanged.
     """
     modified_data: Final = data.copy()
-    metadata: Final = modified_data.setdefault("metadata", {})
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(modified_data)
+    metadata: Final = modified_data.setdefault(metadata_key, {})
     existing_guardrails = metadata.get("guardrails", [])
 
     # Ensure existing_guardrails is a list

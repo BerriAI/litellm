@@ -476,6 +476,65 @@ async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys()
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_strips_caller_guardrails_from_metadata():
+    """veria-ai HIGH on #36085: a caller sending
+    ``metadata: {"guardrails": []}`` (or ``litellm_metadata``) on /v1/messages
+    could shadow admin-authoritative guardrails because
+    ``get_guardrail_from_metadata`` checks ``metadata`` before
+    ``litellm_metadata``. The strip in ``add_litellm_data_to_request`` must
+    remove ``guardrails`` and ``guardrail_config`` from both caller-supplied
+    metadata dicts so only admin-merged values (from
+    ``move_guardrails_to_metadata`` and
+    ``_check_and_merge_model_level_guardrails``) survive."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"guardrails": [], "guardrail_config": {"mode": "block"}},
+        "litellm_metadata": {"guardrails": ["caller-fake"], "guardrail_config": {"mode": "pass"}},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="real-user",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # Neither metadata dict should retain caller-supplied guardrails fields.
+    for meta_key in ("metadata", "litellm_metadata"):
+        meta = updated.get(meta_key) or {}
+        assert "guardrails" not in meta, \
+            f"caller-supplied 'guardrails' must be stripped from {meta_key}, got: {meta.get('guardrails')}"
+        assert "guardrail_config" not in meta, \
+            f"caller-supplied 'guardrail_config' must be stripped from {meta_key}, got: {meta.get('guardrail_config')}"
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_string_metadata_does_not_crash():
     """Regression: pre-strip code that pre-populated data['metadata'][k]=v
     before the string-to-dict parse would crash on JSON-string metadata.
