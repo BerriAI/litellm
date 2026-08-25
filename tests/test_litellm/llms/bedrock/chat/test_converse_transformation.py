@@ -366,6 +366,96 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
     assert additional.get("output_config") == {"effort": "high"}
 
 
+def test_reasoning_effort_requests_summarized_display_converse():
+    """Regression LIT-5714: adaptive thinking synthesized from reasoning_effort must
+    request the summarized display, otherwise the provider returns a blank thinking
+    block and reasoning_content is always empty."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"]["type"] == "adaptive"
+    assert optional_params["thinking"]["display"] == "summarized"
+
+
+def test_thinking_request_adds_output_tokens_details_response_path():
+    """Regression LIT-5714: the Converse usage block has no thinking-token field, so
+    thinking requests must ask for ``/usage/output_tokens_details`` via
+    ``additionalModelResponseFieldPaths``."""
+    config = AmazonConverseConfig()
+
+    result = config._transform_request(
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["additionalModelResponseFieldPaths"] == ("/usage/output_tokens_details",)
+
+
+def test_request_without_thinking_omits_response_field_paths():
+    config = AmazonConverseConfig()
+
+    result = config._transform_request(
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"maxTokens": 256},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "additionalModelResponseFieldPaths" not in result
+
+
+def test_transform_usage_prefers_provider_reasoning_tokens():
+    """Regression LIT-5714: provider-reported thinking tokens must win over the
+    token_counter estimate derived from visible reasoning text."""
+    config = AmazonConverseConfig()
+
+    usage = config.transform_usage(
+        {"inputTokens": 40, "outputTokens": 3002, "totalTokens": 3042},
+        reasoning_content="a short reasoning summary",
+        thinking_ran=True,
+        provider_reasoning_tokens=1033,
+    )
+
+    assert usage.completion_tokens_details.reasoning_tokens == 1033
+    assert usage.completion_tokens_details.text_tokens == 3002 - 1033
+
+
+def test_transform_usage_falls_back_to_estimate_without_provider_tokens():
+    config = AmazonConverseConfig()
+
+    usage = config.transform_usage(
+        {"inputTokens": 40, "outputTokens": 300, "totalTokens": 340},
+        reasoning_content="a short reasoning summary",
+        thinking_ran=True,
+    )
+
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+    assert usage.completion_tokens_details.reasoning_tokens < 300
+
+
+def test_thinking_tokens_parsed_from_additional_model_response_fields():
+    parsed = AmazonConverseConfig.thinking_tokens_from_additional_fields(
+        {"usage": {"output_tokens_details": {"thinking_tokens": 92}}}
+    )
+    assert parsed == 92
+    assert AmazonConverseConfig.thinking_tokens_from_additional_fields(None) is None
+    assert AmazonConverseConfig.thinking_tokens_from_additional_fields({"usage": {}}) is None
+
+
 @pytest.mark.parametrize(
     "model,effort,expected_effort",
     [
