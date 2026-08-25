@@ -1,5 +1,7 @@
 
 import json
+from collections.abc import Mapping
+from typing import Optional
 
 import pytest
 
@@ -354,7 +356,14 @@ RESPONSE_SCHEMA_CHANNEL_CLIENT_SCHEMA = {
 }
 
 
-def _gemini_request_body(model: str, litellm_params: dict, **completion_kwargs) -> RequestBody:
+def _gemini_request_body(
+    model: str,
+    litellm_params: Mapping[str, bool],
+    request_override: Optional[bool] = None,
+) -> RequestBody:
+    override_kwargs: dict[str, bool] = (
+        {} if request_override is None else {"vertex_ai_use_response_json_schema": request_override}
+    )
     optional_params = litellm.utils.get_optional_params(
         model=model,
         custom_llm_provider="vertex_ai",
@@ -365,14 +374,14 @@ def _gemini_request_body(model: str, litellm_params: dict, **completion_kwargs) 
                 "schema": json.loads(json.dumps(RESPONSE_SCHEMA_CHANNEL_CLIENT_SCHEMA)),
             },
         },
-        **completion_kwargs,
+        **override_kwargs,
     )
     return transformation._transform_request_body(
         messages=[{"role": "user", "content": "extract it"}],
         model=model,
         optional_params=optional_params,
         custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
+        litellm_params=dict(litellm_params),
         cached_content=None,
     )
 
@@ -382,9 +391,7 @@ def test__transform_request_body_per_request_response_json_schema_opt_out():
     vertex_ai_use_response_json_schema=False on the request puts the schema on Vertex's native
     responseSchema channel, and the knob itself never reaches the provider body
     """
-    body = _gemini_request_body(
-        "gemini-2.5-flash", {}, vertex_ai_use_response_json_schema=False
-    )
+    body = _gemini_request_body("gemini-2.5-flash", {}, request_override=False)
 
     generation_config = body["generationConfig"]
     assert "response_json_schema" not in generation_config
@@ -398,9 +405,7 @@ def test__transform_request_body_per_request_response_json_schema_opt_out():
 
 def test__transform_request_body_deployment_response_json_schema_opt_out():
     """A deployment's litellm_params opts every request routed to it out of responseJsonSchema"""
-    body = _gemini_request_body(
-        "gemini-2.5-flash", {"vertex_ai_use_response_json_schema": False}
-    )
+    body = _gemini_request_body("gemini-2.5-flash", {"vertex_ai_use_response_json_schema": False})
 
     generation_config = body["generationConfig"]
     assert "response_json_schema" not in generation_config
@@ -414,9 +419,7 @@ def test__transform_request_body_per_request_opt_in_beats_global_opt_out(monkeyp
     """
     monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", False)
 
-    body = _gemini_request_body(
-        "gemini-2.5-flash", {}, vertex_ai_use_response_json_schema=True
-    )
+    body = _gemini_request_body("gemini-2.5-flash", {}, request_override=True)
 
     generation_config = body["generationConfig"]
     assert "response_schema" not in generation_config

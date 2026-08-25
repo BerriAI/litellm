@@ -200,7 +200,9 @@ CLIENT_SCHEMA = {
         (None, None, "gemini-2.5-flash", True),
         (None, None, "gemini-1.5-pro", False),
         (False, None, "gemini-2.5-flash", False),
-        (True, None, "gemini-1.5-pro", True),
+        (True, None, "gemini-flash-latest", True),
+        (True, None, "gemini-1.5-pro", False),
+        (None, True, "gemini-1.5-pro", False),
         (False, True, "gemini-2.5-flash", True),
         (True, False, "gemini-2.5-flash", False),
     ],
@@ -208,7 +210,10 @@ CLIENT_SCHEMA = {
 def test_should_use_response_json_schema_precedence(
     monkeypatch, global_setting, request_override, model, expected
 ):
-    """Per request override beats litellm.vertex_ai_use_response_json_schema, which beats the model heuristic"""
+    """
+    Per request override beats litellm.vertex_ai_use_response_json_schema, which beats the model
+    heuristic, and neither can put a schema on a channel Gemini 1.x has no field for
+    """
     monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", global_setting)
 
     assert should_use_response_json_schema(model, request_override) is expected
