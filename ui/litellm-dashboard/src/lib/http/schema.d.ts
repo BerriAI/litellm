@@ -36248,6 +36248,8 @@ export interface components {
         TagRateLimitEntry: {
             /** Apply To Key Alias */
             apply_to_key_alias?: string[] | null;
+            /** Apply To Models */
+            apply_to_models?: string[] | null;
             disabled_for?: components["schemas"]["TagRateLimitScope"] | null;
             enabled_for?: components["schemas"]["TagRateLimitScope"] | null;
             /** Key Ttl Seconds */
