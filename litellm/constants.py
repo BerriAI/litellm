@@ -750,6 +750,7 @@ openai_compatible_endpoints: Final[list] = [
     "api.groq.com/openai/v1",
     "https://integrate.api.nvidia.com/v1",
     "api.deepseek.com/v1",
+    "api.together.ai/v1",
     "api.together.xyz/v1",
     "app.empower.dev/api/v1",
     "https://api.friendli.ai/serverless/v1",
