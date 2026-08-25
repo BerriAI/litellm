@@ -7,6 +7,8 @@ compiled extension present.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -256,6 +258,44 @@ class TestSyncCall:
         assert result.id == original_id, (
             "the rust path must keep the chatcmpl id litellm already minted"
         )
+
+    def test_carries_reasoning_content_from_a_converse_reasoning_response(self):
+        reasoning_response: Final = {
+            **RUST_RESPONSE,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "hello from rust",
+                        "reasoning_content": "counting",
+                        "thinking_blocks": [
+                            {"type": "thinking", "thinking": "counting", "signature": "sig"}
+                        ],
+                        "provider_specific_fields": {
+                            "reasoningContentBlocks": [
+                                {"reasoningText": {"text": "counting", "signature": "sig"}}
+                            ]
+                        },
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(result=reasoning_response))
+
+        result: Final = bridge.chat_completions(**_call_kwargs(ModelResponse()))
+
+        assert result is not None
+        message: Final = result.choices[0].message
+        assert message.content == "hello from rust"
+        assert message.reasoning_content == "counting"
+        assert message.thinking_blocks == [
+            {"type": "thinking", "thinking": "counting", "signature": "sig"}
+        ]
+        assert message.provider_specific_fields["reasoningContentBlocks"] == [
+            {"reasoningText": {"text": "counting", "signature": "sig"}}
+        ]
 
     def test_passes_the_timeout_through_as_seconds(self):
         native = _RecordingCall()

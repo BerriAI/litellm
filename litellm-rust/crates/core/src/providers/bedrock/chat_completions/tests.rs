@@ -578,3 +578,83 @@ fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
     );
     assert!(host_supplied_credentials(&Map::new()).is_none());
 }
+
+#[test]
+fn normalizes_a_reasoning_response_the_way_python_does() {
+    let response = transform_response(json!({
+        "output": {"message": {"role": "assistant", "content": [
+            {"reasoningContent": {"reasoningText": {"text": "counting", "signature": "sig"}}},
+            {"text": "Hi there, friend!"}
+        ]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 9, "outputTokens": 5, "totalTokens": 14}
+    }))
+    .expect("reasoning response transforms");
+    let message = &response.choices[0].message;
+    assert_eq!(message.content.as_deref(), Some("Hi there, friend!"));
+    assert_eq!(message.reasoning_content.as_deref(), Some("counting"));
+    assert_eq!(
+        message.thinking_blocks.as_deref(),
+        Some(
+            [ThinkingBlock::Thinking {
+                thinking: Some("counting".to_string()),
+                signature: Some("sig".to_string()),
+            }]
+            .as_slice()
+        )
+    );
+    assert_eq!(
+        serde_json::to_value(message).expect("message serializes"),
+        json!({
+            "role": "assistant",
+            "content": "Hi there, friend!",
+            "reasoning_content": "counting",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "counting", "signature": "sig"}
+            ],
+            "provider_specific_fields": {"reasoningContentBlocks": [
+                {"reasoningText": {"text": "counting", "signature": "sig"}}
+            ]}
+        }),
+        "the rust message must carry the keys Python's converse transform sets"
+    );
+}
+
+#[test]
+fn reports_redacted_reasoning_without_reasoning_text() {
+    let response = transform_response(json!({
+        "output": {"message": {"content": [
+            {"reasoningContent": {"redactedContent": "encrypted"}},
+            {"text": "done"}
+        ]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+    }))
+    .expect("redacted reasoning response transforms");
+    let message = &response.choices[0].message;
+    assert_eq!(message.reasoning_content.as_deref(), Some(""));
+    assert_eq!(
+        message.thinking_blocks.as_deref(),
+        Some(
+            [ThinkingBlock::Redacted {
+                data: "encrypted".to_string(),
+            }]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn omits_the_reasoning_keys_on_a_plain_text_response() {
+    let response = transform_response(json!({
+        "output": {"message": {"content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}
+    }))
+    .expect("response transforms");
+    assert_eq!(
+        serde_json::to_value(&response.choices[0].message).expect("message serializes"),
+        json!({"role": "assistant", "content": "hi"}),
+        "a response with no reasoning must serialize the shape Python builds"
+    );
+}
