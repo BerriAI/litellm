@@ -271,14 +271,8 @@ def supports_response_json_schema(model: str) -> bool:
     return bool(gemini_2_plus_pattern.search(model_lower))
 
 
-GEMINI_1_MODEL_PATTERN: Final = re.compile(r"gemini-1(?:\.|-)")
 VERTEX_AI_USE_RESPONSE_JSON_SCHEMA_PARAM: Final = "vertex_ai_use_response_json_schema"
 VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM: Final = "litellm_param_vertex_ai_verbatim_response_schema"
-
-
-def _rejects_response_json_schema(model: str) -> bool:
-    """Gemini 1.x generateContent has no responseJsonSchema field, so no override can reach it"""
-    return bool(GEMINI_1_MODEL_PATTERN.search(model.lower()))
 
 
 def should_use_response_json_schema(model: str, request_override: bool | None = None) -> bool:
@@ -289,16 +283,16 @@ def should_use_response_json_schema(model: str, request_override: bool | None = 
     natively converted ``responseSchema`` (nullable unions flattened, constraints
     hoisted, ``propertyOrdering`` added). Precedence: per request
     ``vertex_ai_use_response_json_schema``, then
-    ``litellm.vertex_ai_use_response_json_schema``, then the model heuristic. Neither
-    override can select a channel the model has no field for
+    ``litellm.vertex_ai_use_response_json_schema``, then the model heuristic. An
+    override picks between the channels the model has, it never adds one
     """
     override: Final = request_override if request_override is not None else litellm.vertex_ai_use_response_json_schema
     if override is None:
         return supports_response_json_schema(model)
-    if override and _rejects_response_json_schema(model):
+    if override and not supports_response_json_schema(model):
         verbose_logger.warning(
-            "vertex_ai_use_response_json_schema=True ignored for model=%s: it has no responseJsonSchema field, "
-            "so the schema stays on responseSchema",
+            "vertex_ai_use_response_json_schema=True ignored for model=%s: it is not known to accept "
+            "responseJsonSchema, so the schema stays on responseSchema",
             model,
         )
         return False

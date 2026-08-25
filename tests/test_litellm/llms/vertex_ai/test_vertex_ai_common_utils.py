@@ -200,7 +200,7 @@ CLIENT_SCHEMA = {
         (None, None, "gemini-2.5-flash", True),
         (None, None, "gemini-1.5-pro", False),
         (False, None, "gemini-2.5-flash", False),
-        (True, None, "gemini-flash-latest", True),
+        (True, None, "gemini-flash-latest", False),
         (True, None, "gemini-1.5-pro", False),
         (None, True, "gemini-1.5-pro", False),
         (False, True, "gemini-2.5-flash", True),
@@ -212,7 +212,7 @@ def test_should_use_response_json_schema_precedence(
 ):
     """
     Per request override beats litellm.vertex_ai_use_response_json_schema, which beats the model
-    heuristic, and neither can put a schema on a channel Gemini 1.x has no field for
+    heuristic, and neither can select responseJsonSchema for a model not known to accept it
     """
     monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", global_setting)
 
