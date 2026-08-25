@@ -412,13 +412,7 @@ class BaseResponsesAPIStreamingIterator:
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
         # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
         # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(self.completed_response, "model_dump"):
-            try:
-                logging_response = type(self.completed_response).model_validate(self.completed_response.model_dump())
-            except Exception:
-                # Fallback to original if serialization fails
-                pass
+        logging_response = self._response_for_success_logging()
 
         end_time: Final = datetime.now()
         if is_async:
@@ -447,6 +441,29 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
             )
         self._run_post_success_hooks(end_time=end_time)
+
+    def _response_for_success_logging(
+        self,
+    ) -> ResponsesAPIStreamingResponse | ResponsesAPIResponse | None:
+        """Build the response object to pass to success handlers.
+
+        ``self.completed_response`` is a ``ResponseCompletedEvent`` wrapper.
+        The success handlers only unwrap it in their assembled-stream branch,
+        which a non-streaming caller draining this iterator never reaches.
+        Unwrap it here so the inner ``ResponsesAPIResponse`` reaches the
+        handlers and ``standard_logging_object`` is built for cost tracking.
+        """
+        completed = self.completed_response
+        if completed is None or not hasattr(completed, "model_dump"):
+            return completed
+        try:
+            copied = type(completed).model_validate(completed.model_dump())
+        except Exception:
+            return completed
+        unwrapped = getattr(copied, "response", None)
+        if isinstance(unwrapped, ResponsesAPIResponse):
+            return unwrapped
+        return copied
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""

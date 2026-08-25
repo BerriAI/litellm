@@ -305,3 +305,62 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
     asyncio.run(_short_lived_script())
 
     assert len(writes) == 1
+async def test_completed_response_unwrapped_for_success_logging():
+    """The iterator must pass the unwrapped ResponsesAPIResponse (not the
+    ResponseCompletedEvent wrapper) to dispatch_success_handlers so that
+    _success_handler_helper_fn recognises it and builds
+    standard_logging_object for cost tracking.
+
+    Without this fix, non-streaming callers that drain a force-streaming
+    provider (e.g. the Anthropic /v1/messages -> Responses API bridge) get
+    ``standard_logging_object not found`` because the wrapper event is not
+    recognised by _is_recognized_call_type_for_logging in the non-streaming
+    branch of _success_handler_helper_fn.
+    """
+    logging_obj = _logging_obj_stub()
+    dispatched_args: list = []
+
+    async def _dispatch(result, **kwargs):
+        dispatched_args.append(result)
+
+    logging_obj.dispatch_success_handlers.side_effect = _dispatch
+
+    iterator = _make_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=logging_obj,
+    )
+
+    async for _ in iterator:
+        pass
+
+    assert len(dispatched_args) == 1, (
+        f"Expected dispatch_success_handlers called once; got {len(dispatched_args)}"
+    )
+    logged = dispatched_args[0]
+    assert isinstance(logged, ResponsesAPIResponse), (
+        f"Expected ResponsesAPIResponse unwrapped for logging; got {type(logged).__name__}"
+    )
+
+
+def test_sync_completed_response_unwrapped_for_success_logging():
+    """Sync counterpart of the unwrapping test."""
+    logging_obj = _logging_obj_stub()
+    success_args: list = []
+
+    logging_obj.async_success_handler.side_effect = lambda result, **kw: success_args.append(result)
+
+    iterator = _make_sync_iterator(
+        sse_events=_COMPLETE_STREAM_EVENTS,
+        logging_obj=logging_obj,
+    )
+
+    for _ in iterator:
+        pass
+
+    assert len(success_args) == 1, (
+        f"Expected async_success_handler called once; got {len(success_args)}"
+    )
+    logged = success_args[0]
+    assert isinstance(logged, ResponsesAPIResponse), (
+        f"Expected ResponsesAPIResponse unwrapped for logging; got {type(logged).__name__}"
+    )
