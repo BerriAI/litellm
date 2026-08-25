@@ -97,6 +97,25 @@ def test_pop_next_value_peels_one_value_and_keeps_remainder():
     assert not accumulator
 
 
+def test_pop_next_value_skips_non_ascii_whitespace_between_concatenated_values():
+    """A separator like U+00A0 (non-breaking space) between two concatenated
+    values must not strand the second value forever. `raw_decode` only skips
+    the narrow `json.decoder.WHITESPACE` set, so the accumulator's own
+    whitespace skip must be as tolerant as `str.strip()` was before this
+    class replaced it, not merely match `raw_decode`'s narrower set."""
+    accumulator = JSONFragmentAccumulator()
+    accumulator.append('{"a": 1}' + "\xa0" + '{"a": 2}')
+
+    first_found, first_value = accumulator.pop_next_value()
+    assert first_found is True
+    assert first_value == {"a": 1}
+
+    second_found, second_value = accumulator.pop_next_value()
+    assert second_found is True, "the second value must not be permanently stranded"
+    assert second_value == {"a": 2}
+    assert not accumulator
+
+
 def test_pop_next_value_advances_past_a_non_dict_leading_value():
     accumulator = JSONFragmentAccumulator()
     accumulator.append("[1, 2]" + '{"a": 1}')

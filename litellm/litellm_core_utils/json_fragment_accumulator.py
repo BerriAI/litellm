@@ -1,8 +1,6 @@
 import json
 from typing import Final, cast  # noqa: TID251  # raw_decode returns tuple[Any, int]; no cast-free unpack
 
-_JSON_WHITESPACE: Final = " \t\n\r"  # matches json.decoder.WHITESPACE's character class
-
 
 class JSONFragmentAccumulator:
     """
@@ -68,7 +66,7 @@ class JSONFragmentAccumulator:
         self._materialize()
         length: Final = len(self._buffer)
         start = self._offset
-        while start < length and self._buffer[start] in _JSON_WHITESPACE:
+        while start < length and self._buffer[start].isspace():
             start += 1
         if start >= length:
             self._offset = start  # mutable-ok: see __init__
