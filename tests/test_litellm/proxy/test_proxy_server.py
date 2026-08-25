@@ -1861,36 +1861,35 @@ def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_nam
 
 
 @pytest.mark.asyncio
-async def test_non_admin_all_models_raises_400_when_user_row_missing():
+async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
     """
-    Regression test: a key whose user row no longer exists made find_unique return
-    None, and _check_if_model_is_team_model then dereferenced it
-    (`model_team_id in user_row.teams`) and raised AttributeError, surfacing as a
-    500. The miss must reuse the 400 "User not found" contract the neighbouring
-    except-branch already raises.
+    Regression test: /key/generate mints keys without a LiteLLM_UserTable row, so
+    find_unique returns None for such a user. That miss must neither raise (a 400
+    here, or the AttributeError on `user_row.teams` that used to surface as a 500)
+    nor leak team models: the user belongs to no team, so only the models they
+    added themselves come back.
     """
-    from fastapi import HTTPException
-
     from litellm.proxy.proxy_server import non_admin_all_models
 
+    user_added_model = {"model_name": "my-model", "model_info": {"id": "user-model-1"}}
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
 
     llm_router = MagicMock()
     llm_router.get_model_list.return_value = [
-        {"model_info": {"id": "gpt-4-model-1", "team_id": "team-a"}},
+        user_added_model,
+        {"model_name": "team-model", "model_info": {"id": "team-model-1", "team_id": "team-a"}},
     ]
 
-    with pytest.raises(HTTPException) as exc_info:
-        await non_admin_all_models(
-            all_models=[],
-            llm_router=llm_router,
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="deleted-user"),
-            prisma_client=prisma_client,
-        )
+    result = await non_admin_all_models(
+        all_models=[user_added_model],
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="ghost-user"),
+        prisma_client=prisma_client,
+    )
 
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == {"error": "User not found"}
+    assert result == [user_added_model]
 
 
 @pytest.mark.asyncio
