@@ -244,6 +244,17 @@ handler.addFilter(_secret_filter)
 handler.addFilter(_correlation_filter)
 
 
+def _should_use_color(stream: object = None) -> bool:
+    # NO_COLOR (https://no-color.org/) wins. FORCE_COLOR overrides. Otherwise tty-detect.
+    if os.getenv("NO_COLOR"):
+        return False
+    if os.getenv("FORCE_COLOR"):
+        return True
+    if stream is None:
+        stream = sys.stderr
+    return bool(getattr(stream, "isatty", lambda: False)())
+
+
 def _try_parse_json_message(message: str) -> dict[str, Any] | None:
     """
     Try to parse a log message as JSON. Returns parsed dict if valid, else None.
@@ -446,10 +457,11 @@ if json_logs:
     handler.setFormatter(JsonFormatter())
     _setup_json_exception_handlers(JsonFormatter())
 else:
-    formatter: Final = CorrelationPlainFormatter(
-        "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    if _should_use_color(handler.stream):
+        fmt = "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s"
+    else:
+        fmt = "%(asctime)s - %(name)s:%(levelname)s: %(filename)s:%(lineno)s - %(message)s"
+    formatter: Final = CorrelationPlainFormatter(fmt, datefmt="%H:%M:%S")
 
     handler.setFormatter(formatter)
 
