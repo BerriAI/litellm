@@ -603,6 +603,29 @@ class TestRedactionAndCaps:
         assert "PAYLOADMIDDLE" not in result.redacted_body
         assert tail[:40] not in result.redacted_body
 
+    def test_a_fragment_shorter_than_a_long_run_is_dropped(self):
+        """A slice too short to share a long contiguous run with the assertion is still assertion
+        material, and repeated errors would hand it over piece by piece."""
+        assertion = SecretStr("eyJhbGciOiJSUzI1NiJ9." + "A" * 60 + ".sigsigsig")
+        fragment = assertion.get_secret_value()[30:48]
+        body = {"error": "invalid_grant", "error_description": f"rejected near {fragment}"}
+
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert fragment not in result.redacted_body
+
+    def test_a_fragment_broken_up_by_delimiters_is_dropped(self):
+        """Splitting the echo defeats a contiguous match, so the comparison ignores whatever the
+        endpoint put between the pieces."""
+        assertion = SecretStr("eyJhbGciOiJSUzI1NiJ9." + "A" * 60 + ".sigsigsig")
+        piece = assertion.get_secret_value()[20:44]
+        spaced = " ".join(piece[i : i + 6] for i in range(0, 24, 6))
+        body = {"error": "invalid_grant", "error_description": spaced}
+
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert spaced not in result.redacted_body
+
     def test_a_short_secret_is_still_matched_whole(self):
         """A Keycloak client secret can be shorter than the probe length; the whole value is
         compared in that case rather than a truncated prefix."""

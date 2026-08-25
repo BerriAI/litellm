@@ -10,6 +10,7 @@ public exception contract.
 import asyncio
 import hashlib
 import json
+import re
 import threading
 import time
 from collections.abc import Callable, Coroutine, Mapping
@@ -74,7 +75,12 @@ _NON_OBJECT_BODY_MESSAGE: Final = "non-object error response omitted"
 _NO_OAUTH_FIELDS_MESSAGE: Final = "error response carried no RFC 6749 fields"
 _UNSTRUCTURED_BODY_MESSAGE: Final = "non-JSON error response omitted"
 _REFLECTED_VALUE_MESSAGE: Final = "<redacted: response echoed the request>"
-_REFLECTION_PROBE_LENGTH: Final = 24
+# A credential fragment shorter than this is not worth the false positives; longer, and a run
+# shared with the assertion is reflection rather than coincidence.
+_REFLECTION_MIN_RUN: Final = 8
+# Everything a base64url credential is NOT made of, stripped so a fragment split by delimiters
+# still lines up against the assertion.
+_CREDENTIAL_CHARS: Final = re.compile(r"[^A-Za-z0-9._~+/=-]")
 _SENTINEL_BODY_MESSAGES: Final = frozenset({_OVERSIZED_BODY_MESSAGE, _NON_OBJECT_BODY_MESSAGE})
 
 
@@ -120,26 +126,27 @@ def redact_oauth_error_body(status_code: int, body_text: str, assertion: SecretS
 
 def _drop_reflected_assertion(rendered: str, assertion: SecretStr | None) -> str:
     """A token endpoint that echoes the submitted assertion back would otherwise put it in the
-    operator log and in the error handed to the caller. The probe caps at
-    ``_REFLECTION_PROBE_LENGTH`` for a long assertion (a JWT), but a short reflected value (e.g. a
-    Keycloak client_secret under that length) still needs the whole thing checked -- capping the
-    minimum here too would silently stop redacting exactly the short secrets most likely to be
-    hand-set rather than generated."""
+    operator log and in the error handed to the caller.
+
+    Matching a contiguous slice is not enough. An endpoint that returns a short piece of the
+    assertion, or returns it broken up by delimiters, shares no long run with it, so the credential
+    material would travel on unredacted. The rendered text is therefore stripped down to the
+    characters a credential is made of and scanned against the assertion, which catches a fragment
+    wherever it starts and however it was split. Over-redacting an error that merely happens to
+    contain such a run is the right way to be wrong here.
+    """
     if assertion is None:
         return rendered
     secret: Final = assertion.get_secret_value()
     if not secret:
         return rendered
-    if len(secret) <= _REFLECTION_PROBE_LENGTH:
+    if len(secret) <= _REFLECTION_MIN_RUN:
         return _REFLECTED_VALUE_MESSAGE if secret in rendered else rendered
-    # Scan from the rendered side rather than probing the assertion's prefix: an endpoint that
-    # echoes the assertion from any offset (or only its tail) shares no prefix with it, but must
-    # still be caught. The rendered text is already capped, so this stays a handful of lookups.
-    windows: Final = (
-        rendered[start : start + _REFLECTION_PROBE_LENGTH]
-        for start in range(len(rendered) - _REFLECTION_PROBE_LENGTH + 1)
+    compacted: Final = _CREDENTIAL_CHARS.sub("", rendered)
+    runs: Final = (
+        compacted[start : start + _REFLECTION_MIN_RUN] for start in range(len(compacted) - _REFLECTION_MIN_RUN + 1)
     )
-    return _REFLECTED_VALUE_MESSAGE if any(window in secret for window in windows) else rendered
+    return _REFLECTED_VALUE_MESSAGE if any(run in secret for run in runs) else rendered
 
 
 def _redact_body_text(body_text: str) -> str:
