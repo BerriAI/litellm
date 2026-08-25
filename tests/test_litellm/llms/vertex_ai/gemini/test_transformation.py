@@ -1,7 +1,8 @@
 
 import json
 from collections.abc import Mapping
-from typing import Optional
+from types import MappingProxyType
+from typing import Final, Optional
 
 import pytest
 
@@ -361,7 +362,7 @@ def _gemini_request_body(
     litellm_params: Mapping[str, bool],
     request_override: Optional[bool] = None,
 ) -> RequestBody:
-    override_kwargs: dict[str, bool] = (
+    override_kwargs: Final[Mapping[str, bool]] = MappingProxyType(
         {} if request_override is None else {"vertex_ai_use_response_json_schema": request_override}
     )
     optional_params = litellm.utils.get_optional_params(
