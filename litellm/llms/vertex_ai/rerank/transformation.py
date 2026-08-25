@@ -191,22 +191,14 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         results: Final = []
         for record in records:
             # Handle both cases: with full details and with only IDs
-            if "score" in record:
-                # Full response with score and details
-                result_item: dict[str, Any] = {
-                    "index": int(record["id"]),
-                    "relevance_score": record.get("score", 0.0),
-                }
-            else:
-                # Response with only IDs (when ignoreRecordDetailsInResponse=true)
-                # We can't provide a relevance score, so we'll use a default
-                result_item = {
-                    "index": int(record["id"]),
-                    "relevance_score": 1.0,  # Default score when details are ignored
-                }
-
-            if return_documents and record.get("content") is not None:
-                result_item["document"] = RerankResponseDocument(text=record["content"])
+            score_val = record.get("score", 0.0) if "score" in record else 1.0
+            doc_text = record.get("content")
+            result_item = {
+                "index": int(record["id"]),
+                "relevance_score": score_val,
+            }
+            if return_documents and doc_text is not None:
+                result_item["document"] = RerankResponseDocument(text=doc_text)
 
             results.append(result_item)
 
