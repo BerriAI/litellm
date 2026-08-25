@@ -18,9 +18,6 @@ from litellm.utils import get_valid_models
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
 
-_CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
-
-
 def _check_wildcard_routing(model: str) -> bool:
     """
     Returns True if a model is a provider wildcard.
@@ -256,7 +253,7 @@ def _hydrate_litellm_credential_name(
 
     litellm_params = litellm_params.model_copy()
     for key, value in credential_values.items():
-        if key in _CREDENTIAL_LITELLM_PARAM_FIELDS and getattr(litellm_params, key, None) is None:
+        if key in _CREDENTIAL_LITELLM_PARAM_FIELDS and CredentialAccessor.is_unset(getattr(litellm_params, key, None)):
             setattr(litellm_params, key, value)
     litellm_params.litellm_credential_name = None
     return litellm_params

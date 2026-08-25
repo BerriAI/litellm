@@ -625,7 +625,7 @@ def load_credentials_from_list(kwargs: dict):
     if credential_name and litellm.credential_list:
         credential_accessor: Final[Mapping[str, object]] = CredentialAccessor.get_credential_values(credential_name)
         for key, value in credential_accessor.items():
-            if key not in kwargs:
+            if CredentialAccessor.is_unset(kwargs.get(key)):
                 kwargs[key] = value
 
 
