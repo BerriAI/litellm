@@ -4929,6 +4929,70 @@ def test_client_side_timeout_marker_never_reaches_the_provider():
     )
 
 
+def test_ssl_verify_never_reaches_the_provider():
+    """ssl_verify configures the outbound TLS client, so it is meaningless to the provider.
+    Unregistered, the OpenAI param builder sweeps it into extra_body and it goes out as a
+    JSON body field: an openai-compatible endpoint then rejects the request, so a deployment
+    carrying a private CA bundle path cannot serve a single completion.
+
+    Registering it keeps it on litellm_params, where the client config reads it from.
+    """
+    ca_bundle = "/opt/app/certs/ca.crt"
+    kwargs = {"a_real_provider_specific_param": 1, "ssl_verify": ca_bundle}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        f"ssl_verify leaked into the provider params: {sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+    assert "ssl_verify" in all_litellm_params
+
+    assert (
+        dict(GenericLiteLLMParams(model="openai/gpt-4o-mini", ssl_verify=ca_bundle)).get("ssl_verify") == ca_bundle
+    ), "registering ssl_verify must not strip it from litellm_params, which is where the TLS client reads it"
+
+
+def test_completion_does_not_leak_ssl_verify_into_provider_request_body():
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    mock_raw_response = MagicMock()
+    mock_raw_response.headers = {}
+    mock_raw_response.parse.return_value = mock_response
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
+
+    litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        ssl_verify="/opt/app/certs/ca.crt",
+        api_key="sk-test",
+        client=mock_client,
+    )
+
+    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
+    assert "ssl_verify" not in create_kwargs
+    assert "ssl_verify" not in (create_kwargs.get("extra_body") or {})
+
+
 def test_rust_flag_not_forwarded_as_provider_param():
     forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
     assert "rust" not in forwarded
