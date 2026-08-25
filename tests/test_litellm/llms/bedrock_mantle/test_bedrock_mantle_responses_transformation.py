@@ -8,7 +8,8 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
 import copy
-
+import json
+from pathlib import Path
 
 import pytest
 from botocore.exceptions import (
@@ -1532,7 +1533,7 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
         assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 1000000
+        assert info["max_input_tokens"] == 1050000
         assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
         assert info["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(cache_creation_cost * 2)
         assert info["cache_read_input_token_cost_above_272k_tokens"] == pytest.approx(cache_read_cost * 2)
@@ -1574,3 +1575,42 @@ class TestBedrockMantleResponsesPricing:
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
+
+
+def _repo_cost_map(map_name: str) -> dict[str, dict[str, object]]:
+    repo_root = Path(__file__).resolve().parents[4]
+    paths = {
+        "root": repo_root / "model_prices_and_context_window.json",
+        "bundled_backup": repo_root / "litellm" / "model_prices_and_context_window_backup.json",
+    }
+    return json.loads(paths[map_name].read_text())
+
+
+class TestGpt56MantleRegistryEntries:
+    """Locks the gpt-5.6 frontier entries to Bedrock Mantle's live behavior.
+
+    Mantle enforces a 1,050,000-token prompt maximum for gpt-5.6 sol/terra/luna
+    (oversize requests 400 with "prompt tokens (N) exceed model maximum
+    (1050000)", and a 1,030,590-token request completes), matching the OpenAI
+    Bedrock guide. mode must stay "responses": Mantle's native
+    /v1/chat/completions rejects function tools unless reasoning_effort is
+    "none", so chat traffic has to keep bridging to the Responses API
+    (see the responses_api_bridge tests above).
+    """
+
+    @pytest.mark.parametrize("map_name", ("root", "bundled_backup"))
+    @pytest.mark.parametrize(
+        "key",
+        (
+            "bedrock_mantle/openai.gpt-5.6-sol",
+            "bedrock_mantle/openai.gpt-5.6-terra",
+            "bedrock_mantle/openai.gpt-5.6-luna",
+        ),
+    )
+    def test_entry_matches_mantle_enforced_limits(self, map_name, key):
+        entry = _repo_cost_map(map_name)[key]
+        assert entry["max_input_tokens"] == 1050000
+        assert entry["max_output_tokens"] == 128000
+        assert entry["mode"] == "responses"
+        assert entry["use_openai_responses_path"] is True
+        assert entry["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses"]

@@ -277,6 +277,8 @@ def rerank(
             if api_key is None:
                 raise ValueError("TogetherAI API key is required, please set 'TOGETHERAI_API_KEY' in your environment")
 
+            api_base = dynamic_api_base or optional_params.api_base or litellm.api_base or "https://api.together.ai/v1"
+
             response = together_rerank.rerank(
                 model=model,
                 query=query,
@@ -286,6 +288,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 api_key=api_key,
+                api_base=api_base,
                 _is_async=_is_async,
             )
         elif _custom_llm_provider == litellm.LlmProviders.JINA_AI:
