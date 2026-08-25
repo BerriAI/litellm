@@ -10644,10 +10644,9 @@ class Router:
                 _router_model_name: str = model_value
             elif isinstance(model_value, dict):
                 _model_value = RouterModelGroupAliasItem(**model_value)
-                if _model_value["hidden"] is True:
+                if _model_value["hidden"] is True and model_name is None:
                     continue
-                else:
-                    _router_model_name = _model_value["model"]
+                _router_model_name = _model_value["model"]
             else:
                 continue
 
