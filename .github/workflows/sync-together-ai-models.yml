@@ -1,0 +1,68 @@
+name: Sync Together AI model registry
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync_together_ai_models:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: litellm_internal_staging
+          persist-credentials: false
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - name: Look for an already-open sync PR
+        id: existing
+        run: |
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName \
+            --jq '[.[].headRefName | select(startswith("litellm_together_registry_sync_"))] | first // empty')"
+          echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
+          if [ -n "$open_pr" ]; then
+            echo "An open sync PR already exists on branch $open_pr; skipping this run."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Run the sync
+        if: steps.existing.outputs.open_pr == ''
+        run: |
+          uv run --frozen python scripts/sync_together_ai_models.py --write --pr-body-file "$RUNNER_TEMP/pr_body.md"
+        env:
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      - name: Regenerate the JSON schema
+        if: steps.existing.outputs.open_pr == ''
+        run: |
+          uv run --frozen python ci_cd/generate_model_prices_schema.py
+      - name: Create a pull request when the registry changed
+        if: steps.existing.outputs.open_pr == ''
+        run: |
+          if git diff --quiet; then
+            echo "Registry already in sync; no PR needed."
+            exit 0
+          fi
+          branch="litellm_together_registry_sync_$(date +'%Y-%m-%d')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add model_prices_and_context_window.json \
+            litellm/model_prices_and_context_window_backup.json \
+            model_prices_and_context_window.schema.json
+          git commit -m "feat(models): sync together_ai model registry $(date +'%Y-%m-%d')"
+          gh auth setup-git
+          git push origin "$branch"
+          gh pr create --title "feat(models): sync together_ai model registry" \
+            --body-file "$RUNNER_TEMP/pr_body.md" \
+            --head "$branch" \
+            --base litellm_internal_staging
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
