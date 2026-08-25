@@ -4,32 +4,47 @@ Translates from OpenAI's `/v1/chat/completions` to Together AI's `/v1/chat/compl
 Docs: https://docs.together.ai/docs/chat-overview
 """
 
-from collections.abc import Container
-from types import MappingProxyType
+from collections.abc import Callable, Container
 from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.utils import supports_function_calling
+from litellm.utils import supports_function_calling, supports_response_schema
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 TOOL_CALLING_PARAMS: Final = ("tools", "tool_choice", "function_call")
-PLAIN_TEXT_RESPONSE_FORMAT: Final = MappingProxyType({"type": "text"})
 FUNCTION_CALLING_DOCS_URL: Final = "https://docs.together.ai/docs/function-calling"
+STRUCTURED_OUTPUTS_DOCS_URL: Final = "https://docs.together.ai/docs/inference/chat/structured-outputs"
+
+
+def _registry_verdict(model: str, flag: str, check: Callable[[str], bool]) -> bool | None:
+    try:
+        if check(model):
+            return True
+    except Exception as e:
+        verbose_logger.debug("Error checking together_ai %s for %s: %s", flag, model, e)
+    registry_entry: Final = litellm.model_cost.get(f"together_ai/{model}")
+    if isinstance(registry_entry, dict) and registry_entry.get(flag) is False:
+        return False
+    return None
 
 
 def _function_calling_verdict(model: str) -> bool | None:
-    try:
-        if supports_function_calling(model, custom_llm_provider="together_ai"):
-            return True
-    except Exception as e:
-        verbose_logger.debug("Error checking together_ai function calling support for %s: %s", model, e)
-    registry_entry: Final = litellm.model_cost.get(f"together_ai/{model}")
-    if isinstance(registry_entry, dict) and registry_entry.get("supports_function_calling") is False:
-        return False
-    return None
+    return _registry_verdict(
+        model,
+        "supports_function_calling",
+        lambda checked_model: supports_function_calling(checked_model, custom_llm_provider="together_ai"),
+    )
+
+
+def _response_schema_verdict(model: str) -> bool | None:
+    return _registry_verdict(
+        model,
+        "supports_response_schema",
+        lambda checked_model: supports_response_schema(checked_model, custom_llm_provider="together_ai"),
+    )
 
 
 def _tool_params_to_drop(passed_params: Container[str], model: str, drop_params: bool) -> tuple[str, ...]:
@@ -61,19 +76,33 @@ def _tool_params_to_drop(passed_params: Container[str], model: str, drop_params:
     )
 
 
-class TogetherAIChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
-        supports_fc: Final = _function_calling_verdict(model)
-        supported_params: Final = super().get_supported_openai_params(model)
-        if supports_fc is True:
-            return supported_params
-        verbose_logger.debug(
-            "Only some together models support response_format. Docs - https://docs.together.ai/docs/function-calling"
+def _drop_response_format(passed_params: Container[str], model: str, drop_params: bool) -> bool:
+    if "response_format" not in passed_params:
+        return False
+    verdict: Final = _response_schema_verdict(model)
+    if verdict is True:
+        return False
+    if verdict is None:
+        verbose_logger.warning(
+            "together_ai model %s has no structured outputs entry in the model registry; passing response_format through for Together to validate. Docs - %s",
+            model,
+            STRUCTURED_OUTPUTS_DOCS_URL,
         )
-        return [  # mutable-ok: the inherited contract returns a plain list; building fresh avoids mutating the base class's value
-            param for param in supported_params if param != "response_format"
-        ]
+        return False
+    if drop_params or litellm.drop_params:
+        verbose_logger.warning(
+            "together_ai model %s does not support structured outputs per the model registry; dropping response_format. Docs - %s",
+            model,
+            STRUCTURED_OUTPUTS_DOCS_URL,
+        )
+        return True
+    raise UnsupportedParamsError(
+        status_code=500,
+        message=f"together_ai does not support parameters: response_format, for model={model}. To drop it from the call, set `litellm.drop_params = True`.",
+    )
 
+
+class TogetherAIChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -84,6 +113,6 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         for param in _tool_params_to_drop(mapped_openai_params, model, drop_params):
             mapped_openai_params.pop(param)
-        if mapped_openai_params.get("response_format") == PLAIN_TEXT_RESPONSE_FORMAT:
+        if _drop_response_format(mapped_openai_params, model, drop_params):
             mapped_openai_params.pop("response_format")
         return mapped_openai_params

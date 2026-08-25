@@ -18,10 +18,23 @@ TOOL_CALLING_MODEL = "openai/gpt-oss-20b"
 REASONING_MODEL = "deepseek-ai/DeepSeek-V3.1"
 UNMAPPED_MODEL = "example-org/brand-new-model"
 NO_TOOLS_MODEL = "example-org/no-tools-model"
+NO_SCHEMA_MODEL = "example-org/no-schema-model"
 
 TOOL_PARAMS = ("tools", "tool_choice", "function_call")
 
 WEATHER_TOOLS = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+
+VOICE_NOTE_SCHEMA = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, "summary": {"type": "string"}},
+    "required": ["title", "summary"],
+    "additionalProperties": False,
+}
+JSON_SCHEMA_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {"name": "voice_note", "schema": VOICE_NOTE_SCHEMA, "strict": True},
+}
+REGEX_RESPONSE_FORMAT = {"type": "regex", "pattern": "(positive|neutral|negative)"}
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +51,15 @@ def registry_disables_function_calling(monkeypatch):
         litellm.model_cost,
         f"together_ai/{NO_TOOLS_MODEL}",
         {"litellm_provider": "together_ai", "mode": "chat", "supports_function_calling": False},
+    )
+
+
+@pytest.fixture
+def registry_disables_response_schema(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"together_ai/{NO_SCHEMA_MODEL}",
+        {"litellm_provider": "together_ai", "mode": "chat", "supports_response_schema": False},
     )
 
 
@@ -63,7 +85,7 @@ def test_supported_params_unmapped_model_keeps_tool_params():
 
     for param in TOOL_PARAMS:
         assert param in supported
-    assert "response_format" not in supported
+    assert "response_format" in supported
     assert "stream" in supported
     assert "temperature" in supported
 
@@ -73,7 +95,7 @@ def test_supported_params_no_tools_model_keeps_tool_params(registry_disables_fun
 
     for param in TOOL_PARAMS:
         assert param in supported
-    assert "response_format" not in supported
+    assert "response_format" in supported
 
 
 def test_map_openai_params_tool_calling_model_passes_tools():
@@ -141,21 +163,17 @@ def test_map_openai_params_reasoning_model_passes_sampling_params():
     assert mapped["max_tokens"] == 512
 
 
-def test_map_openai_params_drops_text_response_format():
-    mapped = TogetherAIChatConfig().map_openai_params(
-        non_default_params={"response_format": {"type": "text"}, "temperature": 0.5},
-        optional_params={},
-        model=REASONING_MODEL,
-        drop_params=False,
-    )
-
-    assert "response_format" not in mapped
-    assert mapped["temperature"] == 0.5
-
-
-def test_map_openai_params_keeps_json_response_format():
-    response_format = {"type": "json_object"}
-
+@pytest.mark.parametrize(
+    "response_format",
+    [
+        {"type": "text"},
+        {"type": "json_object"},
+        {"type": "json_object", "schema": VOICE_NOTE_SCHEMA},
+        JSON_SCHEMA_RESPONSE_FORMAT,
+        REGEX_RESPONSE_FORMAT,
+    ],
+)
+def test_map_openai_params_schema_model_passes_response_format_through(response_format):
     mapped = TogetherAIChatConfig().map_openai_params(
         non_default_params={"response_format": response_format},
         optional_params={},
@@ -164,6 +182,46 @@ def test_map_openai_params_keeps_json_response_format():
     )
 
     assert mapped["response_format"] == response_format
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_map_openai_params_unmapped_model_passes_response_format_through(drop_params, together_warning_log):
+    mapped = TogetherAIChatConfig().map_openai_params(
+        non_default_params={"response_format": JSON_SCHEMA_RESPONSE_FORMAT},
+        optional_params={},
+        model=UNMAPPED_MODEL,
+        drop_params=drop_params,
+    )
+
+    assert mapped["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+    assert UNMAPPED_MODEL in together_warning_log.text
+    assert "passing response_format through" in together_warning_log.text
+
+
+def test_map_openai_params_no_schema_model_drops_response_format_with_warning(
+    registry_disables_response_schema, together_warning_log
+):
+    mapped = TogetherAIChatConfig().map_openai_params(
+        non_default_params={"response_format": JSON_SCHEMA_RESPONSE_FORMAT, "temperature": 0.5},
+        optional_params={},
+        model=NO_SCHEMA_MODEL,
+        drop_params=True,
+    )
+
+    assert "response_format" not in mapped
+    assert mapped["temperature"] == 0.5
+    assert NO_SCHEMA_MODEL in together_warning_log.text
+    assert "dropping response_format" in together_warning_log.text
+
+
+def test_map_openai_params_no_schema_model_raises_without_drop_params(registry_disables_response_schema):
+    with pytest.raises(UnsupportedParamsError, match="response_format"):
+        TogetherAIChatConfig().map_openai_params(
+            non_default_params={"response_format": JSON_SCHEMA_RESPONSE_FORMAT},
+            optional_params={},
+            model=NO_SCHEMA_MODEL,
+            drop_params=False,
+        )
 
 
 def _transform_response(message: dict) -> ModelResponse:
@@ -385,3 +443,69 @@ def test_completion_unmapped_model_sends_tools_to_together():
     tool_call = response.choices[0].message.tool_calls[0]
     assert tool_call.function.name == "get_weather"
     assert json.loads(tool_call.function.arguments) == {"city": "San Francisco"}
+
+
+def _capture_completion_request(model: str, **completion_kwargs) -> dict:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    captured_requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-together-structured",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"title": "t", "summary": "s"}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    litellm.completion(
+        model=f"together_ai/{model}",
+        messages=[{"role": "user", "content": "Summarize with a title and summary."}],
+        api_key="fake-key",
+        client=client,
+        **completion_kwargs,
+    )
+    return json.loads(captured_requests[0].content)
+
+
+def test_completion_unmapped_model_sends_json_schema_to_together():
+    request_body = _capture_completion_request(
+        UNMAPPED_MODEL, response_format=JSON_SCHEMA_RESPONSE_FORMAT, drop_params=True
+    )
+
+    assert request_body["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+
+
+def test_completion_pydantic_response_format_sends_json_schema_to_together():
+    from pydantic import BaseModel
+
+    class VoiceNote(BaseModel):
+        title: str
+        summary: str
+
+    request_body = _capture_completion_request(TOOL_CALLING_MODEL, response_format=VoiceNote)
+
+    sent = request_body["response_format"]
+    assert sent["type"] == "json_schema"
+    assert sent["json_schema"]["name"] == "VoiceNote"
+    assert sent["json_schema"]["strict"] is True
+    assert sent["json_schema"]["schema"]["required"] == ["title", "summary"]
+
+
+def test_completion_regex_response_format_sends_pattern_to_together():
+    request_body = _capture_completion_request(TOOL_CALLING_MODEL, response_format=REGEX_RESPONSE_FORMAT)
+
+    assert request_body["response_format"] == REGEX_RESPONSE_FORMAT
