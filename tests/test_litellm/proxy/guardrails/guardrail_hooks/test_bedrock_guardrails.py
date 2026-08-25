@@ -316,6 +316,77 @@ def test_bedrock_guardrail_resolves_specific_deployment_name(monkeypatch: pytest
     router.get_model_list.assert_not_called()
 
 
+def test_bedrock_guardrail_ignores_user_agent_without_regex_route(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.enable_tag_filtering = True
+    router.get_model_list.return_value = [
+        {"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}}
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert BedrockGuardrail._router_allows_bedrock(
+        {"model": "shared-alias", "metadata": {"user_agent": "client/1.0"}}
+    ) is True
+
+
+def test_bedrock_guardrail_applies_router_post_filters(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    deployments = [
+        {
+            "litellm_params": {"custom_llm_provider": "openai", "order": 1},
+            "model_info": {"id": "openai"},
+        },
+        {
+            "litellm_params": {"custom_llm_provider": "bedrock", "order": 2},
+            "model_info": {"id": "bedrock"},
+        },
+    ]
+    router._common_checks_available_deployment.return_value = ("shared-alias", deployments)
+    router._filter_health_check_unhealthy_deployments.return_value = deployments
+    router.routing_plugins = []
+    router.default_deployment = None
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert BedrockGuardrail._router_allows_bedrock({"model": "shared-alias"}) is False
+    assert (
+        BedrockGuardrail._router_allows_bedrock(
+            {"model": "shared-alias", "_excluded_deployment_ids": ["openai"]}
+        )
+        is True
+    )
+
+
+def test_bedrock_guardrail_applies_web_search_filter(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    deployments = [
+        {
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "model_info": {"id": "openai", "supports_web_search": True},
+        },
+        {
+            "litellm_params": {"custom_llm_provider": "bedrock"},
+            "model_info": {"id": "bedrock", "supports_web_search": False},
+        },
+    ]
+    router._common_checks_available_deployment.return_value = ("shared-alias", deployments)
+    router._filter_health_check_unhealthy_deployments.return_value = deployments
+    router.routing_plugins = []
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert (
+        BedrockGuardrail._router_allows_bedrock(
+            {"model": "shared-alias", "tools": [{"type": "web_search"}]}
+        )
+        is False
+    )
+
+
 def test_bedrock_guardrail_follows_default_fallback_group(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server
 
