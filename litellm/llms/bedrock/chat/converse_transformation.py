@@ -418,12 +418,18 @@ class AmazonConverseConfig(BaseConfig):
         Handle the reasoning_effort parameter based on the model type.
 
         - GPT-OSS models: passed through unchanged via additionalModelRequestFields.
+        - OpenAI GPT-5.x models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
         if "gpt-oss" in model:
             optional_params["reasoning_effort"] = reasoning_effort
+        elif "openai.gpt-5" in model:
+            # Converse rejects Anthropic's `thinking` for OpenAI GPT-5.x; effort goes
+            # under additionalModelRequestFields as {"reasoning": {"effort": ...}}.
+            optional_params.pop("thinking", None)
+            optional_params["reasoning"] = {"effort": reasoning_effort}
         elif self._is_nova_2_model(model):
             reasoning_config: Final = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
