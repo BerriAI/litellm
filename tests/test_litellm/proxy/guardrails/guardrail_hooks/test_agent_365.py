@@ -687,6 +687,31 @@ class TestVeriaHardening:
         assert "500" in exc_info.value.detail["message"]
 
     @pytest.mark.asyncio
+    async def test_token_endpoint_429_blocks_even_fail_open_as_throttled(self):
+        handler: Final = FakeHandler(
+            [_response(429, {"error": "temporarily_throttled", "error_description": "AADSTS90056"})]
+        )
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert "429" in exc_info.value.detail["message"]
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Throttled"
+
+    @pytest.mark.asyncio
+    async def test_token_endpoint_408_non_json_blocks_as_throttled(self):
+        handler: Final = FakeHandler([_response(408, text="Request Timeout")])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Throttled"
+
+    @pytest.mark.asyncio
     async def test_token_endpoint_4xx_html_stays_infra_fail_open(self):
         handler: Final = FakeHandler([_response(403, text="<html>waf block page</html>")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
