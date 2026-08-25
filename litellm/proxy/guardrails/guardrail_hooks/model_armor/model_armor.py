@@ -841,14 +841,25 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
+        from litellm.proxy.guardrails.anthropic_sse import (
+            anthropic_sse_chunks_from_response,
+            anthropic_sse_error_frames,
+            assemble_anthropic_sse_stream,
+            is_raw_sse_stream,
+        )
 
         # Collect all chunks
         all_chunks: Final[list[ModelResponseStream]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
-        # Build complete response
-        assembled_response: Final = stream_chunk_builder(chunks=all_chunks)
+        # /v1/messages arrives as raw SSE frames, which stream_chunk_builder cannot assemble
+        raw_sse: Final = is_raw_sse_stream(all_chunks)
+        assembled_response: Final = (
+            assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+            if raw_sse
+            else stream_chunk_builder(chunks=all_chunks)
+        )
 
         if isinstance(assembled_response, ModelResponse):
             # Extract content
@@ -868,7 +879,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         _, metadata = get_or_create_metadata_bucket(request_data)
                         metadata["_model_armor_response"] = self._build_logging_response(armor_response)
                         metadata["_model_armor_status"] = (
-                            "blocked" if self._should_block_content(armor_response) else "success"
+                            "blocked"
+                            if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
+                            else "success"
                         )
 
                     # Add guardrail to applied_guardrails BEFORE potential blocking
@@ -882,7 +895,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     )
 
                     # Check if blocked
-                    if self._should_block_content(armor_response):
+                    if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
                         raise HTTPException(
                             status_code=400,
                             detail=self._build_block_error_detail(
@@ -902,6 +915,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                                         choice.message.content = sanitized_content
 
                             # Return sanitized stream
+                            if raw_sse:
+                                for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
+                                    yield sse_chunk
+                                return
                             mock_response: Final = MockResponseIterator(model_response=assembled_response)
                             async for chunk in mock_response:
                                 yield chunk
@@ -909,6 +926,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
                 except ModelArmorAPIError as e:
                     if self.optional_params.get("fail_on_error", True):
+                        if raw_sse:
+                            for error_frame in anthropic_sse_error_frames(e.detail):
+                                yield error_frame
+                            return
                         error_obj = {"message": e.detail, "code": "500"}
                         yield f"data: {json.dumps({'error': error_obj})}\n\n"
                         return
@@ -923,6 +944,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     else:
                         error_obj = {"message": str(error_value)}
                     error_obj["code"] = str(e.status_code)
+                    if raw_sse:
+                        for error_frame in anthropic_sse_error_frames(str(error_obj.get("message", error_obj))):
+                            yield error_frame
+                        return
                     yield f"data: {json.dumps({'error': error_obj})}\n\n"
                     return
                 except Exception as e:
@@ -931,6 +956,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         raise
             else:
                 verbose_proxy_logger.debug("Model Armor: No text content in streaming response, skipping guardrail")
+        elif raw_sse:
+            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed
+            for error_frame in anthropic_sse_error_frames(
+                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
+            ):
+                yield error_frame
+            return
 
         # Return original chunks if no sanitization needed
         for chunk in all_chunks:
