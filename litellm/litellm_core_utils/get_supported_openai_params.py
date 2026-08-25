@@ -172,7 +172,7 @@ def get_supported_openai_params(
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "together_ai":
-        return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
+        return litellm.TogetherAIChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "databricks":
         if request_type == "chat_completion":
             return litellm.DatabricksConfig().get_supported_openai_params(model=model)
