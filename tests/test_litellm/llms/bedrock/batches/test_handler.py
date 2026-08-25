@@ -8,14 +8,11 @@ the tests don't hit AWS.
 
 from __future__ import annotations
 
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bedrock.batches.handler import (  # noqa: E402
     BedrockBatchesHandler,

@@ -1,11 +1,9 @@
 import logging
 import os
-import sys
 import pytest
 from typing import List, Any, cast
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 # Import required modules
 import litellm

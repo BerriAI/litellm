@@ -1,8 +1,5 @@
-import sys
-import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("."))
 
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 

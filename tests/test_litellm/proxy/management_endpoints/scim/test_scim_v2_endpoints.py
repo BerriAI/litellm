@@ -58,7 +58,6 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
-from litellm.proxy._types import ProxyException
 
 
 @pytest.mark.asyncio

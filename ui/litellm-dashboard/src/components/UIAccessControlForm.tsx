@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { z } from "zod/v4";
 
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

@@ -1,5 +1,3 @@
-import os
-import sys
 import zoneinfo
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, Mock, patch
@@ -8,7 +6,6 @@ import httpx
 import polars as pl
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.integrations.cloudzero.cz_stream_api import CloudZeroStreamer
 

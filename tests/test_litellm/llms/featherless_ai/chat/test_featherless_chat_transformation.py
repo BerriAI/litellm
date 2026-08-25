@@ -5,14 +5,9 @@ These tests validate the FeatherlessAIConfig class which extends OpenAIGPTConfig
 Featherless AI is an OpenAI-compatible provider with a few customizations.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 

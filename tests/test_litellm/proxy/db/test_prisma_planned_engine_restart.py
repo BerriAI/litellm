@@ -40,9 +40,6 @@ import pytest
 from prisma import Prisma as GeneratedPrisma
 from prisma.engine.errors import EngineConnectionError
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.utils import PrismaClient

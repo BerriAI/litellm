@@ -5,6 +5,51 @@ import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import GenericLiteLLMParams
+
+AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
+
+
+def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
+    """
+    Resolve an Entra ID / OAuth access token for an Azure AI Foundry deployment.
+
+    Accepts the same credential set as the `azure` provider: service principal
+    (`tenant_id` / `client_id` / `client_secret`), a pre-fetched `azure_ad_token`, an OIDC
+    federated token, username/password, or `DefaultAzureCredential` / managed identity.
+    """
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    params = GenericLiteLLMParams.model_validate(litellm_params) if litellm_params else GenericLiteLLMParams()
+
+    return get_azure_ad_token(params)
+
+
+def get_azure_ai_auth_headers(
+    api_key: str | None,
+    litellm_params: Mapping[str, object] | None = None,
+    api_key_header: AzureAIApiKeyHeader = "Authorization",
+    api_key_env_var: str = "AZURE_AI_API_KEY",
+) -> Mapping[str, str]:
+    """
+    Build the auth headers for an Azure AI Foundry route.
+
+    Prefers the API key when one is configured, and otherwise falls back to Entra ID / OAuth,
+    sending the access token as a bearer token.
+    """
+    if api_key:
+        return {api_key_header: f"Bearer {api_key}" if api_key_header == "Authorization" else api_key}
+
+    azure_ad_token = get_azure_ai_entra_token(litellm_params=litellm_params)
+    if azure_ad_token:
+        return {"Authorization": f"Bearer {azure_ad_token}"}
+
+    raise ValueError(
+        f"Missing Azure AI credentials - set an API key (`api_key` or {api_key_env_var}), or Entra ID / OAuth "
+        "credentials (`tenant_id` + `client_id` + `client_secret`, `azure_ad_token`, an OIDC token, or a managed "
+        "identity with `litellm.enable_azure_ad_token_refresh = True`)"
+    )
+
 
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
 
@@ -79,7 +124,7 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        return api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_AI_API_KEY")
+        return api_key or litellm.api_key or get_secret_str("AZURE_AI_API_KEY")
 
     @property
     def api_version(self, api_version: str | None = None) -> str | None:
