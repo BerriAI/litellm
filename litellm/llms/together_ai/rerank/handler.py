@@ -51,7 +51,7 @@ class TogetherAIRerank(BaseLLM):
             raise ValueError("TogetherAI does not support max_chunks_per_doc")
 
         if _is_async:
-            return self.async_rerank(request_data_dict, api_key, api_base)  # Call async method
+            return self.async_rerank(request_data_dict, api_key, api_base)
 
         response: Final = client.post(
             _rerank_url(api_base),
