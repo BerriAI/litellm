@@ -2,7 +2,7 @@ import asyncio
 import concurrent.futures
 import base64
 import json
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 import logging
 import threading
 import time
@@ -624,6 +624,18 @@ class TestRedactionAndCaps:
         echoed = quote(assertion.get_secret_value(), safe="")
         body = {"error": "invalid_client", "error_description": f"rejected {echoed}"}
 
+        result = redact_oauth_error_body(400, json.dumps(body), assertion)
+
+        assert echoed not in result.redacted_body
+
+    def test_a_space_encoded_as_plus_is_dropped(self):
+        """A form-encoded body writes a space as "+", not %20, so percent-decoding alone does not
+        recover the secret and a passphrase echoed in its wire shape would travel on."""
+        assertion = SecretStr("correct horse battery staple")
+        echoed = urlencode({"client_secret": assertion.get_secret_value()}).split("=", 1)[1]
+        body = {"error": "invalid_client", "error_description": f"rejected {echoed}"}
+
+        assert "+" in echoed
         result = redact_oauth_error_body(400, json.dumps(body), assertion)
 
         assert echoed not in result.redacted_body

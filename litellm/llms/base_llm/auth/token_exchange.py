@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from math import inf
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
-from urllib.parse import unquote, urlencode, urlsplit, urlunsplit
+from urllib.parse import unquote, unquote_plus, urlencode, urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
@@ -170,8 +170,11 @@ def _shares_a_credential_run(rendered: str, compacted_secret: str) -> bool:
     """``unquote`` covers a credential sent form-encoded, without every caller enumerating that
     shape for itself: percent-escaping is reversible and applies to any field, query string
     included."""
+    # unquote covers %XX; unquote_plus additionally covers the "+" a form-encoded body uses for a
+    # space. Both are kept rather than only the wider one, because "+" is a base64 character and
+    # decoding it away would lose a run that the undecoded candidate still matches on.
     compacted_candidates: Final = tuple(
-        _CREDENTIAL_CHARS.sub("", candidate) for candidate in (rendered, unquote(rendered))
+        _CREDENTIAL_CHARS.sub("", candidate) for candidate in (rendered, unquote(rendered), unquote_plus(rendered))
     )
     return any(
         compacted[start : start + _REFLECTION_MIN_RUN] in compacted_secret

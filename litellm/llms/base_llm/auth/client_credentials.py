@@ -15,7 +15,7 @@ import threading
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, quote_plus, urlencode
 
 import httpx
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -158,9 +158,10 @@ def _wire_forms_of_secret(config: KeycloakSource, client_secret: str) -> tuple[S
             encoded_pair: Final = f"{_form_encode(config.client_id)}:{_form_encode(client_secret)}"
             return (raw, SecretStr(base64.b64encode(encoded_pair.encode()).decode("ascii")))
         case "client_secret_post":
-            # urlencode percent-escapes reserved characters, so a secret containing any of them
-            # leaves in a shape the raw comparison would not recognise coming back.
-            return (raw, SecretStr(quote(client_secret, safe="")))
+            # urlencode escapes reserved characters and writes a space as "+", so a secret
+            # containing either leaves in a shape the raw comparison would not recognise coming
+            # back. quote_plus is what urlencode itself applies.
+            return (raw, SecretStr(quote_plus(client_secret)))
         case _:
             assert_never(config.auth_method)
 
