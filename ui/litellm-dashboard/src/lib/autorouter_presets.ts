@@ -268,6 +268,7 @@ export const buildPresetPrefill = (
         model: resolve(config.classifier_llm_config.model),
       },
       classifier_context_window_size: config.classifier_context_window_size,
+      classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,

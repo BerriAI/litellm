@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -2812,18 +2807,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
 
     assert result["thinking"] == {"type": "adaptive"}
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -6143,3 +6126,41 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
             "output_tokens_details": {"reasoning_tokens": 0},
         }
     )
+
+
+@pytest.mark.parametrize(
+    "model, expected_dropped",
+    [
+        # always-on-thinking models reject thinking.type=disabled with a 400
+        ("claude-fable-5", True),
+        ("claude-mythos-5", True),
+        # unmapped future family member -> claude-always-on-thinking fallback rule
+        ("claude-fable-5-1", True),
+        # adaptive-capable models that ACCEPT disabled must keep it verbatim
+        ("claude-opus-5", False),
+        ("claude-sonnet-5", False),
+        ("claude-opus-4-8", False),
+        # legacy models keep it verbatim
+        ("claude-sonnet-4-5-20250929", False),
+    ],
+)
+def test_disabled_thinking_omitted_only_for_always_on_models(
+    local_model_cost_map, model, expected_dropped
+):
+    """``thinking={"type": "disabled"}`` is omitted for always-on-thinking models
+    (Fable/Mythos, which 400 on it: the API remedy is to omit the param) and is
+    forwarded verbatim for every model that accepts it."""
+    config = AnthropicConfig()
+
+    request = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 64, "thinking": {"type": "disabled"}},
+        litellm_params={},
+        headers={},
+    )
+
+    if expected_dropped:
+        assert "thinking" not in request
+    else:
+        assert request["thinking"] == {"type": "disabled"}

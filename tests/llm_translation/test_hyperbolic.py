@@ -1,13 +1,9 @@
 import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import get_llm_provider
@@ -23,17 +19,13 @@ def test_get_llm_provider_hyperbolic():
 def test_hyperbolic_completion_call():
     """Test basic completion call structure for Hyperbolic"""
     # This is primarily a structure test since we don't have actual API keys
-    try:
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="hyperbolic/qwen-2.5-72b",
-            messages=[{"role": "user", "content": "Hello!"}],
-            mock_response="Hi there!",
-        )
-        assert response is not None
-    except Exception as e:
-        # Expected to fail without valid API key, but should recognize the provider
-        assert "hyperbolic" in str(e).lower() or "api" in str(e).lower()
+    litellm.set_verbose = True
+    response = litellm.completion(
+        model="hyperbolic/qwen-2.5-72b",
+        messages=[{"role": "user", "content": "Hello!"}],
+        mock_response="Hi there!",
+    )
+    assert response is not None
 
 
 def test_hyperbolic_config_initialization():
@@ -80,7 +72,6 @@ def test_hyperbolic_in_provider_lists():
 def test_hyperbolic_models_configuration():
     """Test that Hyperbolic models are properly configured"""
     import json
-    import os
 
     # Load model configuration directly from the JSON file
     json_path = os.path.join(

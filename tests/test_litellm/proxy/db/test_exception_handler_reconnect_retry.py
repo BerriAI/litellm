@@ -8,15 +8,12 @@ LiteLLM 1.83.x and started emitting `db_exceptions` alerts on transient
 `httpx.ReadError` flaps that used to self-heal in 1.82.6.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from prisma.errors import ClientNotConnectedError, UniqueViolationError
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 

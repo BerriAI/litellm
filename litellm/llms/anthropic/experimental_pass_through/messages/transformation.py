@@ -379,12 +379,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _translate_legacy_thinking_for_adaptive_model(
         model: str, optional_params: dict, custom_llm_provider: str
     ) -> None:
-        """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
-        Caller-provided ``output_config.effort`` is never overridden.
+        """Translate legacy ``thinking.type=enabled`` to adaptive for the
+        adaptive-thinking models that reject it (4.7+ and the 5 families).
+        Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
+        legacy shape natively, so it is forwarded verbatim and the caller's
+        ``budget_tokens`` cap keeps applying. Caller-provided
+        ``output_config.effort`` is never overridden.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
         if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
             return
         thinking: Final = optional_params.get("thinking")
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
@@ -563,6 +569,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
 
         self._translate_reasoning_effort_to_anthropic(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+            custom_llm_provider=self._resolved_provider,
+        )
+
+        AnthropicModelInfo.maybe_drop_disabled_thinking(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,

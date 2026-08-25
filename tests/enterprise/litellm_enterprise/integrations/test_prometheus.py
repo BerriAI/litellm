@@ -3,15 +3,10 @@ Mock prometheus unit tests, these don't rely on LLM API calls
 """
 
 import json
-import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from unittest.mock import patch
 
@@ -755,7 +750,6 @@ class MockHistogram:
 @pytest.fixture
 def mock_prometheus_logger():
     """Create a PrometheusLogger with mocked metrics to test increment logic"""
-    from unittest.mock import patch
 
     collectors = list(REGISTRY._collector_to_names.keys())
     for collector in collectors:
@@ -1186,7 +1180,7 @@ async def test_langfuse_callback_failure_metric(prometheus_logger):
     This test verifies that when Langfuse logging fails, the 
     litellm_callback_logging_failures_metric is incremented with callback_name="langfuse".
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     from litellm.integrations.langfuse.langfuse_prompt_management import (
         LangfusePromptManagement,
@@ -1242,7 +1236,7 @@ async def test_langfuse_otel_callback_failure_metric(prometheus_logger):
     This test verifies that when Langfuse OTEL logging fails, the 
     litellm_callback_logging_failures_metric is incremented with callback_name="langfuse_otel".
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 

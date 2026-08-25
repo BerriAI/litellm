@@ -2,8 +2,7 @@
 Unit tests for auto router management endpoints
 """
 
-import os
-import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -11,7 +10,6 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LitellmUserRoles,
@@ -25,10 +23,21 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
 from litellm.router import Router
 from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
 )
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
+
+
+def _deployment(model_name: str, model: str, *, db_model: bool) -> dict[str, object]:
+    """One entry as `Router.model_list` holds it, for either origin."""
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": model},
+        "model_info": {"id": f"{model_name}-{int(db_model)}", "db_model": db_model},
+    }
+
 
 TIERS = {
     "SIMPLE": ["cheap-model"],
@@ -298,6 +307,34 @@ def test_classifier_plugin_is_not_settable_over_http():
 class TestAutoRouterBenchmarks:
     from litellm.proxy.management_endpoints.auto_router_endpoints import _SessionAggRow
 
+    @pytest.fixture(autouse=True)
+    def _pin_the_router_global(self, monkeypatch: pytest.MonkeyPatch):
+        """Every test here reads proxy_server.llm_router, so no test may inherit a sibling's."""
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+
+    @staticmethod
+    async def _benchmarks(
+        monkeypatch: pytest.MonkeyPatch,
+        rows: Sequence[Mapping[str, object]],
+        model_list: Sequence[object],
+    ) -> AutoRouterBenchmarksResponse:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        class _DB:
+            async def query_raw(self, sql: str, *params: object):
+                return rows
+
+        monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
+        monkeypatch.setattr(proxy_server, "llm_router", type("R", (), {"model_list": model_list})())
+        return await get_auto_router_benchmarks(
+            user_api_key_dict=ADMIN,
+            start_date="2026-07-01",
+            end_date="2026-08-01",
+        )
+
     ROW = _SessionAggRow(
         router_name="live-auto",
         router_type="complexity",
@@ -474,6 +511,113 @@ class TestAutoRouterBenchmarks:
         )
         assert response.groups[0].tier_turns == expected
 
+    @pytest.mark.asyncio
+    async def test_the_picker_lists_configured_routers_before_they_have_traffic(self, monkeypatch: pytest.MonkeyPatch):
+        """A router must be selectable the moment it exists, from either origin.
+
+        `live-auto` is the only router the rollup knows about, so before this it was the only
+        thing the dropdown could offer. Both a config.yaml router and a DB-created one now
+        arrive zeroed, and neither moves the totals or duplicates the router that has traffic.
+        """
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[self.ROW.model_dump()],
+            model_list=[
+                _deployment("live-auto", "auto_router/complexity_router", db_model=False),
+                _deployment("idle-from-config", "auto_router/complexity_router", db_model=False),
+                _deployment("idle-from-db", "auto_router/complexity_router", db_model=True),
+            ],
+        )
+
+        by_name = {group.router_name: group for group in response.groups}
+        assert sorted(by_name) == ["idle-from-config", "idle-from-db", "live-auto"]
+        assert len(response.groups) == 3
+        assert response.routers_in_scope == 3
+        assert by_name["live-auto"].spend == 10.0
+        assert response.totals.spend == 10.0
+        assert response.totals.sessions == 4
+        for name in ("idle-from-config", "idle-from-db"):
+            idle = by_name[name]
+            assert idle.router_type == "complexity"
+            assert (idle.sessions, idle.turns, idle.spend, idle.saved_spend, idle.baseline_spend) == (
+                0,
+                0,
+                0.0,
+                0.0,
+                0.0,
+            )
+            assert (idle.saved_pct, idle.saved_per_session, idle.avg_turns_per_session) == (0.0, 0.0, 0.0)
+            assert (idle.cache.hit_rate_pct, idle.cache.coverage_pct) == (0.0, 0.0)
+            assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
+            assert idle.tier_turns == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model, listed_as",
+        [
+            ("auto_router/complexity_router", "complexity"),
+            ("auto_router/adaptive_router", "adaptive"),
+            ("auto_router/quality_router", "quality"),
+            ("auto_router/my-semantic-router", None),
+            ("openai/gpt-5", None),
+        ],
+    )
+    async def test_only_kinds_whose_routing_the_rollup_records_are_listed(
+        self, model: str, listed_as: str | None, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A semantic auto-router records no routing decision, so it can never own a session
+        row; listing it would show $0 forever even while it serves traffic."""
+        response = await self._benchmarks(
+            monkeypatch, rows=[], model_list=[_deployment("candidate", model, db_model=True)]
+        )
+
+        assert [group.router_type for group in response.groups] == ([listed_as] if listed_as else [])
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_deployment_is_skipped_rather_than_failing_the_dashboard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[self.ROW.model_dump()],
+            model_list=[
+                "not-a-mapping",
+                {},
+                {"model_name": "no-params"},
+                {"model_name": "", "litellm_params": {"model": "auto_router/complexity_router"}},
+                {"model_name": 7, "litellm_params": {"model": "auto_router/complexity_router"}},
+                {"model_name": "no-model", "litellm_params": {}},
+                {"model_name": "unreadable-model", "litellm_params": {"model": None}},
+            ],
+        )
+
+        assert [group.router_name for group in response.groups] == ["live-auto"]
+
+    @pytest.mark.asyncio
+    async def test_two_deployments_of_one_router_are_listed_once(self, monkeypatch: pytest.MonkeyPatch):
+        """Tagged variants share a model_name, and the picker selects by name and type."""
+        response = await self._benchmarks(
+            monkeypatch,
+            rows=[],
+            model_list=[
+                _deployment("tagged", "auto_router/complexity_router", db_model=True),
+                _deployment("tagged", "auto_router/complexity_router", db_model=True),
+            ],
+        )
+
+        assert [group.router_name for group in response.groups] == ["tagged"]
+
+    def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
+        """The one reason semantic is excluded, pinned against both declarations: a kind the
+        rollup can record must be listable, and a kind it cannot must not be."""
+        from typing import get_args, get_type_hints
+
+        from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
+        from litellm.types.utils import StandardLoggingRoutingDecision
+
+        recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
+        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
+
 
 # ---------------------------------------------------------------------------
 # Shadow eval endpoints
@@ -482,7 +626,6 @@ class TestAutoRouterBenchmarks:
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-from fastapi import HTTPException
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,

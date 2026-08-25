@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,9 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 if TYPE_CHECKING:
     from litellm.router import Router
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from datetime import datetime, timedelta, timezone
 
@@ -52,6 +47,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_soft_budget_check,
     get_key_object,
     get_user_object,
+    invalidate_team_member_spend_state,
     vector_store_access_check,
 )
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -2458,6 +2454,53 @@ async def test_get_team_object_raises_404_when_not_found():
 
     assert exc_info.value.status_code == 404
     assert "Team doesn't exist in db" in str(exc_info.value.detail)
+
+
+def _mock_prisma_for_team_lookup(find_unique):
+    from unittest.mock import MagicMock
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
+    """A deleted team and a database that would not answer both surface as a 404,
+    which leaves callers unable to tell a definitive answer from a degraded read.
+    Only the row being positively absent raises the subclass; anything else keeps
+    the plain 404 so every existing caller is unaffected."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_team_object
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    # The database answered, and the row is not there.
+    with pytest.raises(TeamNotFoundError) as absent_info:
+        await get_team_object(
+            team_id="absent-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(return_value=None)),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert absent_info.value.status_code == 404
+    assert "Team doesn't exist in db" in str(absent_info.value.detail)
+
+    # The database did not answer. Same status and detail, but not the subclass,
+    # so a caller keying on it does not read this as proof the team is gone.
+    with pytest.raises(HTTPException) as unreadable_info:
+        await get_team_object(
+            team_id="unreadable-team-lit5522",
+            prisma_client=_mock_prisma_for_team_lookup(AsyncMock(side_effect=ConnectionError("db unreachable"))),
+            user_api_key_cache=mock_cache,
+            check_db_only=True,
+        )
+    assert unreadable_info.value.status_code == 404
+    assert not isinstance(unreadable_info.value, TeamNotFoundError)
 
 
 # Reject Client-Side Metadata Tags Tests
@@ -6897,3 +6940,307 @@ def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is
     router = _router_with_a_group_priced_through_model_info()
 
     assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_clears_both_membership_cache_keys():
+    """A team-member budget reset (new_spend passed) must SET the spend counter to the reset
+    value, clear its DB-floor marker, AND invalidate both independently-keyed membership caches
+    (user_api_key_auth.py's admission check writes one key format, budget_reservation.py and
+    auth_checks.py's own get_team_membership() write the other) or a stale read keeps 429ing
+    after the reset. Asserted against real cache reads, not mock call args, so a change that
+    keeps the call but drops its effect still fails."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    real_cache = UserApiKeyCache()
+    await real_cache.async_set_cache(key="team-1_user-1", value="stale-membership")
+    await real_cache.async_set_cache(key="team_membership:user-1:team-1", value="stale-membership")
+
+    real_spend_counter_cache = DualCache()
+    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:user-1:team-1", value=999.0)
+    real_spend_counter_cache.in_memory_cache.set_cache(
+        key="spend_db_floor:spend:team_member:user-1:team-1", value=999.0
+    )
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=real_cache,
+            new_spend=0.0,
+        )
+
+    assert await real_cache.async_get_cache(key="team-1_user-1") is None
+    assert await real_cache.async_get_cache(key="team_membership:user-1:team-1") is None
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 0.0
+    assert (
+        real_spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:team_member:user-1:team-1")
+        == 0.0
+    ), "the DB-floor marker kept the pre-reset value; a stale-floor read can raise the counter right back up"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_alone_without_new_spend():
+    """team_member_update only changes the budget cap, not the tracked spend, so it calls
+    invalidate_team_member_spend_state with no new_spend. Deleting the live spend counter in that
+    case would force the next read to reseed from the DB's own spend column, which lags the live
+    counter via periodic batch writes, briefly UNDER-enforcing the raised cap against a spend
+    value lower than what was actually tracked (regression: PR #37971 Bugbot finding)."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    real_cache = UserApiKeyCache()
+    await real_cache.async_set_cache(key="team-1_user-1", value="stale-membership")
+
+    real_spend_counter_cache = DualCache()
+    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:user-1:team-1", value=999.0)
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=real_cache,
+        )
+
+    assert await real_cache.async_get_cache(key="team-1_user-1") is None
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 999.0
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_deleting():
+    """/key/{key}/reset_spend SETs its counter to the reset value rather than deleting it, so a
+    worker's next read reflects it directly instead of falling back through a DB reseed. A reset
+    caller passing new_spend must match that precedent, not merely delete the counter."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    real_cache = UserApiKeyCache()
+    real_spend_counter_cache = DualCache()
+    fake_redis_cache = MagicMock()
+    fake_redis_cache.async_set_cache = AsyncMock()
+    real_spend_counter_cache.redis_cache = fake_redis_cache
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=real_cache,
+            new_spend=2.5,
+        )
+
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 2.5
+    fake_redis_cache.async_set_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1", value=2.5, ttl=60)
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_deletes_redis_counter_when_set_fails():  # test-quality-ok: only observable effect is the fallback call on the same fake client
+    """Redis reads take priority over the local in-memory copy (get_current_spend reads Redis
+    first), so a failed Redis SET would otherwise leave the OLD pre-reset value authoritative
+    for every worker even though the reset reported success. On a failed SET, the stale Redis
+    entry must be deleted instead, so the next read clean-misses and reseeds from the DB."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    real_cache = UserApiKeyCache()
+    real_spend_counter_cache = DualCache()
+    fake_redis_cache = MagicMock()
+    fake_redis_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    fake_redis_cache.async_delete_cache = AsyncMock()
+    real_spend_counter_cache.redis_cache = fake_redis_cache
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=real_cache,
+            new_spend=2.5,
+        )
+
+    fake_redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1")
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_raises_503_when_both_redis_writes_fail():
+    """If the Redis SET fails AND the fallback DELETE fails, the stale pre-reset counter is still
+    authoritative in Redis for every worker. Reporting success would silently keep 429ing the
+    member, so the reset must surface a 503 instead (regression: PR #37971 Greptile finding)."""
+    from fastapi import HTTPException
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    real_cache = UserApiKeyCache()
+    real_spend_counter_cache = DualCache()
+    fake_redis_cache = MagicMock()
+    fake_redis_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    fake_redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis still down"))
+    real_spend_counter_cache.redis_cache = fake_redis_cache
+
+    with (
+        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=real_cache,
+            new_spend=2.5,
+        )
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_to_remote_workers():
+    """The test above only proves the handling worker's own spend counter is
+    cleared. A remote worker's spend counter is a separate DualCache instance;
+    if the reset never reaches it, that worker keeps enforcing the pre-reset
+    spend the moment its own Redis read for the counter fails and it falls
+    back to its own (now-stale) in-memory copy. Drives the actual message
+    published onto the invalidation channel through a second, independent
+    AuthCacheInvalidationSubscriber standing in for that remote worker, rather
+    than asserting on the publish call args."""
+    from redis.asyncio import Redis
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    published: list[tuple[str, str]] = []
+
+    class _RecordingRedisClient(Redis):
+        def __init__(self) -> None:
+            pass
+
+        async def publish(self, channel: str, message: str) -> int:
+            published.append((channel, message))
+            return 1
+
+    class _FakeRedisCache:
+        def __init__(self) -> None:
+            self.namespace = None
+
+        def init_async_client(self) -> object:
+            return _RecordingRedisClient()
+
+    local_spend_counter_cache = DualCache()
+
+    remote_user_api_key_cache = UserApiKeyCache()
+    remote_spend_counter_in_memory_cache = InMemoryCache()
+    remote_spend_counter_in_memory_cache.set_cache("spend:team_member:user-1:team-1", 999.0)
+    remote_spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:team_member:user-1:team-1", 999.0)
+
+    with (
+        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+            return_value=_FakeRedisCache(),
+        ),
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=UserApiKeyCache(),
+            new_spend=0.0,
+        )
+
+    def _published_message_for(cache_key: str) -> str:
+        matches = [message for _, message in published if json.loads(message)["cache_key"] == cache_key]
+        assert matches, f"{cache_key} never reached the cross-worker invalidation channel"
+        return matches[-1]
+
+    remote_subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(),
+        user_api_key_cache=remote_user_api_key_cache,
+        additional_in_memory_caches=(remote_spend_counter_in_memory_cache,),
+    )
+    for cache_key in ("spend:team_member:user-1:team-1", "spend_db_floor:spend:team_member:user-1:team-1"):
+        remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
+            {"type": "message", "data": _published_message_for(cache_key)}
+        )
+
+    assert remote_spend_counter_in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0
+    assert (
+        remote_spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0
+    ), "the DB-floor marker was not broadcast; a remote worker can re-raise the counter off its stale floor"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_not_erase_the_reset():
+    """The handling worker subscribes to the same invalidation channel it publishes on, so it
+    receives its own reset message. A delete-style broadcast would erase the post-reset counter
+    and floor marker the handler just wrote, reopening the stale-floor race the reset closed
+    (regression: PR #37971 Greptile finding). The broadcast carries the reset value as a SET, so
+    applying the self-delivered message must leave both keys at the post-reset value."""
+    from redis.asyncio import Redis
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    published: list[tuple[str, str]] = []
+
+    class _RecordingRedisClient(Redis):
+        def __init__(self) -> None:
+            pass
+
+        async def publish(self, channel: str, message: str) -> int:
+            published.append((channel, message))
+            return 1
+
+    class _FakeRedisCache:
+        def __init__(self) -> None:
+            self.namespace = None
+
+        def init_async_client(self) -> object:
+            return _RecordingRedisClient()
+
+    local_spend_counter_cache = DualCache()
+    local_user_api_key_cache = UserApiKeyCache()
+
+    with (
+        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+            return_value=_FakeRedisCache(),
+        ),
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=local_user_api_key_cache,
+            new_spend=0.0,
+        )
+
+    own_subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(),
+        user_api_key_cache=local_user_api_key_cache,
+        additional_in_memory_caches=(local_spend_counter_cache.in_memory_cache,),
+    )
+    for _, message in published:
+        own_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
+            {"type": "message", "data": message}
+        )
+
+    assert local_spend_counter_cache.in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0, (
+        "the handler's self-delivered broadcast erased the post-reset spend counter"
+    )
+    assert (
+        local_spend_counter_cache.in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0
+    ), "the handler's self-delivered broadcast erased the post-reset floor marker, reopening the stale-floor race"

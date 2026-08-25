@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,9 +8,6 @@ from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
     LiteLLM_ProxyModelTable,
