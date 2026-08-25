@@ -350,16 +350,7 @@ async def test_mcp_cost_tracking_per_tool():
             assert mock_client.call_tool.call_count == 2
 
 
-class MCPLoggerHook(CustomLogger):
-    def __init__(self):
-        self.standard_logging_payload = None
-        super().__init__()
-
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print("success event")
-        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
-        print(f"Captured standard_logging_payload: {self.standard_logging_payload}")
-
+class MCPLoggerHook(TestMCPLogger):
     async def async_post_mcp_tool_call_hook(
         self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
     ) -> Optional[MCPPostCallResponseObject]:
