@@ -34,6 +34,13 @@ def highest_privilege_role(roles: Sequence[LitellmUserRoles]) -> LitellmUserRole
     return roles[0] if roles else None
 
 
+def _lookup_role(role_str: object) -> LitellmUserRoles | None:
+    if not isinstance(role_str, str):
+        return None
+    result: Final = LitellmUserRoles._value2member_map_.get(role_str.lower())
+    return cast(LitellmUserRoles | None, result)
+
+
 def is_valid_litellm_user_role(role_str: str) -> bool:
     """
     Check if a string is a valid LitellmUserRoles enum value (case-insensitive).
@@ -69,11 +76,9 @@ def get_litellm_user_role(role_str) -> LitellmUserRoles | None:
         if isinstance(role_str, list):
             entries: Final[Sequence[object]] = role_str
             return highest_privilege_role(
-                tuple(role for role in (get_litellm_user_role(entry) for entry in entries) if role is not None)
+                tuple(role for role in (_lookup_role(entry) for entry in entries) if role is not None)
             )
-        # Use _value2member_map_ for O(1) lookup, case-insensitive
-        result: Final = LitellmUserRoles._value2member_map_.get(role_str.lower())
-        return cast(LitellmUserRoles | None, result)
+        return _lookup_role(role_str)
     except Exception:
         return None
 
