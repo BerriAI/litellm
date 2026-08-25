@@ -9,10 +9,57 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
+    MockResponseIterator,
     make_call,
     make_sync_call,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.utils import (
+    Choices,
+    CompletionTokensDetailsWrapper,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
+
+
+def test_mock_response_iterator_preserves_usage_details():
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="done", role="assistant"),
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=500,
+            completion_tokens=25,
+            total_tokens=525,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=321,
+                cache_write_tokens=123,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=11,
+            ),
+        ),
+    )
+
+    chunk = MockResponseIterator(model_response=response)._chunk_parser(response)
+
+    assert chunk["usage"] == {
+        "prompt_tokens": 500,
+        "completion_tokens": 25,
+        "total_tokens": 525,
+        "prompt_tokens_details": {
+            "cached_tokens": 321,
+            "cache_write_tokens": 123,
+            "cache_creation_tokens": 123,
+        },
+        "completion_tokens_details": {"reasoning_tokens": 11},
+    }
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -203,9 +250,7 @@ def test_bedrock_converse_streaming_consistent_id():
     expected_id = f"chatcmpl-{native_conversation_id}"
 
     for response in parsed_responses:
-        assert (
-            response.id == expected_id
-        ), "All chunk IDs must match the one captured from the messageStart event"
+        assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
 
 
 @pytest.mark.asyncio
@@ -472,4 +517,3 @@ async def test_async_invoke_streaming_forwards_bedrock_response_headers():
     )
 
     assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-987"
-

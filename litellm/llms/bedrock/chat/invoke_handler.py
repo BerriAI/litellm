@@ -824,6 +824,16 @@ class MockResponseIterator:  # for returning ai21 streaming responses
                     prompt_tokens=chunk_usage.prompt_tokens,
                     completion_tokens=chunk_usage.completion_tokens,
                     total_tokens=chunk_usage.total_tokens,
+                    prompt_tokens_details=(
+                        chunk_usage.prompt_tokens_details.model_dump(exclude_none=True)
+                        if chunk_usage.prompt_tokens_details is not None
+                        else None
+                    ),
+                    completion_tokens_details=(
+                        chunk_usage.completion_tokens_details.model_dump(exclude_none=True)
+                        if chunk_usage.completion_tokens_details is not None
+                        else None
+                    ),
                 ),
                 index=0,
             )
