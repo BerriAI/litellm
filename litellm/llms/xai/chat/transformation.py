@@ -227,7 +227,9 @@ class XAIChatConfig(OpenAIGPTConfig):
         chat_params: Final = {  # mutable-ok: base transform_request takes a plain dict of optional params
             key: value for key, value in optional_params.items() if key != "web_search_options"
         }
-        return super().transform_request(model, strip_name_from_messages(messages), chat_params, litellm_params, headers)
+        return super().transform_request(
+            model, strip_name_from_messages(messages), chat_params, litellm_params, headers
+        )
 
     @staticmethod
     def _fix_choice_finish_reason_for_tool_calls(choice: Choices) -> None:
