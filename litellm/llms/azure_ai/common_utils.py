@@ -50,6 +50,7 @@ def get_azure_ai_auth_headers(
         "identity with `litellm.enable_azure_ad_token_refresh = True`)"
     )
 
+
 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
 
 
