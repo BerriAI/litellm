@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching dynamic_rate_limiter_v3's identical import
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # this hook explicitly reuses its Redis/TTL-preserving increment machinery, see module docstring
@@ -1444,6 +1445,35 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         Without this, the reservation would sit held until _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
         expires, letting a caller who repeatedly opens and immediately drops
         streaming requests exhaust their own tag's concurrency limit for free.
+        """
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+        if not isinstance(model_call_details, dict):
+            return
+        release_keys: Final = self._pop_pending_concurrency_keys(model_call_details)
+        if release_keys:
+            await self._release_keys(release_keys)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,  # mutable-ok: must match CustomLogger.async_post_call_failure_hook's own base signature exactly
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        """
+        litellm's Logging object sets has_logged_async_failure=True after
+        the first hop of a fallback chain fails, which blocks
+        async_log_failure_event for every later hop (see
+        fallback_event_handlers.py's own docstring) -- so a chain's own
+        final, chain-exhausting failure never reaches that callback at all,
+        and _release_stale_hop_reservations only cleans up a stale
+        reservation when a *next* hop's admission runs, which never happens
+        after the last one. This hook fires exactly once per proxy request,
+        at the point the proxy gives up and returns an error to the caller,
+        regardless of how many hops ran or whether the completion-level
+        callback was suppressed for this one -- the one reliable place left
+        to release whatever reservation is still pending.
         """
         logging_obj: Final = request_data.get("litellm_logging_obj")
         model_call_details: Final = getattr(logging_obj, "model_call_details", None)

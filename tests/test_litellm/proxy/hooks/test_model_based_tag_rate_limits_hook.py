@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _BACKGROUND_TASKS,
@@ -2336,6 +2337,48 @@ async def test_concurrency_slot_released_on_failure_frees_capacity(time_controll
         response_obj=None,
         start_time=0,
         end_time=0,
+    )
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_concurrency_slot_released_by_post_call_failure_hook_on_the_final_fallback_hop(time_controller):
+    """
+    litellm's Logging object sets has_logged_async_failure=True after the
+    first hop's failure and blocks async_log_failure_event for every later
+    hop (see fallback_event_handlers.py), so a fallback chain's own final,
+    chain-exhausting failure never reaches async_log_failure_event at all --
+    _release_stale_hop_reservations only cleans up a stale reservation when
+    a *next* hop's admission runs, and there is no next hop after the last
+    one. async_post_call_failure_hook fires exactly once, at the point the
+    proxy gives up and returns an error to the caller, regardless of how
+    many hops ran or whether the completion-level callback was suppressed --
+    it must release whatever reservation is still pending at that point.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # This hop's admission reserves the slot; its own failure is the chain's
+    # final one, so async_log_failure_event never fires for it (simulating
+    # litellm's has_logged_async_failure dedup blocking the callback here).
+    request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+
+    await limiter.async_post_call_failure_hook(
+        request_data=request_kwargs,
+        original_exception=Exception("all deployments failed"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hash"),
     )
 
     result = await limiter.async_filter_deployments(
