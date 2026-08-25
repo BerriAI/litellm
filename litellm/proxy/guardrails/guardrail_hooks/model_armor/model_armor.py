@@ -849,16 +849,20 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
 
         # Collect all chunks
-        all_chunks: Final[list[ModelResponseStream]] = []
+        all_chunks: Final[list[object]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
-        # /v1/messages arrives as raw SSE frames, which stream_chunk_builder cannot assemble
+        # /v1/messages arrives as raw SSE frames and /v1/responses as Responses API event
+        # objects; stream_chunk_builder can assemble neither
         raw_sse: Final = is_raw_sse_stream(all_chunks)
+        chat_stream: Final = bool(all_chunks) and all(isinstance(chunk, ModelResponseStream) for chunk in all_chunks)
         assembled_response: Final = (
             assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
             if raw_sse
             else stream_chunk_builder(chunks=all_chunks)
+            if chat_stream
+            else None
         )
 
         if isinstance(assembled_response, ModelResponse):
@@ -963,6 +967,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             ):
                 yield error_frame
             return
+        elif not chat_stream:
+            verbose_proxy_logger.warning(
+                "Model Armor: streaming response contained unsupported event objects "
+                "(e.g. /v1/responses events); output scanning was skipped for this response."
+            )
 
         # Return original chunks if no sanitization needed
         for chunk in all_chunks:

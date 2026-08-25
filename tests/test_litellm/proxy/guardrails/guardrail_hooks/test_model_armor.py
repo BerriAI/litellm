@@ -652,7 +652,7 @@ def _sse_armor_guardrail(**kwargs: object) -> ModelArmorGuardrail:
 
 
 async def _drain_armor_streaming_hook(
-    guardrail: ModelArmorGuardrail, chunks: tuple[bytes, ...] = _ANTHROPIC_SSE_CHUNKS
+    guardrail: ModelArmorGuardrail, chunks: tuple[object, ...] = _ANTHROPIC_SSE_CHUNKS
 ) -> list[object]:
     async def _stream():
         for chunk in chunks:
@@ -762,6 +762,27 @@ async def test_streaming_hook_masks_raw_anthropic_sse():
     body = b"".join(chunk for chunk in delivered if isinstance(chunk, bytes))
     assert b"[REDACTED]" in body
     assert b"123-45-6789" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_passes_through_responses_api_events():
+    """/v1/responses streams deliver event objects stream_chunk_builder cannot assemble.
+
+    Regression for `500 Error building chunks for logging/streaming usage calculation`.
+    """
+    from litellm.types.llms.openai import GenericEvent, ResponsesAPIStreamEvents
+
+    guardrail = _sse_armor_guardrail()
+    events = (
+        GenericEvent(type=ResponsesAPIStreamEvents.RESPONSE_CREATED),
+        GenericEvent(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
+    )
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock()) as mock_post:
+        delivered = await _drain_armor_streaming_hook(guardrail, chunks=events)
+
+    mock_post.assert_not_called()
+    assert tuple(delivered) == events
 
 
 @pytest.mark.asyncio
