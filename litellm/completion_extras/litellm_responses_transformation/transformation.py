@@ -5,7 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
 
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
@@ -35,6 +35,7 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
+    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
@@ -1113,22 +1114,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        # If string is passed, map with optional summary based on flag/env var
-        if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")
-        elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
-        elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")
-        elif reasoning_effort == "medium":
+        if reasoning_effort in get_args(REASONING_EFFORT):
             return (
-                Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
-            )
-        elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
-        elif reasoning_effort == "minimal":
-            return (
-                Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
+                Reasoning(effort=reasoning_effort, summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort=reasoning_effort)
             )
         return None
 
