@@ -183,7 +183,7 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
-def _is_strategy_router_deployment(litellm_params: dict) -> bool:
+def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
     """True for strategy-router deployments."""
     model: Final[object] = litellm_params.get("model", "")
     return isinstance(model, str) and classify_strategy_router_model(model) is not None
