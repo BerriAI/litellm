@@ -5,9 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
@@ -120,9 +118,7 @@ def test_azure_ai_grok_stop_parameter_handling():
     # Test supported parameters for Grok models
     for model in ("grok-4-fast", "grok-4.3"):
         grok_params = config.get_supported_openai_params(model)
-        assert (
-            "stop" not in grok_params
-        ), "Grok models should not support stop parameter"
+        assert "stop" not in grok_params, "Grok models should not support stop parameter"
 
     # Test supported parameters for non-Grok models
     gpt_params = config.get_supported_openai_params("gpt-4")
@@ -201,9 +197,82 @@ def test_azure_model_router_response_shows_actual_model():
 
     # Verify that the response contains the actual model used, not the router model
     assert result.model == "azure_ai/gpt-5-nano-2025-08-07", (
-        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
-        f"but got '{result.model}'"
+        f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), but got '{result.model}'"
     )
+
+
+def test_azure_model_router_stamps_selected_model_on_hidden_params():
+    """
+    The selected model must be stamped on _hidden_params, not left for downstream code to
+    re-derive by looking for "model-router" in the model string. Deployments whose alias
+    does not contain that text are invisible to the string check.
+    """
+    from httpx import Response
+
+    from litellm.llms.azure_ai.common_utils import (
+        AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+        AzureFoundryModelInfo,
+    )
+    from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse
+
+    raw_response_json = {
+        "id": "chatcmpl-test456",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "grok-4-1-fast-reasoning",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "pong"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+    mock_response = MagicMock(spec=Response)
+    mock_response.json.return_value = raw_response_json
+    mock_response.text = json.dumps(raw_response_json)
+    mock_response.headers = {}
+
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+    logging_obj.model_call_details = {}
+
+    result = AzureModelRouterConfig().transform_response(
+        model="smart-pick",
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "Reply with just pong"}],
+        optional_params={},
+        litellm_params={"model": "azure_ai/model_router/smart-pick"},
+        encoding=None,
+        api_key="test-key",
+        json_mode=False,
+    )
+
+    assert result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY] == result.model
+    assert result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY] == "azure_ai/grok-4-1-fast-reasoning"
+    assert AzureFoundryModelInfo.get_model_router_selected_model(result._hidden_params) == (
+        "azure_ai/grok-4-1-fast-reasoning"
+    )
+    assert AzureFoundryModelInfo.is_model_router_call(model="smart-pick", hidden_params=result._hidden_params) is True
+
+
+def test_azure_model_router_stamp_does_not_leak_across_responses():
+    """
+    ModelResponse declares _hidden_params as a class-level dict, so the stamp has to be written
+    as a fresh dict. Mutating in place would bleed the selected model into unrelated responses.
+    """
+    from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
+    from litellm.types.utils import ModelResponse
+
+    untouched = ModelResponse()
+
+    assert AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY not in (untouched._hidden_params or {})
 
 
 def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
@@ -226,14 +295,10 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     mock_response.text = error_text
     mock_response.json.return_value = json.loads(error_text)
     mock_response.status_code = 400
-    e = httpx.HTTPStatusError(
-        message="400", request=MagicMock(), response=mock_response
-    )
+    e = httpx.HTTPStatusError(message="400", request=MagicMock(), response=mock_response)
 
     assert config._error_has_tool_level_extra_fields(error_text) is True
-    assert (
-        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
-    )
+    assert config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
 
     request_data = {
         "model": "FW-Kimi-K2.6",
@@ -354,9 +419,7 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
         {
             "role": "assistant",
             "content": "I can help.",
-            "thinking_blocks": [
-                {"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}
-            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}],
             "provider_specific_fields": {"thought_signature": "sig-top"},
             "tool_calls": [
                 {
