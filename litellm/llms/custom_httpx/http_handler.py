@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Optional, TypeAlias, TypedDict
 
 import certifi
 import httpx
@@ -158,6 +158,26 @@ def _handler_may_close_client(client_refcount: int, owns_client: bool) -> bool:
     refcount at the call site, since binding the client to a parameter would inflate it.
     """
     return owns_client and client_refcount <= _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER
+
+
+def _hand_off_client_to_evicted_closer(client: object) -> None:
+    """
+    Route a finalized handler's client to the evicted-client closer instead of closing it.
+
+    A request in flight holds references to the pooled connection, not to the client
+    object, so the sole-referrer refcount check cannot see it. Closing from ``__del__``
+    therefore tears the pool down under live requests: a cache-evicted handler is
+    finalized the moment the cache drops it, and every SSE stream on its pool dies
+    mid-turn (one batch per handler-cache TTL per process). The closer closes an idle
+    client immediately (preserving reclamation) and defers a busy one until it reports
+    no connection in flight and a grace window has passed.
+
+    Runs via ``loop.call_soon`` rather than inside the finalizer, so no lock is taken
+    in GC context.
+    """
+    from litellm.caching.evicted_client_closer import default_evicted_client_closer
+
+    default_evicted_client_closer.close_or_defer(client)
 
 
 def blocked_cookie_jar() -> CookieJar:
@@ -933,21 +953,6 @@ class AsyncHTTPHandler:
         response.raise_for_status()
         return response
 
-    # Strong references to finalizer-scheduled client-close tasks. A bare
-    # create_task() result may be garbage-collected before it runs, leaving
-    # the underlying aiohttp session unclosed ("Unclosed client session").
-    # Mirrors LiteLLMAiohttpTransport._background_close_tasks.
-    _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
-
-    @classmethod
-    def _on_finalizer_close_done(cls, task: "asyncio.Task[None]") -> None:
-        cls._finalizer_close_tasks.discard(task)
-        if task.cancelled():
-            return
-        exc: Final = task.exception()
-        if exc is not None:
-            verbose_logger.debug("Error closing client at finalization: %s", exc)
-
     def _aiohttp_session_bound_elsewhere(self, loop: asyncio.AbstractEventLoop) -> bool:
         """True when the wrapped aiohttp session is bound to a loop other than
         ``loop`` — awaiting ``aclose()`` here would touch that loop's internals."""
@@ -1006,10 +1011,7 @@ class AsyncHTTPHandler:
                 # here is the cross-loop path the transport refuses.
                 self._dispose_wrapped_aiohttp_session()
                 return
-            task: Final = loop.create_task(self._client.aclose())
-            cls: Final = type(self)
-            cls._finalizer_close_tasks.add(task)
-            task.add_done_callback(cls._on_finalizer_close_done)
+            loop.call_soon(_hand_off_client_to_evicted_closer, self._client)
         except Exception:
             pass
 

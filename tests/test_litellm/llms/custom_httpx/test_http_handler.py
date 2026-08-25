@@ -1,8 +1,6 @@
 import asyncio
 import gc
-import io
 import os
-import pathlib
 import ssl
 import threading
 import weakref
@@ -364,8 +362,10 @@ async def test_async_handler_with_shared_session():
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
     from litellm.llms.custom_httpx.http_handler import (
-        get_async_httpx_client,
         AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
     )
     from litellm.types.utils import LlmProviders
 
@@ -388,8 +388,10 @@ async def test_get_async_httpx_client_with_shared_session():
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
     from litellm.llms.custom_httpx.http_handler import (
-        get_async_httpx_client,
         AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
     )
     from litellm.types.utils import LlmProviders
 
@@ -426,6 +428,7 @@ async def test_session_reuse_chain():
 def test_shared_session_parameter_in_acompletion():
     """Test that acompletion function accepts shared_session parameter"""
     import inspect
+
     from litellm.main import acompletion
 
     # Get the function signature
@@ -443,6 +446,7 @@ def test_shared_session_parameter_in_acompletion():
 def test_shared_session_parameter_in_completion():
     """Test that completion function accepts shared_session parameter"""
     import inspect
+
     from litellm.main import completion
 
     # Get the function signature
@@ -461,8 +465,10 @@ def test_shared_session_parameter_in_completion():
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
     from litellm.llms.custom_httpx.http_handler import (
-        get_async_httpx_client,
         AsyncHTTPHandler as AsyncHTTPHandlerReload,
+    )
+    from litellm.llms.custom_httpx.http_handler import (
+        get_async_httpx_client,
     )
     from litellm.types.utils import LlmProviders
 
@@ -1225,10 +1231,13 @@ def test_finalizer_without_running_loop_closes_dead_loop_session():
 
 
 @pytest.mark.asyncio
-async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
-    """With a running loop, finalization schedules an async close and must keep
-    a strong reference to the task until it completes — a bare create_task()
-    result may be collected before it runs, leaving the session unclosed."""
+async def test_finalizer_with_running_loop_hands_idle_client_to_closer():
+    """With a running loop, finalization defers to the evicted-client closer,
+    which closes an idle client immediately while holding a strong reference to
+    the close task — a bare create_task() result may be collected before it
+    runs, leaving the session unclosed."""
+    from litellm.caching.evicted_client_closer import default_evicted_client_closer
+
     handler = AsyncHTTPHandler(timeout=61.0)
     transport = handler.client._transport
     assert isinstance(transport, LiteLLMAiohttpTransport)
@@ -1236,16 +1245,17 @@ async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
     assert not session.closed
     del transport
 
-    baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
+    baseline_tasks = set(default_evicted_client_closer._close_tasks)
     del handler
     gc.collect()
+    await asyncio.sleep(0)
 
-    scheduled = AsyncHTTPHandler._finalizer_close_tasks - baseline_tasks
+    scheduled = default_evicted_client_closer._close_tasks - baseline_tasks
     assert len(scheduled) == 1
 
     await asyncio.gather(*scheduled)
     assert session.closed
-    assert not (AsyncHTTPHandler._finalizer_close_tasks & scheduled)
+    assert not (default_evicted_client_closer._close_tasks & scheduled)
 
 
 @pytest.mark.asyncio
@@ -1278,39 +1288,69 @@ async def test_sync_close_helper_respects_session_ownership():
 
 
 @pytest.mark.asyncio
-async def test_finalizer_close_done_consumes_exception():
-    """A failing finalizer close must have its exception retrieved by the done
-    callback, or asyncio emits "Task exception was never retrieved" at GC —
-    the same log noise the finalizer path exists to eliminate."""
-
-    async def failing_close() -> None:
-        raise RuntimeError("close failed")
-
-    task = asyncio.get_running_loop().create_task(failing_close())
-    AsyncHTTPHandler._finalizer_close_tasks.add(task)
-    await asyncio.sleep(0)
-
-    AsyncHTTPHandler._on_finalizer_close_done(task)
-    assert task not in AsyncHTTPHandler._finalizer_close_tasks
-
-    cancelled = asyncio.get_running_loop().create_task(asyncio.sleep(30))
-    cancelled.cancel()
-    await asyncio.sleep(0)
-    AsyncHTTPHandler._on_finalizer_close_done(cancelled)
-
-
-@pytest.mark.asyncio
 async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_scheduling():
     """GC on a live loop (e.g. the app's) of a handler whose session belongs to
-    another, dead loop must not schedule aclose() here — that is the cross-loop
-    path the transport refuses — and must still dispose the session."""
+    another, dead loop must not hand the client to the closer — that is the
+    cross-loop path the transport refuses — and must still dispose the session."""
+    from litellm.caching.evicted_client_closer import default_evicted_client_closer
+
     handler = AsyncHTTPHandler(timeout=61.0)
     session = await asyncio.to_thread(_mint_session_on_dead_loop, handler)
     assert not session.closed
 
-    baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
+    baseline_tasks = set(default_evicted_client_closer._close_tasks)
+    baseline_pending = default_evicted_client_closer.pending_count
     del handler
     gc.collect()
+    await asyncio.sleep(0)
 
-    assert AsyncHTTPHandler._finalizer_close_tasks == baseline_tasks
+    assert default_evicted_client_closer._close_tasks == baseline_tasks
+    assert default_evicted_client_closer.pending_count == baseline_pending
     assert session.closed
+
+
+async def _slow_chunked_upstream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """Serves a chunked body in two installments, so a stream is on the wire while the handler dies."""
+    await reader.read(4096)
+    writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+    writer.write(b"5\r\nfirst\r\n")
+    await writer.drain()
+    await asyncio.sleep(0.4)
+    writer.write(b"4\r\nlast\r\n0\r\n\r\n")
+    await writer.drain()
+
+
+@pytest.mark.asyncio
+async def test_collected_handler_never_kills_a_stream_in_flight(monkeypatch):
+    """
+    Regression: a cache-evicted (hence collected) handler's finalizer used to close the
+    owned client while its pool still served live SSE streams, killing every one of them
+    mid-turn once per handler-cache TTL. The finalizer must defer to the evicted-client
+    closer while a connection is in flight, so the stream reads to completion.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+
+    server = await asyncio.start_server(_slow_chunked_upstream, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    handler = AsyncHTTPHandler()
+    async with asyncio.timeout(30):
+        request = handler.client.build_request("GET", f"http://127.0.0.1:{port}/")
+        response = await handler.client.send(request, stream=True)
+        body_iter = response.aiter_raw()
+        first = await body_iter.__anext__()
+        assert b"first" in first
+
+        del handler
+        gc.collect()
+        await asyncio.sleep(0.1)
+
+        remainder = b"".join([chunk async for chunk in body_iter])
+        assert b"last" in remainder
+
+        await response.aclose()
+    # No wait_closed(): the surviving client's pooled keepalive connection is
+    # the point of this test, and on Python >= 3.12.1 wait_closed() waits for
+    # every client transport, parking the suite forever.
+    server.close()
