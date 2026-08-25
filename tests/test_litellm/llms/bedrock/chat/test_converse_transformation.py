@@ -287,6 +287,37 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
 @pytest.mark.parametrize(
     "model",
     [
+        "us.openai.gpt-5.6-sol",
+        "global.openai.gpt-5.6-terra",
+        "bedrock/converse/us.openai.gpt-5.6-luna",
+    ],
+)
+def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(model, local_model_cost_map):
+    """OpenAI GPT-5.x on Bedrock Converse routes reasoning_effort to
+    ``additionalModelRequestFields.reasoning.effort`` rather than Anthropic ``thinking``."""
+    config = AmazonConverseConfig()
+
+    assert "reasoning_effort" in config.get_supported_openai_params(model=model)
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["reasoning"] == {"effort": "high"}
+    assert "thinking" not in optional_params
+    assert "reasoning_effort" not in optional_params
+
+    _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
+    assert additional_request_params["reasoning"] == {"effort": "high"}
+    assert "thinking" not in additional_request_params
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
         "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0",
         "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
         "bedrock/converse/us.anthropic.claude-opus-4-7",
