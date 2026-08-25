@@ -214,6 +214,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
           system text        -> message(role=system, input_text)
           user text          -> message(role=user, input_text)
           user image         -> message(role=user, input_image)
+          user document      -> message(role=user, input_file)
           user tool_result   -> function_call_output
           assistant text     -> message(role=assistant, output_text)
           assistant thinking -> reasoning
@@ -267,6 +268,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     with_prompt_cache_breakpoint(
                                         {"type": "input_image", "image_url": url}, block.get("prompt_cache_breakpoint")
                                     )
+                                )
+                        elif btype == "document":
+                            file_part = self._translate_anthropic_document_block_to_file_part(block)
+                            if file_part:
+                                user_parts.append(
+                                    with_prompt_cache_breakpoint(file_part, block.get("prompt_cache_breakpoint"))
                                 )
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")

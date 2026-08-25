@@ -1688,6 +1688,87 @@ class TestToolResultDocuments:
         ]
 
 
+class TestUserContentDocuments:
+    """Documents in plain user content must survive translation (LIT-6144): each
+    document block becomes an input_file part of the user message, in block order,
+    exactly like image blocks become input_image parts. Untranslatable documents
+    are dropped without disturbing the surrounding parts."""
+
+    PDF_B64 = "JVBERi0xLjQKJSBQT05H"
+    PDF_DATA_URI = "data:application/pdf;base64,JVBERi0xLjQKJSBQT05H"
+    PDF_URL = "https://example.com/report.pdf"
+    EXPLICIT = {"mode": "explicit"}
+
+    def _translate(self, user_content):
+        return _ADAPTER.translate_messages_to_responses_input([{"role": "user", "content": user_content}])
+
+    @staticmethod
+    def _user_content(items):
+        return next(item for item in items if item.get("type") == "message" and item.get("role") == "user")["content"]
+
+    def _base64_document(self, **extra):
+        return {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": self.PDF_B64},
+            **extra,
+        }
+
+    def test_document_then_text_keeps_block_order(self):
+        content = self._user_content(
+            self._translate([self._base64_document(), {"type": "text", "text": "what does the pdf say?"}])
+        )
+        assert content == [
+            {"type": "input_file", "filename": "document.pdf", "file_data": self.PDF_DATA_URI},
+            {"type": "input_text", "text": "what does the pdf say?"},
+        ]
+
+    def test_document_title_becomes_filename(self):
+        content = self._user_content(self._translate([self._base64_document(title="quarterly-report.pdf")]))
+        assert content == [
+            {"type": "input_file", "filename": "quarterly-report.pdf", "file_data": self.PDF_DATA_URI}
+        ]
+
+    def test_url_document_becomes_file_url_part(self):
+        content = self._user_content(
+            self._translate([{"type": "document", "source": {"type": "url", "url": self.PDF_URL}}])
+        )
+        assert content == [{"type": "input_file", "file_url": self.PDF_URL}]
+
+    def test_document_only_content_still_produces_user_message(self):
+        content = self._user_content(self._translate([self._base64_document()]))
+        assert content == [{"type": "input_file", "filename": "document.pdf", "file_data": self.PDF_DATA_URI}]
+
+    def test_empty_base64_data_drops_only_the_document_part(self):
+        content = self._user_content(
+            self._translate(
+                [
+                    {"type": "text", "text": "still here"},
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": ""}},
+                ]
+            )
+        )
+        assert content == [{"type": "input_text", "text": "still here"}]
+
+    def test_non_dict_source_drops_only_the_document_part(self):
+        content = self._user_content(
+            self._translate([{"type": "text", "text": "still here"}, {"type": "document", "source": self.PDF_URL}])
+        )
+        assert content == [{"type": "input_text", "text": "still here"}]
+
+    def test_document_breakpoint_rides_on_the_file_part(self):
+        content = self._user_content(
+            self._translate([self._base64_document(prompt_cache_breakpoint=self.EXPLICIT)])
+        )
+        assert content == [
+            {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": self.PDF_DATA_URI,
+                "prompt_cache_breakpoint": self.EXPLICIT,
+            }
+        ]
+
+
 def _contains_key(value, key) -> bool:
     if isinstance(value, dict):
         return key in value or any(_contains_key(v, key) for v in value.values())
