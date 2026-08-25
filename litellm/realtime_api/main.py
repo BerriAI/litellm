@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 
 import litellm
@@ -45,6 +47,7 @@ bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
+_EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
@@ -412,10 +415,8 @@ async def _arealtime(
         if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
             realtime_protocol = "GA"
         realtime_protocol = realtime_protocol or "beta"
-        resolved_azure_ad_token = (
-            None
-            if api_key
-            else get_azure_ad_token(GenericLiteLLMParams(**{**kwargs, "azure_ad_token": azure_ad_token}))
+        resolved_azure_ad_token: Final = (
+            None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
         )
         await azure_realtime.async_realtime(
             model=model,
@@ -556,6 +557,17 @@ async def _arealtime(
         raise ValueError(f"Unsupported model: {model}")
 
 
+def _realtime_health_check_auth_headers(
+    custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, Any]
+) -> Mapping[str, str | None]:
+    if custom_llm_provider != "azure":
+        return MappingProxyType({"api-key": api_key})
+    return azure_realtime.get_auth_headers(
+        api_key=api_key,
+        azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
+    )
+
+
 async def _realtime_health_check(
     model: str,
     custom_llm_provider: str,
@@ -584,20 +596,17 @@ async def _realtime_health_check(
     import websockets
 
     url: str | None = None
-    auth_headers: dict[str, str | None] = {"api-key": api_key}
+    auth_headers: Final = _realtime_health_check_auth_headers(
+        custom_llm_provider=custom_llm_provider,
+        api_key=api_key,
+        model_params=model_params or _EMPTY_MODEL_PARAMS,
+    )
     if custom_llm_provider == "azure":
         url = azure_realtime._construct_url(
             api_base=api_base or "",
             model=model,
             api_version=api_version or "2024-10-01-preview",
             realtime_protocol=realtime_protocol,
-        )
-        azure_litellm_params = GenericLiteLLMParams(**(model_params or {}))
-        auth_headers = dict(
-            azure_realtime.get_auth_headers(
-                api_key=api_key,
-                azure_ad_token=(None if api_key else get_azure_ad_token(azure_litellm_params)),
-            )
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(

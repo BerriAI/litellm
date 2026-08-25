@@ -590,7 +590,9 @@ async def test_async_realtime_uses_bearer_token_when_no_api_key():
             "websockets.connect",
             return_value=_DummyAsyncContextManager(mock_backend_ws),
         ) as mock_ws_connect,
-        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+        patch(  # test-quality-ok: handler owns the streaming loop, only the handshake headers are under test
+            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
+        ) as mock_realtime_streaming,
     ):
         mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
 
