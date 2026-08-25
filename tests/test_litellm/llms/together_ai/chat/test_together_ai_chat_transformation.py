@@ -16,8 +16,22 @@ TOOL_CALLING_MODEL = "openai/gpt-oss-20b"
 REASONING_MODEL = "deepseek-ai/DeepSeek-V3.1"
 PLAIN_MODEL = "Qwen/Qwen3-235B-A22B-fp8-tput"
 UNMAPPED_MODEL = "MiniMaxAI/MiniMax-M3"
+ADJUSTABLE_REASONING_MODEL = "openai/gpt-oss-120b"
+HYBRID_REASONING_MODEL = "Qwen/Qwen3.5-9B"
+HIGH_MAX_REASONING_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+REGISTRY_FLAGGED_REASONING_MODEL = "zai-org/GLM-4.6"
+NON_REASONING_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 
 FUNCTION_CALLING_PARAMS = ("tools", "tool_choice", "function_call", "response_format")
+
+
+def _map_reasoning_effort(model: str, effort: str) -> dict:
+    return TogetherAIChatConfig().map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +117,116 @@ def test_map_openai_params_keeps_json_response_format():
     assert mapped["response_format"] == response_format
 
 
+@pytest.mark.parametrize(
+    "model",
+    [ADJUSTABLE_REASONING_MODEL, HYBRID_REASONING_MODEL, HIGH_MAX_REASONING_MODEL, REGISTRY_FLAGGED_REASONING_MODEL],
+)
+def test_supported_params_includes_reasoning_effort_for_reasoning_models(model):
+    supported = TogetherAIChatConfig().get_supported_openai_params(model=model)
+
+    assert "reasoning_effort" in supported
+
+
+@pytest.mark.parametrize("model", [NON_REASONING_MODEL, PLAIN_MODEL])
+def test_supported_params_excludes_reasoning_effort_for_non_reasoning_models(model):
+    supported = TogetherAIChatConfig().get_supported_openai_params(model=model)
+
+    assert "reasoning_effort" not in supported
+
+
+@pytest.mark.parametrize(
+    "effort, expected",
+    [("low", "low"), ("medium", "medium"), ("high", "high"), ("minimal", "low"), ("xhigh", "high"), ("max", "high")],
+)
+def test_adjustable_model_translates_reasoning_effort(effort, expected):
+    mapped = _map_reasoning_effort(ADJUSTABLE_REASONING_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == expected
+    assert "reasoning" not in mapped
+
+
+def test_adjustable_model_cannot_disable_reasoning_so_none_becomes_low():
+    mapped = _map_reasoning_effort(ADJUSTABLE_REASONING_MODEL, "none")
+
+    assert mapped["reasoning_effort"] == "low"
+    assert "reasoning" not in mapped
+
+
+@pytest.mark.parametrize(
+    "effort, expected",
+    [("low", "low"), ("medium", "medium"), ("high", "high"), ("minimal", "low"), ("xhigh", "high"), ("max", "high")],
+)
+def test_hybrid_model_translates_reasoning_effort(effort, expected):
+    mapped = _map_reasoning_effort(HYBRID_REASONING_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == expected
+    assert "reasoning" not in mapped
+
+
+@pytest.mark.parametrize("model", [HYBRID_REASONING_MODEL, HIGH_MAX_REASONING_MODEL, REGISTRY_FLAGGED_REASONING_MODEL])
+def test_reasoning_effort_none_becomes_reasoning_toggle(model):
+    mapped = _map_reasoning_effort(model, "none")
+
+    assert mapped["reasoning"] == {"enabled": False}
+    assert "reasoning_effort" not in mapped
+
+
+def test_reasoning_effort_none_does_not_clobber_user_reasoning():
+    mapped = TogetherAIChatConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={"reasoning": {"enabled": True}},
+        model=HYBRID_REASONING_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped["reasoning"] == {"enabled": True}
+    assert "reasoning_effort" not in mapped
+
+
+@pytest.mark.parametrize(
+    "effort, expected",
+    [("minimal", "high"), ("low", "high"), ("medium", "high"), ("high", "max"), ("xhigh", "max"), ("max", "max")],
+)
+def test_deepseek_v4_pro_remaps_to_high_max(effort, expected):
+    mapped = _map_reasoning_effort(HIGH_MAX_REASONING_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == expected
+
+
+def test_deepseek_v4_pro_dated_variant_remaps_via_prefix():
+    mapped = _map_reasoning_effort(f"{HIGH_MAX_REASONING_MODEL}-0813", "low")
+
+    assert mapped["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize("model", [ADJUSTABLE_REASONING_MODEL, HYBRID_REASONING_MODEL, HIGH_MAX_REASONING_MODEL])
+def test_reasoning_effort_default_is_dropped(model):
+    mapped = _map_reasoning_effort(model, "default")
+
+    assert "reasoning_effort" not in mapped
+    assert "reasoning" not in mapped
+
+
+def test_get_optional_params_translates_reasoning_effort_for_together():
+    optional_params = litellm.get_optional_params(
+        model=ADJUSTABLE_REASONING_MODEL,
+        custom_llm_provider="together_ai",
+        reasoning_effort="max",
+    )
+
+    assert optional_params["reasoning_effort"] == "high"
+
+
+def test_get_optional_params_rejects_reasoning_effort_for_non_reasoning_together_model():
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model=NON_REASONING_MODEL,
+            custom_llm_provider="together_ai",
+            reasoning_effort="low",
+            drop_params=False,
+        )
+
+
 def _transform_response(message: dict) -> ModelResponse:
     raw_response_json = {
         "id": "chatcmpl-test",
@@ -136,26 +260,20 @@ def _transform_response(message: dict) -> ModelResponse:
 
 
 def test_transform_response_maps_reasoning_to_reasoning_content():
-    result = _transform_response(
-        {"role": "assistant", "content": "4", "reasoning": "2+2 equals 4"}
-    )
+    result = _transform_response({"role": "assistant", "content": "4", "reasoning": "2+2 equals 4"})
 
     assert result.choices[0].message.content == "4"
     assert result.choices[0].message.reasoning_content == "2+2 equals 4"
 
 
 def test_transform_response_preserves_reasoning_content_field():
-    result = _transform_response(
-        {"role": "assistant", "content": "4", "reasoning_content": "adding 2 and 2"}
-    )
+    result = _transform_response({"role": "assistant", "content": "4", "reasoning_content": "adding 2 and 2"})
 
     assert result.choices[0].message.reasoning_content == "adding 2 and 2"
 
 
 def test_streaming_chunk_maps_delta_reasoning_to_reasoning_content():
-    iterator = TogetherAIChatConfig().get_model_response_iterator(
-        streaming_response=iter(()), sync_stream=True
-    )
+    iterator = TogetherAIChatConfig().get_model_response_iterator(streaming_response=iter(()), sync_stream=True)
     assert isinstance(iterator, OpenAIChatCompletionStreamingHandler)
 
     parsed = iterator.chunk_parser(
@@ -179,9 +297,7 @@ def test_together_ai_config_alias_points_at_chat_config():
 def test_provider_config_manager_returns_together_chat_config():
     from litellm.utils import ProviderConfigManager
 
-    config = ProviderConfigManager.get_provider_chat_config(
-        model=REASONING_MODEL, provider=LlmProviders.TOGETHER_AI
-    )
+    config = ProviderConfigManager.get_provider_chat_config(model=REASONING_MODEL, provider=LlmProviders.TOGETHER_AI)
 
     assert isinstance(config, TogetherAIChatConfig)
 
