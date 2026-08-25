@@ -8922,6 +8922,247 @@ class TestAzureBaseModelFallbackLogging:
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
 
+def test_model_group_info_intersects_supported_reasoning_efforts():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/mini-like"},
+                "model_info": {"id": "mini-like-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_xhigh_reasoning_effort": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": False,
+            "supports_minimal_reasoning_effort": True,
+            "supports_xhigh_reasoning_effort": False,
+        }
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="smart-group",
+            user_facing_model_group_name="smart-group",
+        )
+
+    assert result is not None
+    # opus-like offers all seven levels, mini-like lacks none/xhigh/max; only the common set survives,
+    # so the group never advertises an effort routing could hand to a deployment that rejects it.
+    assert result.supported_reasoning_efforts == ("minimal", "low", "medium", "high")
+
+
+def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
+    """The router fills every ModelInfo key, so a deployment absent from the model map arrives with
+    supports_reasoning None rather than with the key missing. Its synthesized entry carries no mode,
+    which is what separates it from a mapped non-reasoning model, and nothing being known about it is
+    no reason to drop the levels the rest of the group agrees on."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/unmapped-model"},
+                "model_info": {"id": "unmapped-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {"key": model_name, "litellm_provider": "openai", "mode": None, "supports_reasoning": None}
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="smart-group",
+            user_facing_model_group_name="smart-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")
+
+
+def test_model_group_info_reasoning_efforts_empty_on_a_mapped_non_reasoning_deployment():
+    """A group mixing a reasoning model with one the map knows is not a reasoning model shares no
+    level, so it advertises none and the picker offers nothing rather than a level routing would
+    hand to a deployment that rejects it."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "anthropic/opus-like"},
+                "model_info": {"id": "opus-like-deployment"},
+            },
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "openai/plain-chat"},
+                "model_info": {"id": "plain-chat-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        if model_id == "opus-like-deployment":
+            return {
+                "key": model_name,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "supports_reasoning": True,
+                "supports_max_reasoning_effort": True,
+            }
+        return {"key": model_name, "litellm_provider": "openai", "mode": "chat", "supports_reasoning": None}
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="mixed-group",
+            user_facing_model_group_name="mixed-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ()
+
+
+def test_model_group_info_reasoning_efforts_ignore_a_value_declared_in_model_info():
+    """The group's levels are computed from its deployments, so a value an operator left in one
+    deployment's model_info must not seed them. Seeding let the first deployment read narrow the
+    whole group while the same value on any other deployment was silently ignored."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "declared-group",
+                "litellm_params": {"model": "openai/first-reasoner"},
+                "model_info": {"id": "first-deployment"},
+            },
+            {
+                "model_name": "declared-group",
+                "litellm_params": {"model": "openai/second-reasoner"},
+                "model_info": {"id": "second-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        info = {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+        }
+        if model_id == "first-deployment":
+            info["supported_reasoning_efforts"] = ("high",)
+        return info
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="declared-group",
+            user_facing_model_group_name="declared-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
+
+
+def test_model_group_info_survives_a_junk_typed_operator_effort_value():
+    """A deployment's registered model_info reads back with whatever the operator wrote under any
+    key, so a wrong-typed supported_reasoning_efforts must not fail the group's info. Only the
+    constructor's trailing override keeps the junk away from ModelGroupInfo validation."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "junk-declared-group",
+                "litellm_params": {"model": "openai/lone-reasoner"},
+                "model_info": {"id": "junk-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        return {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+            "supported_reasoning_efforts": "high",
+        }
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="junk-declared-group",
+            user_facing_model_group_name="junk-declared-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
+
+
+def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared():
+    """A deployment is registered in the cost map under its own id with whatever model_info the
+    operator wrote, so a mode they set themselves reads back exactly like one the map supplied. Only
+    a mode the map supplied marks the deployment as known, or an off-map deployment carrying any
+    mode empties the group it sits in."""
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+
+    mapped_model = "openai/gpt-5.6-sol"
+    expected = resolve_supported_reasoning_efforts(
+        litellm.get_model_info(model=mapped_model),
+        deployment_is_mapped=True,
+    )
+    assert expected
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": mapped_model, "api_key": "sk-fake"},
+                "model_info": {"id": "mapped-deployment"},
+            },
+            {
+                "model_name": "smart-group",
+                "litellm_params": {"model": "openai/a-model-the-map-never-heard-of", "api_key": "sk-fake"},
+                "model_info": {"id": "off-map-deployment", "mode": "chat"},
+            },
+        ]
+    )
+
+    result = router._set_model_group_info(
+        model_group="smart-group",
+        user_facing_model_group_name="smart-group",
+    )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == expected
+
 
 class TestAddDeploymentApiBaseProviderResolution:
     def test_bare_model_with_known_api_base_initializes(self):

@@ -168,6 +168,11 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
@@ -9449,6 +9454,8 @@ class Router:
             except Exception:
                 model_info = None
 
+            deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
+
             # get llm provider
             litellm_model, llm_provider = "", ""
             try:
@@ -9491,6 +9498,7 @@ class Router:
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supported_reasoning_efforts": None,
                     }
                 )
             else:
@@ -9567,6 +9575,11 @@ class Router:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
+
+            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                model_group_info.supported_reasoning_efforts,
+                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:
