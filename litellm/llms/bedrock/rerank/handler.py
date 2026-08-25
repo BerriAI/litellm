@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -31,6 +32,8 @@ class BedrockRerankHandler(BaseAWSLLM):
         prepared_request: BedrockPreparedRequest,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
+        documents: Sequence[str | dict[str, Any]] | None = None,
+        return_documents: bool = True,
     ):
         if client is None:
             client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
@@ -48,7 +51,9 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig()._transform_response(response.json())
+        return BedrockRerankConfig()._transform_response(
+            response.json(), documents=documents, return_documents=return_documents
+        )
 
     def rerank(
         self,
@@ -76,6 +81,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             return_documents=return_documents,
         )
         data: Final = BedrockRerankConfig()._transform_request(request_data)
+        should_return_documents: Final = return_documents is not False
 
         prepared_request: Final = self._prepare_request(
             model=model,
@@ -98,6 +104,8 @@ class BedrockRerankHandler(BaseAWSLLM):
         if _is_async:
             return self.arerank(
                 prepared_request,
+                documents=documents,
+                return_documents=should_return_documents,
                 timeout=timeout,
                 client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None,
             )
@@ -125,7 +133,9 @@ class BedrockRerankHandler(BaseAWSLLM):
 
         response_json: Final = response.json()
 
-        return BedrockRerankConfig()._transform_response(response_json)
+        return BedrockRerankConfig()._transform_response(
+            response_json, documents=documents, return_documents=should_return_documents
+        )
 
     def _prepare_request(
         self,

@@ -4,6 +4,7 @@ Translates from Cohere's `/v1/rerank` input format to Bedrock's `/rerank` input 
 Why separate file? Make it easy to see how transformation works
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm._uuid import uuid
@@ -22,6 +23,7 @@ from litellm.types.rerank import (
     RerankBilledUnits,
     RerankRequest,
     RerankResponse,
+    RerankResponseDocument,
     RerankResponseMeta,
     RerankResponseResult,
     RerankTokens,
@@ -77,7 +79,12 @@ class BedrockRerankConfig:
             sources=_sources,
         )
 
-    def _transform_response(self, response: dict) -> RerankResponse:
+    def _transform_response(
+        self,
+        response: dict,
+        documents: Sequence[str | Mapping[str, object]] | None = None,
+        return_documents: bool = True,
+    ) -> RerankResponse:
         """
         Transform the response from Bedrock into the RerankResponse format.
 
@@ -88,20 +95,20 @@ class BedrockRerankConfig:
         _tokens: Final = RerankTokens(**response.get("usage", {}))
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: list[RerankResponseResult] | None = None
-
         bedrock_results: Final = response.get("results")
-        if bedrock_results:
-            _results = [
-                RerankResponseResult(
-                    index=result.get("index"),
-                    relevance_score=result.get("relevanceScore"),
-                )
-                for result in bedrock_results
-            ]
-
-        if _results is None:
+        if not bedrock_results:
             raise ValueError(f"No results found in the response={response}")
+
+        _results: Final = []
+        for result in bedrock_results:
+            index = result.get("index")
+            item = RerankResponseResult(index=index, relevance_score=result.get("relevanceScore"))
+            if return_documents and documents is not None and isinstance(index, int) and 0 <= index < len(documents):
+                doc = documents[index]
+                text = doc if isinstance(doc, str) else doc.get("text")
+                if isinstance(text, str):
+                    item["document"] = RerankResponseDocument(text=text)
+            _results.append(item)
 
         return RerankResponse(
             id=response.get("id") or str(uuid.uuid4()),
