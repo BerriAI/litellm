@@ -3307,7 +3307,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
     # SigNoz dynamic params (proxy-stamped team/key callback vars only;
     # request-supplied values are blocked)
-    signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+    signoz_ingestion_endpoint: str | None  # writable-ok: assigned by initialize_standard_callback_dynamic_params
     signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
     # Logging settings
