@@ -3524,7 +3524,7 @@ class TestCLIKeyRegenerationFlow:
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
@@ -3677,7 +3677,7 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value="minted-token",
@@ -3742,7 +3742,7 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value="minted-token",
@@ -3785,7 +3785,7 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value="minted-token",
@@ -3839,7 +3839,7 @@ class TestCLIKeyRegenerationFlow:
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
@@ -3896,7 +3896,7 @@ class TestCLIKeyRegenerationFlow:
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
             patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
+            patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
@@ -8126,7 +8126,7 @@ async def test_cli_poll_key_tolerates_missing_user_row():
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
         patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),
+        patch("litellm.proxy.proxy_server.prisma_client", _cli_session_registry_prisma()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
         patch(
             "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
             return_value=mock_jwt_token,
@@ -8690,9 +8690,9 @@ async def test_cli_poll_key_registers_the_session_it_mints(monkeypatch):
     prisma = _cli_session_registry_prisma()
 
     with (
-        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
     ):
         result = await cli_poll_key(
             key_id="cli-registered-session",
@@ -8730,9 +8730,9 @@ async def test_cli_poll_key_withholds_the_credential_when_registration_fails(mon
     prisma.db.litellm_clisessiontable.create = AsyncMock(side_effect=Exception("registry write failed"))
 
     with (
-        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
     ):
         with pytest.raises(HTTPException) as exc_info:
             await cli_poll_key(
@@ -8762,9 +8762,9 @@ async def test_cli_poll_key_registers_a_distinct_session_per_login(monkeypatch):
     prisma = _cli_session_registry_prisma()
 
     with (
-        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
     ):
         for key_id in ("cli-login-session-alpha", "cli-login-session-bravo"):
             await cli_poll_key(key_id=key_id, team_id=None, x_litellm_cli_poll_secret="poll-secret")

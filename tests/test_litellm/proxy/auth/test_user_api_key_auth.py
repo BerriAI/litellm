@@ -6780,9 +6780,9 @@ async def _auth_with_cli_token(cli_token: str, cache: DualCache):
     mock_request.query_params = {}
 
     with (
-        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
     ):
         return await user_api_key_auth(request=mock_request, api_key=f"Bearer {cli_token}")
 

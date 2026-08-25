@@ -36,8 +36,8 @@ def _caller(role: LitellmUserRoles, user_id: str = "admin-1") -> UserAPIKeyAuth:
 
 def _proxy(table: FakeCLISessionTable):
     return (
-        patch("litellm.proxy.proxy_server.prisma_client", FakePrismaClient(table)),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.proxy_server.prisma_client", FakePrismaClient(table)),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),  # test-quality-ok: auth reads proxy_server module globals, no injection seam
     )
 
 
