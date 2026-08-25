@@ -405,6 +405,21 @@
     "description": "S3 Bucket (AWS) Logging Integration"
   },
   {
+    "id": "signoz",
+    "displayName": "SigNoz",
+    "logo": "signoz.svg",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "signoz_ingestion_key": {
+        "type": "password",
+        "ui_name": "SigNoz Ingestion Key",
+        "description": "Per-team ingestion key. Team traces export to this key's SigNoz account over OTLP.",
+        "required": false
+      }
+    },
+    "description": "SigNoz OpenTelemetry Observability Integration"
+  },
+  {
     "id": "sqs",
     "displayName": "SQS",
     "logo": "aws.svg",

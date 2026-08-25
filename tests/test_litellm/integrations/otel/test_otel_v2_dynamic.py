@@ -458,3 +458,24 @@ def test_newrelic_key_only_team_routes_to_us_not_operator_region(monkeypatch):
     )
     owned = next(e for e in new_cfg.exporters if e.owner == "newrelic")
     assert owned.endpoint == "https://otlp.nr-data.net"
+
+
+def test_signoz_dynamic_headers_stamp_ingestion_key():
+    from litellm.integrations.otel.presets import dynamic_otlp_headers
+
+    assert dynamic_otlp_headers("signoz", {"signoz_ingestion_key": "team-key"}) == {
+        "signoz-ingestion-key": "team-key"
+    }
+    # No key means no per-request routing; the caller keeps its default tracer.
+    assert dynamic_otlp_headers("signoz", {}) is None
+
+
+def test_signoz_registers_no_dynamic_endpoint_resolver():
+    # A team supplies a key, never a destination, so the operator's endpoint wins.
+    from litellm.integrations.otel.presets import (
+        DYNAMIC_ENDPOINT_BY_CALLBACK,
+        dynamic_otlp_endpoint,
+    )
+
+    assert "signoz" not in DYNAMIC_ENDPOINT_BY_CALLBACK
+    assert dynamic_otlp_endpoint("signoz", {"signoz_ingestion_key": "k"}) is None
