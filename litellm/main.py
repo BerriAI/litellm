@@ -184,7 +184,11 @@ from .litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     stringify_json_tool_call_content,
 )
-from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+from .litellm_core_utils.streaming_chunk_builder_utils import (
+    ChunkProcessor,
+    choice_indices,
+    chunks_for_choice,
+)
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -8543,6 +8547,11 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
+def _reindexed_choice(choice: Choices, index: int) -> Choices:
+    choice.index = index
+    return choice
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: list | None = None,
@@ -8575,6 +8584,44 @@ def stream_chunk_builder(
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
+
+        indices: Final = choice_indices(chunks)
+        if len(indices) > 1:
+            rebuilt: Final = tuple(
+                (
+                    index,
+                    stream_chunk_builder(
+                        chunks=chunks_for_choice(chunks, index),
+                        messages=messages,
+                        start_time=start_time,
+                        end_time=end_time,
+                        logging_obj=None,
+                    ),
+                )
+                for index in indices
+            )
+            assembled: Final = tuple(
+                (index, one) for index, one in rebuilt if one is not None and getattr(one, "choices", None)
+            )
+            if assembled:
+                merged: Final = assembled[0][1]
+                merged.choices = [_reindexed_choice(cast(Choices, one.choices[0]), index) for index, one in assembled]
+                completion_output: Final[str] = "".join(
+                    (getattr(choice.message, "content", None) or "") for choice in cast(list[Choices], merged.choices)
+                )
+                merged_usage: Final = processor.calculate_usage(
+                    chunks=chunks,
+                    model=model,
+                    completion_output=completion_output,
+                    messages=messages,
+                    reasoning_tokens=0,
+                )
+                setattr(merged, "usage", merged_usage)
+                if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+                    setattr(merged_usage, "cost", logging_obj._response_cost_calculator(result=merged))
+                processor.apply_provider_assembled_streaming_metadata(merged, chunks, logging_obj)
+                return merged
+
         # Initialize the response dictionary
         response: Final = processor.build_base_response(chunks)
 

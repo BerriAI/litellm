@@ -1363,3 +1363,149 @@ def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
     assert usage.completion_tokens == 100
     assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
     assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+
+
+N_CHOICE_MESSAGES = [{"role": "user", "content": "Name one colour. One word only."}]
+
+
+def _n_choice_chunk(content, index, role=None, finish_reason=None, usage=None):
+    delta = {}
+    if role is not None:
+        delta["role"] = role
+    if content is not None:
+        delta["content"] = content
+
+    payload = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "gpt-4o-mini",
+        "choices": [{"index": index, "delta": delta, "finish_reason": finish_reason}],
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return payload
+
+
+def test_two_choices_rebuild_separately():
+    chunks = [
+        _n_choice_chunk("Azure", 0, role="assistant"),
+        _n_choice_chunk("Blue", 1, role="assistant"),
+        _n_choice_chunk(".", 0),
+        _n_choice_chunk(".", 1),
+        _n_choice_chunk(None, 0, finish_reason="stop"),
+        _n_choice_chunk(None, 1, finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=N_CHOICE_MESSAGES)
+
+    assert len(response.choices) == 2
+    assert [c.index for c in response.choices] == [0, 1]
+    assert response.choices[0].message.content == "Azure."
+    assert response.choices[1].message.content == "Blue."
+
+
+def test_choices_are_not_concatenated():
+    """The specific regression: one choice holding both completions."""
+    chunks = [
+        _n_choice_chunk("first", 0, role="assistant"),
+        _n_choice_chunk("second", 1, role="assistant"),
+        _n_choice_chunk(None, 0, finish_reason="stop"),
+        _n_choice_chunk(None, 1, finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=N_CHOICE_MESSAGES)
+
+    contents = [c.message.content for c in response.choices]
+    # Each choice separately, not the join: two correct choices legitimately
+    # concatenate to "firstsecond" when you glue them together, so asserting on
+    # the joined string tests nothing.
+    assert all("firstsecond" != c for c in contents)
+    assert set(contents) == {"first", "second"}
+
+
+def test_four_choices():
+    chunks = [_n_choice_chunk(f"answer{i}", i, role="assistant") for i in range(4)]
+    chunks += [_n_choice_chunk(None, i, finish_reason="stop") for i in range(4)]
+
+    response = stream_chunk_builder(chunks, messages=N_CHOICE_MESSAGES)
+
+    assert len(response.choices) == 4
+    assert [c.message.content for c in response.choices] == [
+        "answer0",
+        "answer1",
+        "answer2",
+        "answer3",
+    ]
+
+
+def test_usage_is_counted_once_for_the_request():
+    """Usage belongs to the request, not to each choice.
+
+    Each per-choice slice sees the provider's usage chunk, so a naive
+    implementation either reports one slice's figure or sums them. Neither is
+    right — the provider already reported the total for every completion.
+    """
+    usage = {"prompt_tokens": 15, "completion_tokens": 4, "total_tokens": 19}
+    chunks = [
+        _n_choice_chunk("Azure.", 0, role="assistant"),
+        _n_choice_chunk("Blue.", 1, role="assistant"),
+        _n_choice_chunk(None, 0, finish_reason="stop"),
+        _n_choice_chunk(None, 1, finish_reason="stop", usage=usage),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=N_CHOICE_MESSAGES)
+
+    assert len(response.choices) == 2
+    assert response.usage.prompt_tokens == 15
+    assert response.usage.completion_tokens == 4
+    assert response.usage.total_tokens == 19
+
+
+def test_finish_reason_is_per_choice():
+    chunks = [
+        _n_choice_chunk("short", 0, role="assistant"),
+        _n_choice_chunk("truncated", 1, role="assistant"),
+        _n_choice_chunk(None, 0, finish_reason="stop"),
+        _n_choice_chunk(None, 1, finish_reason="length"),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=N_CHOICE_MESSAGES)
+
+    assert [c.finish_reason for c in response.choices] == ["stop", "length"]
+
+
+@pytest.mark.parametrize("content", ["one", ""])
+def test_single_choice_is_unchanged(content):
+    """n=1 must take the original path and behave exactly as before."""
+    chunks = [
+        _n_choice_chunk(content, 0, role="assistant"),
+        _n_choice_chunk(None, 0, finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=N_CHOICE_MESSAGES)
+
+    assert len(response.choices) == 1
+    assert response.choices[0].index == 0
+    assert response.choices[0].message.content == content
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_missing_index_counts_as_zero():
+    """Some providers omit `index` on a chunk; it must not be dropped."""
+    chunks = [
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-4o-mini",
+            "choices": [{"delta": {"role": "assistant", "content": "hello"}, "finish_reason": None}],
+        },
+        _n_choice_chunk(" world", 0),
+        _n_choice_chunk(None, 0, finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks, messages=N_CHOICE_MESSAGES)
+
+    assert len(response.choices) == 1
+    assert response.choices[0].message.content == "hello world"
