@@ -11,9 +11,13 @@ aquery carries the completion response with real usage and cost.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+import json
+from typing import Final
+from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._internal_context import is_internal_call
@@ -255,113 +259,83 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("filter_key", ["retrieval_filter", "filters"])
-async def test_aquery_forwards_retrieval_filter_to_vector_store_search(filter_key):
-    """
-    The retrieval_config filter (AWS Bedrock KB metadata filter) must reach the
-    vector store search call. Before the fix it was dropped, so Bedrock ran an
-    unfiltered Retrieve and returned documents from the wrong metadata partition.
-    Both the customer-facing `retrieval_filter` key and the typed `filters` alias
-    must be forwarded as the search `filters` argument.
-    """
-    from litellm.types.vector_stores import VectorStoreSearchResponse
+@pytest.mark.parametrize(
+    ("retrieval_config_json", "top_level_filter_json", "expected_filter_json"),
+    (
+        (
+            '{"vector_store_id":"vs_test_123","custom_llm_provider":"openai","top_k":50,'
+            '"retrieval_filter":{"equals":{"key":"tenant","value":"retrieval"}}}',
+            None,
+            '{"equals":{"key":"tenant","value":"retrieval"}}',
+        ),
+        (
+            '{"vector_store_id":"vs_test_123","custom_llm_provider":"openai","top_k":50,'
+            '"filters":{"equals":{"key":"tenant","value":"alias"}}}',
+            None,
+            '{"equals":{"key":"tenant","value":"alias"}}',
+        ),
+        (
+            '{"vector_store_id":"vs_test_123","custom_llm_provider":"openai","top_k":50}',
+            '{"equals":{"key":"tenant","value":"top-level"}}',
+            '{"equals":{"key":"tenant","value":"top-level"}}',
+        ),
+        (
+            '{"vector_store_id":"vs_test_123","custom_llm_provider":"openai","top_k":50,'
+            '"retrieval_filter":{"equals":{"key":"tenant","value":"retrieval"}},'
+            '"filters":{"equals":{"key":"tenant","value":"alias"}}}',
+            '{"equals":{"key":"tenant","value":"top-level"}}',
+            '{"equals":{"key":"tenant","value":"retrieval"}}',
+        ),
+        (
+            '{"vector_store_id":"vs_test_123","custom_llm_provider":"openai","top_k":50}',
+            None,
+            None,
+        ),
+    ),
+)
+async def test_aquery_forwards_filters_to_vector_store_search(
+    retrieval_config_json: str,
+    top_level_filter_json: str | None,
+    expected_filter_json: str | None,
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    retrieval_config: Final = json.loads(retrieval_config_json)
+    top_level_filter: Final = json.loads(top_level_filter_json) if top_level_filter_json is not None else None
+    expected_filter: Final = json.loads(expected_filter_json) if expected_filter_json is not None else None
 
-    retrieval_filter = {
-        "andAll": [
-            {"equals": {"key": "Technology", "value": "Blade"}},
-            {"equals": {"key": "Parameter", "value": "Nicotine"}},
-        ]
-    }
-
-    fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page",
-            search_query="q",
-            data=[],
+    with respx.mock(assert_all_called=True) as respx_mock:
+        search_route: Final = respx_mock.post("https://example.com/v1/vector_stores/vs_test_123/search").mock(
+            return_value=httpx.Response(
+                200,
+                content='{"object":"vector_store.search_results.page","search_query":"q","data":[]}',
+            )
         )
-    )
-
-    with patch("litellm.vector_stores.asearch", new=fake_search):
-        response = await litellm.aquery(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "most frequent causes of low nicotine"}],
-            retrieval_config={
-                "vector_store_id": "CBVFYF3MYF",
-                "custom_llm_provider": "bedrock",
-                "top_k": 50,
-                filter_key: retrieval_filter,
-            },
-            mock_response="answer",
+        respx_mock.post("https://example.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                content=(
+                    '{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"gpt-4o-mini",'
+                    '"choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],'
+                    '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+                ),
+            )
         )
-
-    assert isinstance(response, ModelResponse)
-    fake_search.assert_awaited_once()
-    assert fake_search.await_args.kwargs["filters"] == retrieval_filter
-    assert fake_search.await_args.kwargs["vector_store_id"] == "CBVFYF3MYF"
-    assert fake_search.await_args.kwargs["max_num_results"] == 50
-
-
-@pytest.mark.asyncio
-async def test_aquery_top_level_filters_kwarg_does_not_collide():
-    """
-    An SDK caller may pass a top-level `filters` kwarg (it used to flow to the
-    search via **kwargs). Now that the pipeline passes `filters` explicitly, the
-    top-level kwarg must be consumed rather than forwarded twice, otherwise
-    asearch raises TypeError for a duplicate keyword before any search runs.
-    """
-    from litellm.types.vector_stores import VectorStoreSearchResponse
-
-    top_level_filter = {"equals": {"key": "tenant", "value": "a"}}
-
-    fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page",
-            search_query="q",
-            data=[],
-        )
-    )
-
-    with patch("litellm.vector_stores.asearch", new=fake_search):
-        response = await litellm.aquery(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hello"}],
-            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+        response: Final = await litellm.aquery(
+            model="openai/gpt-4o-mini",
+            messages=json.loads('[{"role":"user","content":"most frequent causes of low nicotine"}]'),
+            retrieval_config=retrieval_config,
             filters=top_level_filter,
-            mock_response="hi",
+            api_key="sk-test",
+            api_base="https://example.com/v1",
         )
+        request_body: Final = json.loads(search_route.calls.last.request.content)
 
     assert isinstance(response, ModelResponse)
-    fake_search.assert_awaited_once()
-    assert fake_search.await_args.kwargs["filters"] == top_level_filter
-    assert "filters" not in fake_search.await_args.kwargs.get("kwargs", {})
-
-
-@pytest.mark.asyncio
-async def test_aquery_without_filter_forwards_none():
-    """
-    When no filter is provided, the search call must receive filters=None rather
-    than a truthy default that would silently constrain an unfiltered query.
-    """
-    from litellm.types.vector_stores import VectorStoreSearchResponse
-
-    fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page",
-            search_query="q",
-            data=[],
-        )
-    )
-
-    with patch("litellm.vector_stores.asearch", new=fake_search):
-        await litellm.aquery(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "hello"}],
-            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
-            mock_response="hi",
-        )
-
-    fake_search.assert_awaited_once()
-    assert fake_search.await_args.kwargs["filters"] is None
+    assert response.choices[0].message.content == "answer"
+    assert request_body["query"] == "most frequent causes of low nicotine"
+    assert request_body["filters"] == expected_filter
+    assert request_body["max_num_results"] == 50
 
 
 def test_rag_call_types_are_registered():
