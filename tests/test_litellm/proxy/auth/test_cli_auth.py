@@ -82,7 +82,7 @@ async def test_poll_for_ready_404(sleep_mock, request_mock):
         _poll_for_ready_data(
             "https://litellm.com", poll_interval=1, total_timeout=1, request_timeout=42
         )
-    request_mock.assert_called_once_with("https://litellm.com", timeout=42)
+    request_mock.assert_called_once_with("https://litellm.com", headers=None, timeout=42)
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_poll_for_ready_200_ready(sleep_mock, click_mock, request_mock):
     )
     assert actual == {"status": "ready", "json": "data"}
     click_mock.assert_not_called()
-    request_mock.assert_called_once_with("https://litellm.com", timeout=42)
+    request_mock.assert_called_once_with("https://litellm.com", headers=None, timeout=42)
     sleep_mock.assert_not_called()
 
 
@@ -131,8 +131,8 @@ async def test_poll_for_ready_single_pending(sleep_mock, click_mock, request_moc
     click_mock.assert_not_called()
     request_mock.assert_has_calls(
         [
-            call("https://litellm.com", timeout=42),
-            call("https://litellm.com", timeout=42),
+            call("https://litellm.com", headers=None, timeout=42),
+            call("https://litellm.com", headers=None, timeout=42),
         ]
     )
     sleep_mock.assert_called_once_with(1)
@@ -168,8 +168,8 @@ async def test_poll_for_ready_pending(sleep_mock, click_mock, request_mock):
     click_mock.assert_has_calls([call("Pending message"), call("Pending message")])
     request_mock.assert_has_calls(
         [
-            call("https://litellm.com", timeout=42),
-            call("https://litellm.com", timeout=42),
+            call("https://litellm.com", headers=None, timeout=42),
+            call("https://litellm.com", headers=None, timeout=42),
         ]
     )
     sleep_mock.assert_has_calls([call(1), call(1)])
@@ -194,7 +194,7 @@ async def test_poll_for_ready_connection_failure(sleep_mock, click_mock, request
     click_mock.assert_called_once_with("Connection error (will retry): ERROR")
     request_mock.assert_has_calls(
         [
-            call("https://litellm.com", timeout=42),
+            call("https://litellm.com", headers=None, timeout=42),
         ]
     )
     sleep_mock.assert_has_calls([call(1), call(1)])
