@@ -1627,14 +1627,7 @@ def _parse_content_for_reasoning(
     )
 
     if reasoning_match:
-        reasoning_content = reasoning_match.group(1)
-        content = reasoning_match.group(2)
-        if not content.strip():
-            # Model's entire answer was inside the think block with
-            # nothing after it — surface it as content instead of
-            # silently discarding the model's only real output.
-            content = reasoning_content
-        return reasoning_content, content
+        return reasoning_match.group(1), reasoning_match.group(2)
 
     return None, message_text
 
