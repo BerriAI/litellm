@@ -3,10 +3,14 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 REPO_ROOT: Final = Path(__file__).parents[2]
+
+CostMap = dict[str, dict[str, object]]
+COST_MAP_ADAPTER: Final = TypeAdapter(CostMap)
 
 SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/moonshotai/Kimi-K3",
@@ -66,13 +70,13 @@ DEPRECATED_MODELS: Final = {
 
 
 @pytest.fixture(scope="module")
-def cost_map() -> dict:
+def cost_map() -> CostMap:
     with open(REPO_ROOT / "model_prices_and_context_window.json") as f:
-        return json.load(f)
+        return COST_MAP_ADAPTER.validate_python(json.load(f))
 
 
 @pytest.mark.parametrize("model", SERVERLESS_CHAT_MODELS)
-def test_together_serverless_chat_model_is_mapped(cost_map: dict, model: str):
+def test_together_serverless_chat_model_is_mapped(cost_map: CostMap, model: str):
     info = cost_map.get(model)
     assert info is not None, f"{model} missing from model_prices_and_context_window.json"
     assert info["litellm_provider"] == "together_ai"
@@ -86,7 +90,7 @@ def test_together_serverless_chat_model_is_mapped(cost_map: dict, model: str):
     assert provider == "together_ai"
 
 
-def test_together_kimi_k3_pricing_and_capabilities(cost_map: dict):
+def test_together_kimi_k3_pricing_and_capabilities(cost_map: CostMap):
     info = cost_map["together_ai/moonshotai/Kimi-K3"]
     assert info["input_cost_per_token"] == 3e-06
     assert info["output_cost_per_token"] == 1.5e-05
@@ -98,7 +102,7 @@ def test_together_kimi_k3_pricing_and_capabilities(cost_map: dict):
     assert info["supports_reasoning"] is True
 
 
-def test_together_glm_52_pricing(cost_map: dict):
+def test_together_glm_52_pricing(cost_map: CostMap):
     info = cost_map["together_ai/zai-org/GLM-5.2"]
     assert info["input_cost_per_token"] == 1.4e-06
     assert info["output_cost_per_token"] == 4.4e-06
@@ -106,7 +110,7 @@ def test_together_glm_52_pricing(cost_map: dict):
     assert info["supports_reasoning"] is True
 
 
-def test_together_multilingual_e5_embedding_entry(cost_map: dict):
+def test_together_multilingual_e5_embedding_entry(cost_map: CostMap):
     info = cost_map["together_ai/intfloat/multilingual-e5-large-instruct"]
     assert info["mode"] == "embedding"
     assert info["input_cost_per_token"] == 2e-08
@@ -114,7 +118,7 @@ def test_together_multilingual_e5_embedding_entry(cost_map: dict):
     assert info["output_vector_size"] == 1024
 
 
-def test_together_llama_33_70b_repriced_to_current_together_rate(cost_map: dict):
+def test_together_llama_33_70b_repriced_to_current_together_rate(cost_map: CostMap):
     info = cost_map["together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"]
     assert info["input_cost_per_token"] == 1.04e-06
     assert info["output_cost_per_token"] == 1.04e-06
@@ -122,17 +126,25 @@ def test_together_llama_33_70b_repriced_to_current_together_rate(cost_map: dict)
 
 
 @pytest.mark.parametrize("model", sorted(DEPRECATED_MODELS))
-def test_together_deprecated_model_carries_deprecation_date(cost_map: dict, model: str):
+def test_together_deprecated_model_carries_deprecation_date(cost_map: CostMap, model: str):
     info = cost_map.get(model)
     assert info is not None, f"{model} missing from model_prices_and_context_window.json"
     assert info.get("deprecation_date") == DEPRECATED_MODELS[model]
 
 
-def test_together_successor_metadata_points_at_live_models(cost_map: dict):
+def _successor(info: dict[str, object]) -> str | None:
+    metadata = info.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    successor = metadata.get("successor")
+    return successor if isinstance(successor, str) else None
+
+
+def test_together_successor_metadata_points_at_live_models(cost_map: CostMap):
     successors = {
-        model: info["metadata"]["successor"]
+        model: successor
         for model, info in cost_map.items()
-        if model.startswith("together_ai/") and "successor" in info.get("metadata", {})
+        if model.startswith("together_ai/") and (successor := _successor(info)) is not None
     }
     assert len(successors) >= 10
     for model, successor in successors.items():
@@ -141,9 +153,9 @@ def test_together_successor_metadata_points_at_live_models(cost_map: dict):
         assert "deprecation_date" not in target, f"{model} names deprecated successor {successor}"
 
 
-def test_together_backup_cost_map_in_sync(cost_map: dict):
+def test_together_backup_cost_map_in_sync(cost_map: CostMap):
     with open(REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json") as f:
-        backup = json.load(f)
+        backup = COST_MAP_ADAPTER.validate_python(json.load(f))
     together_main = {k: v for k, v in cost_map.items() if k.startswith("together_ai/")}
     together_backup = {k: v for k, v in backup.items() if k.startswith("together_ai/")}
     assert together_backup == together_main
