@@ -2952,6 +2952,29 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
 
 
 @pytest.mark.asyncio
+async def test_load_config_eagerly_initializes_string_success_callback(tmp_path, monkeypatch):
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  success_callback:\n"
+        "    - generic_api\n"
+    )
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", "http://127.0.0.1:8899/")
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert any(isinstance(callback, GenericAPILogger) for callback in litellm._async_success_callback)
+    assert "generic_api" not in litellm.success_callback
+
+
+@pytest.mark.asyncio
 async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeypatch):
     """
     max_budget configured as os.environ/MAX_BUDGET resolves to a string;
