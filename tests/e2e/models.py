@@ -52,6 +52,7 @@ class KeyMetadata(BaseModel):
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
+    mcp_toolsets: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -865,6 +866,7 @@ class TeamNewBody(BaseModel):
     team_id: str | None = None
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class TeamNewResponse(BaseModel):
@@ -873,8 +875,9 @@ class TeamNewResponse(BaseModel):
 
 class TeamUpdateBody(BaseModel):
     team_id: str
-    team_alias: str
+    team_alias: str | None = None
     models: list[str] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class TeamInfoParams(BaseModel):
