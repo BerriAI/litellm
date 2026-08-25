@@ -706,7 +706,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return credentials, aws_region_name
 
     @staticmethod
-    def _request_api_key_is_a_bedrock_credential(request_data: dict | None) -> bool:
+    def _request_api_key_is_a_bedrock_credential(request_data: Mapping[str, Any] | None) -> bool:
         """Whether ``request_data["api_key"]`` can be a Bedrock credential at all.
 
         That field holds the key for the **LLM** call, not for this guardrail's own
