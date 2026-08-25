@@ -2,15 +2,12 @@
 
 import importlib
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 import asyncio
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 
 @pytest.fixture(scope="session")
@@ -29,11 +26,7 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
     curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
 
-    import litellm
     from litellm import Router
 
     importlib.reload(litellm)
@@ -46,6 +39,8 @@ def setup_and_teardown():
     yield
 
     # Teardown code (executes after the yield point)
+    # LoggingWorker carries still-queued coroutines onto the next test's loop, where they'd log into that test's callbacks
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     loop.close()  # Close the loop created earlier
     asyncio.set_event_loop(None)  # Remove the reference to the loop
 

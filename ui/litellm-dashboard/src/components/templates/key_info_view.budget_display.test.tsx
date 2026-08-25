@@ -1,21 +1,27 @@
 import { renderWithProviders } from "../../../tests/test-utils";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import type { Organization } from "../networking";
 
 // IMPORTANT: do not mock `@/utils/dataUtils` here. We want to exercise the
 // real `formatNumberWithCommas` so this test catches the LIT-2845 regression
 // where the overview "Spend" card formatted `max_budget` with the default 0
 // decimals, truncating sub-dollar budgets (e.g. $0.10) to "$0".
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("./key_edit_view", () => ({
   KeyEditView: () => <div data-testid="key-edit-view-stub" />,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({ default: vi.fn() }));
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({ useOrganizations: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
   useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
@@ -24,6 +30,7 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 vi.mock("../networking", () => ({
+  serverRootPath: "",
   keyDeleteCall: vi.fn().mockResolvedValue({}),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({ resolved_guardrails: [] }),
@@ -123,10 +130,34 @@ const makeTeam = (overrides: Partial<Team>): Team => ({
   ...overrides,
 });
 
+const makeOrganization = (overrides: Partial<Organization>): Organization =>
+  ({
+    organization_id: "org-1",
+    organization_alias: "Acme Org",
+    budget_id: "budget-1",
+    metadata: {},
+    models: [],
+    spend: 0,
+    model_spend: {},
+    created_at: "2026-01-01T00:00:00Z",
+    created_by: "admin",
+    updated_at: "2026-01-01T00:00:00Z",
+    updated_by: "admin",
+    litellm_budget_table: { max_budget: null, budget_duration: null },
+    teams: null,
+    users: null,
+    members: null,
+    ...overrides,
+  }) as Organization;
+
+const mockOrganizations = (organizations: Organization[]) =>
+  vi.mocked(useOrganizations).mockReturnValue({ data: organizations } as ReturnType<typeof useOrganizations>);
+
 describe("KeyInfoView overview budget display (LIT-2845)", () => {
   beforeEach(() => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
     vi.mocked(useAuthorized).mockReturnValue(baseAuthorized);
+    mockOrganizations([]);
   });
 
   it("renders a sub-dollar max_budget ($0.10) with 2-decimal precision in the overview Spend card", async () => {
@@ -181,7 +212,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     });
   });
 
-  it("renders team budget with alias and duration when key has no own budget but team has one", async () => {
+  it("never pairs key spend with the team budget: shows Unlimited plus an inherited-budget hint", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, budget_duration: "30d" })],
       setTeams: vi.fn(),
@@ -196,15 +227,20 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText(/of \$1,200\.00 \(Team: Test Budget \/ 30d\)/)).toBeInTheDocument();
+      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
+    expect(screen.queryByText(/of \$1,200\.00/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\(Team: Test Budget/)).not.toBeInTheDocument();
+    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
+    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Test Budget: $1,200.00 / 30d");
   });
 
-  it("renders team budget without duration when team has no budget_duration", async () => {
+  it("lists the organization budget in the hint when the team's org has one", async () => {
     vi.mocked(useTeams).mockReturnValue({
-      teams: [makeTeam({ team_id: "team-456", team_alias: "No Duration Team", max_budget: 500 })],
+      teams: [makeTeam({ team_id: "team-456", team_alias: "Org Team", organization_id: "org-1" })],
       setTeams: vi.fn(),
     });
+    mockOrganizations([makeOrganization({ litellm_budget_table: { max_budget: 5000, budget_duration: null } })]);
     renderWithProviders(
       <KeyInfoView
         keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-456" } as unknown as KeyResponse}
@@ -215,11 +251,14 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText(/of \$500\.00 \(Team: No Duration Team\)/)).toBeInTheDocument();
+      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
+    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
+    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Organization Acme Org: $5,000.00");
+    expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("Team Org Team");
   });
 
-  it("renders 'Unlimited' when key has no budget and team also has no budget", async () => {
+  it("renders 'Unlimited' with no hint when neither key, team, nor org has a budget", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam({ team_id: "team-789", team_alias: "Free Team" })],
       setTeams: vi.fn(),
@@ -236,6 +275,27 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
+    expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
+  });
+
+  it("shows no hint when the key has its own budget even if the team has one", async () => {
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200 })],
+      setTeams: vi.fn(),
+    });
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, max_budget: 25, team_id: "team-123" } as unknown as KeyResponse}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/of \$25\.00/)).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
   });
 });
 
@@ -243,6 +303,7 @@ describe("KeyInfoView budget reset visibility", () => {
   beforeEach(() => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
     vi.mocked(useAuthorized).mockReturnValue(baseAuthorized);
+    mockOrganizations([]);
   });
 
   const KEY_WITH_RESET = {

@@ -5,10 +5,12 @@ import datetime
 import os
 import random
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from openai import APIError
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -16,7 +18,11 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import HOURS_IN_A_DAY
+from litellm.constants import (
+    HOURS_IN_A_DAY,
+    SLACK_DAILY_REPORT_LOCK_ID,
+    SLACK_MODEL_DEPRECATION_LOCK_ID,
+)
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
@@ -33,24 +39,39 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    InvitationModel,
+    InvitationNew,
     Litellm_EntityType,
+    UserAPIKeyAuth,
     VirtualKeyEvent,
     WebhookEvent,
 )
+from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
+from litellm.types.proxy.model_deprecation import (
+    DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    DEPRECATION_IDLE_POLL_SECONDS,
+)
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
 from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.router import Router as _Router
 
     Router = _Router
 else:
     Router = Any
+
+
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -1038,6 +1059,99 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    def _deprecation_alerts_enabled(self) -> bool:
+        return self.alerting is not None and AlertType.model_deprecation_warnings in self.alert_types
+
+    async def send_model_deprecation_alert(
+        self,
+        llm_router: Router | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
+        """Alert on the router's deprecated and imminent models, True when one was sent
+
+        The daily lock is claimed only once there is something to say, so an empty pass never blocks a
+        later real one, and a sent alert is stamped in the shared cache for a day so sibling pods stop asking
+        """
+        if not self._deprecation_alerts_enabled():
+            return False
+
+        from litellm.proxy.common_utils.model_deprecation import (
+            collect_model_deprecations,
+            format_deprecation_alert_message,
+        )
+
+        snapshot: Final = collect_model_deprecations(llm_router=llm_router)
+        message: Final = format_deprecation_alert_message(snapshot)
+        if message is None:
+            return False
+        if not await self._claimed_deprecation_alert_window(pod_lock_manager):
+            return False
+
+        level: Final[Literal["Low", "Medium", "High"]] = "High" if snapshot.deprecated else "Medium"
+
+        await self.send_alert(
+            message=message,
+            level=level,
+            alert_type=AlertType.model_deprecation_warnings,
+            alerting_metadata={  # mutable-ok: send_alert takes a dict payload
+                "deprecated_count": len(snapshot.deprecated),
+                "imminent_count": len(snapshot.imminent),
+                "upcoming_count": len(snapshot.upcoming),
+            },
+        )
+        await self.internal_usage_cache.async_set_cache(
+            key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value,
+            value=time.time(),
+            ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+        )
+        return True
+
+    async def _claimed_deprecation_alert_window(self, pod_lock_manager: "PodLockManager | None") -> bool:
+        """Without a redis backed lock there is no fleet to coordinate, so a lone pod always alerts"""
+        if pod_lock_manager is None:
+            return True
+        return (
+            await pod_lock_manager.acquire_lock(
+                cronjob_id=SLACK_MODEL_DEPRECATION_LOCK_ID,
+                ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+                allow_reentrant=False,
+            )
+        ) is not False
+
+    async def _deprecation_alert_sent_within_a_day(self) -> bool:
+        return (
+            await self.internal_usage_cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value)
+        ) is not None
+
+    async def _run_deprecation_alert_pass(
+        self, llm_router: Router | None, pod_lock_manager: "PodLockManager | None"
+    ) -> bool:
+        if llm_router is None or not self._deprecation_alerts_enabled():
+            return False
+        if await self._deprecation_alert_sent_within_a_day():
+            return False
+        return await self.send_model_deprecation_alert(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
+
+    async def run_scheduled_deprecation_check(
+        self,
+        get_llm_router: Callable[[], Router | None] = _proxy_llm_router,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> None:
+        """Poll every pass for a loaded router, the alert being on, and no alert in the last day, then alert
+
+        A pass that could not alert (no router yet, alert type off, a sibling pod holds the daily lock, or a
+        redis blip at claim time) is retried on the next poll instead of costing a day, while a pass that
+        raised (a missing webhook, say) backs off a full day so a misconfiguration logs once, not every poll
+        """
+        while True:
+            try:
+                await self._run_deprecation_alert_pass(get_llm_router(), pod_lock_manager)
+            except Exception as e:  # noqa: BLE001  # a failed alert must not kill the loop
+                verbose_proxy_logger.exception("Error in model deprecation alert loop: %s", e)
+                await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
+                continue
+            await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
+
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
         Sends structured alert to webhook, if set.
@@ -1080,6 +1194,44 @@ Model Info:
         if premium_user is not True:
             if email_logo_url is not None or email_support_contact is not None:
                 raise ValueError(f"Trying to Customize Email Alerting\n {CommonProxyErrors.not_premium_user.value}")
+
+    async def _construct_user_invitation_link(self, recipient_user_id: str | None, base_url: str) -> str:
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if recipient_user_id is None or prisma_client is None:
+            return base_url
+
+        try:
+            existing_invitations: Final = TypeAdapter(list[InvitationModel]).validate_python(
+                await InvitationLinkRepository(prisma_client).table.find_many(  # pyright: ignore[reportAny]  # untyped prisma boundary (any-ok), result validated by TypeAdapter
+                    where={"user_id": recipient_user_id},  # mutable-ok: prisma find_many requires a dict where filter
+                    order={"created_at": "desc"},  # mutable-ok: prisma find_many requires a dict order arg
+                ),
+                from_attributes=True,
+            )
+            invitation: Final = (
+                existing_invitations[0]
+                if existing_invitations
+                else TypeAdapter(InvitationModel).validate_python(
+                    await create_invitation_for_user(
+                        data=InvitationNew(user_id=recipient_user_id),
+                        user_api_key_dict=UserAPIKeyAuth(user_id=recipient_user_id),
+                    ),
+                    from_attributes=True,
+                )
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort link build; any DB/creation failure falls back to base_url
+            verbose_proxy_logger.error(
+                "Error creating invitation link for user_id %s: %s",
+                recipient_user_id,
+                str(e),
+            )
+            return base_url
+
+        return f"{base_url.rstrip('/')}/ui/onboarding?invitation_id={invitation.id}"
 
     async def send_key_created_or_user_invited_email(self, webhook_event: WebhookEvent) -> bool:
         try:
@@ -1139,11 +1291,14 @@ Model Info:
                     team_row: Final = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
                     if team_row is not None:
                         team_name = team_row.team_alias or "-"
+                invitation_link: Final = await self._construct_user_invitation_link(
+                    recipient_user_id=recipient_user_id, base_url=base_url
+                )
                 email_html_content = USER_INVITED_EMAIL_TEMPLATE.format(
                     email_logo_url=email_logo_url,
                     recipient_email=recipient_email,
                     team_name=team_name,
-                    base_url=base_url,
+                    base_url=invitation_link,
                     email_support_contact=email_support_contact,
                 )
             else:
@@ -1530,7 +1685,11 @@ Model Info:
         except Exception:
             pass
 
-    async def _run_scheduler_helper(self, llm_router) -> bool:
+    async def _run_scheduler_helper(
+        self,
+        llm_router,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
         """
         Returns:
         - True -> report sent
@@ -1555,6 +1714,16 @@ Model Info:
             interval_seconds: Final = self.alerting_args.daily_report_frequency
 
             if current_time - report_sent >= interval_seconds:
+                if (
+                    pod_lock_manager is not None
+                    and (
+                        await pod_lock_manager.acquire_lock(
+                            cronjob_id=SLACK_DAILY_REPORT_LOCK_ID, ttl=interval_seconds, allow_reentrant=False
+                        )
+                    )
+                    is False
+                ):
+                    return False
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
@@ -1566,7 +1735,11 @@ Model Info:
 
         return report_sent_bool
 
-    async def _run_scheduled_daily_report(self, llm_router: Any | None = None):
+    async def _run_scheduled_daily_report(
+        self,
+        llm_router: Any | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ):
         """
         If 'daily_reports' enabled
 
@@ -1579,7 +1752,7 @@ Model Info:
 
         if "daily_reports" in self.alert_types:
             while True:
-                await self._run_scheduler_helper(llm_router=llm_router)
+                await self._run_scheduler_helper(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
                 interval = random.randint(
                     self.alerting_args.report_check_interval - 3,
                     self.alerting_args.report_check_interval + 3,

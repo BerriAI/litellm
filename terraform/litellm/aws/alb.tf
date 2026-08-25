@@ -3,9 +3,16 @@ resource "aws_lb" "this" {
   load_balancer_type = "application"
   internal           = false
   security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
+  subnets            = local.public_subnet_ids
 
   idle_timeout = 120
+
+  lifecycle {
+    precondition {
+      condition     = length(local.public_subnet_ids) >= 2
+      error_message = "The ALB needs at least 2 public subnets in different AZs. Set `public_subnet_ids` when using `vpc_id`, or list at least 2 `azs` when the module creates the VPC."
+    }
+  }
 
   tags = local.tags
 }
@@ -25,7 +32,7 @@ resource "aws_lb_target_group" "gateway" {
   port        = 4000
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     path                = "/health/readiness"
@@ -46,7 +53,7 @@ resource "aws_lb_target_group" "backend" {
   port        = 4001
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     path                = "/health/readiness"
@@ -67,7 +74,7 @@ resource "aws_lb_target_group" "ui" {
   port        = 3000
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     path                = "/healthz"

@@ -568,6 +568,32 @@ def test_forward_headers_custom_wins_case_insensitive_over_request_authorization
     assert result["x-request-id"] == "req-123"
 
 
+def test_forward_headers_never_forwards_client_accept_encoding():
+    """
+    The client's Accept-Encoding must not reach the upstream provider: the proxy's
+    HTTP client decodes the upstream body and advertises only encodings it can
+    decode. Forwarding e.g. "br" on an install without the brotli package makes
+    the proxy relay raw compressed bytes with the content-encoding header stripped
+    (garbled JSON for /v1/models and count_tokens through the Anthropic passthrough).
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    request_headers = {
+        "accept-encoding": "gzip, deflate, br, zstd",
+        "x-pass-accept-encoding": "br",
+        "x-request-id": "req-123",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers={},
+        forward_headers=True,
+    )
+
+    assert "accept-encoding" not in result
+    assert result["x-request-id"] == "req-123"
+
+
 @pytest.mark.asyncio
 async def test_vertex_passthrough_custom_model_name_replaced_in_url():
     """

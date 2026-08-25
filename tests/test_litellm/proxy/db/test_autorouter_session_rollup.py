@@ -93,6 +93,19 @@ class TestBuildTransaction:
     def test_requests_without_a_routing_decision_are_skipped(self, metadata: dict):
         assert _build(metadata=metadata) is None
 
+    def test_the_tier_the_decision_recorded_is_carried_onto_the_transaction(self):
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "tier": "reasoning"}))
+        assert transaction is not None and transaction.tier == "reasoning"
+
+    @pytest.mark.parametrize("tier", [None, "", 3, {"tier": "medium"}])
+    def test_a_decision_without_a_usable_tier_records_no_tier(self, tier: object):
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "tier": tier}))
+        assert transaction is not None and transaction.tier is None
+
+    def test_a_decision_that_never_mentions_tier_records_no_tier(self):
+        transaction = _build()
+        assert transaction is not None and transaction.tier is None
+
     def test_router_name_falls_back_to_the_payload_model_group(self):
         transaction = _build(metadata=_metadata(routing_decision={"router_type": "complexity"}))
         assert transaction is not None and transaction.router_name == "live-auto"
@@ -167,7 +180,11 @@ class _FakeClient:
         self.db = _FakeDB(failures, poison_session)
 
 
-def _transaction(session_id: str = "s1", at: datetime = datetime(2026, 8, 1, 12, 0, 0)) -> AutoRouterTurnTransaction:
+def _transaction(
+    session_id: str = "s1",
+    at: datetime = datetime(2026, 8, 1, 12, 0, 0),
+    tier: str | None = "medium",
+) -> AutoRouterTurnTransaction:
     return AutoRouterTurnTransaction(
         api_key="k1",
         session_id=session_id,
@@ -182,6 +199,7 @@ def _transaction(session_id: str = "s1", at: datetime = datetime(2026, 8, 1, 12,
         cache_hit=False,
         cache_ttl_seconds=None,
         cache_touched=False,
+        tier=tier,
     )
 
 
@@ -201,7 +219,7 @@ class TestFlush:
         assert sql == UPSERT_AUTOROUTER_SESSION_SQL
         assert params == (
             "k1", "s1", "live-auto", "complexity", "bedrock/haiku",
-            "2026-08-01T12:00:00", 100, 0.01, 0.02, 1, 0, None, 0,
+            "2026-08-01T12:00:00", 100, 0.01, 0.02, 1, 0, None, 0, "medium",
         )
 
     def test_a_connect_error_retries_the_same_statement(self):
@@ -261,3 +279,10 @@ def test_every_drain_trigger_reads_the_one_queue_census_owner():
         assert queue in owner_source, queue
     for site in (proxy_utils.update_spend, proxy_utils.update_spend_logs_job, proxy_utils._monitor_spend_logs_queue):
         assert "_total_queued_spend_transactions" in inspect.getsource(site), site.__name__
+
+
+def test_internal_call_origin_never_reaches_the_rollup():
+    """A shadow eval's duplicate carries a real routing_decision, so the decision-presence
+    gate alone would count it; the internal_call_origin stamp must exclude it."""
+    assert _build(metadata=_metadata(internal_call_origin="shadow_eval_router")) is None
+    assert _build() is not None

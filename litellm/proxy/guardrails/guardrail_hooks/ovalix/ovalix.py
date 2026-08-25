@@ -54,6 +54,7 @@ class OvalixGuardrailBlockedException(GuardrailRaisedException):
             guardrail_name=guardrail_name,
             message=message,
             should_wrap_with_default_message=should_wrap_with_default_message,
+            blocked_content=True,
         )
 
 

@@ -13,6 +13,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -84,29 +85,29 @@ def _redact_tool_calls(tool_calls) -> None:
     for tool_call in tool_calls:
         function = getattr(tool_call, "function", None)
         if function is not None and hasattr(function, "arguments"):
-            function.arguments = "redacted-by-litellm"
+            function.arguments = REDACTED_BY_LITELLM
 
 
 def _redact_function_call(function_call) -> None:
     """Redact legacy assistant function_call arguments."""
     if function_call is not None and hasattr(function_call, "arguments"):
-        function_call.arguments = "redacted-by-litellm"
+        function_call.arguments = REDACTED_BY_LITELLM
 
 
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
     if isinstance(choice, litellm.Choices):
-        choice.message.content = "redacted-by-litellm"
+        choice.message.content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "reasoning_content"):
-            choice.message.reasoning_content = "redacted-by-litellm"
+            choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
     elif isinstance(choice, litellm.utils.StreamingChoices):
-        choice.delta.content = "redacted-by-litellm"
+        choice.delta.content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "reasoning_content"):
-            choice.delta.reasoning_content = "redacted-by-litellm"
+            choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
@@ -117,22 +118,22 @@ def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
         if hasattr(output_item, "text"):
-            output_item.text = "redacted-by-litellm"
+            output_item.text = REDACTED_BY_LITELLM
 
         if hasattr(output_item, "content") and isinstance(output_item.content, list):
             for content_part in output_item.content:
                 if hasattr(content_part, "text"):
-                    content_part.text = "redacted-by-litellm"
+                    content_part.text = REDACTED_BY_LITELLM
 
         # Redact reasoning items in output array
         if hasattr(output_item, "type") and output_item.type == "reasoning":
             if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
                 for summary_item in output_item.summary:
                     if hasattr(summary_item, "text"):
-                        summary_item.text = "redacted-by-litellm"
+                        summary_item.text = REDACTED_BY_LITELLM
 
         if hasattr(output_item, "type") and output_item.type == "function_call" and hasattr(output_item, "arguments"):
-            output_item.arguments = "redacted-by-litellm"
+            output_item.arguments = REDACTED_BY_LITELLM
 
 
 def _redact_responses_api_output_dict(output_items, redacted_str: str):
@@ -164,7 +165,7 @@ def _redact_standard_logging_object(model_call_details: dict):
     if standard_logging_object is None:
         return
 
-    redacted_str: Final = "redacted-by-litellm"
+    redacted_str: Final = REDACTED_BY_LITELLM
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
@@ -235,7 +236,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     copy via redact_streaming_responses_for_custom_logger instead.
     """
     # Redact model_call_details
-    model_call_details["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
+    model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
     _redact_standard_logging_object(model_call_details)
@@ -256,6 +257,12 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             or hasattr(result, "__anext__")  # async generator
         ):  # async iterator
             # For async objects, return a simple redacted response without deepcopy
+            return {"text": REDACTED_BY_LITELLM}
+
+        if not (
+            isinstance(result, (litellm.ModelResponse, litellm.ResponsesAPIResponse, litellm.EmbeddingResponse))
+            or (isinstance(result, dict) and ("choices" in result or "output" in result))
+        ):
             return {"text": "redacted-by-litellm"}
 
         _result: Final = copy.deepcopy(result)
@@ -267,11 +274,11 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
-                _redact_model_response_dict_choices(_result["choices"], "redacted-by-litellm")
+                _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
             redact_vertex_ai_metadata_from_logged_object(_result)
         elif isinstance(_result, dict) and "output" in _result:
             if isinstance(_result.get("output"), list):
-                _redact_responses_api_output_dict(_result["output"], "redacted-by-litellm")
+                _redact_responses_api_output_dict(_result["output"], REDACTED_BY_LITELLM)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)
@@ -282,7 +289,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
             if hasattr(_result, "data") and _result.data is not None:
                 _result.data = []
         else:
-            return {"text": "redacted-by-litellm"}
+            return {"text": REDACTED_BY_LITELLM}
         return _result
 
 

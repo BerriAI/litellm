@@ -1,13 +1,8 @@
 import asyncio
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
@@ -520,13 +515,15 @@ async def test_circuit_breaker_covers_lua_script_execution(redis_no_ping):
     counted toward taking Redis out of the pool and kept paying a full socket timeout
     each, which is the traffic the outage hurts most.
     """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
     cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
     run_script = cache.async_register_script("return 1")
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
-        with pytest.raises(Exception):
+        with pytest.raises(RedisConnectionError):
             await run_script(keys=["lit4930"], args=[1])
 
     with pytest.raises(Exception, match="circuit breaker is open"):
@@ -603,8 +600,11 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
     async def failing_call():
         raise raised
 
-    for _ in range(breaker.failure_threshold + 1):
-        with pytest.raises(Exception):
+    for _ in range(breaker.failure_threshold):
+        with pytest.raises(type(raised)):
             await _run_under_circuit_breaker(breaker, "op", failing_call)
+
+    with pytest.raises(Exception, match="circuit breaker is open" if opens_breaker else "boom"):
+        await _run_under_circuit_breaker(breaker, "op", failing_call)
 
     assert breaker.is_open() is opens_breaker

@@ -8,6 +8,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { regenerateKeyCall } from "../networking";
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -22,6 +23,13 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
     useDebouncer: (fn: (...args: unknown[]) => void) => ({ maybeExecute: fn, cancel: vi.fn(), flush: vi.fn() }),
   };
 });
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
+vi.mock("../networking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../networking")>()),
+  regenerateKeyCall: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
@@ -337,13 +345,9 @@ it("emphasizes the active field in the Spend / Budget header so the sorted colum
   await user.click(await screen.findByText("Budget descending"));
 
   await waitFor(() => {
-    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" }).className).toContain(
-      "font-semibold",
-    );
+    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" })).toHaveClass("font-semibold");
   });
-  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" }).className).toContain(
-    "text-muted-foreground",
-  );
+  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" })).toHaveClass("text-muted-foreground");
 });
 
 it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / Budget menu", async () => {
@@ -389,6 +393,28 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
     expect(lastKeyParam(onUrlUpdate)).toBeNull();
   });
   expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
+});
+
+it("repoints ?key= to the rotated hash once the regenerate dialog is dismissed", async () => {
+  const user = userEvent.setup();
+  vi.mocked(regenerateKeyCall).mockResolvedValue({
+    key: "sk-rotated-plaintext",
+    token: null,
+    token_id: "rotated-hash-456",
+  });
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token }, onUrlUpdate });
+
+  await user.click(await screen.findByRole("button", { name: /regenerate key/i }));
+  await user.click(await screen.findByRole("button", { name: /^Regenerate$/ }));
+  expect(await screen.findAllByText("sk-rotated-plaintext")).not.toHaveLength(0);
+  expect(lastKeyParam(onUrlUpdate)).toBeUndefined();
+
+  await user.click(screen.getAllByRole("button", { name: "Close" })[0]);
+
+  await waitFor(() => {
+    expect(lastKeyParam(onUrlUpdate)).toBe("rotated-hash-456");
+  });
 });
 
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
@@ -535,7 +561,7 @@ describe("refresh button", () => {
 
     const refresh = screen.getByTestId("datatable-refresh");
     expect(refresh).toBeInTheDocument();
-    expect(refresh).not.toBeDisabled();
+    expect(refresh).toBeEnabled();
   });
 
   it("disables the refresh control while a fetch is in flight but keeps data visible", () => {

@@ -16,7 +16,7 @@ def _normalize_reasoning_effort_for_chat_completion(
 ) -> str | None:
     """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
 
-    The chat completion API expects a simple string: 'none', 'low', 'medium', 'high', or 'xhigh'.
+    The chat completion API expects an effort string such as 'low' or 'high'.
     Config/deployments may pass the Responses API format: {'effort': 'high', 'summary': 'detailed'}.
     """
     if value is None:

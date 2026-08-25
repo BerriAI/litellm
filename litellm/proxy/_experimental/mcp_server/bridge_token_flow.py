@@ -15,6 +15,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HE
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
+    from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _BridgeAuthorizationCode
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
         EnvelopeIdentity,
@@ -181,7 +182,13 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
 
 
 async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | None":
-    """Re-validate a live litellm user by id, returning ``None`` when the user is active or a precise
+    """``None`` when the user is live, else the precise failure ``load_active_user_by_id`` found."""
+    loaded: Final = await load_active_user_by_id(user_id)
+    return loaded if isinstance(loaded, str) else None
+
+
+async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResolutionFailure":
+    """Load a live litellm user by id, returning the record when the user is active or a precise
     failure otherwise. The interactive DCR client authenticates via SSO, so its refresh envelope seals a
     user subject; renewing it must re-check the user is still live (present and not SCIM-deactivated) so a
     deactivated user cannot keep refreshing, mirroring how admission re-validates the same user subject on
@@ -226,7 +233,7 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
         return "no_active_key"
     if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
         return "no_active_key"
-    return None
+    return user_object
 
 
 async def _key_owner_scim_deactivated(key: "UserAPIKeyAuth") -> bool:

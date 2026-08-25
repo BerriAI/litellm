@@ -54,7 +54,30 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        return headers
+        inference_component_name: Final = optional_params.get("model_id")
+        if not isinstance(inference_component_name, str):
+            return headers
+        return {**headers, "X-Amzn-SageMaker-Inference-Component": inference_component_name}
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: matches the base chat transform signature
+        optional_params: dict,  # mutable-ok: matches the base chat transform signature
+        litellm_params: dict,  # mutable-ok: matches the base chat transform signature
+        headers: dict,  # mutable-ok: matches the base chat transform signature
+    ) -> dict:  # mutable-ok: the handler sends this body straight to httpx
+        request: Final = super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        served_model_name: Final = litellm_params.get("hf_model_name")
+        if not isinstance(served_model_name, str):
+            return request
+        return {**request, "model": served_model_name}
 
     def get_complete_url(
         self,

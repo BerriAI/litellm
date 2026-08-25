@@ -18,6 +18,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.proxy._types import ProxyException
 
 _PT_MOD = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 _COLLECT = "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails"
@@ -251,7 +252,7 @@ class TestPassthroughPostCallGuardrails:
         )
 
         with _common_patches(mock_proxy_logging, mock_response):
-            with pytest.raises(Exception):
+            with pytest.raises(ProxyException):
                 await pass_through_request(
                     request=_make_mock_request(),
                     target="https://example.com/v1/generateContent",

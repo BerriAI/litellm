@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -18,7 +18,8 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
-from litellm.types.vector_stores import IndexCreateRequest
+from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
 ########################################################
@@ -549,14 +550,15 @@ async def index_create(
     Create an index. Just writes the index to the database.
 
     ```bash
-    curl -L -X POST 'http://0.0.0.0:4000/indexes/create' \
+    curl -L -X POST 'http://0.0.0.0:4000/v1/indexes' \
         -H 'Content-Type: application/json' \
         -H 'Authorization: Bearer sk-1234' \
-        -H 'LiteLLM-Beta: indexes_beta=v1' \
-        -d '{ 
+        -d '{
             "index_name": "dall-e-3",
-            "vector_store_index": "real-index-name",
-            "vector_store_name": "azure-ai-search"
+            "litellm_params": {
+                "vector_store_index": "real-index-name",
+                "vector_store_name": "azure-ai-search"
+            }
         }'
     ```
     """
@@ -592,3 +594,36 @@ async def index_create(
     new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(data=jsonify_object(index_data))
 
     return new_index.model_dump()
+
+
+@router.get(
+    "/v1/indexes",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=IndexListResponse,
+)
+async def index_list(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> IndexListResponse:
+    """
+    List all vector store indexes. Proxy admin only.
+
+    ```bash
+    curl -L -X GET 'http://0.0.0.0:4000/v1/indexes' \
+        -H 'Authorization: Bearer sk-1234'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    assert_proxy_admin_for_vector_store_index_management(
+        user_api_key_dict,
+        operation="list",
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail=CommonProxyErrors.db_not_connected_error.value,
+        )
+
+    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(prisma_client)
+    return IndexListResponse(data=indexes)

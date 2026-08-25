@@ -6,15 +6,10 @@ forward_client_headers_to_llm_api were not being passed to Bedrock rerank provid
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.bedrock.base_aws_llm import Boto3CredentialsInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -66,7 +61,6 @@ def test_bedrock_rerank_header_forwarding_sync(model):
     This test verifies the fix for the issue where headers configured via
     forward_client_headers_to_llm_api were not being passed to Bedrock rerank provider.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -160,7 +154,6 @@ async def test_bedrock_rerank_header_forwarding_async(model):
     This test verifies the fix for the issue where headers configured via
     forward_client_headers_to_llm_api were not being passed to Bedrock rerank provider.
     """
-    litellm.set_verbose = True
     client = AsyncHTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -332,7 +325,6 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
     This ensures that headers from kwargs (forwarded by proxy) and extra_headers
     (passed explicitly) are both included in the final headers sent to the provider.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"

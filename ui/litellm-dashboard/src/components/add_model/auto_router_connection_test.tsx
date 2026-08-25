@@ -1,10 +1,8 @@
 import React from "react";
-import { Typography } from "antd";
-import { CheckCircleTwoTone, CloseCircleTwoTone, LoadingOutlined } from "@ant-design/icons";
+import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
+
 import { testModelGroupConnection, ModelGroupConnectionResult } from "../networking";
 import { AutoRouterTestTarget } from "./build_auto_router_test_targets";
-
-const { Text } = Typography;
 
 interface AutoRouterConnectionTestProps {
   accessToken: string;
@@ -48,53 +46,48 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   }, []);
 
   if (targets.length === 0) {
-    return <Text type="secondary">No complexity tiers are configured yet, so there is nothing to test.</Text>;
+    return (
+      <p className="text-sm text-muted-foreground">
+        No complexity tiers are configured yet, so there is nothing to test.
+      </p>
+    );
   }
 
   return (
     <div className="space-y-3">
-      <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+      <p className="mb-2 text-sm text-muted-foreground">
         Each configured tier routes to a saved model group. Test Connection sends a minimal request through the proxy to
         each one, exactly as the auto router would.
-      </Text>
+      </p>
       {targets.map((target, index) => {
         const result = results[index] ?? { status: "pending" };
         return (
           <div
             key={`${target.modelGroup}-${target.mode}`}
             data-testid="auto-router-test-row"
-            style={{
-              border: "1px solid #e5e7eb",
-              borderRadius: 8,
-              padding: "12px 16px",
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 12,
-            }}
+            className="flex items-start gap-3 rounded-lg border p-3"
           >
-            <div style={{ fontSize: 18, lineHeight: "24px" }}>
-              {result.status === "pending" && <LoadingOutlined data-testid="test-status-pending" />}
+            <div className="pt-0.5">
+              {result.status === "pending" && (
+                <LoaderCircle className="size-5 animate-spin text-muted-foreground" data-testid="test-status-pending" />
+              )}
               {result.status === "success" && (
-                <CheckCircleTwoTone twoToneColor="#52c41a" data-testid="test-status-success" />
+                <CircleCheck className="size-5 text-primary" data-testid="test-status-success" />
               )}
               {result.status === "error" && (
-                <CloseCircleTwoTone twoToneColor="#ff4d4f" data-testid="test-status-error" />
+                <CircleX className="size-5 text-destructive" data-testid="test-status-error" />
               )}
             </div>
-            <div style={{ flex: 1 }}>
-              <Text strong>{target.labels.join(", ")}</Text>{" "}
-              <Text type="secondary">
+            <div className="min-w-0 flex-1 text-sm">
+              <span className="font-medium">{target.labels.join(", ")}</span>{" "}
+              <span className="text-muted-foreground">
                 {"->"} {target.modelGroup}
                 {target.mode === "embedding" ? " (embedding)" : ""}
-              </Text>
+              </span>
               {result.status === "error" && (
-                <Text
-                  type="danger"
-                  data-testid="test-error-message"
-                  style={{ display: "block", marginTop: 4, fontSize: 13 }}
-                >
+                <p className="mt-1 text-xs text-destructive" data-testid="test-error-message">
                   {result.error}
-                </Text>
+                </p>
               )}
             </div>
           </div>

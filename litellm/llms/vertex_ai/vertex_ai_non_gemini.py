@@ -28,7 +28,7 @@ class TextStreamer:
     Fake streaming iterator for Vertex AI Model Garden calls
     """
 
-    def __init__(self, text):
+    def __init__(self, text: str):
         self.text = text.split()  # let's assume words as a streaming unit
         self.index = 0
 

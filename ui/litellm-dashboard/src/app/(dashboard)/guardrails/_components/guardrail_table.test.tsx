@@ -33,7 +33,7 @@ describe("GuardrailTable", () => {
   it("renders the provider logo from the bundled guardrail logo map", () => {
     render(<GuardrailTable guardrailsList={[makeGuardrail()]} {...baseProps} />);
     const logo = screen.getByAltText("Presidio PII logo");
-    expect(logo.getAttribute("src")).toContain("microsoft_azure.svg");
+    expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
   });
 
   it("falls back to a letter avatar for an unknown provider slug", () => {

@@ -1,15 +1,21 @@
 """Abstraction function for OpenAI's realtime API"""
 
+import asyncio
 import os
-from typing import Any, Final, cast
+from typing import Any, Final, Literal, cast
 
 import litellm
-from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request_timeout
+from litellm.constants import (
+    REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
+    REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+    request_timeout,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexAccessTokenResolver
 from litellm.types.realtime import (
     RealtimeClientSecretRequest,
     RealtimeExpiresAfter,
@@ -281,6 +287,41 @@ async def arealtime_calls(
     )
 
 
+async def vertex_access_token_resolver(
+    credentials: VERTEX_CREDENTIALS_TYPES | None,
+    project_id: str | None,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> tuple[str, str]:
+    return await vertex_llm_base._ensure_access_token_async(
+        credentials=credentials,
+        project_id=project_id,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+
+async def _resolve_vertex_access_token_bounded(
+    credentials: VERTEX_CREDENTIALS_TYPES | None,
+    project_id: str | None,
+    resolver: VertexAccessTokenResolver,
+    timeout_seconds: float,
+) -> tuple[str, str]:
+    try:
+        return await asyncio.wait_for(
+            resolver(
+                credentials=credentials,
+                project_id=project_id,
+                custom_llm_provider="vertex_ai",
+            ),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError as e:
+        raise ValueError(
+            "Vertex AI realtime: timed out fetching Google OAuth access token after "
+            f"{timeout_seconds}s; check network egress from the proxy "
+            "to the OAuth token endpoint (oauth2.googleapis.com)"
+        ) from e
+
+
 @wrapper_client
 async def _arealtime(
     model: str,
@@ -478,10 +519,11 @@ async def _arealtime(
         (
             access_token,
             resolved_project,
-        ) = await vertex_llm_base._ensure_access_token_async(
+        ) = await _resolve_vertex_access_token_bounded(
             credentials=vertex_credentials,
             project_id=vertex_project,
-            custom_llm_provider="vertex_ai",
+            resolver=vertex_access_token_resolver,
+            timeout_seconds=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
         )
 
         vertex_realtime_config: Final = VertexAIRealtimeConfig(
@@ -559,10 +601,11 @@ async def _realtime_health_check(
         (
             access_token,
             resolved_project,
-        ) = await vertex_llm_base._ensure_access_token_async(
+        ) = await _resolve_vertex_access_token_bounded(
             credentials=VertexBase.safe_get_vertex_ai_credentials(vertex_model_params),
             project_id=VertexBase.safe_get_vertex_ai_project(vertex_model_params),
-            custom_llm_provider="vertex_ai",
+            resolver=vertex_access_token_resolver,
+            timeout_seconds=REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
         )
         vertex_realtime_config: Final = VertexAIRealtimeConfig(
             access_token=access_token,

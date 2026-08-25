@@ -21,6 +21,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    tag_cache_key,
+    tag_registry_cache_key,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
@@ -131,6 +135,20 @@ def _table(
 ) -> object:
     prisma_table: Final[object] = repository.table
     return prisma_table
+
+
+async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
+    """
+    Every endpoint that mutates a tag row must call this, or a deleted tag keeps its budget
+    enforced and a newly created one stays invisible to the cached name registry until the TTL
+    expires: auth reads tags cache-first, with no freshness check.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        evict_and_broadcast,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
 
 
 async def _get_internal_user_api_keys(
@@ -294,6 +312,8 @@ async def new_tag(
             }
         )
 
+        await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+
         # Update models with new tag
         if tag.models:
             tasks: Final = []
@@ -439,6 +459,8 @@ async def update_tag(
             where={"tag_name": tag.name},
             data=update_data,
         )
+
+        await _evict_tag_cache_keys((tag_cache_key(tag.name),))
 
         # Build response
         tag_config: Final = TagConfig(
@@ -688,6 +710,8 @@ async def delete_tag(
 
         # Delete tag from database
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": data.name})
+
+        await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
 
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:

@@ -34,12 +34,16 @@ class ExceptionCheckers:
     """
 
     @staticmethod
-    def is_error_str_rate_limit(error_str: str) -> bool:
+    def is_error_str_rate_limit(error_str: str, status_code: int | None = None) -> bool:
         """
         Check if an error string indicates a rate limit error.
 
         Args:
             error_str: The error string to check
+            status_code: The HTTP status the provider returned, when known. Gates only the
+                bare-number branch: providers echo the request back in validation errors and
+                429 is an ordinary token id, so an echoed prompt can put a standalone 429 in
+                the body of a 400. The phrase branches stay ungated (#11455).
 
         Returns:
             True if the error indicates a rate limit, False otherwise
@@ -47,8 +51,9 @@ class ExceptionCheckers:
         if not isinstance(error_str, str):
             return False
 
-        # Only treat 429 as a rate limit signal when it appears as a standalone token
-        if re.search(r"\b429\b", error_str):
+        # A standalone 429 counts unless the provider's own status says otherwise. The
+        # status is read off an arbitrary exception, so a non-integer means "unknown".
+        if re.search(r"\b429\b", error_str) and (not isinstance(status_code, int) or status_code == 429):
             return True
 
         _error_str_lower: Final = error_str.lower()
@@ -280,7 +285,9 @@ def _map_openai_exception(
     else:
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-    if ExceptionCheckers.is_error_str_rate_limit(error_str):
+    if ExceptionCheckers.is_error_str_rate_limit(
+        error_str, status_code=getattr(original_exception, "status_code", None)
+    ):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
             model=model,
@@ -804,6 +811,24 @@ def _map_openai_like_exception(
             )
 
 
+_BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN: Final = re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)")
+
+
+def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
+    """
+    Mantle reports context overflow as a structured validation error rather than
+    the plain-text patterns Bedrock itself uses, so it needs its own detection and a
+    message clients recognize as context overflow (litellm/litellm#36546).
+    """
+    if "invalid_request_error" not in error_str and "validation_error" not in error_str:
+        return None
+    match = _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN.search(error_str)
+    if match is None:
+        return None
+    prompt_tokens, max_tokens = match.groups()
+    return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+
+
 def _map_bedrock_exception(
     *,
     model: str,
@@ -814,6 +839,14 @@ def _map_bedrock_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    if custom_llm_provider == "bedrock_mantle":
+        mantle_context_window_message = _get_bedrock_mantle_context_window_message(error_str)
+        if mantle_context_window_message is not None:
+            raise ContextWindowExceededError(
+                message=mantle_context_window_message,
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
     if (
         "too many tokens" in error_str
         or "expected maxLength:" in error_str
@@ -2268,6 +2301,7 @@ def exception_type(
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
                 or custom_llm_provider == "mistral"
+                or custom_llm_provider == "runwayml"
             ):
                 _map_openai_exception(
                     model=model,
@@ -2308,7 +2342,7 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
-            elif custom_llm_provider == "bedrock":
+            elif custom_llm_provider in ("bedrock", "bedrock_mantle"):
                 _map_bedrock_exception(
                     model=model,
                     original_exception=mappable_exception,
