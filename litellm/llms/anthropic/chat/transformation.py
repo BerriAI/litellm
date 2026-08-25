@@ -75,12 +75,12 @@ from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
     ModelResponse,
     Usage,
-    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_mid_conversation_system,
     supports_reasoning,
     token_counter,
 )
@@ -1911,10 +1911,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params["system"] = anthropic_system_message_list
         conversation: Final = place_mid_conversation_system(
             later_messages,
-            supports_mid_conversation_system=_supports_factory(
-                model=model,
-                custom_llm_provider=self.custom_llm_provider,
-                key="supports_mid_conversation_system",
+            supports_mid_conversation_system=supports_mid_conversation_system(
+                model=model, custom_llm_provider=self.custom_llm_provider
             ),
         )
         # Format rest of message according to anthropic guidelines
