@@ -6,6 +6,7 @@ in-memory list has not yet picked up a credential another pod just wrote or upda
 """
 
 from collections.abc import Mapping
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -117,19 +118,26 @@ async def effective_anthropic_wif_fields(
     """
     from_stored: Final = () if stored is None else anthropic_wif_fields_present(stored)
     from_incoming: Final = () if incoming is None else anthropic_wif_fields_named(incoming.model_fields_set)
-    credential_name: Final = _effective_credential_name(stored, incoming)
-    from_credential: Final = (
-        () if credential_name is None else await named_credential_wif_fields(credential_name, prisma_client)
-    )
+    per_credential: Final = [
+        await named_credential_wif_fields(credential_name, prisma_client)
+        for credential_name in _effective_credential_names(stored, incoming)
+    ]
+    from_credential: Final = tuple(chain.from_iterable(per_credential))
     return tuple(dict.fromkeys(from_stored + from_incoming + from_credential))
 
 
-def _effective_credential_name(
+def _effective_credential_names(
     stored: Mapping[str, object] | None,
     incoming: GenericLiteLLMParams | None,
-) -> str | None:
-    if incoming is not None and "litellm_credential_name" in incoming.model_fields_set:
-        named: Final = incoming.litellm_credential_name
-        return named if isinstance(named, str) else None
+) -> tuple[str, ...]:
+    """Both the credential the deployment already carries and the one this write names.
+
+    Taking only the incoming name would let a write clear its way out: detaching a federated
+    credential, by sending ``litellm_credential_name: null`` alongside an api_key or api_base of
+    the caller's choosing, would leave nothing federated to find and the write would be allowed.
+    Detaching an administrator's federated credential is itself an administrator's action, so the
+    stored name counts whatever the write says.
+    """
     from_stored: Final = None if stored is None else stored.get("litellm_credential_name")
-    return from_stored if isinstance(from_stored, str) else None
+    from_incoming: Final = None if incoming is None else incoming.litellm_credential_name
+    return tuple(dict.fromkeys(name for name in (from_stored, from_incoming) if isinstance(name, str)))

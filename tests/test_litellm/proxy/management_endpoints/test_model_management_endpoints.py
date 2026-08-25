@@ -4857,6 +4857,59 @@ class TestWifBoundaryReadsTheResultingDeployment:
                 )
 
     @pytest.mark.asyncio
+    async def test_non_admin_cannot_detach_a_federated_credential_to_escape_the_gate(self):
+        """Clearing the credential name must not be the way out. A deployment federated through a
+        named credential carries no federation field of its own, so a patch that sends
+        litellm_credential_name: null alongside an api_base of the caller's choosing would leave
+        nothing federated to find, and the write would be allowed."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        federated_row = MagicMock()
+        federated_row.litellm_params = {
+            "model": "anthropic/claude-sonnet-4",
+            "litellm_credential_name": "admin-wif",
+        }
+        federated_row.model_dump.return_value = {
+            "model_name": "claude",
+            "litellm_params": federated_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+
+        admin_credential_row = MagicMock()
+        admin_credential_row.dict.return_value = {
+            "credential_name": "admin-wif",
+            "credential_values": {
+                "anthropic_federation_rule_id": "fdrl_admin",
+                "anthropic_organization_id": "org-admin",
+            },
+            "credential_info": {"custom_llm_provider": "anthropic"},
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=federated_row)
+        mock_prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=admin_credential_row)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: proxy wiring under test
+                "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+        ):
+            with pytest.raises(Exception, match="Only proxy admins can modify a deployment configured for Anthropic"):
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(
+                            litellm_credential_name=None, api_base="https://gateway.internal"
+                        )
+                    ),
+                    user_api_key_dict=non_admin,
+                )
+
+    @pytest.mark.asyncio
     async def test_non_admin_cannot_attach_a_federated_credential_by_name(self):
         """litellm_credential_name names no federation field itself, but request-time hydration
         imports whatever the credential holds, so the resulting deployment federates."""
