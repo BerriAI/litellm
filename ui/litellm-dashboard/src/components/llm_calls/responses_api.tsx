@@ -295,8 +295,10 @@ export async function makeOpenAIResponsesRequest(
             };
 
             // Add reasoning tokens if available
-            if (usage.completion_tokens_details?.reasoning_tokens) {
-              usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
+            const reasoningTokens =
+              usage.output_tokens_details?.reasoning_tokens ?? usage.completion_tokens_details?.reasoning_tokens;
+            if (reasoningTokens) {
+              usageData.reasoningTokens = reasoningTokens;
             }
 
             if (usage.cost !== undefined && usage.cost !== null) {
