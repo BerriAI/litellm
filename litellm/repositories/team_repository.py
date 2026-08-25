@@ -60,19 +60,22 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         return LiteLLM_TeamTable.model_validate(data)
 
     async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> list[Member] | None:
-        """Return the team's members_with_roles, locking the row FOR UPDATE.
+        """Return the team's members_with_roles. The caller must already hold
+        ``TEAM_ADVISORY_LOCK_SQL`` for this team_id on ``tx`` before calling this.
 
-        ``None`` when the team row is gone, which a caller holding the lock can
-        only see if a delete committed under it, as opposed to ``[]`` for a team
-        that simply has no members.
+        ``None`` when the team row is gone, which is only possible under that lock if
+        a delete committed before this read, as opposed to ``[]`` for a team that
+        simply has no members.
 
-        Must be called inside a transaction so the row lock is held until
-        commit. This serializes concurrent membership writers on the team row
-        so the losing writer appends onto the winner's committed result instead
-        of overwriting it from a stale snapshot.
+        A plain read is enough here because the advisory lock, not a row lock, is what
+        serializes this against a concurrent writer: ``SELECT ... FOR UPDATE`` would
+        additionally take a row lock on ``LiteLLM_TeamTable``, and the access-group
+        endpoints lock an access group and then a team row, so a team-row-first lock
+        here can deadlock with them. The advisory lock cannot, since those endpoints
+        never take it.
         """
         rows: Final = await tx.query_raw(
-            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1',
             team_id,
         )
         if not rows:

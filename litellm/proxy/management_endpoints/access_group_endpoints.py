@@ -210,7 +210,6 @@ async def _patch_team_caches_add_access_group(
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
             key=f"team_id:{team_id}",
-            proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -240,7 +239,6 @@ async def _patch_team_caches_remove_access_group(
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
             key=f"team_id:{team_id}",
-            proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )

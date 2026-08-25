@@ -16,20 +16,12 @@ import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import (
-    TYPE_CHECKING,
-    Annotated,
-    Final,
-    NamedTuple,
-    Protocol,
-    TypedDict,
-    TypeVar,
-    cast,
-)
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protocol, TypeVar, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -61,6 +53,7 @@ from litellm.proxy._types import (
     PatchTeamRequest,
     ProxyErrorTypes,
     ProxyException,
+    ResetSpendRequest,
     SpecialManagementEndpointEnums,
     SpecialModelNames,
     SpecialProxyStrings,
@@ -89,6 +82,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_membership,
     get_team_object,
     get_user_object,
+    invalidate_team_member_spend_state,
 )
 from litellm.proxy.auth.auth_utils import (
     enforce_batch_enqueued_token_limit_is_admin_only,
@@ -119,6 +113,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
+    TEAM_ADVISORY_LOCK_SQL,
     AccessGroupSyncTx,
     invalidate_access_group_caches,
     reconcile_team_access_group_membership,
@@ -137,6 +132,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     validate_team_metadata_if_configured,
 )
 from litellm.proxy.management_helpers.utils import (
+    MemberWriteTx,
     add_new_member,
     management_endpoint_wrapper,
 )
@@ -299,9 +295,42 @@ class _TeamIdInFilter(TypedDict, total=False):
     team_id: Mapping[str, Sequence[str]]
 
 
+class _DeletedTeamsResult(TypedDict):
+    deleted_teams: ReadOnly[Sequence[str]]
+
+
+class _ErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
 class _TeamCreateTx(AccessGroupSyncTx, Protocol):
     @property
     def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
+
+
+class _MemberDeleteTx(Protocol):
+    """The tables `/team/member_delete` reads while it holds the team's advisory lock.
+
+    Reading them off the transaction keeps the whole endpoint on the one pooled connection
+    it already checked out: a request that has the lock but still needs another connection
+    can be starved by the lock waiters, which is a deadlock rather than a wait when enough
+    of them hold the rest of the pool."""
+
+    @property
+    def litellm_usertable(self) -> "TableActions[prisma_models.LiteLLM_UserTable]": ...
+
+    @property
+    def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
+
+
+class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
+    async def execute_raw(self, query: str, *args: object) -> int: ...
+
+    @property
+    def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
+
+    @property
+    def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
 
 _STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
@@ -2555,8 +2584,13 @@ async def _process_team_members(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
+    tx: MemberWriteTx | None = None,
 ) -> tuple[list[LiteLLM_UserTable], list[LiteLLM_TeamMembership]]:
-    """Process and add new team members."""
+    """Process and add new team members.
+
+    ``tx`` is the caller's open transaction, when it has one, so the member writes run on the
+    connection it already holds instead of checking out a second one.
+    """
     updated_users: Final[list[LiteLLM_UserTable]] = []
     updated_team_memberships: Final[list[LiteLLM_TeamMembership]] = []
 
@@ -2582,6 +2616,7 @@ async def _process_team_members(
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
                 budget_duration=data.budget_duration,
+                tx=tx,
             )
         except Exception as e:
             raise HTTPException(
@@ -2604,6 +2639,7 @@ async def _process_team_members(
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
                     budget_duration=data.budget_duration,
+                    tx=tx,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2683,64 +2719,37 @@ async def _add_team_members_to_team(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> tuple["prisma_models.LiteLLM_TeamTable", list[LiteLLM_UserTable], list[LiteLLM_TeamMembership]]:
-    """Add team members to the team.
+    """Add team members to the team, under the team's advisory lock.
 
-    The members_with_roles reconciliation runs inside a transaction that locks
-    the team row with ``SELECT ... FOR UPDATE`` before reading the current
-    membership. Concurrent /team/member_add calls for the same team therefore
-    serialize on the row lock and each appends onto the other's committed
-    result, instead of both rewriting the whole JSON array from a stale
-    snapshot (which silently drops one member on the losing write).
+    The lock (``TEAM_ADVISORY_LOCK_SQL``, keyed on the team id) is taken first, and the
+    team is re-read under it before any write, so a delete that already committed is
+    visible here before this call writes anything: the user and membership writes only
+    happen once the re-read proves the team is still live. /team/delete takes the same
+    lock around its own sweep-and-delete, so the two can never interleave; whichever
+    acquires the lock first runs to completion before the other's re-read can proceed.
 
-    The same lock serializes this against /team/delete: the delete cannot remove
-    the row while the reconcile holds it, and a reconcile that finds the row
-    already gone cleans up after itself rather than leaving the member pointing
-    at a deleted team id.
+    The user and membership writes run on this transaction too, not on a second
+    connection from the pool: a lock waiter that needs a connection it hasn't got yet is
+    a waiter that can deadlock the pool, since enough concurrent adds for one team would
+    hold every connection waiting on the lock while the holder waits for a free one.
     """
-    # Process and add new members
-    updated_users, updated_team_memberships = await _process_team_members(
-        data=data,
-        complete_team_data=complete_team_data,
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_proxy_admin_name=litellm_proxy_admin_name,
-    )
-
-    updated_team: Final = await _write_members_with_roles_locked(
-        data=data,
-        complete_team_data=complete_team_data,
-        prisma_client=prisma_client,
-        updated_users=updated_users,
-    )
-    if updated_team is None:
-        await _sweep_deleted_team_references(team_ids=(data.team_id,), prisma_client=prisma_client)
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team={data.team_id} was deleted while this member add was running"},
-        )
-
-    return updated_team, updated_users, updated_team_memberships
-
-
-async def _write_members_with_roles_locked(
-    data: TeamMemberAddRequest,
-    complete_team_data: LiteLLM_TeamTable,
-    prisma_client: PrismaClient,
-    updated_users: list[LiteLLM_UserTable],
-) -> "prisma_models.LiteLLM_TeamTable | None":
-    """Reconcile members_with_roles under the team row lock. None when the team row is gone.
-
-    That read is at least as recent as the user and membership writes the caller
-    already made, so a missing row means /team/delete committed after them. Its
-    post-delete sweep can have run before those writes landed, which is why the
-    caller sweeps this team id again rather than only reporting the 404.
-    """
+    gone_detail: Final[_ErrorDetail] = {"error": f"Team={data.team_id} was deleted while this member add was running"}
     async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, data.team_id)
+
         locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, data.team_id)
         if locked_members is None:
-            return None
-
+            raise HTTPException(status_code=404, detail=gone_detail)
         complete_team_data.members_with_roles = locked_members
+
+        updated_users, updated_team_memberships = await _process_team_members(
+            data=data,
+            complete_team_data=complete_team_data,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            tx=tx,
+        )
 
         await _update_team_members_list(
             data=data,
@@ -2749,10 +2758,14 @@ async def _write_members_with_roles_locked(
         )
 
         _db_team_members: Final = [m.model_dump() for m in complete_team_data.members_with_roles]
-        return await _team_tx_db(tx).update(
+        updated_team: Final = await _team_tx_db(tx).update(
             where={"team_id": data.team_id},
             data={"members_with_roles": json.dumps(_db_team_members)},
         )
+        if updated_team is None:
+            raise HTTPException(status_code=404, detail=gone_detail)
+
+    return updated_team, updated_users, updated_team_memberships
 
 
 def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
@@ -3134,10 +3147,6 @@ async def team_member_add(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    # Check if updated_team is None
-    if updated_team is None:
-        raise HTTPException(status_code=404, detail={"error": f"Team with id {data.team_id} not found"})
-
     _emit_team_members_metric(complete_team_data)
 
     await _create_team_member_add_audit_logs(
@@ -3251,47 +3260,61 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
-    removed_team_members, new_team_members = _cleanup_members_with_roles(
-        existing_team_row=existing_team_row,
-        data=data,
-    )
-
-    if not removed_team_members:
-        raise HTTPException(status_code=400, detail={"error": "User not found in team"})
-
-    existing_team_row.members_with_roles = new_team_members
-
-    _db_new_team_members: Final[list[dict]] = [m.model_dump() for m in new_team_members]
-
-    ## DELETE TEAM ID from USER ROW, IF EXISTS ##
-    # get user row
-    removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
-    key_val: Final[Mapping[str, object]] = (
-        {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
-    )
-    existing_user_rows: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(
-        where=key_val
-    )
-
-    # Also clean up any existing team membership rows for this user and team
-    user_ids_to_delete: Final = removed_user_ids.union(
-        (data.user_id,) if data.user_id is not None else (),
-        (user.user_id for user in existing_user_rows if user.user_id),
-    )
-
-    ## DELETE KEYS CREATED BY USER FOR THIS TEAM
-    # Fetch keys before deletion so their audit records can be persisted alongside the delete.
-    # An empty user_ids_to_delete still resolves cleanly: prisma's "in": [] matches no rows.
-    keys_to_delete: Final = await _tokens_db(prisma_client).find_many(
-        where={
-            "user_id": {"in": sorted(user_ids_to_delete)},
-            "team_id": data.team_id,
-        }
-    )
-
-    # All four cleanups run on one connection so a failure between them leaves
-    # no partial removal: either every write below lands, or none of them do.
+    # Everything from here on runs under the team's advisory lock, the same one
+    # /team/member_add and /team/delete take: without it, this endpoint's own row-level
+    # update lock used to be the only thing serializing it against a concurrent member_add,
+    # and only by accident (their SELECT ... FOR UPDATE contended for the same row lock this
+    # UPDATE takes). Now that member_add reads under the advisory lock instead, this has to
+    # take it too, and re-read the roster under it rather than off the snapshot validated
+    # above, or a member_add that commits in between can have its addition silently
+    # overwritten by this delete computing from stale data.
     async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, data.team_id)
+
+        fresh_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, data.team_id)
+        if fresh_members is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Team id={data.team_id} does not exist in db"},
+            )
+
+        removed_team_members, new_team_members = _cleanup_members_with_roles(
+            existing_team_row=LiteLLM_TeamTable(team_id=data.team_id, members_with_roles=fresh_members),
+            data=data,
+        )
+
+        if not removed_team_members:
+            raise HTTPException(status_code=400, detail={"error": "User not found in team"})
+
+        existing_team_row.members_with_roles = new_team_members
+
+        _db_new_team_members: Final[list[dict]] = [m.model_dump() for m in new_team_members]
+
+        ## DELETE TEAM ID from USER ROW, IF EXISTS ##
+        # get user row
+        removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
+        key_val: Final[Mapping[str, object]] = (
+            {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
+        )
+        member_tx: Final[_MemberDeleteTx] = tx
+        existing_user_rows: Final = await member_tx.litellm_usertable.find_many(where=key_val)
+
+        # Also clean up any existing team membership rows for this user and team
+        user_ids_to_delete: Final = removed_user_ids.union(
+            (data.user_id,) if data.user_id is not None else (),
+            (user.user_id for user in existing_user_rows if user.user_id),
+        )
+
+        ## DELETE KEYS CREATED BY USER FOR THIS TEAM
+        # Fetch keys before deletion so their audit records can be persisted alongside the delete.
+        # An empty user_ids_to_delete still resolves cleanly: prisma's "in": [] matches no rows.
+        keys_to_delete: Final = await member_tx.litellm_verificationtoken.find_many(
+            where={
+                "user_id": {"in": sorted(user_ids_to_delete)},
+                "team_id": data.team_id,
+            }
+        )
+
         await _team_tx_db(tx).update(
             where={"team_id": data.team_id},
             data={"members_with_roles": json.dumps(_db_new_team_members)},
@@ -3371,7 +3394,7 @@ async def team_member_update(
 
     Update team member budgets and team member role
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3470,6 +3493,12 @@ async def team_member_update(
             budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
         )
+    if budget_patch:
+        await invalidate_team_member_spend_state(
+            user_id=received_user_id,
+            team_id=data.team_id,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     ### update team member role
     if data.role is not None:
@@ -3504,6 +3533,125 @@ async def team_member_update(
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
     )
+
+
+def _check_not_resetting_own_spend(user_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    _verify_team_access authorizes a team admin (or org admin) over their own
+    team, with no check that the target user_id differs from the caller. Left
+    unchecked, that admin could target their own LiteLLM_TeamMembership row and
+    repeatedly reset it to 0 right before it crosses their per-member cap,
+    consuming the shared team budget without the configured limit ever binding.
+    Only a proxy admin may reset an admin's own spend.
+    """
+    if user_id == user_api_key_dict.user_id and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        _raise_reset_spend_error(status.HTTP_403_FORBIDDEN, "Cannot reset your own spend. Ask a proxy admin.")
+
+
+def _raise_reset_spend_error(status_code: int, message: str) -> NoReturn:
+    detail: Final = {"error": message}  # mutable-ok: HTTPException.detail takes a dict
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _validate_team_member_reset_spend_value(
+    reset_to: object,
+    membership: LiteLLM_TeamMembership,
+) -> float:
+    if not isinstance(reset_to, (int, float)):
+        _raise_reset_spend_error(status.HTTP_400_BAD_REQUEST, "reset_to must be a float")
+
+    reset_to_float: Final = float(reset_to)
+    if not math.isfinite(reset_to_float) or reset_to_float < 0:
+        _raise_reset_spend_error(status.HTTP_400_BAD_REQUEST, "reset_to must be a finite number >= 0")
+
+    current_spend: Final = membership.spend or 0.0
+    if reset_to_float > current_spend:
+        _raise_reset_spend_error(
+            status.HTTP_400_BAD_REQUEST,
+            f"reset_to ({reset_to_float}) must be <= current spend ({current_spend})",
+        )
+
+    max_budget: Final = membership.litellm_budget_table.max_budget if membership.litellm_budget_table else None
+    if max_budget is not None and reset_to_float > max_budget:
+        _raise_reset_spend_error(
+            status.HTTP_400_BAD_REQUEST,
+            f"reset_to ({reset_to_float}) must be <= budget ({max_budget})",
+        )
+
+    return reset_to_float
+
+
+@router.post(
+    "/team/{team_id}/member/{user_id}/reset_spend",
+    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
+    dependencies=(Depends(user_api_key_auth),),
+)
+@management_endpoint_wrapper
+async def reset_team_member_spend_fn(
+    team_id: str,
+    user_id: str,
+    data: ResetSpendRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Reset a team member's tracked spend against their per-member budget.
+
+    A member's spend is tracked separately from both their own personal
+    budget and the team's own budget (LiteLLM_TeamMembership.spend), so
+    neither /user/update nor /team/update can clear it: this is the only
+    endpoint that does. The cross-pod spend counter and cached membership
+    reads are invalidated so the reset takes effect on the member's next
+    request rather than waiting on the membership cache's TTL.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if prisma_client is None:
+        _raise_reset_spend_error(status.HTTP_500_INTERNAL_SERVER_ERROR, "DB not connected. prisma_client is None")
+
+    team_obj: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=True,
+    )
+    await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
+    _check_not_resetting_own_spend(user_id=user_id, user_api_key_dict=user_api_key_dict)
+
+    membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
+        "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
+    }
+    _membership_row: Final = await _team_membership_db(prisma_client).find_unique(
+        where=membership_where,
+        include={"litellm_budget_table": True},  # mutable-ok: prisma client requires a plain dict include= argument
+    )
+    if _membership_row is None:
+        _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
+    membership: Final = LiteLLM_TeamMembership.model_validate(_membership_row.model_dump())
+
+    current_spend: Final = membership.spend or 0.0
+    reset_to: Final = _validate_team_member_reset_spend_value(data.reset_to, membership)
+
+    await _team_membership_db(prisma_client).update(
+        where=membership_where,
+        data={"spend": reset_to},  # mutable-ok: prisma client requires a plain dict data= argument
+    )
+
+    await invalidate_team_member_spend_state(
+        user_id=user_id,
+        team_id=team_id,
+        user_api_key_cache=user_api_key_cache,
+        new_spend=reset_to,
+    )
+
+    return {  # mutable-ok: matches this router's established untyped-response-dict convention
+        "team_id": team_id,
+        "user_id": user_id,
+        "spend": reset_to,
+        "previous_spend": current_spend,
+        "max_budget": membership.litellm_budget_table.max_budget if membership.litellm_budget_table else None,
+    }
 
 
 def _create_results_from_response(
@@ -3859,7 +4007,21 @@ async def delete_team(
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
 
     ## DELETE TEAMS
-    deleted_teams: Final = await prisma_client.delete_data(team_id_list=data.team_ids, table_name="team")
+    # Both the delete and the reconcile sweep run under every team's advisory lock
+    # (TEAM_ADVISORY_LOCK_SQL, the same one /team/member_add takes before its own writes),
+    # sorted so two overlapping batch deletes always request their locks in the same order.
+    # A member_add mid-flight for one of these teams either finishes its write and releases
+    # the lock before this transaction starts, in which case this sweep reaches what it wrote,
+    # or is still waiting on the lock, in which case its own re-read happens after this commits
+    # and sees the row gone before it writes anything.
+    delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
+    async with prisma_client.tx() as tx:
+        for team_id in sorted(data.team_ids):
+            await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        await tx.litellm_teamtable.delete_many(where=delete_filter)
+        await _sweep_deleted_team_references_tx(team_ids=data.team_ids, tx=tx)
+
+    deleted_teams: Final[_DeletedTeamsResult] = {"deleted_teams": data.team_ids}
 
     # Evict AFTER the rows are gone. Both writers of these keys (`_cache_team_object` and
     # `get_team_object_by_alias`) hydrate from the db, so evicting first leaves a window where a
@@ -3871,12 +4033,6 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-
-    # Sweep again now the team is gone. A `/team/member_add` that landed between the first sweep
-    # and the delete would have re-appended the reference; an add still in flight sees the row
-    # missing under its own row lock and sweeps what it wrote. Both passes are idempotent, and
-    # keeping the first one means a failure here still leaves a team the admin can retry deleting.
-    await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
 
     for deleted_team in team_rows:
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
@@ -3904,6 +4060,16 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
         _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
 
     _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
+
+
+async def _sweep_deleted_team_references_tx(team_ids: Sequence[str], tx: _TeamDeleteTx) -> None:
+    """Same sweep as `_sweep_deleted_team_references`, run on the transaction that holds
+    every id's advisory lock and deletes the team rows, so it commits or rolls back with them."""
+    for team_id in team_ids:
+        _ = await tx.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+
+    membership_filter: Final[_TeamIdInFilter] = {"team_id": {"in": tuple(team_ids)}}
+    _ = await tx.litellm_teammembership.delete_many(where=membership_filter)
 
 
 async def _invalidate_deleted_key_cache(

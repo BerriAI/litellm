@@ -478,10 +478,10 @@ def test_generic_cost_per_token_minimax_m3_above_512k_tokens(_local_model_cost_m
     ],
 )
 def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(_local_model_cost_map, model):
-    """Bedrock GPT-5.6 supports a 1M context window, billed at the long-context rates above 272K."""
+    """Bedrock GPT-5.6 enforces a 1,050,000-token context window, billed at the long-context rates above 272K."""
 
     model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["max_input_tokens"] == 1000000
+    assert model_cost_map["max_input_tokens"] == 1050000
 
     cached_tokens = 100000
     completion_tokens = 1000
