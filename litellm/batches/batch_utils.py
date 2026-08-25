@@ -296,6 +296,32 @@ def calculate_vertex_ai_batch_cost_and_usage(
     )
 
 
+def _provider_output_file_id(output_file_id: str) -> str:
+    """
+    Resolve the file id the provider actually knows: unified ids yield their embedded
+    llm_output_file_id, model-encoded ids decode to the raw provider id, raw ids pass through.
+    """
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        _is_base64_encoded_unified_file_id,
+        get_original_file_id,
+    )
+
+    unified_file_id: Final = _is_base64_encoded_unified_file_id(output_file_id)
+    if not unified_file_id:
+        return get_original_file_id(output_file_id)
+    try:
+        extracted: Final = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+    except (IndexError, AttributeError) as e:
+        verbose_logger.error(
+            "Failed to extract LLM output file ID from unified file ID: %s, error: %s",
+            output_file_id,
+            e,
+        )
+        return output_file_id
+    verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", extracted)
+    return extracted
+
+
 async def _fetch_batch_output_file_content(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
@@ -311,23 +337,11 @@ async def _fetch_batch_output_file_content(
                        Required for Azure and other providers that need authentication
     """
     from litellm.files.main import afile_content
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
-    )
 
     if batch.output_file_id is None:
         raise ValueError("Output file id is None cannot retrieve file content")
 
-    file_id = batch.output_file_id
-    is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(file_id)
-    if is_base64_unified_file_id:
-        try:
-            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-            verbose_logger.debug("Extracted LLM output file ID from unified file ID: %s", file_id)
-        except (IndexError, AttributeError) as e:
-            verbose_logger.error(
-                "Failed to extract LLM output file ID from unified file ID: %s, error: %s", batch.output_file_id, e
-            )
+    file_id: Final = _provider_output_file_id(batch.output_file_id)
 
     # Build kwargs for afile_content with credentials from litellm_params
     file_content_kwargs: Final = {

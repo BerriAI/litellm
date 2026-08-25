@@ -1,6 +1,5 @@
 import copy
 import logging
-import sys
 import time
 from datetime import datetime
 from unittest import mock
@@ -12,9 +11,6 @@ from litellm.types.utils import StandardCallbackDynamicParams
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -1022,17 +1018,14 @@ def test_convert_model_response_object():
         "hidden_params": None,
     }
 
-    try:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # bare Exception() with attributes, so str(e) is empty
         litellm.convert_to_model_response_object(**args)
-        pytest.fail("Expected this to fail")
-    except Exception as e:
-        assert hasattr(e, "status_code")
-        assert e.status_code == 400
-        assert hasattr(e, "message")
-        assert (
-            e.message
-            == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
-        )
+    e = exc_info.value
+    assert e.status_code == 400
+    assert (
+        e.message
+        == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
+    )
 
 
 @pytest.mark.parametrize(
@@ -2147,7 +2140,7 @@ def test_validate_user_messages_invalid_content_type():
 
     messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Please ensure all messages are valid OpenAI chat completion') as e:
         validate_chat_completion_user_messages(messages)
 
     assert "Invalid message" in str(e)

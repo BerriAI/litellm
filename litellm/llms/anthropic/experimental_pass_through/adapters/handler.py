@@ -21,6 +21,7 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    local_model_name,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -358,9 +359,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         except Exception:
             pass
 
-        if isinstance(model, str) and model and not model.startswith("responses/"):
-            # Prefix model with "responses/" to route to OpenAI Responses API
-            completion_kwargs["model"] = f"responses/{model}"
+        if isinstance(model, str) and model and "responses/" not in model:
+            local_model: Final = model.removeprefix(f"{custom_llm_provider}/")
+            completion_kwargs["model"] = f"{custom_llm_provider}/responses/{local_model}"
 
         auto_summary: Final = is_reasoning_auto_summary_enabled()
 
@@ -616,7 +617,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
@@ -750,7 +751,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,

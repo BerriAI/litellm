@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 
 # NOTE: do NOT patch sys.modules["prisma"] file-wide via an autouse fixture.

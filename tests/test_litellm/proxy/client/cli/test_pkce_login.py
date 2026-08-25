@@ -622,7 +622,7 @@ def test_fresh_api_key_never_hands_out_a_rotated_key_it_could_not_save():
     def save(_record):
         raise OSError("disk full")
 
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="disk full"):
         _fresh(STORED, save, http, now=lambda: 999_950.0)
 
 

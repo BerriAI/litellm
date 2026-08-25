@@ -161,6 +161,58 @@ def _get_all_migrations():
     return results
 
 
+_LINE_COMMENT = re.compile(r"--.*$")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+_PRE_GUARD_MIGRATIONS = frozenset({
+    "20260331000000_add_prompt_environment_and_created_by",
+    "20260418000000_add_adaptive_router_tables",
+    "20260429161855_workflow_runs_tables",
+    "20260605182307_add_timeout_to_mcp_server_table",
+    "20260626120000_add_mcp_tool_search_enabled",
+    "20260629000000_add_max_concurrent_requests_to_mcp_server_table",
+    "20260710000000_add_dcr_bridge_to_mcp_server_table",
+    "20260713230852_add_key_type_to_litellm_verification_token",
+    "20260811172448_add_shadow_eval",
+    "20260813180408_add_shadow_eval_direction",
+    "20260814000000_add_proxy_worker_heartbeat",
+    "20260817143646_add_daily_guardrail_usage_units",
+    "20260818224500_add_shadow_eval_stopped_by",
+    "20260819000000_shadow_eval_max_budget",
+})
+
+
+def _blanked_block_comments(sql):
+    """`sql` with every `/* ... */` body blanked out, newlines kept so lines still count.
+
+    Prisma opens a destructive migration with a `/* Warnings: You are about to drop the
+    column ... */` header, which is prose about the statement rather than the statement.
+    """
+    return _BLOCK_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), sql)
+
+
+def _statements(sql):
+    """(line_number, sql) for each line, with comments removed.
+
+    Prisma writes its own explanations as `-- CREATE INDEX CONCURRENTLY ...`, which a
+    raw-line scan reads as the statement it is describing.
+    """
+    return [
+        (number, _LINE_COMMENT.sub("", line))
+        for number, line in enumerate(_blanked_block_comments(sql).splitlines(), 1)
+    ]
+
+
+def _guarded_migrations(all_migrations):
+    """Migrations the DDL rules apply to. Prisma checksums an applied migration, so the
+    ones that predate these rules cannot be edited without breaking `migrate deploy`
+    for existing installs; they are named once, and the rules bind everything after.
+    """
+    return [
+        (name, sql) for name, sql in all_migrations if name not in _PRE_GUARD_MIGRATIONS
+    ]
+
+
 class TestMigrationSQLIdempotency:
     """Ensure all migration SQL files use idempotent DDL (IF [NOT] EXISTS).
 
@@ -181,8 +233,8 @@ class TestMigrationSQLIdempotency:
     def test_create_table_uses_if_not_exists(self, all_migrations):
         """CREATE TABLE statements must use IF NOT EXISTS"""
         violations = []
-        for migration_name, sql in all_migrations:
-            for line_num, line in enumerate(sql.splitlines(), 1):
+        for migration_name, sql in _guarded_migrations(all_migrations):
+            for line_num, line in _statements(sql):
                 if re.search(
                     r"CREATE\s+TABLE\s+", line, re.IGNORECASE
                 ) and not re.search(
@@ -198,8 +250,8 @@ class TestMigrationSQLIdempotency:
     def test_add_column_uses_if_not_exists(self, all_migrations):
         """ADD COLUMN statements must use IF NOT EXISTS"""
         violations = []
-        for migration_name, sql in all_migrations:
-            for line_num, line in enumerate(sql.splitlines(), 1):
+        for migration_name, sql in _guarded_migrations(all_migrations):
+            for line_num, line in _statements(sql):
                 if re.search(r"ADD\s+COLUMN\s+", line, re.IGNORECASE) and not re.search(
                     r"ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS", line, re.IGNORECASE
                 ):
@@ -212,8 +264,8 @@ class TestMigrationSQLIdempotency:
     def test_drop_column_uses_if_exists(self, all_migrations):
         """DROP COLUMN statements must use IF EXISTS"""
         violations = []
-        for migration_name, sql in all_migrations:
-            for line_num, line in enumerate(sql.splitlines(), 1):
+        for migration_name, sql in _guarded_migrations(all_migrations):
+            for line_num, line in _statements(sql):
                 if re.search(
                     r"DROP\s+COLUMN\s+", line, re.IGNORECASE
                 ) and not re.search(
@@ -239,7 +291,7 @@ class TestMigrationSQLIdempotency:
         for migration_name, sql in all_migrations:
             if migration_name in self._DROP_COLUMN_ALLOWLIST:
                 continue
-            for line_num, line in enumerate(sql.splitlines(), 1):
+            for line_num, line in _statements(sql):
                 if re.search(r"DROP\s+COLUMN", line, re.IGNORECASE):
                     violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
         assert (
@@ -251,8 +303,8 @@ class TestMigrationSQLIdempotency:
     def test_drop_index_uses_if_exists(self, all_migrations):
         """DROP INDEX statements must use IF EXISTS"""
         violations = []
-        for migration_name, sql in all_migrations:
-            for line_num, line in enumerate(sql.splitlines(), 1):
+        for migration_name, sql in _guarded_migrations(all_migrations):
+            for line_num, line in _statements(sql):
                 if re.search(r"DROP\s+INDEX\s+", line, re.IGNORECASE) and not re.search(
                     r"DROP\s+INDEX\s+IF\s+EXISTS", line, re.IGNORECASE
                 ):
@@ -266,8 +318,8 @@ class TestMigrationSQLIdempotency:
     def test_create_index_uses_if_not_exists(self, all_migrations):
         """CREATE INDEX statements must use IF NOT EXISTS"""
         violations = []
-        for migration_name, sql in all_migrations:
-            for line_num, line in enumerate(sql.splitlines(), 1):
+        for migration_name, sql in _guarded_migrations(all_migrations):
+            for line_num, line in _statements(sql):
                 if re.search(
                     r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+", line, re.IGNORECASE
                 ) and not re.search(
@@ -284,10 +336,9 @@ class TestMigrationSQLIdempotency:
     def test_rename_column_is_guarded(self, all_migrations):
         """RENAME COLUMN must be inside a DO $$ IF EXISTS block"""
         violations = []
-        for migration_name, sql in all_migrations:
-            lines = sql.splitlines()
+        for migration_name, sql in _guarded_migrations(all_migrations):
             in_do_block = False
-            for line_num, line in enumerate(lines, 1):
+            for line_num, line in _statements(sql):
                 if re.search(r"DO\s+\$\$", line, re.IGNORECASE):
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
@@ -305,10 +356,9 @@ class TestMigrationSQLIdempotency:
     def test_add_constraint_is_guarded(self, all_migrations):
         """ADD CONSTRAINT must be inside a DO $$ IF NOT EXISTS block"""
         violations = []
-        for migration_name, sql in all_migrations:
-            lines = sql.splitlines()
+        for migration_name, sql in _guarded_migrations(all_migrations):
             in_do_block = False
-            for line_num, line in enumerate(lines, 1):
+            for line_num, line in _statements(sql):
                 if re.search(r"DO\s+\$\$", line, re.IGNORECASE):
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
@@ -326,10 +376,9 @@ class TestMigrationSQLIdempotency:
     def test_drop_constraint_is_guarded(self, all_migrations):
         """DROP CONSTRAINT must be inside a DO $$ IF EXISTS block"""
         violations = []
-        for migration_name, sql in all_migrations:
-            lines = sql.splitlines()
+        for migration_name, sql in _guarded_migrations(all_migrations):
             in_do_block = False
-            for line_num, line in enumerate(lines, 1):
+            for line_num, line in _statements(sql):
                 if re.search(r"DO\s+\$\$", line, re.IGNORECASE):
                     in_do_block = True
                 if re.search(r"END\s+\$\$", line, re.IGNORECASE):
@@ -343,3 +392,86 @@ class TestMigrationSQLIdempotency:
             "DROP CONSTRAINT without DO $$ IF EXISTS guard found in migrations:\n"
             + "\n".join(violations)
         )
+
+
+class TestMigrationGuardScope:
+    """The guard must ignore SQL comments, exempt only the named pre-guard migrations,
+    and still fail on a new migration that uses bare DDL."""
+
+    _NEW = "20990101000000_a_new_migration"
+
+    def _run_rules(self, migrations):
+        suite = TestMigrationSQLIdempotency()
+        failures = []
+        for name in (
+            "test_create_table_uses_if_not_exists",
+            "test_add_column_uses_if_not_exists",
+            "test_create_index_uses_if_not_exists",
+            "test_add_constraint_is_guarded",
+        ):
+            try:
+                getattr(suite, name)(migrations)
+            except AssertionError:
+                failures.append(name)
+        return failures
+
+    def test_a_comment_describing_ddl_is_not_the_ddl(self):
+        sql = '-- CREATE TABLE "Foo" (id TEXT);\n-- ADD COLUMN "bar" TEXT;\n'
+        assert self._run_rules([(self._NEW, sql)]) == []
+
+    def test_a_prisma_warning_block_is_not_the_ddl_it_describes(self):
+        sql = (
+            "/*\n"
+            "  Warnings:\n"
+            "\n"
+            "  - You are about to CREATE TABLE \"Foo\" and ADD COLUMN \"bar\".\n"
+            "\n"
+            "*/\n"
+            'CREATE TABLE IF NOT EXISTS "Foo" (id TEXT);\n'
+        )
+        assert self._run_rules([(self._NEW, sql)]) == []
+
+    def test_a_block_comment_does_not_shift_the_reported_line(self):
+        sql = "/* filler\nfiller */\n" + 'CREATE TABLE "Foo" (id TEXT);\n'
+        suite = TestMigrationSQLIdempotency()
+        with pytest.raises(AssertionError) as failure:
+            suite.test_create_table_uses_if_not_exists([(self._NEW, sql)])
+        assert f"{self._NEW}:3:" in str(failure.value)
+
+    def test_a_new_migration_with_bare_create_table_fails(self):
+        assert "test_create_table_uses_if_not_exists" in self._run_rules(
+            [(self._NEW, 'CREATE TABLE "Foo" (id TEXT);\n')]
+        )
+
+    def test_a_new_migration_with_bare_add_column_fails(self):
+        assert "test_add_column_uses_if_not_exists" in self._run_rules(
+            [(self._NEW, 'ALTER TABLE "Foo" ADD COLUMN "bar" TEXT;\n')]
+        )
+
+    def test_the_guarded_forms_pass(self):
+        sql = (
+            'CREATE TABLE IF NOT EXISTS "Foo" (id TEXT);\n'
+            'ALTER TABLE "Foo" ADD COLUMN IF NOT EXISTS "bar" TEXT;\n'
+            'CREATE INDEX IF NOT EXISTS "Foo_bar_idx" ON "Foo"("bar");\n'
+        )
+        assert self._run_rules([(self._NEW, sql)]) == []
+
+    def test_a_pre_guard_migration_is_exempt_but_a_new_one_is_not(self):
+        bare = 'CREATE TABLE "Foo" (id TEXT);\n'
+        exempt = sorted(_PRE_GUARD_MIGRATIONS)[0]
+        assert self._run_rules([(exempt, bare)]) == []
+        assert self._run_rules([(self._NEW, bare)]) != []
+
+    def test_every_pre_guard_migration_still_exists_on_disk(self):
+        present = {name for name, _ in _get_all_migrations()}
+        missing = _PRE_GUARD_MIGRATIONS - present
+        assert not missing, f"pre-guard entries naming no migration: {sorted(missing)}"
+
+    def test_no_pre_guard_entry_is_already_clean(self):
+        by_name = dict(_get_all_migrations())
+        redundant = [
+            name
+            for name in sorted(_PRE_GUARD_MIGRATIONS)
+            if not self._run_rules([(TestMigrationGuardScope._NEW, by_name[name])])
+        ]
+        assert not redundant, f"these no longer violate and should be removed: {redundant}"

@@ -46,7 +46,7 @@ def test_langflow_config_get_complete_url():
 
 def test_langflow_config_get_complete_url_requires_api_base():
     config = LangFlowConfig()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='api_base is required for LangFlow\\. Set it via'):
         config.get_complete_url(
             api_base=None,
             api_key=None,

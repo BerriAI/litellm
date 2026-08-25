@@ -5,7 +5,7 @@ import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useForm } from "react-hook-form";
 import { userFilterUICall } from "@/components/networking";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import {

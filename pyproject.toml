@@ -67,8 +67,8 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.88",
-    "litellm-enterprise==0.1.58",
+    "litellm-proxy-extras==0.4.89",
+    "litellm-enterprise==0.1.59",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -341,9 +341,13 @@ filterwarnings = [
 paths_to_mutate = [
     "litellm/proxy/management_endpoints/",
 ]
+# Only the unit tier that maps to paths_to_mutate. mutmut times and
+# coverage-maps this whole set once before mutating, so a tier that needs a
+# seeded database (tests/proxy_behavior/) kills the run before it starts, and
+# a mutation score is only meaningful against the tests that claim to cover
+# the mutated code anyway.
 tests_dir = [
     "tests/test_litellm/proxy/management_endpoints/",
-    "tests/proxy_behavior/management/",
 ]
 also_copy = [
     "litellm/",
@@ -360,10 +364,16 @@ mutate_only_covered_lines = true
 # - rerunning a "failed" test on a mutant would mask which mutants are killed
 #   vs. survive, so reruns are wrong for mutation testing regardless.
 # - xdist is unnecessary inside mutmut (mutmut handles its own parallelism).
+# test_saml_sso.py cannot run inside mutmut's mutants/ sandbox: the copied tree
+# re-imports cryptography's hash classes under a second identity, so x509 .sign()
+# rejects the SHA256 instance the fixture builds with "Algorithm must be a
+# registered hash algorithm". Nothing to do with mutation coverage, and one
+# erroring test is enough to end the stats phase before any mutant runs.
 pytest_add_cli_args = [
     "-p", "no:retry",
     "-p", "no:rerunfailures",
     "-p", "no:xdist",
+    "--ignore=tests/test_litellm/proxy/management_endpoints/test_saml_sso.py",
 ]
 
 [tool.coverage.run]

@@ -1,12 +1,10 @@
 import json
 import os
 import stat
-import sys
 import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 import pytest
@@ -84,7 +82,7 @@ class TestPollingErrorSurfacing:
         }
 
         with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='Your litellm CLI is out of date and uses a login flow') as exc_info:
                 _poll_for_ready_data("http://test/sso/cli/poll/sk-legacy")
 
         assert mock_get.call_count == 1
@@ -151,7 +149,7 @@ class TestStartCliSsoFlowErrors:
         mock_response.status_code = 404
 
         with patch("requests.post", return_value=mock_response):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='Either --base-url is wrong, or the proxy is older than') as exc_info:
                 _start_cli_sso_flow("https://old-proxy.example.com")
 
         message = str(exc_info.value)
@@ -167,7 +165,7 @@ class TestStartCliSsoFlowErrors:
         mock_response.json.return_value = {"detail": "Too many CLI login attempts. Try again later."}
 
         with patch("requests.post", return_value=mock_response):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='Too many CLI login attempts\\. Try again later\\.') as exc_info:
                 _start_cli_sso_flow("https://test.example.com")
 
         assert "HTTP 429" in str(exc_info.value)
@@ -183,7 +181,7 @@ class TestStartCliSsoFlowErrors:
         mock_response.text = "<html>Sign in to corporate VPN</html>"
 
         with patch("requests.post", return_value=mock_response):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='A proxy, load balancer, or auth gateway in front of') as exc_info:
                 _start_cli_sso_flow("https://test.example.com")
 
         message = str(exc_info.value)
@@ -197,7 +195,7 @@ class TestStartCliSsoFlowErrors:
         from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
 
         with patch("requests.post", side_effect=requests.ConnectionError("Connection refused")):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='Connection refused\\. Check that the proxy is running') as exc_info:
                 _start_cli_sso_flow("https://unreachable.example.com")
 
         message = str(exc_info.value)

@@ -1,14 +1,10 @@
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 
 @pytest.mark.asyncio
