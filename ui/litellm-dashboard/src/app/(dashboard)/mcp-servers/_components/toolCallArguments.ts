@@ -16,6 +16,12 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 export const resolveSchemaProperty = (prop: InputSchemaProperty): InputSchemaProperty => {
+  // JSON Schema represents a nullable/optional field as a type array (e.g. ["integer", "null"]) -
+  // the shape Pydantic's model_json_schema() emits for Optional[int]. Collapse to the single
+  // non-null type before any caller branches on it.
+  if (Array.isArray(prop.type)) {
+    return { ...prop, type: prop.type.find((t) => t !== "null") ?? prop.type[0] };
+  }
   if (prop.type !== undefined) return prop;
   const members = (prop.anyOf ?? prop.oneOf ?? []).filter((member) => member.type !== "null");
   if (members.length !== 1 || members[0].type === undefined) return prop;
@@ -185,12 +191,17 @@ function buildDefaultValue(declared: InputSchemaProperty | undefined, overrideDe
   if (prop.type === "array") return buildArrayDefault(prop, effectiveDefault);
   if (effectiveDefault !== undefined) return effectiveDefault;
 
+  // A nullable numeric/boolean field (an array "type" on the ORIGINAL declaration) with no
+  // explicit default starts empty rather than a synthetic 0/false: unlike a string's natural ""
+  // default, that value looks user-provided, passes the non-empty submission filter in
+  // buildToolCallArguments, and gets sent to the tool even when the field was never touched.
+  const isNullable = Array.isArray(declared.type);
   switch (prop.type) {
     case "integer":
     case "number":
-      return 0;
+      return isNullable ? undefined : 0;
     case "boolean":
-      return false;
+      return isNullable ? undefined : false;
     default:
       return "";
   }
@@ -199,7 +210,11 @@ function buildDefaultValue(declared: InputSchemaProperty | undefined, overrideDe
 export const initialArgumentValues = (fields: readonly ToolArgumentField[]): unknown[] =>
   fields.map(({ prop }) => {
     const resolved = resolveSchemaProperty(prop);
-    const defaultValue = buildDefaultValue(resolved);
+    // Pass the RAW prop, not `resolved` - buildDefaultValue resolves it again internally, and
+    // needs the original `type` (possibly still an array) to know the field is nullable at all.
+    // Passing the pre-resolved (already-scalar) type here would make Array.isArray(declared.type)
+    // always false, silently defeating the nullable-omits-default behavior above.
+    const defaultValue = buildDefaultValue(prop);
     if (isJsonField(resolved)) {
       return isBlank(defaultValue) ? "" : JSON.stringify(defaultValue, null, 2);
     }

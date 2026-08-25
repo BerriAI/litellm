@@ -129,7 +129,8 @@ function convertFormValues(
     }
   });
 
-  const isNestedParams = resolveSchemaType(schema.properties?.params?.type) === "object" && schema.properties?.params?.properties;
+  const isNestedParams =
+    resolveSchemaType(schema.properties?.params?.type) === "object" && schema.properties?.params?.properties;
 
   return isNestedParams ? { params: convertedValues } : convertedValues;
 }
@@ -326,7 +327,9 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                           className="font-mono"
                           placeholder={
                             prop.description ||
-                            (effectiveType === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
+                            (effectiveType === "object"
+                              ? `Enter JSON object for ${key}`
+                              : `Enter JSON array for ${key}`)
                           }
                         />
                       );
