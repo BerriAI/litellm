@@ -1,3 +1,5 @@
+import type { components } from "@/lib/http/schema";
+
 export interface PiiEntity {
   name: string;
   category: string;
@@ -18,28 +20,12 @@ export interface PiiConfigurationProps {
   entityCategories?: PiiEntityCategory[];
 }
 
-export type GuardrailMode =
-  | string
-  | string[]
-  | { tags?: Record<string, string | string[]>; default?: string | string[] | null };
+export type Guardrail = components["schemas"]["GuardrailInfoResponse"];
+export type GuardrailLitellmParams = components["schemas"]["LitellmParams"];
+export type GuardrailMode = GuardrailLitellmParams["mode"];
+export type GuardrailDefinitionLocation = components["schemas"]["GUARDRAIL_DEFINITION_LOCATION"];
 
-export interface Guardrail {
-  guardrail_id: string;
-  guardrail_name: string | null;
-  litellm_params: {
-    guardrail: string;
-    mode: GuardrailMode;
-    default_on: boolean;
-    pii_entities_config?: { [key: string]: string };
-    [key: string]: any;
-  };
-  guardrail_info: Record<string, any> | null;
-  created_at?: string;
-  updated_at?: string;
-  guardrail_definition_location: GuardrailDefinitionLocation;
-}
-
-export enum GuardrailDefinitionLocation {
-  DB = "db",
-  CONFIG = "config",
-}
+export const GuardrailDefinitionLocation = {
+  DB: "db",
+  CONFIG: "config",
+} as const satisfies Record<string, GuardrailDefinitionLocation>;

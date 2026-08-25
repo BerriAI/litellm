@@ -7917,7 +7917,7 @@
           "title": "ApplyGuardrailResponse",
           "type": "object"
         },
-        "BaseLitellmParams-Input": {
+        "BaseLitellmParams": {
           "additionalProperties": true,
           "properties": {
             "additional_provider_specific_params": {
@@ -8121,7 +8121,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if Model Armor encounters an error",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "guard_name": {
@@ -8196,6 +8196,22 @@
               "description": "Optional field if guardrail requires a 'model' parameter",
               "title": "Model"
             },
+            "on_sensitive_data": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "block",
+                    "route"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.",
+              "title": "On Sensitive Data"
+            },
             "on_violation": {
               "anyOf": [
                 {
@@ -8211,6 +8227,19 @@
               ],
               "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
               "title": "On Violation"
+            },
+            "only_scan_new_messages": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.",
+              "title": "Only Scan New Messages"
             },
             "pangea_input_recipe": {
               "anyOf": [
@@ -8275,6 +8304,55 @@
               "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
               "title": "Realtime Violation Message"
             },
+            "run_in_parallel": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call or post_call guardrail runs concurrently with other opted-in guardrails of the same hook, after the sequential guardrails have run. Use only for block-only guardrails that inspect and reject; do not enable it for guardrails that modify the request or response (e.g. PII masking or sensitive-data routing), since parallel runs share one snapshot and their mutations would race.",
+              "title": "Run In Parallel"
+            },
+            "sanitize_error_detail": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": true,
+              "description": "For guardrail='model_armor': omit the raw Model Armor response from caller-facing errors and logs by default. Set False to restore verbose output.",
+              "title": "Sanitize Error Detail"
+            },
+            "scan_only_tool_results": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
+              "title": "Scan Only Tool Results"
+            },
+            "sensitive_data_route_to_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.",
+              "title": "Sensitive Data Route To Model"
+            },
             "severity_threshold": {
               "anyOf": [
                 {
@@ -8296,8 +8374,46 @@
                   "type": "null"
                 }
               ],
-              "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting.",
+              "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting. For Anthropic /v1/messages, the flag applies only to the trusted top-level system prompt. In-sequence system entries are untrusted client input and remain in texts and structured_messages.",
               "title": "Skip System Message In Guardrail"
+            },
+            "skip_tool_message_in_guardrail": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, unified guardrails skip tool-role messages when building evaluation inputs (texts and structured_messages). When False, tool messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_tool_message_in_guardrail setting.",
+              "title": "Skip Tool Message In Guardrail"
+            },
+            "skip_unscannable_attachments": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.",
+              "title": "Skip Unscannable Attachments"
+            },
+            "sticky_session_routing": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": true,
+              "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
+              "title": "Sticky Session Routing"
             },
             "template_id": {
               "anyOf": [
@@ -8311,9 +8427,21 @@
               "description": "The ID of your Model Armor template",
               "title": "Template Id"
             },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.",
+              "title": "Timeout"
+            },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -8337,424 +8465,173 @@
           "title": "BaseLitellmParams",
           "type": "object"
         },
-        "BaseLitellmParams-Output": {
-          "additionalProperties": true,
+        "BedrockChecksConfigModel": {
+          "description": "Inline `checks` config for the resource-less Bedrock InvokeGuardrailChecks API.\n\nInclude only the checks you want to run; at least one must be set.",
           "properties": {
-            "additional_provider_specific_params": {
+            "contentFilter": {
               "anyOf": [
                 {
-                  "additionalProperties": true,
-                  "type": "object"
+                  "$ref": "#/components/schemas/BedrockChecksContentFilterModel"
                 },
                 {
                   "type": "null"
                 }
-              ],
-              "description": "Additional provider-specific parameters for generic guardrail APIs",
-              "title": "Additional Provider Specific Params"
+              ]
             },
-            "api_base": {
+            "promptAttack": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/BedrockChecksPromptAttackModel"
                 },
                 {
                   "type": "null"
                 }
-              ],
-              "description": "Base URL for the guardrail service API",
-              "title": "Api Base"
+              ]
             },
-            "api_endpoint": {
+            "sensitiveInformation": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "$ref": "#/components/schemas/BedrockChecksSensitiveInformationModel"
                 },
                 {
                   "type": "null"
                 }
-              ],
-              "description": "Optional custom API endpoint for Model Armor",
-              "title": "Api Endpoint"
-            },
-            "api_key": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "API key for the guardrail service",
-              "title": "Api Key"
-            },
-            "blocked_words": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/BlockedWord"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "List of blocked words with individual actions",
-              "title": "Blocked Words"
-            },
-            "blocked_words_file": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Path to YAML file containing blocked_words list",
-              "title": "Blocked Words File"
-            },
-            "categories": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/ContentFilterCategoryConfig"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "List of prebuilt categories to enable (harmful_*, bias_*)",
-              "title": "Categories"
-            },
-            "category_thresholds": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/LakeraCategoryThresholds"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Threshold configuration for Lakera guardrail categories"
-            },
-            "credentials": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Path to Google Cloud credentials JSON file or JSON string",
-              "title": "Credentials"
-            },
-            "custom_code": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Python-like code containing the apply_guardrail function for custom guardrail logic",
-              "title": "Custom Code"
-            },
-            "default_on": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Whether the guardrail is enabled by default",
-              "title": "Default On"
-            },
-            "detect_secrets_config": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Configuration for detect-secrets guardrail",
-              "title": "Detect Secrets Config"
-            },
-            "end_session_after_n_fails": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
-              "title": "End Session After N Fails"
-            },
-            "experimental_use_latest_role_message_only": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": false,
-              "description": "When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
-              "title": "Experimental Use Latest Role Message Only"
-            },
-            "extra_headers": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Header names to forward from the client request to the guardrail (e.g. x-request-id). Only these headers' values are sent; others may be omitted or sent as [present]. Used by generic_guardrail_api (similar to MCP extra_headers).",
-              "title": "Extra Headers"
-            },
-            "fail_on_error": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": true,
-              "description": "Whether to fail the request if Model Armor encounters an error",
-              "title": "Fail On Error"
-            },
-            "guard_name": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Name of the guardrail in guardrails.ai",
-              "title": "Guard Name"
-            },
-            "keyword_redaction_tag": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Tag to use for keyword redaction",
-              "title": "Keyword Redaction Tag"
-            },
-            "location": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Google Cloud location/region (e.g., us-central1)",
-              "title": "Location"
-            },
-            "mask_request_content": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Will mask request content if guardrail makes any changes",
-              "title": "Mask Request Content"
-            },
-            "mask_response_content": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Will mask response content if guardrail makes any changes",
-              "title": "Mask Response Content"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Optional field if guardrail requires a 'model' parameter",
-              "title": "Model"
-            },
-            "on_violation": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "warn",
-                    "end_session"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
-              "title": "On Violation"
-            },
-            "pangea_input_recipe": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Recipe for input (LLM request)",
-              "title": "Pangea Input Recipe"
-            },
-            "pangea_output_recipe": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Recipe for output (LLM response)",
-              "title": "Pangea Output Recipe"
-            },
-            "pattern_redaction_format": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Format string for pattern redaction (use {pattern_name} placeholder)",
-              "title": "Pattern Redaction Format"
-            },
-            "patterns": {
-              "anyOf": [
-                {
-                  "items": {
-                    "$ref": "#/components/schemas/ContentFilterPattern"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "List of patterns (prebuilt or custom regex) to detect",
-              "title": "Patterns"
-            },
-            "realtime_violation_message": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
-              "title": "Realtime Violation Message"
-            },
-            "severity_threshold": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Minimum severity to block (high, medium, low)",
-              "title": "Severity Threshold"
-            },
-            "skip_system_message_in_guardrail": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting.",
-              "title": "Skip System Message In Guardrail"
-            },
-            "template_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ID of your Model Armor template",
-              "title": "Template Id"
-            },
-            "unreachable_fallback": {
-              "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
-              "enum": [
-                "fail_closed",
-                "fail_open"
-              ],
-              "title": "Unreachable Fallback",
-              "type": "string"
-            },
-            "violation_message_template": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
-              "title": "Violation Message Template"
+              ]
             }
           },
-          "title": "BaseLitellmParams",
+          "title": "BedrockChecksConfigModel",
+          "type": "object"
+        },
+        "BedrockChecksContentFilterCategoryItem": {
+          "properties": {
+            "category": {
+              "enum": [
+                "VIOLENCE",
+                "HATE",
+                "SEXUAL",
+                "MISCONDUCT",
+                "INSULTS"
+              ],
+              "title": "Category",
+              "type": "string"
+            }
+          },
+          "required": [
+            "category"
+          ],
+          "title": "BedrockChecksContentFilterCategoryItem",
+          "type": "object"
+        },
+        "BedrockChecksContentFilterModel": {
+          "properties": {
+            "categories": {
+              "items": {
+                "$ref": "#/components/schemas/BedrockChecksContentFilterCategoryItem"
+              },
+              "title": "Categories",
+              "type": "array"
+            }
+          },
+          "required": [
+            "categories"
+          ],
+          "title": "BedrockChecksContentFilterModel",
+          "type": "object"
+        },
+        "BedrockChecksPromptAttackCategoryItem": {
+          "properties": {
+            "category": {
+              "enum": [
+                "JAILBREAK",
+                "PROMPT_INJECTION",
+                "PROMPT_LEAKAGE"
+              ],
+              "title": "Category",
+              "type": "string"
+            }
+          },
+          "required": [
+            "category"
+          ],
+          "title": "BedrockChecksPromptAttackCategoryItem",
+          "type": "object"
+        },
+        "BedrockChecksPromptAttackModel": {
+          "properties": {
+            "categories": {
+              "items": {
+                "$ref": "#/components/schemas/BedrockChecksPromptAttackCategoryItem"
+              },
+              "title": "Categories",
+              "type": "array"
+            }
+          },
+          "required": [
+            "categories"
+          ],
+          "title": "BedrockChecksPromptAttackModel",
+          "type": "object"
+        },
+        "BedrockChecksSensitiveInformationEntityItem": {
+          "properties": {
+            "type": {
+              "enum": [
+                "ADDRESS",
+                "AGE",
+                "AWS_ACCESS_KEY",
+                "AWS_SECRET_KEY",
+                "CA_HEALTH_NUMBER",
+                "CA_SOCIAL_INSURANCE_NUMBER",
+                "CREDIT_DEBIT_CARD_CVV",
+                "CREDIT_DEBIT_CARD_EXPIRY",
+                "CREDIT_DEBIT_CARD_NUMBER",
+                "DRIVER_ID",
+                "EMAIL",
+                "INTERNATIONAL_BANK_ACCOUNT_NUMBER",
+                "IP_ADDRESS",
+                "LICENSE_PLATE",
+                "MAC_ADDRESS",
+                "NAME",
+                "PASSWORD",
+                "PHONE",
+                "PIN",
+                "SWIFT_CODE",
+                "UK_NATIONAL_HEALTH_SERVICE_NUMBER",
+                "UK_NATIONAL_INSURANCE_NUMBER",
+                "UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER",
+                "URL",
+                "USERNAME",
+                "US_BANK_ACCOUNT_NUMBER",
+                "US_BANK_ROUTING_NUMBER",
+                "US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER",
+                "US_PASSPORT_NUMBER",
+                "US_SOCIAL_SECURITY_NUMBER",
+                "VEHICLE_IDENTIFICATION_NUMBER"
+              ],
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "BedrockChecksSensitiveInformationEntityItem",
+          "type": "object"
+        },
+        "BedrockChecksSensitiveInformationModel": {
+          "properties": {
+            "entities": {
+              "items": {
+                "$ref": "#/components/schemas/BedrockChecksSensitiveInformationEntityItem"
+              },
+              "title": "Entities",
+              "type": "array"
+            }
+          },
+          "required": [
+            "entities"
+          ],
+          "title": "BedrockChecksSensitiveInformationModel",
           "type": "object"
         },
         "BlockedWord": {
@@ -8787,6 +8664,187 @@
             "action"
           ],
           "title": "BlockedWord",
+          "type": "object"
+        },
+        "CiscoAIDefenseGuardrailConfigModelOptionalParams": {
+          "additionalProperties": true,
+          "description": "Optional parameters for the Cisco AI Defense guardrail.",
+          "properties": {
+            "enabled_rules": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/CiscoAIDefenseRule"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit list of Cisco AI Defense rules to evaluate. If omitted, the policies configured for the API key in the Cisco AI Defense UI are used.",
+              "title": "Enabled Rules"
+            },
+            "fallback_on_error": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "allow",
+                    "block"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "block",
+              "description": "Behaviour when the Cisco AI Defense API is unavailable: 'allow' proceeds without scanning (high availability), 'block' rejects the request (maximum security).",
+              "title": "Fallback On Error"
+            },
+            "inspect_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Override for the inspection endpoint path. Defaults to /api/v1/inspect/chat when inspection_type='chat' and /api/v1/inspect/mcp when inspection_type='mcp'.",
+              "title": "Inspect Path"
+            },
+            "inspection_type": {
+              "default": "chat",
+              "description": "Which Cisco AI Defense inspection surface to use. 'chat' scans LLM model conversations via /api/v1/inspect/chat. 'mcp' scans MCP tool calls via /api/v1/inspect/mcp. Each guardrail instance targets exactly one surface; configure two guardrails to scan both chat and MCP traffic.",
+              "enum": [
+                "chat",
+                "mcp"
+              ],
+              "title": "Inspection Type",
+              "type": "string"
+            },
+            "integration_profile_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration profile id to apply (advanced).",
+              "title": "Integration Profile Id"
+            },
+            "integration_profile_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration profile version to apply (advanced).",
+              "title": "Integration Profile Version"
+            },
+            "integration_tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration tenant id to apply (advanced).",
+              "title": "Integration Tenant Id"
+            },
+            "integration_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Integration type to apply (advanced).",
+              "title": "Integration Type"
+            },
+            "on_flagged_action": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "block",
+              "description": "Action to take when Cisco AI Defense flags content. 'block' raises an HTTPException; 'monitor' logs the detection and lets the request continue.",
+              "title": "On Flagged Action"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "maximum": 60.0,
+                  "minimum": 1.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 10.0,
+              "description": "Timeout (seconds) for Cisco AI Defense API calls (1-60).",
+              "title": "Timeout"
+            }
+          },
+          "title": "CiscoAIDefenseGuardrailConfigModelOptionalParams",
+          "type": "object"
+        },
+        "CiscoAIDefenseRule": {
+          "description": "A single rule to enable for Cisco AI Defense inspection.",
+          "properties": {
+            "entity_types": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional list of entity types for the rule (e.g. 'Email Address', 'Phone Number'). Applies to rules such as PII, PCI, and PHI.",
+              "title": "Entity Types"
+            },
+            "rule_name": {
+              "description": "The canonical Cisco AI Defense rule name to evaluate.",
+              "enum": [
+                "Code Detection",
+                "Harassment",
+                "Hate Speech",
+                "PCI",
+                "PHI",
+                "PII",
+                "Prompt Injection",
+                "Profanity",
+                "Sexual Content & Exploitation",
+                "Social Division & Polarization",
+                "Violence & Public Safety Threats"
+              ],
+              "title": "Rule Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rule_name"
+          ],
+          "title": "CiscoAIDefenseRule",
           "type": "object"
         },
         "ContentFilterAction": {
@@ -8933,106 +8991,6 @@
           "title": "GUARDRAIL_DEFINITION_LOCATION",
           "type": "string"
         },
-        "GraySwanGuardrailConfigModelOptionalParams": {
-          "description": "Optional parameters for the Gray Swan guardrail.",
-          "properties": {
-            "categories": {
-              "anyOf": [
-                {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Default Gray Swan category definitions to send with each request.",
-              "title": "Categories"
-            },
-            "fail_open": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": true,
-              "description": "If true (default), errors contacting Gray Swan are logged and the request proceeds. If false, errors propagate and block the request.",
-              "title": "Fail Open"
-            },
-            "guardrail_timeout": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": 30.0,
-              "description": "Timeout in seconds for calling the Gray Swan guardrail service.",
-              "title": "Guardrail Timeout"
-            },
-            "on_flagged_action": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": "passthrough",
-              "description": "Action when a violation is detected: 'block' rejects the call (400 error), 'monitor' logs only, 'passthrough' replaces response content with violation message (200 status).",
-              "title": "On Flagged Action"
-            },
-            "policy_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Gray Swan policy identifier to apply during monitoring.",
-              "title": "Policy Id"
-            },
-            "reasoning_mode": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Gray Swan reasoning mode override. Accepted values: 'off', 'hybrid', 'thinking'.",
-              "title": "Reasoning Mode"
-            },
-            "violation_threshold": {
-              "anyOf": [
-                {
-                  "maximum": 1.0,
-                  "minimum": 0.0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": 0.5,
-              "description": "Threshold between 0 and 1 at which Gray Swan violations trigger the configured action.",
-              "title": "Violation Threshold"
-            }
-          },
-          "title": "GraySwanGuardrailConfigModelOptionalParams",
-          "type": "object"
-        },
         "Guardrail": {
           "properties": {
             "created_at": {
@@ -9156,7 +9114,7 @@
             "litellm_params": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/BaseLitellmParams-Output"
+                  "$ref": "#/components/schemas/LitellmParams"
                 },
                 {
                   "type": "null"
@@ -9506,7 +9464,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Base URL for the Lakera AI API",
+              "description": "Regional base URL for the Cisco AI Defense Inspection API. Defaults to https://us.api.inspect.aidefense.security.cisco.com. Supported regions: us (us-west-2), ap (ap-ne-1), eu (eu-central-1). The environment variable `CISCO_AI_DEFENSE_API_BASE` is consulted as a fallback. The endpoint path is derived from inspection_type (/api/v1/inspect/chat for 'chat', /api/v1/inspect/mcp for 'mcp').",
               "title": "Api Base"
             },
             "api_endpoint": {
@@ -9542,7 +9500,7 @@
                   "type": "null"
                 }
               ],
-              "description": "API key for the Lakera AI service",
+              "description": "API key for the Cisco AI Defense inspection endpoint. If not provided, the `CISCO_AI_DEFENSE_API_KEY` environment variable is used. Sent in the `X-Cisco-AI-Defense-API-Key` header. Both the chat and MCP endpoints use this key.",
               "title": "Api Key"
             },
             "api_version": {
@@ -9596,6 +9554,18 @@
               ],
               "description": "Custom assertions to validate against the output. Each assertion is a string describing a condition.",
               "title": "Assertions"
+            },
+            "asset_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Repello asset ID whose dashboard policies are enforced. Required; the guardrail raises at init if it is missing.",
+              "title": "Asset Id"
             },
             "async_mode": {
               "anyOf": [
@@ -9887,6 +9857,24 @@
               ],
               "description": "Threshold configuration for Lakera guardrail categories"
             },
+            "checks": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/BedrockChecksConfigModel"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier."
+            },
+            "chunk_budget_chars": {
+              "default": 25000,
+              "description": "ApplyGuardrail: batch size, in characters, used to re-send content after AWS has rejected a request as too large. Requests AWS accepts are always sent in a single call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS still rejects is bisected automatically, so this value only trades round trips against batch size and cannot fail a request on its own.",
+              "exclusiveMinimum": 0.0,
+              "title": "Chunk Budget Chars",
+              "type": "integer"
+            },
             "confidence_threshold": {
               "default": 0.5,
               "default_value": 0.5,
@@ -9912,6 +9900,21 @@
               ],
               "description": "Additional configuration for the guardrail",
               "title": "Config"
+            },
+            "content_filter_threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.5,
+              "description": "InvokeGuardrailChecks: block when any contentFilter severityScore >= this value (scores are in [0,1]). Set to null to make the content filter detect-only (logged, never blocks).",
+              "title": "Content Filter Threshold"
             },
             "content_moderation_check": {
               "anyOf": [
@@ -9948,6 +9951,18 @@
               ],
               "description": "Python-like code containing the apply_guardrail function for custom guardrail logic",
               "title": "Custom Code"
+            },
+            "deepkeep_firewall_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The DeepKeep Firewall ID to use for guardrail evaluation. If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked.",
+              "title": "Deepkeep Firewall Id"
             },
             "default_action": {
               "default": "deny",
@@ -10115,7 +10130,7 @@
                 }
               ],
               "default": true,
-              "description": "Whether to fail the request if Model Armor encounters an error",
+              "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
             "grounding_check": {
@@ -10388,7 +10403,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Optional field if guardrail requires a 'model' parameter",
+              "description": "Model name forwarded to the headroom /v1/compress endpoint.",
               "title": "Model"
             },
             "monitor_mode": {
@@ -10443,6 +10458,22 @@
               "description": "Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
               "title": "On Flagged Action"
             },
+            "on_sensitive_data": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "block",
+                    "route"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.",
+              "title": "On Sensitive Data"
+            },
             "on_violation": {
               "anyOf": [
                 {
@@ -10459,10 +10490,23 @@
               "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
               "title": "On Violation"
             },
+            "only_scan_new_messages": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.",
+              "title": "Only Scan New Messages"
+            },
             "optional_params": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/GraySwanGuardrailConfigModelOptionalParams"
+                  "$ref": "#/components/schemas/CiscoAIDefenseGuardrailConfigModelOptionalParams"
                 },
                 {
                   "type": "null"
@@ -10571,6 +10615,21 @@
               "description": "Enable PII (Personally Identifiable Information) detection.",
               "title": "Pii Check"
             },
+            "pii_confidence_threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.5,
+              "description": "InvokeGuardrailChecks: block when any sensitiveInformation confidenceScore >= this value (scores are in [0,1]). Set to null to make PII detection detect-only.",
+              "title": "Pii Confidence Threshold"
+            },
             "pii_entities_config": {
               "anyOf": [
                 {
@@ -10633,6 +10692,30 @@
               ],
               "title": "Policy Names",
               "ui_type": "multiselect"
+            },
+            "post_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Post-checkpoint ID for the Ovalix Tracker service.",
+              "title": "Post Checkpoint Id"
+            },
+            "pre_checkpoint_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pre-checkpoint ID for the Ovalix Tracker service.",
+              "title": "Pre Checkpoint Id"
             },
             "presidio_ad_hoc_recognizers": {
               "anyOf": [
@@ -10766,6 +10849,21 @@
               "description": "Project ID for the Lakera AI project",
               "title": "Project Id"
             },
+            "prompt_attack_threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.5,
+              "description": "InvokeGuardrailChecks: block when any promptAttack severityScore >= this value (scores are in [0,1]). Set to null to make prompt-attack detection detect-only.",
+              "title": "Prompt Attack Threshold"
+            },
             "prompt_injections": {
               "anyOf": [
                 {
@@ -10804,6 +10902,43 @@
               ],
               "description": "Ordered allow/deny rules. Patterns use regex for tool names/types and optional regex constraints on tool arguments.",
               "title": "Rules"
+            },
+            "run_in_parallel": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, this pre_call or post_call guardrail runs concurrently with other opted-in guardrails of the same hook, after the sequential guardrails have run. Use only for block-only guardrails that inspect and reject; do not enable it for guardrails that modify the request or response (e.g. PII masking or sensitive-data routing), since parallel runs share one snapshot and their mutations would race.",
+              "title": "Run In Parallel"
+            },
+            "sanitize_error_detail": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": true,
+              "description": "For guardrail='model_armor': omit the raw Model Armor response from caller-facing errors and logs by default. Set False to restore verbose output.",
+              "title": "Sanitize Error Detail"
+            },
+            "scan_only_tool_results": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.",
+              "title": "Scan Only Tool Results"
             },
             "send_user_api_key_alias": {
               "anyOf": [
@@ -10844,6 +10979,18 @@
               "description": "Whether to send user_API_key_user_id in headers",
               "title": "Send User Api Key User Id"
             },
+            "sensitive_data_route_to_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. This is typically an on-premise model for data privacy. The routing decision persists for the entire session.",
+              "title": "Sensitive Data Route To Model"
+            },
             "severity_threshold": {
               "anyOf": [
                 {
@@ -10856,6 +11003,54 @@
               "description": "Minimum severity to block (high, medium, low)",
               "title": "Severity Threshold"
             },
+            "singulr_api_base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Singulr API base URL. Get base URL from Singulr Platform.",
+              "title": "Singulr Api Base"
+            },
+            "singulr_api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Singulr API key. Generate API key from Singulr Platform.",
+              "title": "Singulr Api Key"
+            },
+            "singulr_application_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Singulr application ID. Get application ID from Singulr Platform.",
+              "title": "Singulr Application Id"
+            },
+            "singulr_guardrail_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Singulr Guardrail ID. Get guardrail ID from Singulr Platform.",
+              "title": "Singulr Guardrail Id"
+            },
             "skip_system_message_in_guardrail": {
               "anyOf": [
                 {
@@ -10865,8 +11060,46 @@
                   "type": "null"
                 }
               ],
-              "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting.",
+              "description": "When True, unified guardrails skip system-role messages when building evaluation inputs (texts and structured_messages). When False, system messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_system_message_in_guardrail setting. For Anthropic /v1/messages, the flag applies only to the trusted top-level system prompt. In-sequence system entries are untrusted client input and remain in texts and structured_messages.",
               "title": "Skip System Message In Guardrail"
+            },
+            "skip_tool_message_in_guardrail": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, unified guardrails skip tool-role messages when building evaluation inputs (texts and structured_messages). When False, tool messages are included even if litellm_settings sets a global skip. When None, use the global litellm.skip_tool_message_in_guardrail setting.",
+              "title": "Skip Tool Message In Guardrail"
+            },
+            "skip_unscannable_attachments": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.",
+              "title": "Skip Unscannable Attachments"
+            },
+            "sticky_session_routing": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": true,
+              "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
+              "title": "Sticky Session Routing"
             },
             "template_id": {
               "anyOf": [
@@ -10880,6 +11113,18 @@
               "description": "The ID of your Model Armor template",
               "title": "Template Id"
             },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.",
+              "title": "Timeout"
+            },
             "tool_selection_quality_check": {
               "anyOf": [
                 {
@@ -10892,9 +11137,33 @@
               "description": "Enable tool selection quality check to evaluate quality of tool/function calls.",
               "title": "Tool Selection Quality Check"
             },
+            "tracker_api_base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Base URL for the Ovalix Tracker service.",
+              "title": "Tracker Api Base"
+            },
+            "tracker_api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "API key for the Ovalix Tracker service.",
+              "title": "Tracker Api Key"
+            },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "What to do when Akto is unreachable. 'fail_open' = allow, 'fail_closed' = block.",
+              "description": "Behavior when the headroom compression service is unreachable or errors. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and forwards the request uncompressed instead of blocking it.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -11046,7 +11315,7 @@
             "litellm_params": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/BaseLitellmParams-Input"
+                  "$ref": "#/components/schemas/BaseLitellmParams"
                 },
                 {
                   "type": "null"
@@ -11086,6 +11355,9 @@
             "US_SSN",
             "UK_NHS",
             "UK_NINO",
+            "UK_PASSPORT",
+            "UK_POSTCODE",
+            "UK_VEHICLE_REGISTRATION",
             "ES_NIF",
             "ES_NIE",
             "IT_FISCAL_CODE",
@@ -11789,6 +12061,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [

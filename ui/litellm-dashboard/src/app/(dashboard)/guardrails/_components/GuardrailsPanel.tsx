@@ -96,7 +96,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   };
 
   const handleDeleteConfirm = async () => {
-    if (!guardrailToDelete || !accessToken) return;
+    if (!guardrailToDelete?.guardrail_id || !accessToken) return;
 
     setIsDeleting(true);
     try {
@@ -211,10 +211,10 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   { label: "Name", value: guardrailToDelete?.guardrail_name },
                   { label: "ID", value: guardrailToDelete?.guardrail_id, code: true },
                   { label: "Provider", value: providerDisplayName },
-                  { label: "Mode", value: formatGuardrailMode(guardrailToDelete?.litellm_params.mode) },
+                  { label: "Mode", value: formatGuardrailMode(guardrailToDelete?.litellm_params?.mode) },
                   {
                     label: "Default On",
-                    value: guardrailToDelete?.litellm_params.default_on ? "Yes" : "No",
+                    value: guardrailToDelete?.litellm_params?.default_on ? "Yes" : "No",
                   },
                 ]}
                 onCancel={handleDeleteCancel}

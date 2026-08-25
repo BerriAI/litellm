@@ -68,6 +68,32 @@ describe("CustomCodeModal", () => {
     expect(screen.getByRole("button", { name: /update guardrail/i })).toBeInTheDocument();
   });
 
+  it("should seed the mode chips from a tag-based mode and leave it untouched on update", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      editData: {
+        guardrail_id: "g-1",
+        guardrail_name: "tagged-guardrail",
+        litellm_params: {
+          mode: { tags: { "Service-Type: internal-service": "post_call" }, default: ["pre_call"] },
+          default_on: true,
+          custom_code: "def apply_guardrail(): pass",
+        },
+      },
+    });
+
+    expect(await screen.findByLabelText("pre_call (Request)")).toBeInTheDocument();
+    expect(screen.getByLabelText("post_call (Response)")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /update guardrail/i }));
+
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
+    });
+    const [, , payload] = mockUpdate.mock.calls[0] as [string, string, { litellm_params: Record<string, unknown> }];
+    expect(payload.litellm_params).not.toHaveProperty("mode");
+  });
+
   it("should keep save disabled until a guardrail name is entered", async () => {
     const user = userEvent.setup();
     renderModal();

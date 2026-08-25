@@ -15,6 +15,7 @@ import {
   skipToolMessageToChoice,
   choiceToSkipToolForCreate,
   formatGuardrailMode,
+  guardrailModeList,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -208,6 +209,29 @@ describe("guardrail_info_helpers", () => {
 
       expect(result.displayName).toBe("RepelloAI Argus");
       expect(result.logo).toContain("repelloai.png");
+    });
+  });
+
+  describe("guardrailModeList", () => {
+    it("wraps a single mode and passes a list through", () => {
+      expect(guardrailModeList("pre_call")).toEqual(["pre_call"]);
+      expect(guardrailModeList(["pre_call", "post_call"])).toEqual(["pre_call", "post_call"]);
+    });
+
+    it("flattens a tag-based mode into a deduped list, default modes first", () => {
+      const mode = {
+        tags: { "Service-Type: internal-service": "post_call", "Service-Type: batch": ["during_call", "post_call"] },
+        default: ["pre_call", "post_call"],
+      };
+
+      expect(guardrailModeList(mode)).toEqual(["pre_call", "post_call", "during_call"]);
+    });
+
+    it("returns an empty list for missing or unusable modes", () => {
+      expect(guardrailModeList(undefined)).toEqual([]);
+      expect(guardrailModeList(null)).toEqual([]);
+      expect(guardrailModeList({})).toEqual([]);
+      expect(guardrailModeList({ tags: {}, default: null })).toEqual([]);
     });
   });
 

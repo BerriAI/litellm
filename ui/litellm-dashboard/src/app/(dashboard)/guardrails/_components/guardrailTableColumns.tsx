@@ -50,10 +50,13 @@ function GuardrailRowActions({ guardrail, onDeleteClick }: GuardrailRowActionsPr
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           variant="destructive"
-          disabled={isConfigGuardrail}
+          disabled={isConfigGuardrail || !guardrail.guardrail_id}
           data-testid="guardrail-action-delete"
           title={isConfigGuardrail ? CONFIG_DELETE_HINT : undefined}
-          onClick={() => onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || "Unnamed Guardrail")}
+          onClick={() =>
+            guardrail.guardrail_id &&
+            onDeleteClick(guardrail.guardrail_id, guardrail.guardrail_name || "Unnamed Guardrail")
+          }
         >
           <Trash2 />
           Delete
@@ -81,9 +84,9 @@ export const getGuardrailTableColumns = ({
     enableSorting: true,
     cell: ({ row }) => (
       <IdentityCell
-        title={row.original.guardrail_id}
+        title={row.original.guardrail_id ?? "-"}
         titleClassName="font-mono text-xs font-normal"
-        onClick={() => onGuardrailClick(row.original.guardrail_id)}
+        onClick={() => row.original.guardrail_id && onGuardrailClick(row.original.guardrail_id)}
       />
     ),
   },
@@ -109,7 +112,7 @@ export const getGuardrailTableColumns = ({
     header: "Provider",
     size: 180,
     enableSorting: false,
-    cell: ({ row }) => <GuardrailProviderCell provider={row.original.litellm_params.guardrail} />,
+    cell: ({ row }) => <GuardrailProviderCell provider={row.original.litellm_params?.guardrail ?? ""} />,
   },
   {
     id: "mode",
@@ -118,7 +121,7 @@ export const getGuardrailTableColumns = ({
     size: 130,
     enableSorting: false,
     cell: ({ row }) => {
-      const mode = formatGuardrailMode(row.original.litellm_params.mode);
+      const mode = formatGuardrailMode(row.original.litellm_params?.mode);
       return (
         <span className="font-mono text-xs text-muted-foreground" title={mode || undefined}>
           {mode || "-"}

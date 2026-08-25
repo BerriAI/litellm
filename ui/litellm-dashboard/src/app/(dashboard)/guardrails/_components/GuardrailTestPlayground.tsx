@@ -6,24 +6,11 @@ import { toast } from "@/lib/toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { GuardrailMode } from "@/components/guardrails/types";
+import type { Guardrail } from "@/components/guardrails/types";
 import { formatGuardrailMode } from "./guardrail_info_helpers";
 
-interface GuardrailItem {
-  guardrail_id?: string;
-  guardrail_name: string | null;
-  litellm_params: {
-    guardrail: string;
-    mode: GuardrailMode;
-    default_on: boolean;
-  };
-  guardrail_info: Record<string, any> | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
 interface GuardrailTestPlaygroundProps {
-  guardrailsList: GuardrailItem[];
+  guardrailsList: Guardrail[];
   isLoading: boolean;
   accessToken: string | null;
   onClose: () => void;
@@ -169,12 +156,12 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                         <div className="mt-1 space-y-1 text-xs">
                           <div>
                             <span className="font-medium">Type: </span>
-                            <span className="text-muted-foreground">{guardrail.litellm_params.guardrail}</span>
+                            <span className="text-muted-foreground">{guardrail.litellm_params?.guardrail}</span>
                           </div>
                           <div>
                             <span className="font-medium">Mode: </span>
                             <span className="text-muted-foreground">
-                              {formatGuardrailMode(guardrail.litellm_params.mode)}
+                              {formatGuardrailMode(guardrail.litellm_params?.mode)}
                             </span>
                           </div>
                         </div>

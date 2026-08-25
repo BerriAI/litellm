@@ -110,15 +110,20 @@ export const toModeArray = (raw: unknown): string[] => {
   return [];
 };
 
-export const formatGuardrailMode = (raw: unknown): string => {
-  const flat: string[] = toModeArray(raw);
-  if (flat.length > 0) return flat.join(", ");
-  if (raw === null || typeof raw !== "object") return "";
+export const isTagBasedMode = (raw: unknown): raw is { tags?: Record<string, unknown>; default?: unknown } =>
+  raw !== null && typeof raw === "object" && !Array.isArray(raw);
 
-  const { tags, default: fallback } = raw as { tags?: Record<string, unknown>; default?: unknown };
-  const tagged: string[] = tags && typeof tags === "object" ? Object.values(tags).flatMap(toModeArray) : [];
-  const modes: string[] = Array.from(new Set([...toModeArray(fallback), ...tagged]));
-  return modes.length > 0 ? `${modes.join(", ")} (tag-based)` : "";
+// Every mode a guardrail can run in, with a tag-based mode's per-tag and default modes flattened and deduped
+export const guardrailModeList = (raw: unknown): string[] => {
+  if (!isTagBasedMode(raw)) return toModeArray(raw);
+  const tagged: string[] = raw.tags && typeof raw.tags === "object" ? Object.values(raw.tags).flatMap(toModeArray) : [];
+  return Array.from(new Set([...toModeArray(raw.default), ...tagged]));
+};
+
+export const formatGuardrailMode = (raw: unknown): string => {
+  const modes: string[] = guardrailModeList(raw);
+  if (modes.length === 0) return "";
+  return isTagBasedMode(raw) ? `${modes.join(", ")} (tag-based)` : modes.join(", ");
 };
 
 // Resolves the supported modes for the selected provider, falling back to the global list

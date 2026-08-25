@@ -30,6 +30,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import type { GuardrailLitellmParams, GuardrailMode } from "@/components/guardrails/types";
+import { guardrailModeList } from "../guardrail_info_helpers";
 
 // Code templates
 const CODE_TEMPLATES = {
@@ -173,12 +175,7 @@ const MODE_OPTION_BY_VALUE: Record<string, ModeOption> = Object.fromEntries(
 export interface EditGuardrailData {
   guardrail_id: string;
   guardrail_name: string;
-  litellm_params: {
-    mode?: string | string[];
-    default_on?: boolean;
-    custom_code?: string;
-    [key: string]: any;
-  };
+  litellm_params: Partial<Pick<GuardrailLitellmParams, "mode" | "default_on" | "custom_code">>;
 }
 
 interface CustomCodeModalProps {
@@ -305,11 +302,9 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
     setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
-  // Normalize mode from API (string or string[]) to string[]
-  const normalizeMode = (m: string | string[] | undefined): string[] => {
-    if (m === undefined || m === null) return ["pre_call"];
-    if (Array.isArray(m)) return m.length ? m : ["pre_call"];
-    return [m];
+  const normalizeMode = (m: GuardrailMode | undefined): string[] => {
+    const modes = guardrailModeList(m);
+    return modes.length ? modes : ["pre_call"];
   };
 
   // Reset form when modal opens or editData changes

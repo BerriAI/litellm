@@ -275,10 +275,10 @@ const StepCard: React.FC<StepCardProps> = ({
   onDelete,
   availableGuardrails,
 }) => {
-  const guardrailOptions = availableGuardrails.map((g) => ({
-    label: g.guardrail_name || g.guardrail_id,
-    value: g.guardrail_name || g.guardrail_id,
-  }));
+  const guardrailOptions = availableGuardrails.flatMap((g) => {
+    const key = g.guardrail_name || g.guardrail_id;
+    return key ? [{ label: key, value: key }] : [];
+  });
 
   return (
     <div

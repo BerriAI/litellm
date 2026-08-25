@@ -32,6 +32,7 @@ import {
 } from "./GuardrailFormField";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
+import type { Guardrail } from "@/components/guardrails/types";
 import {
   formatGuardrailMode,
   getGuardrailLogoAndName,
@@ -66,7 +67,7 @@ export interface GuardrailInfoProps {
 }
 
 const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, accessToken, isAdmin }) => {
-  const [guardrailData, setGuardrailData] = useState<any>(null);
+  const [guardrailData, setGuardrailData] = useState<Guardrail | null>(null);
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -278,7 +279,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
   const handleGuardrailUpdate = async (values: GuardrailFormValues) => {
     try {
-      if (!accessToken) return;
+      if (!accessToken || !guardrailData) return;
 
       // Prepare update data object - only include changed fields
       const updateData: any = {
@@ -572,8 +573,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               <Card className="block p-6">
                 <p>Created At</p>
                 <div className="mt-2">
-                  <h3 className="text-lg font-medium">{formatDate(guardrailData.created_at)}</h3>
-                  <p>Last Updated: {formatDate(guardrailData.updated_at)}</p>
+                  <h3 className="text-lg font-medium">{formatDate(guardrailData.created_at ?? undefined)}</h3>
+                  <p>Last Updated: {formatDate(guardrailData.updated_at ?? undefined)}</p>
                 </div>
               </Card>
             </div>
@@ -812,7 +813,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                                     optionalParams={providerFields.optional_params}
                                     parentFieldKey="optional_params"
                                     control={form.control}
-                                    values={guardrailData.litellm_params}
+                                    values={guardrailData.litellm_params ?? undefined}
                                   />
                                 );
                               })()}
@@ -883,11 +884,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
                     <div>
                       <p className="font-medium">Created At</p>
-                      <div>{formatDate(guardrailData.created_at)}</div>
+                      <div>{formatDate(guardrailData.created_at ?? undefined)}</div>
                     </div>
                     <div>
                       <p className="font-medium">Last Updated</p>
-                      <div>{formatDate(guardrailData.updated_at)}</div>
+                      <div>{formatDate(guardrailData.updated_at ?? undefined)}</div>
                     </div>
 
                     {guardrailData.litellm_params?.guardrail === "tool_permission" && (
