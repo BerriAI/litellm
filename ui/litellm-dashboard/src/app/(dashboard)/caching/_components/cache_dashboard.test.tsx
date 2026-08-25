@@ -211,6 +211,31 @@ describe("CacheDashboard cache analytics charts", () => {
     expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
   });
 
+  it("dismisses an open drilldown when refetched data no longer has failures for that call_type", async () => {
+    const { rerender } = renderDashboard();
+    const { requestsCard } = await findChartCards();
+
+    const redBar = Array.from(requestsCard.querySelectorAll(".recharts-bar")).find((bar) =>
+      bar.querySelector("path.recharts-rectangle")?.getAttribute("fill")?.includes("red"),
+    );
+    fireEvent.click(redBar!.querySelectorAll("path.recharts-rectangle")[0]);
+    expect(screen.getByText("Failed requests by error code: acompletion")).toBeInTheDocument();
+
+    useCacheActivity.mockReturnValue({
+      data: {
+        ...cacheActivity,
+        groups: cacheActivity.groups.map((group) =>
+          group.call_type === "acompletion" ? { ...group, failed_requests: 0 } : group,
+        ),
+        error_breakdown: cacheActivity.error_breakdown.filter((bucket) => bucket.call_type !== "acompletion"),
+      },
+      refetch: vi.fn(),
+    });
+    rerender(<CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />);
+
+    expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
+  });
+
   it("formats y-axis ticks with compact notation", async () => {
     renderDashboard();
     const { requestsCard, tokensCard } = await findChartCards();
