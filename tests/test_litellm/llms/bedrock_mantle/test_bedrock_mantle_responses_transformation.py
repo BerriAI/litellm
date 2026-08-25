@@ -1568,7 +1568,7 @@ class TestBedrockMantleResponsesPricing:
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
 
 
-def _repo_cost_map(map_name: str) -> dict:
+def _repo_cost_map(map_name: str) -> dict[str, dict[str, object]]:
     repo_root = Path(__file__).resolve().parents[4]
     paths = {
         "root": repo_root / "model_prices_and_context_window.json",
