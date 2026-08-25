@@ -4,6 +4,7 @@ from typing import Any, Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -759,7 +760,14 @@ async def video_edit(
     )
 
     data: Final = await _read_request_body(request=request)
-    data["video_id"] = video_reference_to_id(data.pop("video", None))
+    uploaded_video: Final = data.pop("video", None)
+    if isinstance(uploaded_video, StarletteUploadFile):
+        video_files: Final = await batch_to_bytesio((uploaded_video,))
+        if video_files:
+            data["video"] = video_files[0]
+        data["video_id"] = ""
+    else:
+        data["video_id"] = video_reference_to_id(uploaded_video)
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")
