@@ -80,7 +80,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
   classifierContextWindowSize: number | undefined;
-  classifierContextPerTurnChars: number | undefined;
+  classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   sessionAffinity: boolean;
@@ -111,6 +111,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -219,7 +220,7 @@ export const buildComplexityRouterConfig = ({
   classifierType,
   classifierLlmConfig,
   classifierContextWindowSize,
-  classifierContextPerTurnChars,
+  classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   sessionAffinity,
@@ -270,8 +271,8 @@ export const buildComplexityRouterConfig = ({
         classifier_context_window_size: classifierContextWindowSize,
       }),
     ...(classifierType === "llm" &&
-      classifierContextPerTurnChars !== undefined && {
-        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
       }),
     ...(classifierType === "llm" &&
       classifierContextIncludeAssistantTurns !== undefined && {

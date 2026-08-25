@@ -6828,6 +6828,8 @@ def embedding(
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import get_azure_ai_entra_token
+
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
@@ -6837,8 +6839,8 @@ def embedding(
             api_key = (
                 api_key
                 or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-                or litellm.openai_key
                 or get_secret_str("AZURE_AI_API_KEY")
+                or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
             )
 
             ## EMBEDDING CALL
@@ -8566,7 +8568,7 @@ def stream_chunk_builder(
         if len(chunks) == 0:
             return None
         ## Route to the text completion logic
-        first_chunk_with_choices: Final = next((c for c in chunks if c["choices"]), None)
+        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), None)
         if first_chunk_with_choices is not None and isinstance(
             first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
@@ -8581,7 +8583,7 @@ def stream_chunk_builder(
         simple_content_parts: Final[list[str]] = []
         is_simple_text_stream = True
         for chunk in chunks:
-            if len(chunk["choices"]) == 0:
+            if not chunk.get("choices"):
                 continue
 
             choice = chunk["choices"][0]
@@ -8647,7 +8649,7 @@ def stream_chunk_builder(
         tool_call_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "tool_calls" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["tool_calls"] is not None
         ]
@@ -8661,7 +8663,7 @@ def stream_chunk_builder(
         function_call_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "function_call" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["function_call"] is not None
         ]
@@ -8674,7 +8676,7 @@ def stream_chunk_builder(
         content_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "content" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["content"] is not None
         ]
@@ -8685,7 +8687,7 @@ def stream_chunk_builder(
         thinking_blocks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "thinking_blocks" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
         ]
@@ -8698,7 +8700,7 @@ def stream_chunk_builder(
         reasoning_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "reasoning_content" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["reasoning_content"] is not None
         ]
@@ -8711,7 +8713,7 @@ def stream_chunk_builder(
         annotation_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "annotations" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["annotations"] is not None
         ]
@@ -8728,7 +8730,7 @@ def stream_chunk_builder(
         audio_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "audio" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["audio"] is not None
         ]
@@ -8742,7 +8744,7 @@ def stream_chunk_builder(
         image_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "images" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["images"] is not None
         ]
@@ -8759,7 +8761,7 @@ def stream_chunk_builder(
         provider_specific_chunks: Final = [
             chunk
             for chunk in chunks
-            if len(chunk["choices"]) > 0
+            if chunk.get("choices")
             and "provider_specific_fields" in chunk["choices"][0]["delta"]
             and chunk["choices"][0]["delta"]["provider_specific_fields"] is not None
         ]

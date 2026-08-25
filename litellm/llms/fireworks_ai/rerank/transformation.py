@@ -4,6 +4,7 @@ Fireworks AI Rerank API transformation
 Reference: https://docs.fireworks.ai/inference-api-reference/rerank
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -102,6 +103,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         api_key = self._get_api_key(api_key)
         if api_key is None:

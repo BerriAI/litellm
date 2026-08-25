@@ -1647,15 +1647,27 @@ def _signature_for(signer_cls, url: str, method: str, body: bytes | None, header
     return signer.signature(signer.string_to_sign(request, canonical_request), request)
 
 
+def _as_s3_canonicalizes(url: str) -> str:
+    """
+    The path S3 rebuilds from the wire path: percent-encode everything outside the unreserved
+    set, without normalizing or double-encoding. `=` becomes `%3D`, `%20` stays `%20`.
+    """
+    from urllib.parse import quote, unquote, urlsplit, urlunsplit
+
+    split = urlsplit(url)
+    return urlunsplit(split._replace(path=quote(unquote(split.path), safe="/~")))
+
+
 def _assert_signed_for_s3_canonicalization(url: str, method: str, body: bytes | None, headers: dict[str, str]) -> None:
     """
     S3 rebuilds the canonical request from the wire path with single percent-encoding, which
     botocore models as S3SigV4Auth; plain SigV4Auth double-encodes it (%2520 for a space) and S3
-    answers 403 SignatureDoesNotMatch. Assert we signed the path the way S3 reads it.
+    answers 403 SignatureDoesNotMatch. Assert we sent an already-encoded path and signed it the
+    way S3 reads it.
     """
     from botocore.auth import S3SigV4Auth, SigV4Auth
 
-    assert "%20" in url
+    assert url == _as_s3_canonicalizes(url)
     sent_signature = headers["Authorization"].split("Signature=")[1].strip()
     assert sent_signature == _signature_for(S3SigV4Auth, url, method, body, headers)
     assert sent_signature != _signature_for(SigV4Auth, url, method, body, headers)
@@ -1738,6 +1750,106 @@ async def test_download_signs_object_key_with_space_the_way_s3_does():
     assert await logger._download_object_from_s3(_KEY_WITH_SPACE) == {"downloaded": "data"}
 
     call = logger.async_httpx_client.get.call_args
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="GET",
+        body=None,
+        headers=call.kwargs["headers"],
+    )
+
+_RESERVED_CHAR_KEYS = (
+    "2026-08-21/time-05-29-36_resp_bGl0ZWxsbTpjdXN0b20=.json",
+    "session=logs/2026-08-21/time-05-29-36_abc.json",
+    "a+b/2026-08-21/time-05-29-36_abc.json",
+    "a&b/2026-08-21/time-05-29-36_abc.json",
+    "a#b/2026-08-21/time-05-29-36_abc.json",
+    "a?b/2026-08-21/time-05-29-36_abc.json",
+    "a%b/2026-08-21/time-05-29-36_abc.json",
+    _KEY_WITH_SPACE,
+)
+
+
+def _element_for(s3_object_key: str):
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    return s3BatchLoggingElement(
+        s3_object_key=s3_object_key,
+        payload={"test": "sigv4"},
+        s3_object_download_filename="log.json",
+    )
+
+
+def _expected_wire_url(s3_object_key: str) -> str:
+    """The URL boto3 itself would put on the wire for this key."""
+    from urllib.parse import quote
+
+    return f"https://logs-bucket.s3.us-east-1.amazonaws.com/{quote(s3_object_key, safe='/')}"
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+@pytest.mark.asyncio
+async def test_async_upload_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_element_for(s3_object_key))
+
+    call = logger.async_httpx_client.put.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+def test_sync_upload_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+        logger.upload_data_to_s3(_element_for(s3_object_key))
+
+    call = mock_sync_client.put.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+@pytest.mark.asyncio
+async def test_download_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(return_value={"downloaded": "data"})
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.get.return_value = response
+
+    assert await logger._download_object_from_s3(s3_object_key) == {"downloaded": "data"}
+
+    call = logger.async_httpx_client.get.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
     _assert_signed_for_s3_canonicalization(
         url=call[0][0],
         method="GET",

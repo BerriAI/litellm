@@ -566,6 +566,7 @@ class GeminiVideoConfig(BaseVideoConfig):
         api_base,
         litellm_params,
         headers,
+        video_file=None,
         extra_body=None,
         prefetched_source_data=None,
     ):

@@ -22,6 +22,7 @@ from fixture_bundle import (
     Manifest,
     RecordedHttpResponse,
     RecordedRequest,
+    RecordedStreamedResponse,
     StaleBundle,
     UnreadableBundle,
     UnsafeBundleDir,
@@ -186,3 +187,45 @@ class TestRecordAndLoad:
             slug_for_test("suite/test_a.py::test_one"),
             slug_for_test("suite/test_b.py::test_two"),
         }
+
+    def test_a_streamed_response_round_trips_through_the_bundle(self, tmp_path: Path) -> None:
+        """LIT-5742: the two response shapes share one file format and are told apart
+        by their ``kind`` tag, so a streamed recording comes back with its chunk list
+        intact rather than as a buffered response with an empty body."""
+        root = tmp_path / "bundle"
+        recorder = prepared(root)
+        key = "suite/test_mod.py::test_streamed"
+        recorder.record(
+            test_key=key,
+            request=plain_request("/messages"),
+            response=RecordedStreamedResponse(
+                status_code=200,
+                headers={"content-type": "text/event-stream"},
+                chunks_b64=["Zmly", "c3Q="],
+                truncated="upstream: hung up",
+            ),
+        )
+        loaded = load_bundle(root)
+        assert isinstance(loaded, LoadedBundle)
+        (interaction,) = loaded.interactions[slug_for_test(key)]
+        response = interaction.response
+        assert isinstance(response, RecordedStreamedResponse)
+        assert response.chunks_b64 == ["Zmly", "c3Q="]
+        assert response.truncated == "upstream: hung up"
+
+    def test_load_bundle_rejects_a_foreign_format_version(self, tmp_path: Path) -> None:
+        """A bundle is written atomically, so a manifest from another format version
+        means every response inside it may have a shape this code cannot read. Loading
+        has to refuse it by name, the way the freshness gate does, rather than parse
+        what it happens to understand."""
+        root = tmp_path / "bundle"
+        prepared(root).record(
+            test_key="suite/test_mod.py::test_old",
+            request=plain_request("/chat"),
+            response=plain_response(),
+        )
+        write_manifest(root, NOW, format_version=BUNDLE_FORMAT_VERSION - 1)
+        loaded = load_bundle(root)
+        assert isinstance(loaded, UnreadableBundle)
+        assert f"format_version {BUNDLE_FORMAT_VERSION - 1}" in loaded.reason
+        assert "E2E_FIXTURE_MODE=record" in loaded.reason
