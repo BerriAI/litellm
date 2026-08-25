@@ -333,7 +333,6 @@ class TestScimTransformations:
         assert result == ScimTransformations.DEFAULT_SCIM_NAME
 
     def test_get_scim_member_value(self):
-        # value is the SCIM resource id (user_id), never the email (RFC 7643)
         member_with_email = Member(user_id="user-123", user_email="test@example.com", role="admin")
         result = ScimTransformations._get_scim_member_value(member_with_email)
         assert result == member_with_email.user_id
