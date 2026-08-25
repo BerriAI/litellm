@@ -685,7 +685,7 @@ async def test_message_history_normalizes_redacted_tool_call_arguments():
         }
     ]
 
-    with patch.object(
+    with patch.object(  # test-quality-ok: the handler has no DI seam for the spend-log fetch; every test in this file stubs this same boundary
         ResponsesSessionHandler,
         "get_all_spend_logs_for_previous_response_id",
         new_callable=AsyncMock,

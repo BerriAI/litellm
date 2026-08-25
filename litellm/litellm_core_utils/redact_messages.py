@@ -13,7 +13,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -33,9 +33,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
-
-# arguments fields contractually hold JSON (consumers json.loads them), so redact to valid JSON
-_REDACTED_TOOL_ARGUMENTS: Final = "{}"
 
 
 def redact_message_input_output_from_custom_logger(
@@ -88,13 +85,13 @@ def _redact_tool_calls(tool_calls) -> None:
     for tool_call in tool_calls:
         function = getattr(tool_call, "function", None)
         if function is not None and hasattr(function, "arguments"):
-            function.arguments = _REDACTED_TOOL_ARGUMENTS
+            function.arguments = REDACTED_TOOL_CALL_ARGUMENTS
 
 
 def _redact_function_call(function_call) -> None:
     """Redact legacy assistant function_call arguments."""
     if function_call is not None and hasattr(function_call, "arguments"):
-        function_call.arguments = _REDACTED_TOOL_ARGUMENTS
+        function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS
 
 
 def _redact_choice_content(choice):
@@ -138,7 +135,7 @@ def _redact_responses_api_output(output_items):
                         summary_item.text = REDACTED_BY_LITELLM
 
         if hasattr(output_item, "type") and output_item.type == "function_call" and hasattr(output_item, "arguments"):
-            output_item.arguments = _REDACTED_TOOL_ARGUMENTS
+            output_item.arguments = REDACTED_TOOL_CALL_ARGUMENTS
 
 
 def _redact_responses_api_output_dict(output_items, redacted_str: str):
@@ -161,7 +158,7 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
                     summary_item["text"] = redacted_str
 
         if output_item.get("type") == "function_call" and "arguments" in output_item:
-            output_item["arguments"] = _REDACTED_TOOL_ARGUMENTS
+            output_item["arguments"] = REDACTED_TOOL_CALL_ARGUMENTS
 
 
 def _redact_standard_logging_object(model_call_details: dict):
@@ -200,11 +197,11 @@ def _redact_tool_calls_dict(message: dict) -> None:
     if isinstance(tool_calls, list):
         for tool_call in tool_calls:
             if isinstance(tool_call, dict) and isinstance(tool_call.get("function"), dict):
-                tool_call["function"]["arguments"] = _REDACTED_TOOL_ARGUMENTS
+                tool_call["function"]["arguments"] = REDACTED_TOOL_CALL_ARGUMENTS
 
     function_call: Final = message.get("function_call")
     if isinstance(function_call, dict) and "arguments" in function_call:
-        function_call["arguments"] = _REDACTED_TOOL_ARGUMENTS
+        function_call["arguments"] = REDACTED_TOOL_CALL_ARGUMENTS
 
 
 def _redact_model_response_dict_choices(choices, redacted_str: str):

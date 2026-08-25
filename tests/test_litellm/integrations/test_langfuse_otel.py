@@ -935,8 +935,9 @@ class TestLangfuseOtelResponsesAPI:
 
     def test_responses_api_function_call_with_redacted_arguments(self):
         """Sentinel arguments (invalid JSON) must not kill the whole observation output."""
-        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
         from openai.types.responses import ResponseFunctionToolCall
+
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
 
         response_obj = ResponsesAPIResponse(
             id="response-redacted",
@@ -962,7 +963,9 @@ class TestLangfuseOtelResponsesAPI:
 
         mock_span = MagicMock()
 
-        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+        with patch(  # test-quality-ok: the span attribute sink is the observable boundary; sibling tests in this class stub the same seam
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
             LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
 
             output_calls = [

@@ -32,7 +32,7 @@ from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -1554,7 +1554,7 @@ class LiteLLMCompletionResponsesConfig:
         raw_arguments = function_call.get("arguments")
         if raw_arguments == REDACTED_BY_LITELLM:
             # older releases stored the bare sentinel (invalid JSON) in arguments
-            raw_arguments = "{}"
+            raw_arguments = REDACTED_TOOL_CALL_ARGUMENTS
         if not raw_arguments and function_call.get("type") == "custom_tool_call":
             raw_input: Final = function_call.get("input") or ""
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""

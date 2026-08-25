@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -36,10 +36,10 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
     for tool_call in message.tool_calls or []:
         function: Final = tool_call.function
         if function.arguments == REDACTED_BY_LITELLM:
-            function.arguments = "{}"
+            function.arguments = REDACTED_TOOL_CALL_ARGUMENTS
     function_call: Final = message.function_call
     if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
-        function_call.arguments = "{}"
+        function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS
 
 
 class ResponsesSessionHandler:
