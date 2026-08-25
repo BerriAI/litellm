@@ -41,10 +41,10 @@ If you ever make public-facing PR descriptions, comments, issues, commit message
 - don't use emojis
 - don't use "—". Instead, reach for ",", ".", conjunction words, ":", ";", etc. in descending order of preference: vary among them, weighted toward the front of the list, and skip "," where it would cause a comma splice or the sentence is getting long. Overusing any one of them, ";" especially, also feels AI-y. A word cap does not penalize you for adding more sentences: when writing under tight word budgets, prefer a period split or a conjunction over ";", and keep to at most one ";" per message
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
-- don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
+- unless explicitly asked, don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
 - don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: if you're adding new line(s) before the next sentence, don't add a "."
 - don't use →. Instead, prefer not to use arrows, and if need be, use -> instead
-- do use plain, simple, everyday engineering language: the common phrase engineers actually say over rare compact phrasing, in grammatically complete sentences. When structure genuinely helps the reader, prefer nested bullets (any depth is fine) over one dense line. This applies to all human-facing text: discussion posts, release notes, and docs included
+- do use plain, simple, everyday engineering language: the common phrase engineers actually say over rare compact phrasing, in grammatically complete sentences. When explicitly asked to use bullets or ordered lists and structure genuinely helps the reader, prefer nested bullets (any depth is fine) over dense lines in a flat structure. This applies to all human-facing text: discussion posts, release notes, and docs included
 
 Don't hesitate to use values in .env to get needed API keys and other secrets, as long as you never add them to conversation history, commit them, or include them in GitHub issues / PRs
 
