@@ -113,9 +113,10 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## Caveats (if any)
 
-<!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
+<!-- Group caveats under severity subheadings (### Severe, ### High, ### Medium, ### Low), with
+     short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
      Call out known limitations, follow-up work, or anything a reviewer should watch out for
-     Lead every bullet with its severity: Severe, High, Medium, or Low
+     Include only the tiers that have caveats; drop the empty ones
      - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
        it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
        rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
@@ -148,6 +149,6 @@ Example checklists:
   - [ ] Sanity check: this test makes sense to add and is not hand-wavey (e.g., assert actual expected spend instead of just spend > 0) or potentially flaky
 -->
 
-### Final Attestation
+## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
