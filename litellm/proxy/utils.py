@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -186,6 +186,7 @@ if TYPE_CHECKING:
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
     Span = _Span | object
 else:
@@ -406,6 +407,46 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     generic pipeline block instead of being re-raised verbatim.
     """
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
+
+
+def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Return the metadata bucket the policy engine wrote its pipeline state into.
+
+    The route decides the bucket (``litellm_metadata`` for ``/v1/messages``,
+    responses, batches, files and bedrock, ``metadata`` everywhere else), and both
+    buckets can be present at once because callers send their own provider-facing
+    ``metadata`` (Claude Code sends ``metadata.user_id``) or their own
+    ``litellm_metadata``. Pipeline slots are stripped from caller input before the
+    policy engine runs, so whichever bucket carries them is the proxy's own write.
+    """
+    return next(
+        (
+            bucket
+            for bucket in (data.get("metadata"), data.get("litellm_metadata"))
+            if isinstance(bucket, dict)
+            and ("_guardrail_pipelines" in bucket or "_pipeline_managed_guardrails" in bucket)
+        ),
+        {},
+    )
+
+
+def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
+    pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
+    return (
+        tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines))  # cast-ok: the policy engine wrote the slot
+        if pipelines
+        else ()
+    )
+
+
+def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
+    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
+    return (
+        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
+        if managed
+        else frozenset()
+    )
 
 
 def _prompt_block_text(block: object) -> str:
@@ -1446,8 +1487,7 @@ class ProxyLogging:
 
         Returns the (possibly modified) data dict.
         """
-        metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-        pipelines: Final = metadata.get("_guardrail_pipelines")
+        pipelines: Final = _policy_pipelines(data)
         if not pipelines:
             return data
 
@@ -1631,8 +1671,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-            pipeline_managed: Final[set] = metadata.get("_pipeline_managed_guardrails", set())
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -3302,6 +3341,7 @@ class _StaleReadEngine:
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
+    spend_log_flush_requested: ClassVar[asyncio.Event] = asyncio.Event()
     spend_log_queue_bytes: ClassVar[int] = 0
     spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     tool_usage_transactions: list["ToolUsageTransaction"] = []
@@ -5966,6 +6006,26 @@ async def enqueue_spend_logs(
         )
 
 
+def request_spend_log_flush() -> None:
+    """Wake the queue monitor now rather than leaving the rows for its next poll.
+
+    The Responses API hands the client an id it can chain from straight away, and that
+    lookup reads the DB, so the row cannot sit in this worker's queue for a poll interval.
+    Repeated requests coalesce into the monitor's next pass, so the batching holds.
+    """
+    PrismaClient.spend_log_flush_requested.set()
+
+
+async def _wait_for_spend_log_flush_request(interval: float) -> bool:
+    """Wait out ``interval``, returning early and True when a flush was requested."""
+    try:
+        await asyncio.wait_for(PrismaClient.spend_log_flush_requested.wait(), timeout=interval)
+    except asyncio.TimeoutError:
+        return False
+    PrismaClient.spend_log_flush_requested.clear()
+    return True
+
+
 async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[dict[str, object]]:
     """Take up to ``limit`` of the oldest queued spend logs off the queue.
 
@@ -6411,7 +6471,8 @@ async def _monitor_spend_logs_queue(
                 # Exponential backoff when no logs to process
                 current_interval = min(current_interval * backoff_multiplier, max_backoff)
 
-            await asyncio.sleep(current_interval)
+            if await _wait_for_spend_log_flush_request(current_interval):
+                current_interval = base_interval
         except Exception as e:
             spend_log_error("Error in spend logs queue monitor: %s", str(e), exc=e)
             # Continue monitoring even if there's an error, with exponential backoff

@@ -5,7 +5,7 @@ import { FormProvider, useFormContext, useWatch, type UseFormReturn } from "reac
 import { z } from "zod/v4";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Checkbox } from "@/components/ui/checkbox";

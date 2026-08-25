@@ -1,12 +1,9 @@
-import os
-import sys
 from typing import Any, cast
 
 import pytest
 
 import litellm
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -360,6 +357,48 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert "tool_calls" in result[1]
     assert len(result[1]["tool_calls"]) == 1
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
+
+
+def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
+    """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
+
+    Without it Moonshot and DeepSeek fill in a single-space placeholder and the model gets
+    a blank where its own prior reasoning belongs.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Which city is best for a picnic?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "Denver is dry in August.", "signature": "sig1"},
+                {"type": "thinking", "thinking": "San Francisco is foggy.", "signature": "sig2"},
+                {"type": "redacted_thinking", "data": "REDACTED"},
+                {"type": "text", "text": "Denver."},
+            ],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["reasoning_content"] == "Denver is dry in August.\nSan Francisco is foggy."
+    assert result[1]["content"] == "Denver."
+
+
+def test_translate_anthropic_messages_to_openai_sets_no_reasoning_content_without_thinking():
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "text", "text": "Denver."}],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert "reasoning_content" not in result[0]
 
 
 def test_translate_anthropic_messages_to_openai_tool_message_placement():

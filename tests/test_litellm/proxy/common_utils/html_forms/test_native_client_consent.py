@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.proxy.common_utils.html_forms.native_client_consent import render_native_client_consent_page

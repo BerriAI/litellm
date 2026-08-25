@@ -6,15 +6,12 @@ Tests the rule-based complexity scoring and tier assignment logic.
 
 import asyncio
 import logging
-import os
-import sys
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router
@@ -1807,6 +1804,51 @@ class TestLLMClassifier:
         await llm_complexity_router.aclassify("hi", request_kwargs={"metadata": request_metadata})
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_kwargs",
+        [
+            pytest.param({"metadata": {"user_api_key": "sk-abc"}}, id="metadata-bucket"),
+            pytest.param(
+                {"litellm_metadata": {"user_api_key": "sk-abc"}}, id="litellm-metadata-bucket"
+            ),
+            pytest.param({}, id="no-caller-context"),
+            pytest.param(None, id="no-request-kwargs"),
+        ],
+    )
+    async def test_aclassify_reaches_the_llm_for_every_caller_metadata_shape(
+        self, llm_classifier_config, request_kwargs
+    ):
+        """Whatever the caller's metadata bucket looks like, the configured classifier must
+        actually run. The forwarded metadata reaches litellm's own metadata handling, which
+        raises "'NoneType' object has no attribute 'update'" on a shape it does not expect;
+        aclassify catches that and silently degrades to heuristic scoring, so the tier is
+        decided by word counting while the config says otherwise. A real Router is used here
+        because a mocked acompletion accepts any shape and never reaches that handling.
+        """
+        real_router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku-classifier",
+                    "litellm_params": {
+                        "model": "openai/haiku-classifier",
+                        "api_key": "sk-classifier",
+                        "mock_response": '{"tier": "COMPLEX"}',
+                    },
+                }
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=real_router,
+            complexity_router_config=llm_classifier_config,
+        )
+
+        outcome = await router.aclassify("hi", request_kwargs=request_kwargs)
+
+        assert outcome.cause == "llm_classifier"
+        assert outcome.tier == ComplexityTier.COMPLEX
 
     @pytest.mark.asyncio
     async def test_aclassify_captures_request_body_in_proxy_server_request(
@@ -5947,6 +5989,77 @@ class TestContextAwareClassifier:
         assert _strip_reminder_blocks(text, pairs) == "<<<begin_main>>> why is my tag stripped?"
 
     @pytest.mark.parametrize(
+        "text,limit,expected",
+        [
+            pytest.param("short", 10, "short", id="under-the-limit-is-untouched"),
+            pytest.param("exact", 5, "exact", id="exactly-the-limit-is-untouched"),
+            pytest.param(
+                "Second request with more details and longer text",
+                30,
+                "Second re...tails and longer text",
+                id="over-the-limit-keeps-both-ends",
+            ),
+            pytest.param("abcdefghij", 4, "a...hij", id="tiny-limit-still-splits"),
+            pytest.param("abcdefghij", 1, "...j", id="limit-too-small-for-a-head-keeps-the-tail"),
+            pytest.param("abcdefghij", 0, "...", id="zero-limit-quotes-nothing"),
+            pytest.param("日本語のテキストと最後の質問", 6, "日...最後の質問", id="cjk-slices-by-character"),
+        ],
+    )
+    def test_truncate_keeps_the_end_of_an_over_long_turn(self, text, limit, expected):
+        """A cut turn keeps its tail, because that is where a chat turn puts its ask.
+
+        Head-only truncation was the shipped behavior and it discarded exactly the part that carries
+        the difficulty. The degenerate limits are here because the budget hands this function whatever
+        space is left rather than a configured constant, so it must stay total: a limit too small to
+        hold a head degrades to tail-only rather than raising or slicing with a negative index.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _truncate
+
+        assert _truncate(text, limit) == expected
+
+    def test_truncate_holds_its_length_budget(self):
+        """Cutting to N spends N characters plus the marker, at every N including the degenerate ones.
+
+        The marker is the cost of having cut at all, so it is charged uniformly rather than only once
+        the limit is large enough to hold a head; a caller sizing a cut against a remaining budget can
+        therefore price it as limit plus marker without special-casing the small end.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _TRUNCATION_MARKER, _truncate
+
+        text = "x" * 500
+
+        assert all(
+            len(_truncate(text, limit)) == limit + len(_TRUNCATION_MARKER) for limit in (0, 1, 2, 4, 30, 200, 499)
+        )
+
+    def test_clipped_prior_turn_still_carries_the_ask_it_closes_on(self):
+        """The reported defect, at the level the classifier sees it.
+
+        A prior turn that opens with an incident report and closes with the request routed to the
+        cheapest tier, because the 200-character cut kept the report and dropped the request. The
+        quoted turn must carry both ends.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_prior_turns
+
+        turn = (
+            "We run a multi-region gateway and last night the eu-west pod returned 502s on the "
+            "streaming path only, for thirty minutes, while non-streaming stayed healthy the whole "
+            "window and the cooldown map was mid-failover. " + "Filler sentence to push past the cap. " * 4
+            + "Now rewrite the streaming retry path and prove it cannot livelock."
+        )
+
+        quoted = _extract_prior_turns(
+            [{"role": "user", "content": turn}, {"role": "user", "content": "go ahead"}],
+            "go ahead",
+            3,
+            200,
+            False,
+        )
+
+        assert "multi-region gateway" in quoted[0][1]
+        assert "prove it cannot livelock" in quoted[0][1]
+
+    @pytest.mark.parametrize(
         "messages,current_ask,window,per_turn_chars,include_assistant,expected",
         [
             pytest.param(
@@ -5960,7 +6073,7 @@ class TestContextAwareClassifier:
                 2,
                 30,
                 False,
-                (("user", "First request"), ("user", "Second request with more detai...")),
+                (("user", "First request"), ("user", "Second re...tails and longer text")),
                 id="current-ask-excluded-and-long-turn-marked-as-clipped",
             ),
             pytest.param(
@@ -6069,7 +6182,7 @@ class TestContextAwareClassifier:
                 1,
                 20,
                 True,
-                (("assistant", "a very long plan tha..."),),
+                (("assistant", "a very...l past the cap"),),
                 id="assistant-reply-is-clipped-at-per-turn-chars",
             ),
             pytest.param(
@@ -6092,7 +6205,8 @@ class TestContextAwareClassifier:
 
         The current ask is excluded by matching it rather than by position, since `aclassify` takes
         `prompt` and `messages` separately and a caller may classify other than the newest turn. A turn
-        cut at per_turn_chars is marked so a clip does not read as an abandoned thought.
+        over per_turn_chars keeps both ends with its middle elided, so the ask it closes on survives the
+        cut and the marker does not read as an abandoned thought.
 
         With assistant turns enabled the window is the last N turns of the conversation rather than the
         last N asks, which is what makes a plan the assistant called complex visible under a bare "yes".

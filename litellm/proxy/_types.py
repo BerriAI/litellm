@@ -15,7 +15,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import NotRequired, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
@@ -3537,6 +3537,7 @@ class SpendLogsMetadata(TypedDict):
     max_retries: int | None  # Max retries configured for this request
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
+    autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
 
 
 class SpendLogsPayload(TypedDict):

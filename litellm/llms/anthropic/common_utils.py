@@ -441,6 +441,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
 
     @staticmethod
+    def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` is an adaptive-thinking model that still accepts legacy
+        ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
+        The model cost map is authoritative: an explicit ``supports_legacy_thinking``
+        entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
+        rule for unmapped 4.6 ids. Absent flag means the model rejects the legacy shape.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "supports_legacy_thinking", custom_llm_provider)
+
+    @staticmethod
     def maybe_drop_disabled_thinking(
         model: str,
         optional_params: dict,  # mutable-ok: in-place out-param, same contract as AnthropicConfig._maybe_drop_speed_param

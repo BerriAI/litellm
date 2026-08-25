@@ -1,9 +1,6 @@
 import logging
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 
@@ -62,15 +59,15 @@ def test_rerank_does_not_log_request_content_at_info(caplog):
 
     optional_params_logs = [r for r in litellm_records if "optional_rerank_params" in r.getMessage()]
     assert optional_params_logs, "expected the optional_rerank_params line to be logged"
-    assert all(
-        r.levelno == logging.DEBUG for r in optional_params_logs
-    ), "optional_rerank_params must be logged at DEBUG, not INFO"
+    assert all(r.levelno == logging.DEBUG for r in optional_params_logs), (
+        "optional_rerank_params must be logged at DEBUG, not INFO"
+    )
 
 
 def test_rerank_logging_params_include_resolved_provider():
     litellm_logging_obj = MagicMock()
 
-    with patch(
+    with patch(  # test-quality-ok: stub provider HTTP I/O while asserting resolved logging metadata
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
         return_value=_mock_cohere_response(),
     ):
