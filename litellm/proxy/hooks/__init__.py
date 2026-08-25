@@ -52,4 +52,4 @@ try:
 
     PROXY_HOOKS.update(ENTERPRISE_PROXY_HOOKS)
 except ImportError as e:
-    verbose_proxy_logger.warning(f"Could not import enterprise hooks — enterprise features disabled: {e}")
+    verbose_proxy_logger.warning("Could not import enterprise hooks — enterprise features disabled: %s", e)
