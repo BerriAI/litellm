@@ -6528,13 +6528,6 @@ def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain ca
     return litellm.acompletion(*args, **kwargs)
 
 
-def prompt_token_calculator(model, messages):
-    text: Final = " ".join(message["content"] for message in messages)
-    if "claude" in model:
-        return token_counter(model=model, text=text)
-    return len(_get_default_encoding().encode(text))
-
-
 def valid_model(model):
     try:
         # for a given model name, check if the user has the right permissions to access the model
@@ -9103,6 +9096,7 @@ class ProviderConfigManager:
         from litellm.llms.apiserpent.search.transformation import (
             APISerpentSearchConfig,
         )
+        from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
@@ -9144,6 +9138,7 @@ class ProviderConfigManager:
             SearchProviders.TINYFISH: TinyfishSearchConfig,
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
+            SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

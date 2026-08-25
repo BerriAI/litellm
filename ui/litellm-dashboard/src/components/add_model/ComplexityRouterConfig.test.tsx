@@ -113,7 +113,7 @@ describe("ComplexityRouterConfig", () => {
       classifier_type: "llm",
       classifier_llm_config: { model: "", timeout_ms: 3000, classification_rubric: "agentic" },
       classifier_context_window_size: 3,
-      classifier_context_per_turn_chars: 200,
+      classifier_context_budget_chars: 8000,
     };
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
@@ -135,11 +135,10 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByDisplayValue("750")).toBeInTheDocument();
     expect(screen.getByText("Context Window Size")).toBeInTheDocument();
     expect(screen.getByDisplayValue("5")).toBeInTheDocument();
-    expect(screen.getByText("Context Per-Turn Character Limit")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("400")).toBeInTheDocument();
+    expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
-  it("should default classifier context fields to 3 and 200 when llm is selected without explicit values", () => {
+  it("should default the context window and budget when llm is selected", () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -152,8 +151,42 @@ describe("ComplexityRouterConfig", () => {
     const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
     expect(within(windowSizeSection).getByDisplayValue("3")).toBeInTheDocument();
 
-    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
-    expect(within(perTurnCharsSection).getByDisplayValue("200")).toBeInTheDocument();
+    const budgetSection = screen.getByText("Context Character Budget").closest("div") as HTMLElement;
+    expect(within(budgetSection).getByDisplayValue("8000")).toBeInTheDocument();
+  });
+
+  it("should warn when the budget is too small to quote any turn that does not already fit", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      classifier_context_budget_chars: 50,
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.getByText(/no room to quote a turn/i)).toBeInTheDocument();
+  });
+
+  it("should not warn on a budget large enough to quote a turn, nor on a deliberate zero", () => {
+    for (const budget of [120, 8000, 0]) {
+      const { unmount } = renderWithProviders(
+        <ComplexityRouterConfig
+          modelInfo={mockModelInfo}
+          value={{
+            ...defaultValue,
+            classifier_type: "llm",
+            classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+            classifier_context_budget_chars: budget,
+          }}
+          onChange={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByText("Advanced: Classification Method"));
+      expect(screen.queryByText(/no room to quote a turn/i)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("should show the assistant-turns switch with its configured value when classifier_type is llm", () => {
@@ -231,26 +264,6 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenCalledWith({
       ...llmValue,
       classifier_context_window_size: 7,
-    });
-  });
-
-  it("should call onChange with the updated classifier_context_per_turn_chars when edited", () => {
-    const onChange = vi.fn();
-    const llmValue: ComplexityRouterConfigValue = {
-      ...defaultValue,
-      classifier_type: "llm",
-      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
-    };
-    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-
-    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
-    const input = within(perTurnCharsSection).getByRole("spinbutton");
-    fireEvent.change(input, { target: { value: "500" } });
-
-    expect(onChange).toHaveBeenCalledWith({
-      ...llmValue,
-      classifier_context_per_turn_chars: 500,
     });
   });
 

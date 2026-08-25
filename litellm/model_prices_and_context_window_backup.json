@@ -17155,6 +17155,14 @@
             "notes": "Web Search on Amazon Bedrock AgentCore, billed by AWS on the gateway"
         }
     },
+    "bing_grounding/search": {
+        "input_cost_per_query": 0.035,
+        "litellm_provider": "bing_grounding",
+        "mode": "search",
+        "metadata": {
+            "notes": "Grounding with Bing Search (G1 SKU): $35 per 1,000 transactions. Tokens for the Foundry model deployment that runs the grounded search are billed separately on that deployment."
+        }
+    },
     "tinyfish/search": {
         "input_cost_per_query": 0.0,
         "litellm_provider": "tinyfish",

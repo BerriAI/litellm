@@ -2,7 +2,7 @@ import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 import { formatExpirationStatus } from "@/utils/licenseUtils";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "@/components/shared/Meter";
 import { useQuery } from "@tanstack/react-query";
 import { Award, ChevronDown, Loader2 } from "lucide-react";
 import { getRemainingUsers } from "./networking";
