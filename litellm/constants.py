@@ -147,6 +147,7 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-adaptive-router-model",
     "x-litellm-applied-guardrails",
     "x-litellm-guardrail-scan-id",
+    "x-litellm-cache-key",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -750,6 +751,7 @@ openai_compatible_endpoints: Final[list] = [
     "api.groq.com/openai/v1",
     "https://integrate.api.nvidia.com/v1",
     "api.deepseek.com/v1",
+    "api.together.ai/v1",
     "api.together.xyz/v1",
     "app.empower.dev/api/v1",
     "https://api.friendli.ai/serverless/v1",

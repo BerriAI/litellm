@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from redis.asyncio import Redis
 
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
     AuthCacheInvalidationSubscriber,
@@ -142,6 +143,37 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
 
     assert cache.in_memory_cache.get_cache("project_id:p-1") is None
     assert pubsub.subscribed_channels == [AUTH_CACHE_INVALIDATION_CHANNEL]
+
+
+@pytest.mark.asyncio
+async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() -> None:
+    """
+    The spend-counter half of the same cross-worker gap: a remote worker's own
+    spend counter can hold a stale value (its fallback path when that worker's
+    own Redis read for the counter fails), and only clearing user_api_key_cache
+    on message would leave that separate DualCache's in-memory copy untouched.
+    """
+    cache = UserApiKeyCache()
+    spend_counter_in_memory_cache = InMemoryCache()
+    spend_counter_in_memory_cache.set_cache("spend:team_member:u-1:t-1", 999.0)
+    assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is not None
+
+    pubsub = _QueuePubSub(initial_messages=[_invalidation_message("spend:team_member:u-1:t-1")])
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+        additional_in_memory_caches=(spend_counter_in_memory_cache,),
+    )
+    subscriber.start()
+    try:
+        for _ in range(200):
+            if spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await subscriber.stop()
+
+    assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None
 
 
 @pytest.mark.asyncio

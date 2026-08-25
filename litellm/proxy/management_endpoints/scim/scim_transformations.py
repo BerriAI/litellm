@@ -199,15 +199,8 @@ class ScimTransformations:
 
     @staticmethod
     def _get_scim_member_value(member: Member) -> str:
-        """
-        Get the SCIM member value. Use user_email if available, otherwise use user_id.
-        SCIM member value should be the unique identifier for the user.
-        """
-        if hasattr(member, "user_email") and member.user_email:
-            return member.user_email
-        elif hasattr(member, "user_id"):
-            return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
-        return ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
+        """The member's SCIM resource id, which LiteLLM serves as user_id (RFC 7643 §8.7.1)."""
+        return member.user_id or ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
 
     @staticmethod
     def _get_scim_member_display(member: Member) -> str:
