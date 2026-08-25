@@ -419,7 +419,9 @@ def test_redis_cache_key_does_not_inspect_provider(clear_llm_client_cache):
 def test_pretty_print_never_expands_credential_provider(capsys):
     secret = "aaaa-UNIQUE-SENTINEL-bbbb"
 
-    with patch("litellm._redis.verbose_logger.isEnabledFor", return_value=True):
+    with patch(  # test-quality-ok: enable the debug-only printer without changing process-wide logger state
+        "litellm._redis.verbose_logger.isEnabledFor", return_value=True
+    ):
         _pretty_print_redis_config(
             redis_kwargs={
                 "host": "redis-host",
