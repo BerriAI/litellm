@@ -34,9 +34,8 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
     """Older releases redacted tool-call arguments to the bare sentinel (invalid JSON);
     normalize replayed history to "{}" so provider converters can parse it."""
     for tool_call in message.tool_calls or []:
-        function: Final = tool_call.function
-        if function.arguments == REDACTED_BY_LITELLM:
-            function.arguments = REDACTED_TOOL_CALL_ARGUMENTS
+        if tool_call.function.arguments == REDACTED_BY_LITELLM:
+            tool_call.function.arguments = REDACTED_TOOL_CALL_ARGUMENTS
     function_call: Final = message.function_call
     if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS
@@ -156,8 +155,7 @@ class ResponsesSessionHandler:
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
-                    message: Final = getattr(choice, "message")
-                    _normalize_redacted_tool_call_arguments(message)
+                    _normalize_redacted_tool_call_arguments(message := getattr(choice, "message"))
                     chat_completion_message_history.append(message)
         return chat_completion_message_history
 
