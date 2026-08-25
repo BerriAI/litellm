@@ -1152,6 +1152,16 @@ def run_server(
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
+            elif not isinstance(general_settings, dict):
+                # A non-dict `general_settings` (e.g. a bare string from a
+                # malformed YAML block) otherwise surfaces as a cryptic
+                # `AttributeError: 'str' object has no attribute 'get'` deep in
+                # startup. Fail fast with a message that points at the config.
+                raise ValueError(
+                    "`general_settings` in the proxy config must be a mapping "
+                    f"(got {type(general_settings).__name__}). Check the "
+                    "`general_settings:` block in your config file."
+                )
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings: Final = general_settings.get("key_management_settings", None)
             if key_management_settings is not None:

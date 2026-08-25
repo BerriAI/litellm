@@ -2677,3 +2677,31 @@ class TestLibpqSslParamTranslation:
         assert query["sslmode"] == ["require"]
         assert query["sslcert"] == ["/certs/rds-bundle.pem"]
         assert query["sslaccept"] == ["strict"]
+
+
+@pytest.mark.xdist_group("proxy_cli")
+class TestGeneralSettingsShape:
+    """`general_settings` is read straight from user YAML. A non-mapping value
+    (a bare string when the block is malformed, or `null` from an empty block)
+    used to reach `general_settings.get(...)` and blow up at startup with an
+    opaque `AttributeError: 'str' object has no attribute 'get'`. Startup must
+    either tolerate it (None -> {}) or fail with a message pointing at the config.
+    """
+
+    def test_null_general_settings_is_tolerated(self, tmp_path):
+        """An empty `general_settings:` block parses as None and must not crash."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": None}))
+
+        captured = _run_server_and_capture_urls(str(config_path))
+        assert captured["DATABASE_URL"].startswith("postgresql://t:t@localhost:5432/t")
+
+    def test_string_general_settings_fails_with_actionable_error(self, tmp_path):
+        """A non-mapping value must fail fast, not as a cryptic AttributeError."""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": "database_url"})
+        )
+
+        with pytest.raises(ValueError, match=r"general_settings.*must be a mapping"):
+            _run_server_and_capture_urls(str(config_path))
