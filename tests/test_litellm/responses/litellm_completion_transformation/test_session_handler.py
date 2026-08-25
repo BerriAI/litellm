@@ -9,8 +9,10 @@ import litellm
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    _normalize_redacted_tool_call_arguments,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.utils import Message
 
 
 @pytest.mark.asyncio
@@ -638,6 +640,22 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
 
     assert spend_logs == []
     assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+
+
+def test_normalize_redacted_arguments_skips_custom_tool_calls():
+    """Custom tool calls have no .function; the normalizer must skip them, not crash (session replay path)."""
+    message = Message(
+        content=None,
+        tool_calls=[
+            {"id": "call_c", "type": "custom", "custom": {"name": "run_code", "input": "print(1)"}},
+            {"id": "call_f", "type": "function", "function": {"name": "get_weather", "arguments": "redacted-by-litellm"}},
+        ],
+    )
+
+    _normalize_redacted_tool_call_arguments(message)
+
+    assert message.tool_calls[0].custom.input == "print(1)"
+    assert message.tool_calls[1].function.arguments == "{}"
 
 
 @pytest.mark.asyncio
