@@ -9162,3 +9162,65 @@ def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared(
 
     assert result is not None
     assert result.supported_reasoning_efforts == expected
+
+
+class TestAddDeploymentApiBaseProviderResolution:
+    def test_bare_model_with_known_api_base_initializes(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "groq-pinned",
+                    "litellm_params": {
+                        "model": "llama-3.3-70b-versatile",
+                        "api_base": "https://api.groq.com/openai/v1",
+                        "api_key": "fake-key",
+                    },
+                },
+                {
+                    "model_name": "deepseek-pinned",
+                    "litellm_params": {
+                        "model": "deepseek-chat",
+                        "api_base": "https://api.deepseek.com/v1",
+                        "api_key": "fake-key",
+                    },
+                },
+            ]
+        )
+
+        model_list = router.get_model_list()
+        assert model_list is not None
+        assert {m["model_name"] for m in model_list} == {"groq-pinned", "deepseek-pinned"}
+
+    def test_bare_model_with_unknown_api_base_still_raises(self):
+        with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+            litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "mystery",
+                        "litellm_params": {
+                            "model": "some-unknown-model",
+                            "api_base": "https://llm.internal.example.com/v1",
+                            "api_key": "fake-key",
+                        },
+                    }
+                ]
+            )
+
+    def test_explicit_custom_llm_provider_beats_api_base_endpoint_match(self):
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai-via-gateway",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "custom_llm_provider": "openai",
+                        "api_base": "https://api.groq.com/openai/v1",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        deployment = router.get_deployment_by_model_group_name("openai-via-gateway")
+        assert deployment is not None
+        assert deployment.litellm_params.custom_llm_provider == "openai"

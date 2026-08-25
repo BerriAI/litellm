@@ -602,7 +602,7 @@ async def acompletion(
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=base_url,
+            api_base=kwargs.get("api_base") or base_url,
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
