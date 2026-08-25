@@ -19,7 +19,6 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     Inherits from OpenAIResponsesAPIConfig since XAI's Responses API is largely
     compatible with OpenAI's, with a few differences:
-    - Does not support the 'instructions' parameter
     - Requires code_interpreter tools to have 'container' field removed
     - Recommends store=false when sending images
 
@@ -29,20 +28,6 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.XAI
-
-    def get_supported_openai_params(self, model: str) -> list:
-        """
-        Get supported parameters for XAI Responses API.
-
-        XAI supports most OpenAI Responses API params except 'instructions'.
-        """
-        supported_params: Final = super().get_supported_openai_params(model)
-
-        # Remove 'instructions' as it's not supported by XAI
-        if "instructions" in supported_params:
-            supported_params.remove("instructions")
-
-        return supported_params
 
     def _transform_web_search_tool(self, tool: dict[str, Any]) -> XAIWebSearchTool | dict[str, Any]:
         """
@@ -133,18 +118,12 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Map parameters for XAI Responses API.
 
         Handles XAI-specific transformations:
-        1. Drops 'instructions' parameter (not supported)
-        2. Transforms code_interpreter tools to remove 'container' field
-        3. Transforms web_search tools to XAI format (removes search_context_size, adds filters)
-        4. Transforms x_search tools to XAI format
-        5. Sets store=false when images are detected (recommended by XAI)
+        1. Transforms code_interpreter tools to remove 'container' field
+        2. Transforms web_search tools to XAI format (removes search_context_size, adds filters)
+        3. Transforms x_search tools to XAI format
+        4. Sets store=false when images are detected (recommended by XAI)
         """
         params: Final = dict(response_api_optional_params)
-
-        # Drop instructions parameter (not supported by XAI)
-        if "instructions" in params:
-            verbose_logger.debug("XAI Responses API does not support 'instructions' parameter. Dropping it.")
-            params.pop("instructions")
 
         if "metadata" in params:
             verbose_logger.debug("XAI Responses API does not support 'metadata' parameter. Dropping it.")

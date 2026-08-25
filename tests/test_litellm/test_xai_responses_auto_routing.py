@@ -2,11 +2,13 @@
 Test automatic routing to xAI Responses API when tools are present
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
-
+import httpx
 import pytest
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.main import responses_api_bridge_check
 
 
@@ -242,6 +244,49 @@ class TestXAIResponsesAutoRouting:
         # The mock should have been called, indicating responses API was used
         # Note: This test may need adjustment based on actual mock_response behavior
         # The key is that the responses_api_bridge_check logic routes correctly
+
+    def test_system_message_survives_web_search_bridge(self):
+        """A system message becomes 'instructions' on the bridged /responses call, and xAI accepts it"""
+        captured: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 0,
+                    "status": "completed",
+                    "model": "grok-4.6",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_test",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "1.0.0", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+                request=request,
+            )
+
+        response = litellm.completion(
+            model="xai/grok-4.6",
+            messages=[
+                {"role": "system", "content": "Answer briefly."},
+                {"role": "user", "content": "newest litellm version?"},
+            ],
+            web_search_options={"search_context_size": "medium"},
+            api_key="fake-key",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        assert response.choices[0].message.content == "1.0.0"
+        assert captured[0]["instructions"] == "Answer briefly."
+        assert captured[0]["tools"] == [{"type": "web_search"}]
 
 
 if __name__ == "__main__":
