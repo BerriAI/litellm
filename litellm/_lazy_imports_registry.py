@@ -242,6 +242,7 @@ LLM_CONFIG_NAMES: Final = (
     "OpenRouterResponsesAPIConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
+    "VertexAIInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
     "BaseSkillsAPIConfig",
@@ -976,6 +977,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
         "GoogleAIStudioInteractionsConfig",
+    ),
+    "VertexAIInteractionsConfig": (
+        ".llms.vertex_ai.interactions.transformation",
+        "VertexAIInteractionsConfig",
     ),
     "OpenAIOSeriesConfig": (
         ".llms.openai.chat.o_series_transformation",
