@@ -25,7 +25,7 @@ jobs:
       - name: Look for an already-open sync PR
         id: existing
         run: |
-          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName \
+          open_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json headRefName \
             --jq '[.[].headRefName | select(startswith("litellm_together_registry_sync_"))] | first // empty')"
           echo "open_pr=$open_pr" >> "$GITHUB_OUTPUT"
           if [ -n "$open_pr" ]; then
