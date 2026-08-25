@@ -7,6 +7,7 @@ import pytest
 
 import litellm
 import asyncio
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 
 @pytest.fixture(scope="session")
@@ -38,6 +39,8 @@ def setup_and_teardown():
     yield
 
     # Teardown code (executes after the yield point)
+    # LoggingWorker carries still-queued coroutines onto the next test's loop, where they'd log into that test's callbacks
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     loop.close()  # Close the loop created earlier
     asyncio.set_event_loop(None)  # Remove the reference to the loop
 

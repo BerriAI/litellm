@@ -1,6 +1,9 @@
 import os
 import pytest
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
@@ -458,3 +461,45 @@ async def test_mcp_tool_call_hook():
                 logged_standard_logging_payload is not None
             ), "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
+
+
+_QUEUED_LOGGING_OUTLIVES_TEST = '''
+import time
+
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+ran_at = []
+
+
+async def _record_run():
+    ran_at.append(time.monotonic())
+
+
+async def test_1_leaves_logging_queued_behind_a_stopped_worker():
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(_record_run())
+    await GLOBAL_LOGGING_WORKER.stop()
+    assert ran_at == []
+
+
+async def test_2_starts_after_the_previous_tests_logging_ran():
+    started_at = time.monotonic()
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(_record_run())
+    await GLOBAL_LOGGING_WORKER.flush()
+    assert [t < started_at for t in ran_at] == [True, False]
+'''
+
+
+def test_logging_queued_by_one_test_is_drained_before_the_next(tmp_path: Path):
+    """Regression: a logging coroutine queued by one test must not run inside a later test (it would log into that
+    test's callbacks, which is how test_mcp_tool_call_hook captured a gpt-4o-mini payload under xdist)."""
+    (tmp_path / "conftest.py").write_text((Path(__file__).parent / "conftest.py").read_text())
+    (tmp_path / "pyproject.toml").write_text('[tool.pytest.ini_options]\nasyncio_mode = "auto"\n')
+    (tmp_path / "test_queued_logging.py").write_text(_QUEUED_LOGGING_OUTLIVES_TEST)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_queued_logging.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -87,7 +87,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_auth_cache_key,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
@@ -1970,8 +1973,10 @@ async def _user_api_key_auth_builder(
 
             # Check 3. Check if user is in their team budget
             if not skip_budget_checks and valid_token.team_member_spend is not None:
-                if prisma_client is not None:
-                    _cache_key: Final = f"{valid_token.team_id}_{valid_token.user_id}"
+                _user_id: Final = valid_token.user_id
+                _team_id: Final = valid_token.team_id
+                if prisma_client is not None and _user_id is not None and _team_id is not None:
+                    _cache_key: Final = team_membership_auth_cache_key(team_id=_team_id, user_id=_user_id)
 
                     team_member_info = await user_api_key_cache.async_get_cache(
                         key=_cache_key,
@@ -1979,25 +1984,21 @@ async def _user_api_key_auth_builder(
                     )
                     if team_member_info is None:
                         # read from DB
-                        _user_id: Final = valid_token.user_id
-                        _team_id: Final = valid_token.team_id
-
-                        if _user_id is not None and _team_id is not None:
-                            _db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
-                                where={
-                                    "user_id": _user_id,
-                                    "team_id": _team_id,
-                                },
-                                include={"litellm_budget_table": True},
+                        _db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
+                            where={
+                                "user_id": _user_id,
+                                "team_id": _team_id,
+                            },
+                            include={"litellm_budget_table": True},
+                        )
+                        if _db_member is not None:
+                            team_member_info = LiteLLM_TeamMembership(**_db_member.dict())
+                            await user_api_key_cache.async_set_cache(
+                                key=_cache_key,
+                                value=team_member_info,
+                                model_type=LiteLLM_TeamMembership,
+                                ttl=5,
                             )
-                            if _db_member is not None:
-                                team_member_info = LiteLLM_TeamMembership(**_db_member.dict())
-                                await user_api_key_cache.async_set_cache(
-                                    key=_cache_key,
-                                    value=team_member_info,
-                                    model_type=LiteLLM_TeamMembership,
-                                    ttl=5,
-                                )
 
                     if team_member_info is not None and team_member_info.litellm_budget_table is not None:
                         team_member_budget: Final = team_member_info.litellm_budget_table.max_budget
@@ -2013,11 +2014,16 @@ async def _user_api_key_auth_builder(
                                     max_budget=team_member_budget,
                                 )
                             if team_member_spend > team_member_budget:
+                                _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
                                     max_budget=team_member_budget,
+                                    message=(
+                                        f"Budget has been exceeded! TeamMember={_entity_id} "
+                                        f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
+                                    ),
                                     entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                                    entity_id=f"{valid_token.user_id}:{valid_token.team_id}",
+                                    entity_id=_entity_id,
                                 )
 
             # Check 3. If token is expired
