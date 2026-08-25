@@ -8543,17 +8543,17 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
-def _streaming_choice_index(choice: StreamingChoices | dict[str, Any]) -> int | None:
+def _streaming_choice_index(choice: StreamingChoices | Mapping[str, Any]) -> int | None:
     index = choice.get("index") if isinstance(choice, dict) else getattr(choice, "index", None)
     return index if isinstance(index, int) else None
 
 
-def _streaming_chunk_choices(chunk: ModelResponseStream | dict[str, Any]) -> list[Any]:
+def _streaming_chunk_choices(chunk: ModelResponseStream | Mapping[str, Any]) -> Sequence[Any]:
     choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
     return choices or []
 
 
-def _distinct_streaming_choice_indices(chunks: list[Any]) -> list[int]:
+def _distinct_streaming_choice_indices(chunks: Sequence[Any]) -> Sequence[int]:
     indices: Final = {
         _streaming_choice_index(choice) for chunk in chunks for choice in _streaming_chunk_choices(chunk)
     }
@@ -8561,16 +8561,19 @@ def _distinct_streaming_choice_indices(chunks: list[Any]) -> list[int]:
 
 
 def _replace_chunk_choices(
-    chunk: ModelResponseStream | dict[str, Any], choices: list[Any]
-) -> ModelResponseStream | dict[str, Any]:
+    chunk: ModelResponseStream | Mapping[str, Any], choices: Sequence[Any]
+) -> ModelResponseStream | Mapping[str, Any]:
     if not choices:
         return chunk
-    if isinstance(chunk, dict):
-        return {**chunk, "choices": choices}
-    return chunk.model_copy(update={"choices": choices})
+    # Narrow on the model rather than on dict, so the mapping branch stays a Mapping.
+    if isinstance(chunk, ModelResponseStream):
+        return chunk.model_copy(update={"choices": list(choices)})
+    return {**chunk, "choices": choices}
 
 
-def _chunks_for_streaming_choice_index(chunks: list[Any], index: int) -> list[Any]:
+def _chunks_for_streaming_choice_index(
+    chunks: Sequence[Any], index: int
+) -> list[Any]:  # mutable-ok: fed straight to stream_chunk_builder, whose `chunks` parameter is a list
     matched: Final = (
         (chunk, [c for c in _streaming_chunk_choices(chunk) if _streaming_choice_index(c) == index])
         for chunk in chunks
@@ -8583,12 +8586,12 @@ def _chunks_for_streaming_choice_index(chunks: list[Any], index: int) -> list[An
 
 
 def _build_streaming_choices_per_index(
-    chunks: list[Any],
-    indices: list[int],
-    messages: list | None,
+    chunks: Sequence[Any],
+    indices: Sequence[int],
+    messages: list | None,  # mutable-ok: forwarded verbatim to stream_chunk_builder, whose `messages` is a list
     start_time: datetime.datetime | None,
     end_time: datetime.datetime | None,
-) -> list[Choices] | None:
+) -> list[Choices] | None:  # mutable-ok: assigned to ModelResponse.choices, which is a list
     built: Final = [
         stream_chunk_builder(
             chunks=_chunks_for_streaming_choice_index(chunks, index),
