@@ -899,6 +899,62 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_authorizes_on_params_after_health_check_params_merge():
+    """
+    Regression guard for the ordering fix: health_check_params from the request
+    body are merged into the probe params BEFORE the authorization check, so a
+    caller cannot smuggle a field past auth via health_check_params. Auth is
+    stubbed to reject, which halts the endpoint right after it records the
+    params it was handed, so the outbound probe is never reached. If the merge
+    is moved back to after can_user_make_model_call, the marker is absent from
+    those params and this test fails.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.types.router import Deployment
+
+    marker = "sentinel-from-health-check-params"
+    mock_can_user_make_model_call = AsyncMock(
+        side_effect=HTTPException(status_code=403, detail="denied")
+    )
+
+    with (
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.llm_router", None
+        ),
+        patch.object(  # test-quality-ok: capturing the params handed to auth is the assertion
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        pytest.raises(HTTPException),
+    ):
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"health_check_params": {"probe_marker": marker}},
+            user_api_key_dict=UserAPIKeyAuth(
+                token="requester-token",
+                user_id="admin-user",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
+        )
+
+    assert mock_can_user_make_model_call.called
+    passed_model_params = mock_can_user_make_model_call.call_args.kwargs["model_params"]
+    assert isinstance(passed_model_params, Deployment)
+    authorized_params = passed_model_params.litellm_params.model_dump()
+    assert authorized_params.get("probe_marker") == marker
+
+
+@pytest.mark.asyncio
 async def test_test_model_connection_authorized_team_admin_passes_real_auth():
     """
     Positive-path companion to the deny tests above. When the caller is a

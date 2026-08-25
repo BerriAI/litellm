@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "./meter";
+import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "./Meter";
 
 const renderMeter = (value: number, max: number) =>
   render(
