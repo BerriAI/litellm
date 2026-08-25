@@ -7875,9 +7875,22 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     Cleans up the message by removing the none field.
 
     remove None fields in the message - e.g. {"function": None} - some providers raise validation errors
+
+    Exception: an assistant message that carries `tool_calls` may legitimately set
+    `content: null` (the shape the OpenAI spec prescribes for a tool-call-only
+    turn). Dropping the key entirely breaks providers whose deserializers require
+    it to be present, so `content` is preserved verbatim in that case.
     """
     new_message: Final = message.copy()
-    return {k: v for k, v in new_message.items() if v is not None}
+    preserve_null_content: Final = (
+        new_message.get("role") == "assistant"
+        and new_message.get("content", "not-null") is None
+        and bool(new_message.get("tool_calls"))
+    )
+    cleaned = {k: v for k, v in new_message.items() if v is not None}
+    if preserve_null_content:
+        return {**cleaned, "content": None}
+    return cleaned
 
 
 def validate_chat_completion_user_messages(messages: list[AllMessageValues]):

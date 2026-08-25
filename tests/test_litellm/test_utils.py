@@ -5689,3 +5689,84 @@ class TestDefaultReasoningEffortHydration:
 
         model_info = dict(_get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
         assert model_info.get("default_reasoning_effort") is None
+
+
+class TestCleanupNoneFieldInMessage:
+    """`content: null` on an assistant tool-call turn is the shape the OpenAI
+    spec prescribes, and strict provider deserializers reject the request when
+    the key is dropped entirely (see #37711). It must survive message cleanup,
+    while genuinely irrelevant None fields are still stripped.
+    """
+
+    def test_null_content_preserved_on_assistant_tool_call(self):
+        from litellm.utils import cleanup_none_field_in_message
+
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+            ],
+        }
+        cleaned = cleanup_none_field_in_message(message)
+        assert "content" in cleaned
+        assert cleaned["content"] is None
+        assert cleaned["tool_calls"] == message["tool_calls"]
+
+    def test_null_content_still_dropped_without_tool_calls(self):
+        from litellm.utils import cleanup_none_field_in_message
+
+        cleaned = cleanup_none_field_in_message({"role": "assistant", "content": None})
+        assert "content" not in cleaned
+
+    def test_other_none_fields_still_stripped(self):
+        from litellm.utils import cleanup_none_field_in_message
+
+        message = {
+            "role": "assistant",
+            "content": None,
+            "function_call": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+            ],
+        }
+        cleaned = cleanup_none_field_in_message(message)
+        assert "content" in cleaned
+        assert "function_call" not in cleaned
+
+    def test_end_to_end_null_content_reaches_openai_sdk(self, monkeypatch):
+        import litellm
+        from openai.resources.chat.completions import Completions
+
+        captured = {}
+
+        def spy(self, *args, **kwargs):
+            captured["messages"] = kwargs.get("messages")
+            raise RuntimeError("stop")
+
+        monkeypatch.setattr(Completions, "create", spy)
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ]
+        with pytest.raises(litellm.InternalServerError, match="stop"):
+            litellm.completion(
+                model="openai/some-model",
+                messages=messages,
+                max_tokens=1,
+                api_base="http://127.0.0.1:1/v1",
+                api_key="x",
+                timeout=3,
+            )
+
+        assert captured.get("messages") is not None
+        assistant_msg = captured["messages"][1]
+        assert "content" in assistant_msg
+        assert assistant_msg["content"] is None
