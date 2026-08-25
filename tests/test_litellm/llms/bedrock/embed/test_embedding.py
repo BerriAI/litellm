@@ -1,5 +1,4 @@
-
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -7,9 +6,7 @@ from litellm.types.utils import Embedding
 from litellm.main import bedrock_embedding, embedding, EmbeddingResponse, Usage
 
 
-_mock_model_id = (
-    "arn:aws:bedrock:us-east-1:123412341234:application-inference-profile/abc123123"
-)
+_mock_model_id = "arn:aws:bedrock:us-east-1:123412341234:application-inference-profile/abc123123"
 _mock_app_ip_url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123412341234%3Aapplication-inference-profile%2Fabc123123/invoke"
 
 
@@ -33,9 +30,7 @@ def _get_mock_embedding_response(model: str) -> EmbeddingResponse:
     )
 
 
-@pytest.mark.parametrize(
-    "model", ["amazon.titan-embed-text-v1", "amazon.titan-embed-text-v2:0"]
-)
+@pytest.mark.parametrize("model", ["amazon.titan-embed-text-v1", "amazon.titan-embed-text-v2:0"])
 def test_bedrock_embedding_titan_app_profile(model: str):
     with patch.object(bedrock_embedding, "_single_func_embeddings") as mock_method:
         mock_method.return_value = _get_mock_embedding_response(model=model)
@@ -51,13 +46,23 @@ def test_bedrock_embedding_titan_app_profile(model: str):
         assert mock_method.call_args.kwargs["endpoint_url"] == _mock_app_ip_url
 
 
-@pytest.mark.parametrize(
-    "model", ["cohere.embed-english-v3", "cohere.embed-multilingual-v3"]
-)
+def test_embedding_logging_params_include_resolved_provider():
+    litellm_logging_obj = MagicMock()
+
+    embedding(
+        model="bedrock/amazon.titan-embed-text-v1",
+        input=["hello"],
+        mock_response=[0.1, 0.2],
+        litellm_logging_obj=litellm_logging_obj,
+    )
+
+    logged_params = litellm_logging_obj.update_environment_variables.call_args.kwargs["litellm_params"]
+    assert logged_params["custom_llm_provider"] == "bedrock"
+
+
+@pytest.mark.parametrize("model", ["cohere.embed-english-v3", "cohere.embed-multilingual-v3"])
 def test_bedrock_embedding_cohere_app_profile(model: str):
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.cohere_embedding"
-    ) as mock_cohere_embedding:
+    with patch("litellm.llms.bedrock.embed.embedding.cohere_embedding") as mock_cohere_embedding:
         mock_cohere_embedding.return_value = _get_mock_embedding_response(model=model)
         resp = embedding(
             custom_llm_provider="bedrock",
@@ -68,7 +73,4 @@ def test_bedrock_embedding_cohere_app_profile(model: str):
             aws_access_key_id="mockaws_access_key_id",
             aws_secret_access_key="mockaws_secret_access_key",
         )
-        assert (
-            mock_cohere_embedding.call_args.kwargs["complete_api_base"]
-            == _mock_app_ip_url
-        )
+        assert mock_cohere_embedding.call_args.kwargs["complete_api_base"] == _mock_app_ip_url
