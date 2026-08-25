@@ -6,11 +6,12 @@ extension, and AWS credential resolution is stubbed so nothing reaches STS.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+import litellm
 from botocore.credentials import Credentials
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -487,3 +488,66 @@ def test_post_call_is_not_logged_twice_when_the_sync_rust_call_declines():
     assert response.choices[0].message.content == "hi"
     assert len(calls["post_call"]) == 1
     assert "hi" in calls["post_call"][0]["original_response"]
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        pytest.param(2.25, id="numeric"),
+        pytest.param(httpx.Timeout(2.5), id="httpx-timeout"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_converse_streaming_forwards_timeout_to_existing_client(timeout):
+    async def _no_bytes(chunk_size=None):
+        return
+        yield b""
+
+    response = MagicMock()
+    response.status_code = 200
+    response.aiter_bytes = _no_bytes
+    response.headers = httpx.Headers()
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=response)
+
+    await litellm.acompletion(
+        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=timeout,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert client.post.await_args.kwargs["timeout"] == timeout
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        pytest.param(3.25, id="numeric"),
+        pytest.param(httpx.Timeout(3.5), id="httpx-timeout"),
+    ],
+)
+def test_sync_converse_streaming_forwards_timeout_to_existing_client(timeout):
+    response = MagicMock()
+    response.status_code = 200
+    response.iter_bytes = MagicMock(return_value=iter(()))
+    response.headers = httpx.Headers()
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=response)
+
+    litellm.completion(
+        model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=timeout,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert client.post.call_args.kwargs["timeout"] == timeout
