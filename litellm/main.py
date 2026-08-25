@@ -8439,12 +8439,12 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
-def _streaming_choice_index(choice: Any) -> int | None:
+def _streaming_choice_index(choice: StreamingChoices | dict[str, Any]) -> int | None:
     index = choice.get("index") if isinstance(choice, dict) else getattr(choice, "index", None)
     return index if isinstance(index, int) else None
 
 
-def _streaming_chunk_choices(chunk: Any) -> list[Any]:
+def _streaming_chunk_choices(chunk: ModelResponseStream | dict[str, Any]) -> list[Any]:
     choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
     return choices or []
 
@@ -8456,7 +8456,9 @@ def _distinct_streaming_choice_indices(chunks: list[Any]) -> list[int]:
     return sorted(index for index in indices if index is not None)
 
 
-def _replace_chunk_choices(chunk: Any, choices: list[Any]) -> Any:
+def _replace_chunk_choices(
+    chunk: ModelResponseStream | dict[str, Any], choices: list[Any]
+) -> ModelResponseStream | dict[str, Any]:
     if not choices:
         return chunk
     if isinstance(chunk, dict):
@@ -8480,8 +8482,8 @@ def _build_streaming_choices_per_index(
     chunks: list[Any],
     indices: list[int],
     messages: list | None,
-    start_time,
-    end_time,
+    start_time: datetime.datetime | None,
+    end_time: datetime.datetime | None,
 ) -> list[Choices] | None:
     built: Final = [
         stream_chunk_builder(
