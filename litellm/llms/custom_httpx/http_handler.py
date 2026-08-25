@@ -948,15 +948,30 @@ class AsyncHTTPHandler:
         if exc is not None:
             verbose_logger.debug("Error closing client at finalization: %s", exc)
 
-    def _close_aiohttp_session_sync(self) -> None:
-        """Dispose the wrapped aiohttp session when no event loop is available.
+    def _aiohttp_session_bound_elsewhere(self, loop: asyncio.AbstractEventLoop) -> bool:
+        """True when the wrapped aiohttp session is bound to a loop other than
+        ``loop`` — awaiting ``aclose()`` here would touch that loop's internals."""
+        from litellm.llms.custom_httpx.aiohttp_transport import (
+            LiteLLMAiohttpTransport,
+        )
 
-        Finalization without a running loop cannot await ``aclose()``. Falling
-        back to the connector's synchronous teardown (the same finalizer-safe
-        path ``LiteLLMAiohttpTransport._mark_connector_closed`` uses for
-        dead-loop recycles) releases pooled connections and flips the closed
-        flags that ``ClientSession.__del__`` / connector ``__del__`` check, so
-        no "Unclosed client session" / "Unclosed connector" warnings fire at
+        transport: Final = getattr(self._client, "_transport", None)
+        if not isinstance(transport, LiteLLMAiohttpTransport):
+            return False
+        session: Final = transport.client
+        if not isinstance(session, ClientSession) or session.closed:
+            return False
+        return getattr(session, "_loop", None) is not loop
+
+    def _dispose_wrapped_aiohttp_session(self) -> None:
+        """Dispose the wrapped aiohttp session when ``aclose()`` cannot run here.
+
+        Finalization either has no running loop, or a loop the session is not
+        bound to. Delegating to the transport's lifecycle-aware disposal picks
+        the safe path per session state (async close on its own loop, threadsafe
+        handoff to a loop running elsewhere, or the synchronous connector
+        teardown that flips the flags ``ClientSession.__del__`` checks), so no
+        "Unclosed client session" / "Unclosed connector" warnings fire at
         garbage collection.
         """
         from litellm.llms.custom_httpx.aiohttp_transport import (
@@ -971,7 +986,7 @@ class AsyncHTTPHandler:
             return
         session: Final = transport.client
         if isinstance(session, ClientSession) and not session.closed:
-            transport._mark_connector_closed(session)  # pyright: ignore[reportPrivateUsage]  # deliberate reuse of the transport's finalizer-safe teardown; an async close can never run here
+            transport._close_recycled_session(session)  # pyright: ignore[reportPrivateUsage]  # deliberate reuse of the transport's lifecycle-aware disposal; an async close can never run in this context
 
     def __del__(self) -> None:
         try:
@@ -982,9 +997,14 @@ class AsyncHTTPHandler:
             except RuntimeError:
                 # No running loop at finalization time (worker threads after
                 # their loop closed, interpreter/worker shutdown, GC in a
-                # sync context). An async close can never run here; dispose
-                # synchronously instead of leaking the session.
-                self._close_aiohttp_session_sync()
+                # sync context). An async close can never run here.
+                self._dispose_wrapped_aiohttp_session()
+                return
+            if self._aiohttp_session_bound_elsewhere(loop):
+                # GC ran on a live loop (e.g. the app's) but the session
+                # belongs to another, possibly dead, loop — awaiting aclose()
+                # here is the cross-loop path the transport refuses.
+                self._dispose_wrapped_aiohttp_session()
                 return
             task: Final = loop.create_task(self._client.aclose())
             cls: Final = type(self)
