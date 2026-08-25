@@ -896,7 +896,9 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
             guardrail_hook.async_handler, "post", AsyncMock(return_value=mock_response)
         ),
         patch.object(guardrail_hook, "_load_credentials") as mock_load_creds,
-        patch.object(guardrail_hook, "convert_to_bedrock_format") as mock_convert,
+        patch.object(
+            guardrail_hook, "convert_to_bedrock_format", new_callable=AsyncMock
+        ) as mock_convert,
         patch.object(
             guardrail_hook, "get_guardrail_dynamic_request_body_params"
         ) as mock_get_params,

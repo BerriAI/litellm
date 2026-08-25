@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
+import binascii
 import copy
 import json
 import re
@@ -32,6 +33,8 @@ from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_guardrail_cost
+from litellm.litellm_core_utils.prompt_templates.factory import BedrockImageProcessor
+from litellm.litellm_core_utils.url_utils import SSRFError
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -59,10 +62,13 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksViolation,
     BedrockContentItem,
     BedrockGuardrailChecksResponse,
+    BedrockGuardrailImageFormat,
+    BedrockGuardrailImageSource,
     BedrockGuardrailOutput,
     BedrockGuardrailQualifier,
     BedrockGuardrailResponse,
     BedrockGuardrailUsage,
+    BedrockImageContent,
     BedrockRequest,
     BedrockTextContent,
 )
@@ -132,6 +138,16 @@ _CONTENT_TYPE_TO_QUALIFIER: Final[dict[str, BedrockGuardrailQualifier]] = {
 # results and ``user`` content can carry caller- or externally-influenced text, which
 # must not be graded against as if it were the application's own source material.
 _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
+
+# ApplyGuardrail only accepts png/jpeg image blocks. Anything else (gif, webp, ...)
+# has no representation in the payload, so it cannot be scanned at all.
+_APPLY_GUARDRAIL_IMAGE_FORMATS: Final[
+    dict[str, BedrockGuardrailImageFormat]
+] = {  # mutable-ok: module-level lookup table, never mutated
+    "png": "png",
+    "jpeg": "jpeg",
+    "jpg": "jpeg",
+}
 
 
 class QualifiedTextBlock(NamedTuple):
@@ -221,6 +237,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
         chunk_budget_chars: int = BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
+        on_unscannable_image: Literal["block", "allow"] = "block",
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -229,6 +246,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.guardrail_provider = "bedrock"
         self.chunk_budget_chars = chunk_budget_chars
         self.experimental_use_latest_role_message_only = bool(kwargs.get("experimental_use_latest_role_message_only"))
+        # What to do with an image part ApplyGuardrail cannot scan (non png/jpeg, or a
+        # remote url we refuse to fetch). Defaults to blocking: the image reaches the
+        # model regardless, so allowing it would be a silent guardrail bypass.
+        self.on_unscannable_image: Literal["block", "allow"] = on_unscannable_image
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
         # routes the guardrail to InvokeGuardrailChecks; absent => ApplyGuardrail.
@@ -316,27 +337,138 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         return cleaned or None
 
-    def _create_bedrock_input_content_request(self, messages: list[AllMessageValues] | None) -> BedrockRequest:
+    async def _create_bedrock_input_content_request(self, messages: list[AllMessageValues] | None) -> BedrockRequest:
         """
         Create a bedrock request for the input content - the LLM request.
+
+        Text and image parts are both sent, so a guardrail with the IMAGE modality
+        enabled inspects the image the caller actually sent instead of only the text
+        that happened to sit next to it.
         """
         bedrock_request: Final[BedrockRequest] = BedrockRequest(source="INPUT")
-        bedrock_request_content: Final[list[BedrockContentItem]] = []
         if messages is None:
             return bedrock_request
-        for message in messages:
-            blocks = self.get_content_items_for_message(message=message)
-            if blocks is None:
-                continue
-            for block in blocks:
-                # INPUT scans send plain text only. Grounding qualifiers are attached
-                # exclusively when assembling the OUTPUT request, so a caller cannot use
-                # a grounding_source/query tag to change how input-safety policies treat
-                # their content (which would be an input-guardrail bypass).
-                bedrock_request_content.append(BedrockContentItem(text=BedrockTextContent(text=block.text)))
 
-        bedrock_request["content"] = bedrock_request_content
+        per_message = await asyncio.gather(*(self._build_input_content_items(message=message) for message in messages))
+        # mutable-ok: BedrockRequest["content"] is a list in the AWS wire format
+        bedrock_request["content"] = [item for items in per_message for item in items]
         return bedrock_request
+
+    async def _build_input_content_items(self, message: AllMessageValues) -> tuple[BedrockContentItem, ...]:
+        """Flatten one request message into ApplyGuardrail INPUT content items.
+
+        INPUT scans send text and image parts. Grounding qualifiers are attached
+        exclusively when assembling the OUTPUT request, so a caller cannot use a
+        grounding_source/query tag to change how input-safety policies treat their
+        content (which would be an input-guardrail bypass).
+        """
+        content = message.get("content")
+        if content is None:
+            return ()
+        if isinstance(content, str):
+            return (BedrockContentItem(text=BedrockTextContent(text=content)),)
+        if not isinstance(content, list):
+            return ()
+        parts: Final = cast(  # cast-ok: AllMessageValues content is a union of part TypedDicts
+            tuple[object, ...], tuple(content)
+        )
+        items: Final = await asyncio.gather(*(self._build_input_content_item(item=item) for item in parts))
+        return tuple(item for item in items if item is not None)
+
+    async def _build_input_content_item(self, item: object) -> BedrockContentItem | None:
+        if isinstance(item, str):
+            return BedrockContentItem(text=BedrockTextContent(text=item))
+        if not isinstance(item, dict):
+            return None
+        part: Final = cast(Mapping[str, object], item)  # cast-ok: narrowed to dict on the line above
+        text: Final = part.get("text")
+        if isinstance(text, str):
+            return BedrockContentItem(text=BedrockTextContent(text=text))
+        image_url: Final = self._get_image_url(item=part)
+        if image_url is None:
+            return None
+        return await self._build_image_content_item(image_url=image_url)
+
+    @staticmethod
+    def _get_image_url(item: Mapping[str, object]) -> str | None:
+        if item.get("type") != "image_url":
+            return None
+        image_url: Final = item.get("image_url")
+        if isinstance(image_url, str):
+            return image_url
+        if isinstance(image_url, dict):
+            url: Final = cast(Mapping[str, object], image_url).get("url")  # cast-ok: narrowed to dict on the line above
+            return url if isinstance(url, str) else None
+        return None
+
+    def _handle_unscannable_image(self, reason: str) -> None:
+        """Decide what to do with an image part ApplyGuardrail cannot scan.
+
+        The image still reaches the model either way, so skipping it silently would
+        let a caller defeat an IMAGE-modality guardrail just by picking a format the
+        API does not accept. `on_unscannable_image` defaults to "block" for that
+        reason; "allow" restores the permissive behavior for deployments that would
+        rather serve the request than fail it.
+
+        Returns None so callers can `return self._handle_unscannable_image(...)`.
+        """
+        if self.on_unscannable_image == "block":
+            raise HTTPException(
+                status_code=400,
+                detail={  # mutable-ok: HTTPException detail payload, serialized immediately
+                    "error": "Violated guardrail policy",
+                    "bedrock_guardrail_response": (
+                        f"Request contains an image the guardrail cannot scan ({reason}). "
+                        "ApplyGuardrail accepts png/jpeg images only. Set "
+                        "'on_unscannable_image: allow' on this guardrail to send such "
+                        "requests to the model unscanned."
+                    ),
+                    "guardrail_name": self.guardrail_name,
+                },
+            )
+        verbose_proxy_logger.warning(
+            "Bedrock Guardrail %s: image part will not be scanned (%s); on_unscannable_image=allow, forwarding it to the model anyway",
+            self.guardrail_name,
+            reason,
+        )
+
+    async def _build_image_content_item(self, image_url: str) -> BedrockContentItem | None:
+        """Decode/fetch an image part into an ApplyGuardrail image block.
+
+        Remote URLs are only fetched while LiteLLM's URL validation is on. With
+        validation disabled `async_safe_get` degrades to an unrestricted, redirect
+        following GET, and the URL comes straight from the caller, so fetching here
+        would turn the guardrail into an SSRF primitive. Such an image is treated as
+        unscannable instead.
+        """
+        if not image_url.startswith("data:") and not getattr(litellm, "user_url_validation", True):
+            self._handle_unscannable_image(
+                reason=f"remote image url not fetched because litellm.user_url_validation is disabled: {image_url}"
+            )
+            return None
+
+        try:
+            block: Final = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
+        except (httpx.HTTPError, SSRFError, ValueError, TypeError, KeyError, binascii.Error) as e:
+            self._handle_unscannable_image(reason=f"image content could not be read: {e}")
+            return None
+
+        image_block: Final = block.get("image")
+        image_format: Final = (
+            _APPLY_GUARDRAIL_IMAGE_FORMATS.get(str(image_block.get("format"))) if image_block else None
+        )
+        # mutable-ok: {} is an empty default for .get, never mutated
+        image_bytes: Final = image_block.get("source", {}).get("bytes") if image_block else None
+        if image_format is None or not image_bytes:
+            self._handle_unscannable_image(reason="attachment is not a png/jpeg image")
+            return None
+
+        return BedrockContentItem(
+            image=BedrockImageContent(
+                format=image_format,
+                source=BedrockGuardrailImageSource(bytes=image_bytes),
+            )
+        )
 
     def _create_bedrock_output_content_request(
         self,
@@ -386,7 +518,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 items.append(self._build_content_item(block))
         return items
 
-    def convert_to_bedrock_format(
+    async def convert_to_bedrock_format(
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
@@ -403,7 +535,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         bedrock_request: BedrockRequest = BedrockRequest(source=source)
         if source == "INPUT":
-            bedrock_request = self._create_bedrock_input_content_request(messages=messages)
+            bedrock_request = await self._create_bedrock_input_content_request(messages=messages)
         elif source == "OUTPUT":
             bedrock_request = self._create_bedrock_output_content_request(response=response, messages=messages)
         return bedrock_request
@@ -839,7 +971,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         start_time: Final = datetime.now(timezone.utc)
         bedrock_request_data: Final[dict] = dict(
-            self.convert_to_bedrock_format(source=source, messages=messages, response=response)
+            await self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
         api_key: str | None = None
         if request_data:
@@ -2880,6 +3012,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     masking_index += 1
                 if item is not None:
                     new_content.append(item)
+            else:
+                new_content.append(item)
 
         return new_content, masking_index
 

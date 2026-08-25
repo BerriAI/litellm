@@ -2,6 +2,8 @@
 Unit tests for Bedrock Guardrails
 """
 
+import asyncio
+import base64
 import json
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2408,12 +2410,14 @@ _GUARD_BLOCK = {"text": {"text": _GROUNDING_RESPONSE_TEXT, "qualifiers": ["guard
 
 def _input_request(messages: list) -> dict:
     """Arrange a guardrail and act: build the Bedrock INPUT payload."""
-    return _grounding_guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+    return asyncio.run(_grounding_guardrail().convert_to_bedrock_format(source="INPUT", messages=messages))
 
 
 def _output_request(messages: list, response=None) -> dict:
     """Arrange a guardrail and act: build the Bedrock OUTPUT payload."""
-    return _grounding_guardrail().convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    return asyncio.run(
+        _grounding_guardrail().convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    )
 
 
 def test_grounding_input_strips_grounding_and_query_qualifiers():
@@ -2961,9 +2965,7 @@ async def test_streaming_hook_reraises_guardrail_service_failures():
     guardrail = _sse_guardrail()
 
     with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-        mock_api.side_effect = HTTPException(
-            status_code=500, detail="Bedrock guardrail throttle retries exhausted"
-        )
+        mock_api.side_effect = HTTPException(status_code=500, detail="Bedrock guardrail throttle retries exhausted")
         with pytest.raises(HTTPException) as exc:
             await _drain_streaming_hook(guardrail)
 
@@ -5274,3 +5276,169 @@ async def test_terminal_failure_logs_usage_and_cost_of_prior_passed_chunks(monke
     assert logged["guardrail_cost"] == pytest.approx(0.0003)
     assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
     assert "error" in logged["guardrail_response"]
+
+
+class TestBedrockGuardrailImageInput:
+    """Image parts must reach ApplyGuardrail, not just the text sitting next to them."""
+
+    _PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    _GIF_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
+    _JPEG_BYTES = b"\xff\xd8\xff\xdb"
+    # A literal, globally-routable IP keeps validate_url's getaddrinfo off DNS; the
+    # transport is faked in every test below, so no request leaves the process.
+    _REMOTE_IMAGE_URL = "https://93.184.216.34/a.jpg"
+
+    def _jpeg_response(self, url: str) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=self._JPEG_BYTES,
+            headers={"content-type": "image/jpeg"},
+            request=httpx.Request("GET", url),
+        )
+
+    def _guardrail(self, **kwargs) -> BedrockGuardrail:
+        return BedrockGuardrail(
+            guardrail_name="bedrock-image",
+            guardrailIdentifier="gr-image",
+            guardrailVersion="DRAFT",
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_inline_image_is_sent_for_scanning(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}},
+                ],
+            }
+        ]
+
+        request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert request["content"] == [
+            {"text": {"text": "what does this say?"}},
+            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unscannable_image_blocks_the_request_by_default(self):
+        """ApplyGuardrail takes png/jpeg only, and the image reaches the model either way.
+
+        Skipping it silently would let a caller defeat an IMAGE-modality guardrail by
+        sending a gif, so the default is to reject the request.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "image_url", "image_url": {"url": self._GIF_DATA_URI}},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "Violated guardrail policy"
+
+    @pytest.mark.asyncio
+    async def test_undecodable_image_blocks_the_request_by_default(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "not-an-image"}}],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_unscannable_image_is_skipped_when_explicitly_allowed(self):
+        """on_unscannable_image: allow restores the permissive behavior, opt-in only."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "image_url", "image_url": {"url": self._GIF_DATA_URI}},
+                    {"type": "image_url", "image_url": {"url": "not-an-image"}},
+                ],
+            }
+        ]
+
+        request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
+            source="INPUT", messages=messages
+        )
+
+        assert request["content"] == [{"text": {"text": "hello"}}]
+
+    @pytest.mark.asyncio
+    async def test_remote_image_is_fetched_and_scanned(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._REMOTE_IMAGE_URL}}],
+            }
+        ]
+        get = AsyncMock(return_value=self._jpeg_response(self._REMOTE_IMAGE_URL))
+
+        with patch.object(httpx.AsyncClient, "get", new=get):
+            request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert request["content"] == [
+            {
+                "image": {
+                    "format": "jpeg",
+                    "source": {"bytes": base64.b64encode(self._JPEG_BYTES).decode()},
+                }
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_remote_image_is_not_fetched_when_url_validation_is_disabled(self, monkeypatch):
+        """With validation off, async_safe_get is an unrestricted redirect-following GET.
+
+        The url comes straight from the caller, so fetching it here would make the
+        guardrail an SSRF primitive. Treat the image as unscannable instead, and make
+        no request at all.
+        """
+        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+        url = "http://169.254.169.254/latest/meta-data/"
+        messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
+        get = AsyncMock(return_value=self._jpeg_response(url))
+
+        with patch.object(httpx.AsyncClient, "get", new=get):
+            with pytest.raises(HTTPException):
+                await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+            request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
+                source="INPUT", messages=messages
+            )
+
+        get.assert_not_awaited()
+        assert request["content"] == []
+
+    def test_masking_keeps_image_parts_in_the_request(self):
+        """Masking rewrites text in place; the image must survive to reach the model."""
+        image_part = {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}}
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "my ssn is 123-45-6789"}, image_part],
+            }
+        ]
+
+        updated = self._guardrail()._apply_masking_to_messages(messages=messages, masked_texts=["my ssn is {SSN}"])
+
+        assert updated[0]["content"] == [
+            {"type": "text", "text": "my ssn is {SSN}"},
+            image_part,
+        ]
