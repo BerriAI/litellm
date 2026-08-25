@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -317,7 +318,7 @@ async def test_release_lock_uses_atomic_compare_delete_script_when_available(pod
 
     lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
     mock_redis.async_register_script.assert_called_once_with(PodLockManager._COMPARE_AND_DELETE_LOCK_SCRIPT)
-    script_callable.assert_called_once_with(keys=[lock_key], args=[json.dumps(pod_lock_manager.pod_id)])
+    script_callable.assert_called_once_with(keys=(lock_key,), args=(json.dumps(pod_lock_manager.pod_id),))
     mock_redis.async_get_cache.assert_not_called()
     mock_redis.async_delete_cache.assert_not_called()
 
@@ -453,3 +454,52 @@ async def test_acquire_lock_own_lock_not_reentrant(pod_lock_manager, mock_redis)
 
     assert await pod_lock_manager.acquire_lock(cronjob_id="test_job", allow_reentrant=False) is False
     assert await pod_lock_manager.acquire_lock(cronjob_id="test_job") is True
+
+
+@pytest.mark.asyncio
+async def test_fresh_acquisition_reports_ownership(pod_lock_manager, mock_redis):
+    """LIT-5434: the ownership gauge has to rise when a pod first takes a lock.
+
+    It only ever fired on a reentrant re-acquisition, so in a normal deployment
+    the gauge was driven to 0 by every release and never back up, leaving job
+    ownership invisible in metrics.
+    """
+    mock_redis.async_set_cache.return_value = True
+
+    with patch(
+        "litellm.proxy.db.db_transaction_queue.pod_lock_manager.service_logger_obj.async_service_success_hook",
+        new=AsyncMock(),
+    ) as emit:
+        assert await pod_lock_manager.acquire_lock(cronjob_id="test_job") is True
+        # the emit is fire-and-forget, so let its task reach the hook
+        await asyncio.sleep(0.05)
+
+    emit.assert_awaited_once()
+    metadata = emit.await_args.kwargs["event_metadata"]
+    assert metadata["gauge_labels"] == f"test_job:{pod_lock_manager.pod_id}"
+    assert metadata["gauge_value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_renew_lock_extends_only_the_owning_pod(pod_lock_manager, mock_redis):
+    """A renewal from a pod that no longer owns the lock must not extend it."""
+    script_calls = []
+
+    async def fake_script(keys, args):
+        script_calls.append((keys, args))
+        return 1 if args[0] == json.dumps(pod_lock_manager.pod_id) else 0
+
+    mock_redis.async_register_script = MagicMock(return_value=fake_script)
+
+    assert await pod_lock_manager.renew_lock(cronjob_id="test_job", ttl=120) is True
+    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
+    assert script_calls == [((lock_key,), (json.dumps(pod_lock_manager.pod_id), 120))]
+
+    other_pod = PodLockManager(redis_cache=mock_redis)
+    assert await other_pod.renew_lock(cronjob_id="test_job", ttl=120) is False
+
+
+@pytest.mark.asyncio
+async def test_renew_lock_without_redis_reports_failure(mock_redis):
+    """A deployment with no Redis owns no lease, so it can renew nothing."""
+    assert await PodLockManager(redis_cache=None).renew_lock(cronjob_id="test_job") is False

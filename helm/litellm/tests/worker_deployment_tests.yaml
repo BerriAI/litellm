@@ -1,0 +1,269 @@
+suite: test worker component disabled
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - worker/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders no worker Deployment by default
+    template: worker/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: adds nothing to the gateway env by default
+    template: gateway/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "serving"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 10
+
+  - it: adds nothing to the backend env by default
+    template: backend/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "serving"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 9
+
+---
+suite: test worker component enabled
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - worker/deployment.yaml
+values:
+  - ./values/required.yaml
+set:
+  worker.enabled: true
+tests:
+  - it: renders exactly one worker Deployment with one replica
+    template: worker/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-worker
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: runs the worker job role
+    template: worker/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+
+  - it: flips the gateway to the serving job role
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "serving"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+
+  - it: flips the backend to the serving job role
+    template: backend/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "serving"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: "worker"
+
+  - it: carries its own component selector
+    template: worker/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: worker
+      - equal:
+          path: spec.template.metadata.labels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: worker
+
+  - it: reaches the same database, master key, and config as the backend
+    template: worker/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_MASTER_KEY
+            valueFrom:
+              secretKeyRef:
+                name: litellm-master-key-secret
+                key: master-key
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            value: postgres.example.com
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: gateway-config
+            configMap:
+              name: RELEASE-NAME-litellm-gateway-config
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+
+  - it: shares the backend image
+    template: worker/deployment.yaml
+    set:
+      backend.image.tag: test
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-backend:test
+
+  - it: runs one uvicorn worker process whatever the gateway runs
+    set:
+      gateway.numWorkers: 4
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NUM_WORKERS
+            value: "1"
+        template: worker/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NUM_WORKERS
+            value: "4"
+        template: gateway/deployment.yaml
+
+  - it: rejects podLabels that collide with its selector
+    template: worker/deployment.yaml
+    set:
+      worker.podLabels:
+        app.kubernetes.io/component: something-else
+    asserts:
+      - failedTemplate:
+          errorMessage: "worker.podLabels cannot set app.kubernetes.io/component: it is part of the Deployment's immutable selector"
+
+---
+suite: test worker component is not a serving target
+templates:
+  - gateway/service.yaml
+  - gateway/hpa.yaml
+  - backend/service.yaml
+  - backend/hpa.yaml
+  - ui/service.yaml
+  - worker/deployment.yaml
+  - gateway/configmap.yaml
+values:
+  - ./values/required.yaml
+set:
+  worker.enabled: true
+tests:
+  - it: does not route gateway Service traffic to worker pods
+    template: gateway/service.yaml
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: gateway
+
+  - it: does not route backend Service traffic to worker pods
+    template: backend/service.yaml
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: backend
+
+  - it: scales only the gateway and backend Deployments
+    asserts:
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: RELEASE-NAME-litellm-gateway
+        template: gateway/hpa.yaml
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: RELEASE-NAME-litellm-backend
+        template: backend/hpa.yaml
+
+---
+suite: test worker component sizing and scheduling
+templates:
+  - worker/deployment.yaml
+  - gateway/configmap.yaml
+values:
+  - ./values/required.yaml
+set:
+  worker.enabled: true
+tests:
+  - it: sizes and schedules independently of the gateway
+    template: worker/deployment.yaml
+    set:
+      worker.resources:
+        requests:
+          cpu: 100m
+      worker.nodeSelector:
+        pool: jobs
+      worker.tolerations:
+        - key: jobs
+          operator: Exists
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.nodeSelector.pool
+          value: jobs
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: jobs
+
+  - it: replicas follow worker.replicaCount
+    template: worker/deployment.yaml
+    set:
+      worker.replicaCount: 2
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2

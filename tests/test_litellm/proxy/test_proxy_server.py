@@ -26,6 +26,11 @@ from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import (
+    MONTHLY_SPEND_REPORT_JOB_ID,
+    PTU_ROLLUP_JOB_ID,
+    WEEKLY_SPEND_REPORT_JOB_ID,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
@@ -11009,7 +11014,7 @@ async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkey
     assert mock_client.health_check.await_count == 0
 
 
-async def _run_scheduled_background_jobs():
+async def _run_scheduled_background_jobs(general_settings=None, job_role=None):
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
@@ -11025,9 +11030,12 @@ async def _run_scheduled_background_jobs():
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
         patch("litellm.proxy.proxy_server.store_model_in_db", True),
         patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
+        patch("litellm.proxy.proxy_server.LITELLM_JOB_ROLE", job_role),
+        # the key rotation and UI cleanup jobs read the module global, not the argument
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
     ):
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
+            general_settings=general_settings if general_settings is not None else {},
             prisma_client=mock_prisma_client,
             proxy_budget_rescheduler_min_time=1,
             proxy_budget_rescheduler_max_time=2,
@@ -11039,6 +11047,80 @@ async def _run_scheduled_background_jobs():
 
     assert ps.scheduler is not None
     return ps.scheduler
+
+
+# Jobs whose side effect is shared across the deployment, so a pod dedicated to
+# serving traffic must register none of them
+SINGLE_OWNER_JOB_IDS = (
+    "reset_budget_job",
+    "spend_log_cleanup_job",
+    "key_rotation_job",
+    WEEKLY_SPEND_REPORT_JOB_ID,
+    MONTHLY_SPEND_REPORT_JOB_ID,
+)
+# Jobs that drain this pod's own in-memory queues or refresh its own registry,
+# so every pod must keep registering them whatever its role
+PER_POD_JOB_IDS = (
+    "update_spend_job",
+    "update_daily_tag_spend_job",
+    "update_gateway_requests_job",
+    "periodic_reload_job",
+    "add_deployment_job",
+    "get_credentials_job",
+)
+
+
+def _enable_single_owner_jobs(monkeypatch):
+    from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    monkeypatch.setattr("litellm.constants.LITELLM_KEY_ROTATION_ENABLED", "true")
+    monkeypatch.setattr("litellm.proxy.proxy_server.PROXY_BATCH_POLLING_ENABLED", True)
+    return {
+        "maximum_spend_logs_retention_period": "30d",
+        "spend_report_frequency": "7d",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_role", [None, "all", "worker"])
+async def test_worker_and_default_roles_register_every_job(monkeypatch, job_role):
+    """LIT-5434: only a 'serving' pod opts out, so an unset role keeps today's behavior."""
+    settings = _enable_single_owner_jobs(monkeypatch)
+
+    scheduler = await _run_scheduled_background_jobs(general_settings=settings, job_role=job_role)
+    registered = {job.id for job in scheduler.get_jobs()}
+
+    assert set(SINGLE_OWNER_JOB_IDS) <= registered
+    assert set(PER_POD_JOB_IDS) <= registered
+    assert PTU_ROLLUP_JOB_ID in registered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("job_role", ["serving", "  SERVING  "])
+async def test_serving_role_registers_no_single_owner_job(monkeypatch, job_role):
+    """LIT-5434: an operator moving auxiliary work to a dedicated worker must be able to
+    verify the serving pods register none of it, while their own per-pod flushes keep running."""
+    settings = _enable_single_owner_jobs(monkeypatch)
+
+    scheduler = await _run_scheduled_background_jobs(general_settings=settings, job_role=job_role)
+    registered = {job.id for job in scheduler.get_jobs()}
+
+    assert registered.isdisjoint(SINGLE_OWNER_JOB_IDS)
+    assert PTU_ROLLUP_JOB_ID not in registered
+    assert set(PER_POD_JOB_IDS) <= registered
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_job_role_registers_every_job(monkeypatch):
+    """A typo must not silently stop the deployment's budget resets and cleanups."""
+    settings = _enable_single_owner_jobs(monkeypatch)
+
+    scheduler = await _run_scheduled_background_jobs(general_settings=settings, job_role="serving-pod")
+    registered = {job.id for job in scheduler.get_jobs()}
+
+    assert set(SINGLE_OWNER_JOB_IDS) <= registered
 
 
 @pytest.mark.asyncio

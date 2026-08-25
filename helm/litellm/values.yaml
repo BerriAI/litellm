@@ -376,6 +376,68 @@ backend:
   # Same shape as gateway.topologySpreadConstraints.
   topologySpreadConstraints: []
 
+# ---------- worker (single-owner auxiliary jobs) ----------
+#
+# Optional fourth component for the proxy's single-owner auxiliary jobs (budget
+# resets, cost polls, cleanups). Off by default, which leaves LITELLM_JOB_ROLE
+# unset on gateway and backend and every pod eligible to own them, exactly as
+# before.
+#
+# Enabling this sets LITELLM_JOB_ROLE=worker here and LITELLM_JOB_ROLE=serving on
+# gateway and backend, so the jobs stop competing with request traffic for the
+# event loop and the database pool. The worker gets no Service and no HPA;
+# nothing routes to it.
+#
+# Only the cluster-wide scheduled jobs move. Gateway and backend keep flushing
+# their own in-memory spend and request queues and keep refreshing their own
+# model registry and credentials, so they still write spend as they do today.
+#
+# The worker pins NUM_WORKERS=1 rather than taking gateway.numWorkers: the
+# scheduler is registered once per uvicorn worker process, so N processes would
+# run N copies of every job in one pod.
+#
+# It runs the backend image and the backend ServiceAccount deliberately: it does
+# the same management-plane work against the same database, so it needs the same
+# schema expectations and the same IAM database-auth identity. It also mounts the
+# gateway config, since the proxy needs a model list to start.
+#
+# The jobs are single-owner, so raising replicaCount buys availability across a
+# rollout, not throughput.
+worker:
+  enabled: false
+  replicaCount: 1
+  logLevel: INFO
+  extraEnv: []
+  envConfigMaps: []
+  envSecrets: []
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  livenessProbe:
+    httpGet: { path: /health/liveliness, port: http }
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 6
+  readinessProbe:
+    httpGet: { path: /health/readiness, port: http }
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 10
+  podAnnotations: {}
+  # Same shape as the gateway blocks of the same name.
+  podLabels: {}
+  podSecurityContext: {}
+  securityContext: {}
+  terminationGracePeriodSeconds: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---------- ui (Next.js static dashboard) ----------
 ui:
   enabled: true

@@ -236,6 +236,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
+    LITELLM_JOB_ROLE,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
     MONTHLY_SPEND_REPORT_JOB_ID,
@@ -363,6 +364,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     parse_stagger_settings,
     stagger_trigger,
 )
+from litellm.proxy.common_utils.single_owner_job import JobRole, claim_once_per_window
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
@@ -8898,6 +8900,14 @@ class ProxyStartupEvent:
             timezone=None,
         )
 
+        job_role: Final = JobRole.from_env_value(LITELLM_JOB_ROLE)
+        if not job_role.runs_single_owner_jobs:
+            verbose_proxy_logger.info(
+                "LITELLM_JOB_ROLE=%s: registering no single-owner background job on this process. "
+                "Run a deployment with LITELLM_JOB_ROLE=worker, or the default 'all', or these jobs never run",
+                job_role.value,
+            )
+
         # Use fixed intervals with small random offset instead of jitter
         # This avoids the expensive jitter calculations in APScheduler
         budget_interval: Final = proxy_budget_rescheduler_min_time + random.randint(
@@ -8924,7 +8934,7 @@ class ProxyStartupEvent:
         )
 
         ### RESET BUDGET ###
-        if general_settings.get("disable_reset_budget", False) is False:
+        if general_settings.get("disable_reset_budget", False) is False and job_role.runs_single_owner_jobs:
             budget_reset_job: Final = ResetBudgetJob(
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
@@ -9100,16 +9110,17 @@ class ProxyStartupEvent:
             general_settings=general_settings,
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
+            job_role=job_role,
         )
 
-        await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
+        await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler, job_role=job_role)
 
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
         )
 
-        if is_ptu_cost_attribution_enabled():
+        if is_ptu_cost_attribution_enabled() and job_role.runs_single_owner_jobs:
             from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
                 PTU_ROLLUP_JOB_ID,
                 run_scheduled_ptu_rollup,
@@ -9146,7 +9157,7 @@ class ProxyStartupEvent:
             )
 
         ### SPEND LOG CLEANUP ###
-        if (
+        if job_role.runs_single_owner_jobs and (
             general_settings.get("maximum_spend_logs_retention_period") is not None
             or general_settings.get("maximum_autorouter_session_retention_period") is not None
             or general_settings.get("maximum_health_check_retention_period") is not None
@@ -9187,7 +9198,7 @@ class ProxyStartupEvent:
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
         ### CHECK BATCH COST ###
-        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
+        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED and job_role.runs_single_owner_jobs:
             try:
                 from litellm_enterprise.proxy.common_utils.check_batch_cost import (
                     CheckBatchCost,
@@ -9218,7 +9229,7 @@ class ProxyStartupEvent:
                 )
 
         ### CHECK RESPONSES COST ###
-        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
+        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED and job_role.runs_single_owner_jobs:
             try:
                 from litellm_enterprise.proxy.common_utils.check_responses_cost import (
                     CheckResponsesCost,
@@ -9267,7 +9278,7 @@ class ProxyStartupEvent:
         return worker_heartbeat
 
     @classmethod
-    async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
+    async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler, job_role: JobRole):
         """
         Initialize the spend tracking and other background jobs
         1. CloudZero Background Job
@@ -9275,12 +9286,19 @@ class ProxyStartupEvent:
         3. Prometheus Background Job
         4. Key Rotation Background Job
 
+        Every job here exports or reconciles shared state, so a pod dedicated to
+        serving traffic registers none of them.
+
         Args:
             scheduler: The scheduler to add the background jobs to
+            job_role: Which jobs this process registers
         """
         global prisma_client
         global proxy_logging_obj
         global user_api_key_cache
+
+        if not job_role.runs_single_owner_jobs:
+            return
 
         ########################################################
         # CloudZero Background Job
@@ -9451,8 +9469,16 @@ class ProxyStartupEvent:
         general_settings: dict,
         proxy_logging_obj: ProxyLogging,
         prisma_client: PrismaClient,
+        job_role: JobRole,
     ):
-        """Initialize Slack alerting background jobs for spend reports."""
+        """Initialize Slack alerting background jobs for spend reports.
+
+        Each report reaches a channel once per window, so a pod dedicated to
+        serving traffic registers none of them.
+        """
+        if not job_role.runs_single_owner_jobs:
+            return
+
         if (
             proxy_logging_obj is not None
             and proxy_logging_obj.slack_alerting_instance.alerting is not None
@@ -9469,24 +9495,21 @@ class ProxyStartupEvent:
             weekly_lock_ttl: Final = duration_in_seconds(spend_report_frequency) - 3600
 
             async def _scheduled_weekly_spend_report() -> None:
-                # TTL spans the whole reporting window: each pod's interval anchor is its own
-                # boot time + jitter, so a shorter lock would let a later pod re-send the report.
-                # Minus an hour so the next window's first firer finds a free key
-                if (
-                    await pod_lock_manager.acquire_lock(
-                        cronjob_id=WEEKLY_SPEND_REPORT_JOB_ID, ttl=weekly_lock_ttl, allow_reentrant=False
-                    )
-                    is False
+                # Window is the reporting period minus an hour, so the next window's
+                # first firer finds a free key
+                if not await claim_once_per_window(
+                    pod_lock_manager=pod_lock_manager,
+                    job_name=WEEKLY_SPEND_REPORT_JOB_ID,
+                    window_seconds=weekly_lock_ttl,
                 ):
                     return
                 await proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report(spend_report_frequency)
 
             async def _scheduled_monthly_spend_report() -> None:
-                if (
-                    await pod_lock_manager.acquire_lock(
-                        cronjob_id=MONTHLY_SPEND_REPORT_JOB_ID, ttl=3600, allow_reentrant=False
-                    )
-                    is False
+                if not await claim_once_per_window(
+                    pod_lock_manager=pod_lock_manager,
+                    job_name=MONTHLY_SPEND_REPORT_JOB_ID,
+                    window_seconds=3600,
                 ):
                     return
                 await proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
@@ -9513,11 +9536,10 @@ class ProxyStartupEvent:
                 from zoneinfo import ZoneInfo
 
                 async def _scheduled_fallback_stats() -> None:
-                    if (
-                        await pod_lock_manager.acquire_lock(
-                            cronjob_id=PROMETHEUS_FALLBACK_STATS_JOB_ID, ttl=3600, allow_reentrant=False
-                        )
-                        is False
+                    if not await claim_once_per_window(
+                        pod_lock_manager=pod_lock_manager,
+                        job_name=PROMETHEUS_FALLBACK_STATS_JOB_ID,
+                        window_seconds=3600,
                     ):
                         return
                     await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()

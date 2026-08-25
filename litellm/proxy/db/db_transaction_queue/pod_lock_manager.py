@@ -1,6 +1,8 @@
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Awaitable, Callable, Sequence
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -13,6 +15,12 @@ if TYPE_CHECKING:
     ProxyLogging = Any
 else:
     ProxyLogging = Any
+
+
+class _RegisteredScript(Protocol):
+    """A Lua script already registered with Redis, as returned by async_register_script."""
+
+    def __call__(self, keys: Sequence[str], args: Sequence[object]) -> Awaitable[object]: ...
 
 
 class PodLockManager:
@@ -30,10 +38,19 @@ else
 end
 """
 
+    _COMPARE_AND_EXPIRE_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
+
     def __init__(self, redis_cache: RedisCache | None = None):
         self.pod_id = str(uuid.uuid4())
         self.redis_cache = redis_cache
-        self._release_lock_script: Any | None = None
+        self._release_lock_script: _RegisteredScript | None = None
+        self._renew_lock_script: _RegisteredScript | None = None
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
@@ -85,7 +102,7 @@ end
                     self.pod_id,
                     cronjob_id,
                 )
-
+                self._emit_acquired_lock_event(cronjob_id, self.pod_id)
                 return True
             else:
                 # Check if the current pod already holds the lock
@@ -112,6 +129,45 @@ end
             verbose_proxy_logger.error("Error acquiring Redis lock for %s: %s", cronjob_id, e)
             return False
 
+    async def renew_lock(self, cronjob_id: str, ttl: int | None = None) -> bool:
+        """Extend this pod's lock by another TTL, if it still owns it.
+
+        Lets a lease outlive a run that takes longer than its TTL without making
+        the TTL a failover deadline for the whole job. Returns False when the
+        lock is gone or another pod took it, so the caller learns it is no
+        longer the owner rather than extending someone else's lease.
+
+        Renewal has no non-atomic fallback, unlike release. A GET-then-SET would
+        write unconditionally, so a lease that lapsed and was taken over between
+        the two calls would be handed back to the pod that lost it, leaving that
+        pod and its successor both believing they own the job. Where the
+        compare-and-expire cannot run, this reports False and the lease is left
+        to expire into the failover it already describes.
+        """
+        cache: Final = self.redis_cache
+        if cache is None:
+            verbose_proxy_logger.debug("redis_cache is None, skipping renew_lock")
+            return False
+        lock_ttl: Final = ttl or DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
+        lock_key: Final = PodLockManager.get_redis_lock_key(cronjob_id)
+
+        result, self._renew_lock_script = await self._act_if_owner(
+            cache=cache,
+            lock_key=lock_key,
+            script=self._COMPARE_AND_EXPIRE_LOCK_SCRIPT,
+            script_handle=self._renew_lock_script,
+            script_args=(lock_ttl,),
+            fallback=None,
+        )
+        if result:
+            verbose_proxy_logger.debug(
+                "Pod %s renewed Redis lock for cronjob_id=%s (ttl=%ds)",
+                self.pod_id,
+                cronjob_id,
+                lock_ttl,
+            )
+        return bool(result)
+
     async def release_lock(
         self,
         cronjob_id: str,
@@ -123,7 +179,8 @@ end
         Falls back to GET + DEL for cache implementations that don't support
         script registration.
         """
-        if self.redis_cache is None:
+        cache: Final = self.redis_cache
+        if cache is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping release_lock")
             return
         try:
@@ -133,7 +190,7 @@ end
                 cronjob_id,
             )
             lock_key: Final = PodLockManager.get_redis_lock_key(cronjob_id)
-            result: Final = await self._compare_and_delete_lock(lock_key=lock_key)
+            result: Final = await self._compare_and_delete_lock(cache=cache, lock_key=lock_key)
             if result == 1:
                 verbose_proxy_logger.info(
                     "Pod %s successfully released Redis lock for cronjob_id=%s",
@@ -153,40 +210,70 @@ end
         except Exception as e:
             verbose_proxy_logger.error("Error releasing Redis lock for %s: %s", cronjob_id, e)
 
-    async def _compare_and_delete_lock(self, lock_key: str) -> int:
+    async def _compare_and_delete_lock(self, cache: RedisCache, lock_key: str) -> int:
         """
         Atomically delete lock key only if current pod owns it.
 
         Falls back to get/delete for non-RedisCache implementations that do not
         expose Lua script registration.
         """
-        script_register: Final = getattr(self.redis_cache, "async_register_script", None)
+
+        async def _delete() -> int:
+            return int(await cache.async_delete_cache(lock_key) or 0)
+
+        result, self._release_lock_script = await self._act_if_owner(
+            cache=cache,
+            lock_key=lock_key,
+            script=self._COMPARE_AND_DELETE_LOCK_SCRIPT,
+            script_handle=self._release_lock_script,
+            script_args=(),
+            fallback=_delete,
+        )
+        return result
+
+    async def _act_if_owner(
+        self,
+        *,
+        cache: RedisCache,
+        lock_key: str,
+        script: str,
+        script_handle: _RegisteredScript | None,
+        script_args: Sequence[object],
+        fallback: Callable[[], Awaitable[int]] | None,
+    ) -> tuple[int, _RegisteredScript | None]:
+        """Act on the lock only if this pod still owns it, atomically where possible.
+
+        Returns the script's result and the handle to cache for next time, which is
+        None whenever the GET-then-act fallback answered instead, so a Redis restart
+        that cleared the loaded scripts re-registers rather than failing forever.
+
+        ``fallback`` is None for actions with no safe non-atomic form, which report
+        0 rather than racing the lock's owner.
+        """
+        script_register: Final = getattr(cache, "async_register_script", None)
         if callable(script_register):
-            try:
-                if self._release_lock_script is None:
-                    self._release_lock_script = script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
+            with suppress(Exception):
                 # acquire_lock stores the pod_id via async_set_cache, which
                 # JSON-encodes the value; compare against the same encoding so
-                # the Lua equality check matches and the lock is released
-                result = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
-                return int(result or 0)
-            except Exception:
-                # Lua execution failed (e.g. Redis restart cleared loaded scripts,
-                # or scripting is disabled). Reset cached script handle and fall
-                # through to the GET + DEL fallback so the lock is still released.
-                self._release_lock_script = None
-                verbose_proxy_logger.warning(
-                    "Lua compare-and-delete failed for lock_key=%s, falling back to GET+DEL",
-                    lock_key,
-                )
+                # the Lua equality check matches
+                handle: Final = script_handle or script_register(script)
+                result: Final = await handle(keys=(lock_key,), args=(json.dumps(self.pod_id), *script_args))
+                return int(result or 0), handle
+            # scripting is disabled, or a Redis restart cleared the loaded scripts
+            verbose_proxy_logger.warning(
+                "Lua compare-and-act failed for lock_key=%s, falling back to GET then act",
+                lock_key,
+            )
 
-        current_value = await self.redis_cache.async_get_cache(lock_key)
+        if fallback is None:
+            return 0, None
+
+        current_value = await cache.async_get_cache(lock_key)
         if isinstance(current_value, bytes):
             current_value = current_value.decode("utf-8")
         if current_value != self.pod_id:
-            return 0
-        result = await self.redis_cache.async_delete_cache(lock_key)
-        return int(result or 0)
+            return 0, None
+        return await fallback(), None
 
     @staticmethod
     def _emit_acquired_lock_event(cronjob_id: str, pod_id: str):

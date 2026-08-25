@@ -51,6 +51,39 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Worker naming and labels.
+
+The worker takes a distinct `app.kubernetes.io/name` rather than the shared one
+plus a component label. The Service, PodDisruptionBudget, and ServiceMonitor all
+select on name + instance only, so a worker sharing the name would be picked up
+as a proxy endpoint. Narrowing those selectors instead would mean editing the
+Service selector of a running release, which drops every existing pod out of the
+endpoints until the new ones roll.
+*/}}
+{{- define "litellm.worker.name" -}}
+{{- printf "%s-worker" (include "litellm.name" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "litellm.worker.fullname" -}}
+{{- printf "%s-worker" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "litellm.worker.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.worker.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- define "litellm.worker.labels" -}}
+helm.sh/chart: {{ include "litellm.chart" . }}
+{{ include "litellm.worker.selectorLabels" . }}
+app.kubernetes.io/component: worker
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
 Enterprise billable-request metering. The client certificate identifies the
 deployment to LiteLLM's collector, so it is mounted read-only from an existing
 Secret rather than passed through the environment.

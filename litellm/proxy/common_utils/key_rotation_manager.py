@@ -9,6 +9,7 @@ from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    KEY_ROTATION_JOB_NAME,
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
     LITELLM_KEY_ROTATION_GRACE_PERIOD,
     LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS,
@@ -18,6 +19,12 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     RegenerateKeyRequest,
 )
+from litellm.proxy.common_utils.single_owner_job import (
+    JobLease,
+    WhenLockUnavailable,
+    run_as_single_owner,
+)
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _calculate_key_rotation_time,
@@ -37,42 +44,32 @@ class KeyRotationManager:
     Manages automated key rotation based on individual key rotation schedules.
     """
 
-    def __init__(self, prisma_client: PrismaClient, pod_lock_manager=None):
+    def __init__(self, prisma_client: PrismaClient, pod_lock_manager: PodLockManager | None = None):
         self.prisma_client = prisma_client
         self.pod_lock_manager = pod_lock_manager
 
-    async def process_rotations(self):
+    async def process_rotations(self) -> None:
         """
         Main entry point - find and rotate keys that are due for rotation.
-        Uses PodLockManager to ensure only one pod runs rotation in multi-pod deployments.
+        Runs on one elected pod; the lease is renewed for as long as the cycle
+        takes, so a deployment with many due keys cannot be joined mid-rotation.
         """
-        from litellm.constants import KEY_ROTATION_JOB_NAME
+        # A dedicated lock TTL (default 600s) rather than the check interval, which
+        # defaults to 24h: the interval as a TTL would strand rotation for a day if
+        # the owner crashed before releasing
+        lock_ttl: Final = max(LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS, 300)
+        await run_as_single_owner(
+            pod_lock_manager=self.pod_lock_manager,
+            job_name=KEY_ROTATION_JOB_NAME,
+            ttl_seconds=lock_ttl,
+            # Rotating one key twice hands out two replacements and invalidates the
+            # first, so a cycle skipped during a Redis outage is the cheaper failure
+            when_unavailable=WhenLockUnavailable.SKIP,
+            run=self._rotate_due_keys,
+        )
 
-        lock_acquired = False
+    async def _rotate_due_keys(self, _lease: JobLease) -> None:
         try:
-            # If we have a pod lock manager with Redis, try to acquire the lock
-            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                # Use a dedicated lock TTL (default 600s) instead of the check interval
-                # (which defaults to 86400s / 24h). Using the check interval would create
-                # a 24-hour deadlock window if a pod crashes before releasing the lock.
-                lock_ttl: Final = max(
-                    LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS, 300
-                )  # At least 5 minutes, configurable via LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS
-                lock_acquired = (
-                    await self.pod_lock_manager.acquire_lock(
-                        cronjob_id=KEY_ROTATION_JOB_NAME,
-                        ttl=lock_ttl,
-                    )
-                    or False
-                )
-                if not lock_acquired:
-                    verbose_proxy_logger.warning(
-                        "Key rotation: another pod is already running rotation "
-                        "or Redis lock acquisition failed — skipping this cycle. "
-                        "Keys will be rotated on the next cycle."
-                    )
-                    return
-
             verbose_proxy_logger.info("Starting scheduled key rotation check...")
 
             # Clean up expired deprecated keys first
@@ -99,12 +96,6 @@ class KeyRotationManager:
 
         except Exception as e:
             verbose_proxy_logger.error("Key rotation process failed: %s", e)
-        finally:
-            # Only release the lock if it was actually acquired
-            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                await self.pod_lock_manager.release_lock(
-                    cronjob_id=KEY_ROTATION_JOB_NAME,
-                )
 
     async def _find_keys_needing_rotation(self) -> list[LiteLLM_VerificationToken]:
         """
