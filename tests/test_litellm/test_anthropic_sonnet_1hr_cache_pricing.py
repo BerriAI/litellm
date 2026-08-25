@@ -87,3 +87,56 @@ def test_anthropic_sonnet_1hr_cache_write_pricing(
         ), f"{model_key}: long-context 1hr/5min ratio is {ratio_lc}, expected 1.6"
     else:
         assert "cache_creation_input_token_cost_above_1hr_above_200k_tokens" not in info
+
+
+CLAUDE_3_EXPECTED = [
+    ("claude-3-haiku-20240307", 5e-07),
+    ("claude-3-opus-20240229", 3e-05),
+]
+
+
+@pytest.mark.parametrize("model_key, expected_1hr", CLAUDE_3_EXPECTED)
+def test_claude_3_1hr_cache_write_pricing(model_data, model_key, expected_1hr):
+    """Haiku 3 and Opus 3 both carried Sonnet's 6e-06 1hr rate, overbilling Haiku 3
+    1-hour cache writes 12x and underbilling Opus 3 5x."""
+    info = model_data[model_key]
+
+    assert info["cache_creation_input_token_cost_above_1hr"] == expected_1hr
+
+
+@pytest.mark.parametrize("model_key, expected_1hr", CLAUDE_3_EXPECTED)
+def test_backup_matches_main_for_claude_3_1hr_cache_write(model_key, expected_1hr):
+    json_path = os.path.join(
+        os.path.dirname(__file__),
+        "../../litellm/model_prices_and_context_window_backup.json",
+    )
+    with open(json_path) as f:
+        backup = json.load(f)
+
+    assert (
+        backup[model_key]["cache_creation_input_token_cost_above_1hr"] == expected_1hr
+    )
+
+
+def test_first_party_anthropic_1hr_cache_writes_are_2x_base_input(model_data):
+    """Anthropic charges 1-hour cache writes at 2x base input for every first-party
+    model, so any entry that drifts off that multiple is a copy-paste error."""
+    offenders = tuple(
+        (
+            model_key,
+            info["input_cost_per_token"],
+            info["cache_creation_input_token_cost_above_1hr"],
+        )
+        for model_key, info in model_data.items()
+        if isinstance(info, dict)
+        and info.get("litellm_provider") == "anthropic"
+        and info.get("input_cost_per_token")
+        and info.get("cache_creation_input_token_cost_above_1hr")
+        and abs(
+            info["cache_creation_input_token_cost_above_1hr"]
+            - 2 * info["input_cost_per_token"]
+        )
+        > 1e-12
+    )
+
+    assert offenders == (), f"1hr cache write is not 2x base input for: {offenders}"
