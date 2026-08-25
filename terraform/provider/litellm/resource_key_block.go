@@ -37,7 +37,10 @@ func resourceLiteLLMKeyBlock() *schema.Resource {
 				Required:    true,
 				ForceNew:    true,
 				Sensitive:   true,
-				Description: "The API key to block. Destroying this resource unblocks the key",
+				Description: "The API key to block, as the raw sk- value or its SHA-256 token hash. Destroying this resource unblocks the key",
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					return old != "" && hashedKeyToken(old) == hashedKeyToken(new)
+				},
 			},
 			"blocked": {
 				Type:        schema.TypeBool,
@@ -50,11 +53,13 @@ func resourceLiteLLMKeyBlock() *schema.Resource {
 
 func resourceLiteLLMKeyBlockCreate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
-	key := d.Get("key").(string)
+	// Block by the SHA-256 token hash so the raw key never appears in the
+	// request, the resource ID, or Terraform plan output.
+	token := hashedKeyToken(d.Get("key").(string))
 
 	log.Printf("[INFO] Blocking key")
 
-	resp, err := MakeRequest(client, "POST", endpointKeyBlock, map[string]interface{}{"key": key})
+	resp, err := MakeRequest(client, "POST", endpointKeyBlock, map[string]interface{}{"key": token})
 	if err != nil {
 		return fmt.Errorf("error blocking key: %w", err)
 	}
@@ -64,7 +69,7 @@ func resourceLiteLLMKeyBlockCreate(d *schema.ResourceData, m interface{}) error 
 		return err
 	}
 
-	d.SetId(key)
+	d.SetId(token)
 	return resourceLiteLLMKeyBlockRead(d, m)
 }
 
@@ -99,7 +104,11 @@ func resourceLiteLLMKeyBlockRead(d *schema.ResourceData, m interface{}) error {
 		return nil
 	}
 
-	d.Set("key", key)
+	// Keep the configured key value; only fill it from the hashed ID when
+	// importing, where no configured value exists yet.
+	if _, ok := d.GetOk("key"); !ok {
+		d.Set("key", key)
+	}
 	d.Set("blocked", true)
 	return nil
 }

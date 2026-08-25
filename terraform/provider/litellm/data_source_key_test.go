@@ -13,8 +13,8 @@ func TestDataSourceKeyRead(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/key/info" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		if got := r.URL.Query().Get("key"); got != "sk-raw-secret" {
-			t.Errorf("expected key query param 'sk-raw-secret', got %q", got)
+		if got := r.URL.Query().Get("key"); got != "43d0a3c1b9dc2739952a8ffc4ee4f41ea34da6587cbc717c3a51185b9fac611c" {
+			t.Errorf("expected key query param to be the token hash, got %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
@@ -174,5 +174,25 @@ func TestDataSourceKeysRead(t *testing.T) {
 	second := keys[1].(map[string]interface{})
 	if second["blocked"] != true || second["max_budget"] != 0.0 {
 		t.Errorf("unexpected second key: %v", second)
+	}
+}
+
+// Regression for the security review finding: the singular key data source
+// must query /key/info by the SHA-256 token hash, never the raw sk- value.
+func TestDataSourceKeyQueriesByTokenHash(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("key")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "hash", "info": {"token": "hash", "key_alias": "a"}}`))
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, dataSourceLiteLLMKey().Schema, map[string]interface{}{"key": "sk-test-123"})
+	if err := dataSourceLiteLLMKeyRead(d, NewClient(srv.URL, "master-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if gotQuery != keyBlockTestHash {
+		t.Fatalf("query key = %q, want the token hash %q", gotQuery, keyBlockTestHash)
 	}
 }

@@ -146,7 +146,9 @@ func dataSourceLiteLLMKey() *schema.Resource {
 
 func dataSourceLiteLLMKeyRead(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
-	key := d.Get("key").(string)
+	// Look up by the SHA-256 token hash so the raw key never appears in the
+	// request URL, where reverse-proxy access logs could record it.
+	key := hashedKeyToken(d.Get("key").(string))
 
 	resp, err := MakeRequest(client, "GET", fmt.Sprintf("%s?key=%s", endpointKeyInfo, url.QueryEscape(key)), nil)
 	if err != nil {
