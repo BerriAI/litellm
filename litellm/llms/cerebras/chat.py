@@ -27,7 +27,7 @@ class CerebrasConfig(OpenAIGPTConfig):
     seed: int | None = None
     stream: bool | None = None
     top_p: float | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # Fractions supported.
-    tool_choice: str | dict | None = None
+    tool_choice: str | dict | None = None  # mutable-ok: API payload.
     tools: list | None = None
     user: str | None = None
     reasoning_effort: str | None = None
@@ -36,7 +36,7 @@ class CerebrasConfig(OpenAIGPTConfig):
     top_logprobs: int | None = None
     frequency_penalty: float | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # Fractions supported.
     presence_penalty: float | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # Fractions supported.
-    logit_bias: dict[str, float] | None = None
+    logit_bias: dict[str, float] | None = None  # mutable-ok: API payload.
     service_tier: str | None = None
     prompt_cache_key: str | None = None
     prediction: ChatCompletionPredictionContentParam | None = None
@@ -47,11 +47,11 @@ class CerebrasConfig(OpenAIGPTConfig):
         max_tokens: int | None = None,
         response_format: dict | None = None,
         seed: int | None = None,
-        stop: str | list[str] | None = None,
+        stop: str | list[str] | None = None,  # mutable-ok: API payload.
         stream: bool | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
-        tool_choice: str | dict | None = None,
+        tool_choice: str | dict | None = None,  # mutable-ok: API payload.
         tools: list | None = None,
         user: str | None = None,
         reasoning_effort: str | None = None,
@@ -60,7 +60,7 @@ class CerebrasConfig(OpenAIGPTConfig):
         top_logprobs: int | None = None,
         frequency_penalty: float | None = None,
         presence_penalty: float | None = None,
-        logit_bias: dict[str, float] | None = None,
+        logit_bias: dict[str, float] | None = None,  # mutable-ok: API payload.
         service_tier: str | None = None,
         prompt_cache_key: str | None = None,
         prediction: ChatCompletionPredictionContentParam | None = None,
