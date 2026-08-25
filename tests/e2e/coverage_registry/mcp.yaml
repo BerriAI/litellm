@@ -119,3 +119,35 @@
   assertions: [succeeds]
   source: "server.py:1089"
   rationale: Smoke; rarely used; same auth model as tools
+- id: mcp.toolset.api_key.persists_bare_tool_names
+  module: mcp
+  tier: P0
+  operation: toolset
+  auth_family: api_key
+  assertions: [persists_bare_tool_names]
+  source: "toolset_db.py:24"
+  rationale: "Toolset rows store bare {server_id, tool_name} pairs; a pre-prefixed name double-prefixes at serve time and tools stop matching (LIT-3419, regressed twice)"
+- id: mcp.toolset.api_key.serves_prefixed_tool_names
+  module: mcp
+  tier: P0
+  operation: toolset
+  auth_family: api_key
+  assertions: [serves_prefixed_tool_names]
+  source: "utils.py:249 add_server_prefix_to_name"
+  rationale: "A toolset-scoped key must be served the documented {server_prefix}{separator}{tool} wire name, or clients calling the documented name get tool-not-found (LIT-3419)"
+- id: mcp.key_update.api_key.budget_change_preserves_grants
+  module: mcp
+  tier: P0
+  operation: key_update
+  auth_family: api_key
+  assertions: [budget_change_preserves_grants]
+  source: "key_management_endpoints.py:2047 object_permission gating"
+  rationale: "A max_budget-only /key/update silently dropped the key's MCP toolset/servers (fixed PR #34452); partial updates must not null unrelated fields"
+- id: mcp.key_update.api_key.stale_server_ids_dropped
+  module: mcp
+  tier: P1
+  operation: key_update
+  auth_family: api_key
+  assertions: [stale_server_ids_dropped]
+  source: "object_permission_utils.py:570 stale_identifiers"
+  rationale: "A key holding deleted MCP server ids was un-editable via the UI (403 'not allowed by team'), forcing hand-edited DB rows (LIT-3278); stale ids must be dropped, not fatal"

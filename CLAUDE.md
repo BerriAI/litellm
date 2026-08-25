@@ -23,6 +23,12 @@ When adding new features, add meaningful tests. Don't add tests that don't check
 
 Same thing for bug fixes. The tests should make it so that this specific bug can never happen again without failing tests (i.e., regression)
 
+Work test-first (TDD). Write the failing test before the fix or the feature, run it, and confirm it fails for the reason you expect. A test you have never seen fail is not evidence of anything: it may be asserting something that was already true, or asserting nothing at all. Only once it is red do you write the code that turns it green
+
+Red means red for the right reason. An import error, a typo in a fixture, a 401, or a missing env var is not the failure you are looking for. Read the actual assertion message and check that it names the behavior under test
+
+When the bug is already fixed on your branch and you cannot get a genuine red, prove the test's power another way and say in the PR which one you used: run it against a build from before the fix, or revert the fix locally, or mutate the product code the test claims to protect. If none of those makes it fail, the test does not cover the bug and should not be counted as covering it
+
 `tests/test_litellm/` mirrors `litellm/` in a parallel path (see `tests/test_litellm/readme.md`). Name tests `test_<filename>.py`, but always match the existing test file in the directory you touch — many provider dirs use longer descriptive names (e.g. `test_anthropic_chat_transformation.py`) to avoid ambiguity across sibling folders. For bug fixes, extend the existing mapped test file rather than creating a new one. Only create a new test file for a new feature (provider, endpoint, or transformation module) that has no mapped test yet, following that directory's naming convention (or `test_<filename>.py` if you're the first test there). One focused regression test beats many shallow ones
 
 End-to-end tests belong in `tests/e2e/` and must follow the harness conventions documented in that directory's `CLAUDE.md`

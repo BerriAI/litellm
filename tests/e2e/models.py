@@ -52,6 +52,7 @@ class KeyMetadata(BaseModel):
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
+    mcp_toolsets: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -114,6 +115,7 @@ class KeyInfo(BaseModel):
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
     budget_limits: list[BudgetWindowState] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyInfoResponse(BaseModel):
@@ -767,7 +769,7 @@ class LiteLLMParamsBody(BaseModel):
     tpm: int | None = None
 
 
-ModelMode = Literal["batch", "realtime", "image_generation"]
+ModelMode = Literal["batch", "realtime", "image_generation", "responses"]
 
 
 class ModelInfoBody(BaseModel):
@@ -835,7 +837,9 @@ class CredentialCreateResponse(BaseModel):
 
 class KeyUpdateBody(BaseModel):
     key: str
-    models: list[str]
+    models: list[str] | None = None
+    max_budget: float | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyBlockBody(BaseModel):
