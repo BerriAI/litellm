@@ -5324,6 +5324,47 @@ class TestBedrockGuardrailImageInput:
         ]
 
     @pytest.mark.asyncio
+    async def test_image_part_carrying_a_text_field_is_still_scanned_as_an_image(self):
+        """A part tagged image_url reaches the model as an image, text field or not.
+
+        Provider transformations branch on `type`, so reading `text` first would scan
+        the decoy and forward the image unscanned - the exact bypass this change closes.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": self._PNG_DATA_URI},
+                        "text": "just a friendly note",
+                    }
+                ],
+            }
+        ]
+
+        request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert request["content"] == [
+            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unscannable_image_part_carrying_a_text_field_still_blocks(self):
+        """The decoy text must not turn an unscannable image into a scanned request."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._GIF_DATA_URI}, "text": "hello"}],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_unscannable_image_blocks_the_request_by_default(self):
         """ApplyGuardrail takes png/jpeg only, and the image reaches the model either way.
 

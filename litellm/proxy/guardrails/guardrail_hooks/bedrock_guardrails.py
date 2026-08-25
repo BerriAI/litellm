@@ -381,13 +381,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not isinstance(item, dict):
             return None
         part: Final = cast(Mapping[str, object], item)  # cast-ok: narrowed to dict on the line above
+        # Classify by the declared type before reading any field. Provider
+        # transformations branch on `type`, so a part tagged image_url reaches the
+        # model as an image even when it also carries a `text` key. Reading `text`
+        # first would scan that decoy and forward the image unscanned, which is the
+        # bypass this whole extractor exists to close.
+        if part.get("type") == "image_url":
+            image_url: Final = self._get_image_url(item=part)
+            if image_url is None:
+                return None
+            return await self._build_image_content_item(image_url=image_url)
         text: Final = part.get("text")
         if isinstance(text, str):
             return BedrockContentItem(text=BedrockTextContent(text=text))
-        image_url: Final = self._get_image_url(item=part)
-        if image_url is None:
-            return None
-        return await self._build_image_content_item(image_url=image_url)
+        return None
 
     @staticmethod
     def _get_image_url(item: Mapping[str, object]) -> str | None:
