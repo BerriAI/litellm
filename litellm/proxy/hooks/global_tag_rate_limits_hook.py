@@ -25,13 +25,28 @@ how its bucket is shared:
 - `apply_to_models`: unset means every model. Set to a list of model names,
   only requests whose caller-facing `model` field is in that list count --
   letting one entry rate-limit a whole fallback chain as a single unit by
-  naming every model in the chain. This is evaluated once, against the
-  caller-requested `model`, before Router does any routing: if the request's
-  own model fails and Router falls back to a model not in `apply_to_models`,
-  that fallback hop is not re-evaluated -- the original admission already
-  stands. An operator who needs the limit to track whichever model actually
-  ends up serving a request, including after a fallback, needs
-  `model_info.tag_rate_limits` instead.
+  naming every model in the chain. Each check is a fresh, independent
+  evaluation of `_entry_applies` against whatever `model` is current at that
+  moment, not a one-time decision that then sticks for the rest of the
+  request. Two concrete consequences follow from that:
+  (1) if the request's own model fails mid-flight and Router internally
+  retries a different model for the *same* admitted call, that retry is
+  never re-checked -- the original admission (against the originally
+  requested model) already stands, so an operator who needs the limit to
+  track whichever model actually ends up serving a request needs
+  `model_info.tag_rate_limits` instead; but
+  (2) if this hook's own admission *rejects* the request,
+  `common_request_processing.py` catches that rejection and retries the
+  whole pre-call pipeline (this hook included) against
+  `litellm_settings.fallbacks`/`router_settings.fallbacks` configured for
+  the original model, with `data["model"]` mutated to the fallback target --
+  a fresh, correct evaluation of `apply_to_models` against that new model.
+  If that fallback model is NOT also in `apply_to_models`, this is a real
+  escape hatch: the rejected request is transparently admitted anyway.
+  List every model that should share the cap (the whole chain, not just its
+  primary member) in `apply_to_models` to close this -- a fallback target
+  that's also listed re-hits the same, already-exhausted shared bucket and
+  is correctly rejected too.
 - `scope_by_key_hash` (already exists on `TagRateLimitEntry`): whether the
   keys an entry applies to share one bucket, or each gets its own.
 
