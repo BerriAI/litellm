@@ -34,6 +34,8 @@ const modelMappingsRule = {
   },
 };
 
+const tooltipCodeClassName = "rounded-sm bg-background/20 px-1 py-0.5 font-mono text-xs";
+
 const ConditionalPublicModelName: React.FC = () => {
   const form = useFormContext<MountedFormValues>();
 
@@ -123,22 +125,22 @@ const ConditionalPublicModelName: React.FC = () => {
   if (!showPublicModelName) return null;
 
   const publicNameTooltipContent = (
-    <>
-      <div className="mb-2 font-normal">The name you specify in your API calls to LiteLLM Proxy</div>
-      <div className="mb-2 font-normal">
+    <div className="flex flex-col gap-2 text-left font-normal">
+      <div>The name you specify in your API calls to LiteLLM Proxy</div>
+      <div>
         <strong>Example:</strong> If you name your public model{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">example-name</code>, and choose{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">openai/qwen-plus-latest</code> as the LiteLLM model
+        <code className={tooltipCodeClassName}>example-name</code>, and choose{" "}
+        <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
       </div>
-      <div className="mb-2 font-normal">
+      <div>
         <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">model = &quot;example-name&quot;</code>
+        <code className={tooltipCodeClassName}>model = &quot;example-name&quot;</code>
       </div>
-      <div className="font-normal">
-        <strong>Result:</strong> LiteLLM sends{" "}
-        <code className="bg-muted px-1 py-0.5 rounded-sm text-xs">qwen-plus-latest</code> to the provider
+      <div>
+        <strong>Result:</strong> LiteLLM sends <code className={tooltipCodeClassName}>qwen-plus-latest</code> to the
+        provider
       </div>
-    </>
+    </div>
   );
 
   const liteLLMModelTooltipContent = <div>The model name LiteLLM will send to the LLM API</div>;

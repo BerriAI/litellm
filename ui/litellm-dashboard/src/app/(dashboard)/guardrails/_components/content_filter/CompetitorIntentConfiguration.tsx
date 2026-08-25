@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useState } from "react";
 
 import { getMajorAirlines } from "@/components/networking";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";

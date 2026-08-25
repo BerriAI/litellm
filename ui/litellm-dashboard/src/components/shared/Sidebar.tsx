@@ -2,9 +2,10 @@
 
 import * as React from "react";
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
-import { type VariantProps } from "cva";
 
-import { cn, cva } from "@/lib/cva.config";
+import { cva, type VariantProps } from "class-variance-authority";
+
+import { cn } from "@/lib/cva.config";
 
 type SidebarContextValue = { collapsed: boolean };
 const SidebarContext = React.createContext<SidebarContextValue>({ collapsed: false });
@@ -136,8 +137,8 @@ const SidebarMenuBadge = React.forwardRef<HTMLSpanElement, React.ComponentPropsW
 );
 SidebarMenuBadge.displayName = "SidebarMenuBadge";
 
-const sidebarMenuButtonVariants = cva({
-  base: [
+const sidebarMenuButtonVariants = cva(
+  [
     "group/menu-btn relative flex w-full items-center gap-2.5 overflow-hidden rounded-md px-2.5 text-left text-[13px] font-medium no-underline",
     "text-sidebar-foreground/70 outline-none transition-colors",
     "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -145,19 +146,21 @@ const sidebarMenuButtonVariants = cva({
     "disabled:pointer-events-none disabled:opacity-50",
     "[&>svg]:size-[18px] [&>svg]:shrink-0",
     "group-data-[collapsed=true]/sidebar:mx-auto group-data-[collapsed=true]/sidebar:size-9 group-data-[collapsed=true]/sidebar:justify-center group-data-[collapsed=true]/sidebar:gap-0 group-data-[collapsed=true]/sidebar:px-0",
-  ].join(" "),
-  variants: {
-    isActive: {
-      true: "bg-sidebar-accent text-sidebar-accent-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-sidebar-primary group-data-[collapsed=true]/sidebar:before:hidden",
-      false: "",
+  ],
+  {
+    variants: {
+      isActive: {
+        true: "bg-sidebar-accent text-sidebar-accent-foreground before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-sidebar-primary group-data-[collapsed=true]/sidebar:before:hidden",
+        false: "",
+      },
+      size: {
+        default: "h-[34px]",
+        sub: "h-[34px]",
+      },
     },
-    size: {
-      default: "h-[34px]",
-      sub: "h-[34px]",
-    },
+    defaultVariants: { isActive: false, size: "default" },
   },
-  defaultVariants: { isActive: false, size: "default" },
-});
+);
 
 type SidebarMenuButtonProps = ButtonPrimitive.Props & VariantProps<typeof sidebarMenuButtonVariants>;
 

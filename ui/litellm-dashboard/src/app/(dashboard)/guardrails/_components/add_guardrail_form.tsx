@@ -25,7 +25,7 @@ import {
 } from "./guardrail_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
