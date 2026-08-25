@@ -5762,11 +5762,15 @@ def get_standard_logging_object_payload(
             response_model_name = final_response_obj.get("model")
 
         # For Azure Model Router, preserve the actual model in the top-level standard
-        # logging payload only when the user has opted in.
+        # logging payload.
+        from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
         requested_model: Final = kwargs.get("model")
-        if (
-            isinstance(requested_model, str)
-            and ("model_router" in requested_model.lower() or "model-router" in requested_model.lower())
+        stamped_selected_model: Final = AzureFoundryModelInfo.get_model_router_selected_model(hidden_params)
+        if stamped_selected_model is not None:
+            model_name = stamped_selected_model
+        elif (
+            AzureFoundryModelInfo.is_model_router_call(model=requested_model, hidden_params=hidden_params)
             and isinstance(response_model_name, str)
             and response_model_name
         ):
