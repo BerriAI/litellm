@@ -2,6 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -18,6 +19,26 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router: Final = APIRouter()
+
+
+def _get_credential_list() -> Sequence[CredentialItem]:
+    return litellm.credential_list
+
+
+async def _create_credential_record(
+    credentials_repository: CredentialsRepository,
+    data: dict[str, object],  # mutable-ok: repository create requires a concrete dict
+    credential_name: str,
+) -> None:
+    from prisma.errors import UniqueViolationError
+
+    try:
+        await credentials_repository.create(data=data)
+    except UniqueViolationError as error:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Credential with name '{credential_name}' already exists.",
+        ) from error
 
 
 class CredentialHelperUtils:
@@ -47,6 +68,7 @@ async def create_credential(
     fastapi_response: Response,
     credential: CreateCredentialItem,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    credential_list: Sequence[CredentialItem] = Depends(_get_credential_list),
 ):
     """
     [BETA] endpoint. This might change unexpectedly.
@@ -56,6 +78,14 @@ async def create_credential(
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
     try:
+        credential_name_exists: Final = any(
+            existing_credential.credential_name == credential.credential_name for existing_credential in credential_list
+        )
+        if credential_name_exists:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Credential with name '{credential.credential_name}' already exists.",
+            )
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -89,12 +119,14 @@ async def create_credential(
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict: Final = encrypted_credential.model_dump()
         credentials_dict_jsonified: Final = jsonify_object(credentials_dict)
-        await CredentialsRepository(prisma_client).create(
+        await _create_credential_record(
+            credentials_repository=CredentialsRepository(prisma_client),
             data={
                 **credentials_dict_jsonified,
                 "created_by": user_api_key_dict.user_id,
                 "updated_by": user_api_key_dict.user_id,
-            }
+            },
+            credential_name=credential.credential_name,
         )
 
         ## ADD TO LITELLM ##
