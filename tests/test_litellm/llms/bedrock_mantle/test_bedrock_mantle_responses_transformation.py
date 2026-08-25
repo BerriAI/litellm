@@ -425,11 +425,11 @@ class TestBedrockMantleResponsesNativeWebSearch:
         assert params["tools"] == [_function_tool()]
 
     def test_web_search_is_not_advertised_unless_the_request_asks_for_it(self, local_model_cost_map):
-        """The tool type widens only for requests that carry it, so a capable model's
-        other requests keep the provider-wide set and never reach the cost map."""
+        """The tool type set widens only for requests that carry a Web Search tool, so a capable
+        model's other requests keep the provider-wide set and never reach the cost map."""
         cfg = BedrockMantleResponsesAPIConfig()
         supported = cfg._supported_response_tool_types(tools=[_function_tool()], model="openai.gpt-5.6-terra")
-        assert "web_search" not in supported
+        assert "web_search" not in supported, "a request carrying no web_search tool must not widen the set"
         assert "function" in supported
 
     def test_web_search_hoisted_out_of_codex_additional_tools(self, local_model_cost_map):
