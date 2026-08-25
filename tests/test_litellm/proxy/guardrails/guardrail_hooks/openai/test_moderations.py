@@ -987,3 +987,50 @@ async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags()
             assert guardrail.streaming_sampling_rate == 2
     finally:
         litellm.logging_callback_manager._reset_all_callbacks()
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_response_scan_moderates_output_not_user_prompt():
+    """On response scans the conversation is available in structured_messages,
+    but moderation must still target the model output carried in texts. The fake
+    moderation endpoint flags only the harmful model answer: moderating the
+    (benign) user prompt instead would let the flagged output through."""
+    from fastapi import HTTPException
+
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+        )
+
+        async def moderate(input_text: str) -> OpenAIModerationResponse:
+            flagged = "harmful answer" in input_text
+            return OpenAIModerationResponse(
+                id="modr-123",
+                model="omni-moderation-latest",
+                results=[
+                    OpenAIModerationResult(
+                        flagged=flagged,
+                        categories={"violence": flagged},
+                        category_scores={"violence": 0.99 if flagged else 0.0},
+                        category_applied_input_types={"violence": []},
+                    )
+                ],
+            )
+
+        with patch.object(guardrail, "async_make_request", side_effect=moderate):
+            inputs = GenericGuardrailAPIInputs(
+                texts=["a harmful answer"],
+                structured_messages=[
+                    {"role": "user", "content": "a benign question"},
+                    {"role": "assistant", "content": "a harmful answer"},
+                ],
+            )
+
+            with pytest.raises(HTTPException):
+                await guardrail.apply_guardrail(
+                    inputs=inputs,
+                    request_data={},
+                    input_type="response",
+                )

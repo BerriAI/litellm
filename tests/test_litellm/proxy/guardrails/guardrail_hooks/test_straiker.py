@@ -596,6 +596,37 @@ async def test_non_streamed_response_intervention_redacts():
 
 
 @pytest.mark.asyncio
+async def test_response_envelope_keeps_conversation_out_of_response_content():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    response = ModelResponse(
+        choices=[Choices(finish_reason="stop", index=0, message=Message(content="answer", role="assistant"))],
+        model="gpt-4o-mini",
+    )
+    conversation = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "question"}],
+        "response": response,
+    }
+
+    await g.apply_guardrail(
+        inputs={"texts": ["answer"], "structured_messages": conversation, "model": "gpt-4o-mini"},
+        request_data=request_data,
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+
+    payload = _posted_payload(g)
+    assert payload["response"]["texts"] == ["answer"]
+    assert "structured_messages" not in payload["response"]
+    assert payload["request"]["structured_messages"] == [{"role": "user", "content": "question"}]
+
+
+@pytest.mark.asyncio
 async def test_guardrail_intervened_without_texts_blocks():
     g = _make_guardrail()
     g.async_handler.post.return_value = _mock_response("GUARDRAIL_INTERVENED")

@@ -248,6 +248,32 @@ class OpenAIResponsesHandler(BaseTranslation):
             ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools)
             tools_to_check.extend(cast(list[ChatCompletionToolParam], transformed_tools))
 
+    def scoped_request_conversation(
+        self,
+        request_data: dict,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> tuple[AllMessageValues, ...] | None:
+        """
+        This surface's request scan sends its structured messages without the
+        operator scoping flags (the input path applies none), so the response
+        scan mirrors that; request and response scans must not disagree about
+        the conversation.
+        """
+        structured_messages: Final = self.get_structured_messages(request_data)
+        return tuple(structured_messages) if structured_messages else None
+
+    def request_tools_for_guardrail(
+        self,
+        request_data: dict,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> tuple[ChatCompletionToolParam, ...] | None:
+        raw_tools: Final = request_data.get("tools")
+        if not raw_tools:
+            return None
+        tools_to_check: Final[list[ChatCompletionToolParam]] = []  # mutable-ok: _extract_and_transform_tools appends
+        self._extract_and_transform_tools(raw_tools, tools_to_check)
+        return tuple(tools_to_check) or None
+
     def _remap_tools_to_responses_api_format(self, guardrailed_tools: list[Any]) -> list[dict[str, object]]:
         """
         Remap guardrail-returned tools (Chat Completion format) back to
@@ -455,6 +481,13 @@ class OpenAIResponsesHandler(BaseTranslation):
             if response_model:
                 inputs["model"] = response_model
 
+            self.attach_response_scan_context(
+                inputs,
+                request_data,
+                guardrail_to_apply,
+                self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
+            )
+
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -544,6 +577,13 @@ class OpenAIResponsesHandler(BaseTranslation):
                 response_model = response_obj.get("model")
                 if response_model:
                     inputs["model"] = response_model
+
+                self.attach_response_scan_context(
+                    inputs,
+                    request_data,
+                    guardrail_to_apply,
+                    self.assistant_turn_from_extraction(texts_to_check, tool_calls_to_check),
+                )
 
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,

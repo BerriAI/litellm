@@ -1559,3 +1559,300 @@ class TestScanOnlyToolResults:
         assert data["messages"][3]["content"] == "page says [BLOCKED] here"
         assert data["messages"][3]["tool_call_id"] == "call_1"
         assert data["messages"][4]["content"] == "and then?"
+
+
+class RecordingGuardrail(CustomGuardrail):
+    """Captures the inputs of every apply_guardrail call without modifying anything."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="recording")
+        self.calls: list[tuple[str, dict]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        import copy
+
+        self.calls.append((input_type, copy.deepcopy(dict(inputs))))
+        return inputs
+
+
+class TestResponseScanConversation:
+    """Response scans receive the request conversation with the model's assistant
+    turns appended (inputs["structured_messages"]) plus the request's tool
+    definitions (inputs["tools"]), so conversation-context guardrails see the
+    same dialogue on both scans without caching state between hooks."""
+
+    def _response(self, *choices: Choices) -> ModelResponse:
+        return ModelResponse(
+            id="chatcmpl-1",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=list(choices),
+        )
+
+    @pytest.mark.asyncio
+    async def test_response_scan_receives_conversation_and_tools(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        request_data = {
+            "messages": [
+                {"role": "system", "content": "be helpful"},
+                {"role": "user", "content": "what's the weather?"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+        }
+        response = self._response(
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    content="Checking now.",
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_1",
+                            type="function",
+                            function=Function(name="get_weather", arguments='{"city": "Paris"}'),
+                        )
+                    ],
+                ),
+            )
+        )
+
+        await handler.process_output_response(response, guardrail, request_data=request_data)
+
+        input_type, inputs = guardrail.calls[-1]
+        assert input_type == "response"
+        assert inputs["structured_messages"] == [
+            {"role": "system", "content": "be helpful"},
+            {"role": "user", "content": "what's the weather?"},
+            {
+                "role": "assistant",
+                "content": "Checking now.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
+            },
+        ]
+        assert inputs["tools"] == request_data["tools"]
+
+    @pytest.mark.asyncio
+    async def test_response_scan_scoping_matches_request_scan(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        guardrail.skip_system_message_in_guardrail = True
+        guardrail.skip_tool_message_in_guardrail = True
+        request_data = {
+            "messages": [
+                {"role": "system", "content": "SYSTEM-PROMPT"},
+                {"role": "user", "content": "run the tool"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "TOOL-RESULT"},
+                {"role": "user", "content": "summarize"},
+            ]
+        }
+
+        await handler.process_input_messages(data=dict(request_data), guardrail_to_apply=guardrail)
+        response = self._response(
+            Choices(finish_reason="stop", index=0, message=Message(content="Done.", role="assistant"))
+        )
+        await handler.process_output_response(response, guardrail, request_data=dict(request_data))
+
+        (_, request_inputs), (_, response_inputs) = guardrail.calls
+        request_conversation = request_inputs["structured_messages"]
+        response_conversation = response_inputs["structured_messages"]
+        assert response_conversation[: len(request_conversation)] == request_conversation
+        assert response_conversation[len(request_conversation) :] == [{"role": "assistant", "content": "Done."}]
+        assert all(m["role"] not in ("system", "tool") for m in response_conversation)
+
+    @pytest.mark.asyncio
+    async def test_scan_only_tool_results_scopes_response_conversation_and_tools(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        guardrail.scan_only_tool_results = True
+        request_data = {
+            "messages": [
+                {"role": "user", "content": "fetch the page"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "page content"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "fetch", "parameters": {}}}],
+        }
+        response = self._response(
+            Choices(finish_reason="stop", index=0, message=Message(content="Summary.", role="assistant"))
+        )
+
+        await handler.process_output_response(response, guardrail, request_data=request_data)
+
+        _, inputs = guardrail.calls[-1]
+        assert inputs["structured_messages"] == [
+            {"role": "tool", "tool_call_id": "call_1", "content": "page content"},
+            {"role": "assistant", "content": "Summary."},
+        ]
+        assert "tools" not in inputs
+
+    @pytest.mark.asyncio
+    async def test_sdk_path_without_request_data_sends_no_conversation(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        response = self._response(
+            Choices(finish_reason="stop", index=0, message=Message(content="Hello.", role="assistant"))
+        )
+
+        await handler.process_output_response(response, guardrail, request_data=None)
+
+        _, inputs = guardrail.calls[-1]
+        assert "structured_messages" not in inputs
+        assert "tools" not in inputs
+        assert inputs["texts"] == ["Hello."]
+
+    @pytest.mark.asyncio
+    async def test_multi_choice_response_appends_one_turn_per_choice(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        request_data = {"messages": [{"role": "user", "content": "pick one"}]}
+        response = self._response(
+            Choices(finish_reason="stop", index=0, message=Message(content="candidate one", role="assistant")),
+            Choices(finish_reason="stop", index=1, message=Message(content="candidate two", role="assistant")),
+        )
+
+        await handler.process_output_response(response, guardrail, request_data=request_data)
+
+        _, inputs = guardrail.calls[-1]
+        assert inputs["structured_messages"] == [
+            {"role": "user", "content": "pick one"},
+            {"role": "assistant", "content": "candidate one"},
+            {"role": "assistant", "content": "candidate two"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_end_of_stream_scan_receives_conversation(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        request_data = {"messages": [{"role": "user", "content": "say hi"}]}
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-1",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(index=0, finish_reason=None, delta=Delta(content="hi ", role="assistant"))
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-1",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, finish_reason="stop", delta=Delta(content="there"))],
+            ),
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        _, inputs = guardrail.calls[-1]
+        assert inputs["structured_messages"] == [
+            {"role": "user", "content": "say hi"},
+            {"role": "assistant", "content": "hi there"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_midstream_scan_receives_the_partial_assistant_turn(self):
+        """Before the stream ends there is no assembled response to fall back on,
+        so the in-flight scan must still see the conversation plus what the model
+        has produced so far."""
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        request_data = {"messages": [{"role": "user", "content": "say hi"}]}
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-1",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(index=0, finish_reason=None, delta=Delta(content="hi ", role="assistant"))
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-1",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=0, finish_reason=None, delta=Delta(content="the"))],
+            ),
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        _, inputs = guardrail.calls[-1]
+        assert inputs["structured_messages"] == [
+            {"role": "user", "content": "say hi"},
+            {"role": "assistant", "content": "hi the"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_streaming_transform_scan_receives_conversation_per_choice(self):
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        request_data = {"messages": [{"role": "user", "content": "pick one"}]}
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-1",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(index=1, finish_reason=None, delta=Delta(content="two", role="assistant")),
+                    StreamingChoices(index=0, finish_reason=None, delta=Delta(content="one", role="assistant")),
+                ],
+            ),
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+            stream_transform_sink=StreamTransformSink(),
+        )
+
+        _, inputs = guardrail.calls[-1]
+        assert inputs["structured_messages"] == [
+            {"role": "user", "content": "pick one"},
+            {"role": "assistant", "content": "one"},
+            {"role": "assistant", "content": "two"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_empty_response_turns_yield_no_conversation(self):
+        """A conversation without a response turn would shadow the tool_calls/texts
+        fallback in conversation-preferring guardrails, so none is built."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = RecordingGuardrail()
+        request_data = {"messages": [{"role": "user", "content": "hi"}]}
+
+        assert handler.response_scan_conversation(request_data, guardrail, []) is None
