@@ -9092,6 +9092,40 @@ def test_model_group_info_reasoning_efforts_ignore_a_value_declared_in_model_inf
     assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
 
 
+def test_model_group_info_survives_a_junk_typed_operator_effort_value():
+    """A deployment's registered model_info reads back with whatever the operator wrote under any
+    key, so a wrong-typed supported_reasoning_efforts must not fail the group's info. Only the
+    constructor's trailing override keeps the junk away from ModelGroupInfo validation."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "junk-declared-group",
+                "litellm_params": {"model": "openai/lone-reasoner"},
+                "model_info": {"id": "junk-deployment"},
+            },
+        ]
+    )
+
+    def _model_info(model_id: str, model_name: str):
+        return {
+            "key": model_name,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+            "supported_reasoning_efforts": "high",
+        }
+
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info):
+        result = router._set_model_group_info(
+            model_group="junk-declared-group",
+            user_facing_model_group_name="junk-declared-group",
+        )
+
+    assert result is not None
+    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
+
+
 def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared():
     """A deployment is registered in the cost map under its own id with whatever model_info the
     operator wrote, so a mode they set themselves reads back exactly like one the map supplied. Only
