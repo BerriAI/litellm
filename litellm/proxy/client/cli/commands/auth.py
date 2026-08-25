@@ -99,11 +99,6 @@ class CliPollData(TypedDict, total=False):
     team_id: str
 
 
-class CliPollRequestKwargs(TypedDict, total=False):
-    timeout: int
-    headers: dict[str, str]
-
-
 class CliSsoStartData(TypedDict):
     login_id: str
     poll_secret: str
@@ -518,10 +513,7 @@ def _poll_for_ready_data(
 ) -> CliPollData | None:
     for attempt in range(total_timeout // poll_interval):
         try:
-            request_kwargs: CliPollRequestKwargs = {"timeout": request_timeout}
-            if headers is not None:
-                request_kwargs["headers"] = headers
-            response = requests.get(url, **request_kwargs)
+            response = requests.get(url, headers=headers, timeout=request_timeout)
             if response.status_code == 200:
                 data: CliPollData = response.json()
                 status = data.get("status")

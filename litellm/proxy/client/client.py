@@ -38,4 +38,4 @@ class Client:
         self.chat = ChatClient(base_url=self._base_url, api_key=self._api_key)
         self.keys = KeysManagementClient(base_url=self._base_url, api_key=self._api_key)
         self.credentials = CredentialsManagementClient(base_url=self._base_url, api_key=self._api_key)
-        self.teams = TeamsManagementClient(base_url=self._base_url, api_key=self._api_key)
+        self.teams = TeamsManagementClient(base_url=self._base_url, api_key=self._api_key, timeout=timeout)
