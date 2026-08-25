@@ -4130,7 +4130,7 @@ def get_optional_params(
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
     elif custom_llm_provider == "together_ai":
-        optional_params = litellm.TogetherAIConfig().map_openai_params(
+        optional_params = litellm.TogetherAIChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -7898,7 +7898,7 @@ class ProviderConfigManager:
             LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
             LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
-            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
+            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIChatConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
