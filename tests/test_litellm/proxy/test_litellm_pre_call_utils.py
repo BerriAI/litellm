@@ -7418,3 +7418,34 @@ def test_newrelic_vars_scoped_to_newrelic_callback_entry():
         None,
     )
     assert legit.callback_vars == {"newrelic_api_key": "REAL", "newrelic_region": "us"}
+
+
+def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
+    """``signoz_*`` vars reach the tracer through the trusted overlay with no
+    callback-name check, so a team that saved them under a different callback
+    never asked for SigNoz and must not export to it."""
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    under_signoz = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="signoz",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_signoz.callback_vars == {
+        "signoz_ingestion_key": "team-key",
+        "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443",
+    }
+
+    under_other = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "langfuse_host": "https://cloud.langfuse.com"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}

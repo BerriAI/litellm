@@ -51,6 +51,15 @@ def signoz_preset(
     )
 
 
+def signoz_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+    """Per-request SigNoz endpoint from team/key dynamic params.
+
+    ``None`` keeps the operator's endpoint, so a team that saved only a key
+    still exports to the configured destination.
+    """
+    return params.get("signoz_ingestion_endpoint")
+
+
 def signoz_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:  # mutable-ok: registry type
     """Per-request SigNoz OTLP headers from team/key dynamic params."""
     key: Final = params.get("signoz_ingestion_key")

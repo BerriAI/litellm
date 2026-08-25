@@ -5343,6 +5343,14 @@ def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
         assert legacy.config.endpoint == "http://signoz-collector.internal:4318/v1/traces"
         assert legacy.config.headers == "signoz-ingestion-key=legacy-key"
         assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
+        # Same name resolves to the same instance, not a second exporter.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is legacy
     finally:
         logging_module._in_memory_loggers.clear()
         is_otel_v2_enabled.cache_clear()

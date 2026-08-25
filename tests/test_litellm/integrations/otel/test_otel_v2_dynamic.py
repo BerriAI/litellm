@@ -470,12 +470,13 @@ def test_signoz_dynamic_headers_stamp_ingestion_key():
     assert dynamic_otlp_headers("signoz", {}) is None
 
 
-def test_signoz_registers_no_dynamic_endpoint_resolver():
-    # A team supplies a key, never a destination, so the operator's endpoint wins.
-    from litellm.integrations.otel.presets import (
-        DYNAMIC_ENDPOINT_BY_CALLBACK,
-        dynamic_otlp_endpoint,
-    )
+def test_signoz_dynamic_endpoint_comes_from_team_config():
+    from litellm.integrations.otel.presets import dynamic_otlp_endpoint
 
-    assert "signoz" not in DYNAMIC_ENDPOINT_BY_CALLBACK
+    assert (
+        dynamic_otlp_endpoint("signoz", {"signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"})
+        == "https://ingest.eu.signoz.cloud:443"
+    )
+    # A team that saved only a key keeps the operator's configured endpoint.
     assert dynamic_otlp_endpoint("signoz", {"signoz_ingestion_key": "k"}) is None
+    assert dynamic_otlp_endpoint("signoz", {}) is None

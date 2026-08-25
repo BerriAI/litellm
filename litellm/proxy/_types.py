@@ -3500,6 +3500,15 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    signoz: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="signoz",
+        ui_callback_name="SigNoz",
+        litellm_callback_params=[
+            "SIGNOZ_INGESTION_ENDPOINT",
+            "SIGNOZ_INGESTION_KEY",
+        ],
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """

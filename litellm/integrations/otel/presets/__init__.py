@@ -31,6 +31,7 @@ from litellm.integrations.otel.presets.phoenix import (
     phoenix_project_headers,
 )
 from litellm.integrations.otel.presets.signoz import (
+    signoz_dynamic_endpoint,
     signoz_dynamic_headers,
     signoz_preset,
 )
@@ -77,6 +78,7 @@ DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynam
     MappingProxyType(
         {
             "newrelic": newrelic_dynamic_endpoint,
+            "signoz": signoz_dynamic_endpoint,
         }
     )
 )
