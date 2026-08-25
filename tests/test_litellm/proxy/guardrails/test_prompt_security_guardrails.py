@@ -30,6 +30,7 @@ def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
                     "guardrail": "prompt_security",
                     "mode": "during_call",
                     "default_on": True,
+                    "file_sanitization_fail_open": False,
                 },
             }
         ],
@@ -41,6 +42,10 @@ def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
     assert registered[0].guardrail_name == "prompt_security"
     assert registered[0].default_on is True
     assert registered[0].event_hook == "during_call"
+    assert registered[0].file_sanitization_fail_open is False
+    config_model = registered[0].get_config_model()
+    assert config_model is not None
+    assert config_model().file_sanitization_fail_open is True
 
 
 def test_prompt_security_guard_config_no_api_key(monkeypatch: pytest.MonkeyPatch):
@@ -390,13 +395,28 @@ async def test_file_sanitization(monkeypatch: pytest.MonkeyPatch):
     ),
     ids=("litellm", "httpx"),
 )
-async def test_file_sanitization_fails_open_on_request_timeout(monkeypatch: pytest.MonkeyPatch, timeout: Exception):
+@pytest.mark.parametrize("fail_open", (True, False), ids=("fail-open", "fail-closed"))
+async def test_file_sanitization_request_timeout_policy(
+    monkeypatch: pytest.MonkeyPatch, timeout: Exception, fail_open: bool
+):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook="pre_call",
+        default_on=True,
+        file_sanitization_fail_open=fail_open,
+    )
 
     with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=timeout)):
+        if not fail_open:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.sanitize_file_content(b"file-content", "document.pdf")
+            assert exc_info.value.status_code == 408
+            assert exc_info.value.detail == "File sanitization timeout"
+            return
+
         result = await guardrail.sanitize_file_content(b"file-content", "document.pdf")
 
     assert result == {
@@ -408,7 +428,8 @@ async def test_file_sanitization_fails_open_on_request_timeout(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_file_sanitization_fails_open_on_overall_timeout(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("fail_open", (True, False), ids=("fail-open", "fail-closed"))
+async def test_file_sanitization_overall_timeout_policy(monkeypatch: pytest.MonkeyPatch, fail_open: bool):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
@@ -417,13 +438,21 @@ async def test_file_sanitization_fails_open_on_overall_timeout(monkeypatch: pyte
         event_hook="pre_call",
         default_on=True,
         file_sanitization_timeout=0.01,
+        file_sanitization_fail_open=fail_open,
     )
 
-    async def hanging_post(*args, **kwargs):
+    async def hanging_post(*_args: object, **_kwargs: object) -> None:
         await asyncio.sleep(60)
         raise AssertionError("sanitization request should have been cancelled")
 
     with patch.object(guardrail.async_handler, "post", side_effect=hanging_post):
+        if not fail_open:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.sanitize_file_content(b"file-content", "document.pdf")
+            assert exc_info.value.status_code == 408
+            assert exc_info.value.detail == "File sanitization timeout"
+            return
+
         result = await guardrail.sanitize_file_content(b"file-content", "document.pdf")
 
     assert result["action"] == "allow"

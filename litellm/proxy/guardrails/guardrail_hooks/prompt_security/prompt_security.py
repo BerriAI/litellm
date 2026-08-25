@@ -92,6 +92,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         system_prompt: str | None = None,
         check_tool_results: bool | None = None,
         file_sanitization_timeout: float = _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS,
+        file_sanitization_fail_open: bool | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -122,6 +123,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         self.max_poll_attempts = 30  # Maximum number of polling attempts
         self.poll_interval = 2  # Seconds between polling attempts
         self.file_sanitization_timeout = file_sanitization_timeout
+        self.file_sanitization_fail_open = file_sanitization_fail_open is not False
 
         super().__init__(**kwargs)
 
@@ -417,6 +419,14 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 timeout=self.file_sanitization_timeout,
             )
         except (asyncio.TimeoutError, httpx.TimeoutException, LiteLLMTimeout) as exc:
+            if not self.file_sanitization_fail_open:
+                verbose_proxy_logger.error(
+                    "Prompt Security Guardrail: file sanitization for %s timed out with %s; failing closed",
+                    filename,
+                    type(exc).__name__,
+                )
+                raise HTTPException(status_code=408, detail="File sanitization timeout") from exc
+
             verbose_proxy_logger.error(
                 "Prompt Security Guardrail: file sanitization for %s timed out with %s; failing open",
                 filename,
