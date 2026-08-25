@@ -14936,6 +14936,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/{team_id}/member/{user_id}/reset_spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Team Member Spend Fn
+         * @description Reset a team member's tracked spend against their per-member budget.
+         *
+         *     A member's spend is tracked separately from both their own personal
+         *     budget and the team's own budget (LiteLLM_TeamMembership.spend), so
+         *     neither /user/update nor /team/update can clear it: this is the only
+         *     endpoint that does. The cross-pod spend counter and cached membership
+         *     reads are invalidated so the reset takes effect on the member's next
+         *     request rather than waiting on the membership cache's TTL.
+         */
+        post: operations["reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/{team_id}/members/me": {
         parameters: {
             query?: never;
@@ -29550,6 +29577,8 @@ export interface components {
              * @default []
              */
             supported_openai_params: string[] | null;
+            /** Supported Reasoning Efforts */
+            supported_reasoning_efforts?: string[] | null;
             /**
              * Supports Function Calling
              * @default false
@@ -55062,6 +55091,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetSpendRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

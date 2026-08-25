@@ -2528,6 +2528,37 @@ def test_only_callbacks_that_can_charge_a_frame_are_collected_for_ws_quota(monke
     assert _collect_ws_project_quota_callbacks() == (quota,)
 
 
+@pytest.mark.asyncio
+async def test_async_rerank_records_llm_api_duration():
+    """arerank must feed the httpx timing into the logging obj, so the proxy can emit
+    x-litellm-overhead-duration-ms / x-litellm-timing-* on /rerank."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "rerank-1",
+                "results": [{"index": 0, "relevance_score": 0.9}],
+                "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 1}},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.arerank(
+        model="cohere/rerank-v3.5",
+        query="what is the capital of france",
+        documents=["paris", "berlin"],
+        top_n=1,
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert response._hidden_params["litellm_overhead_time_ms"] is not None
+    assert response._hidden_params["_response_ms"] >= response._hidden_params["litellm_overhead_time_ms"]
+
+
 class _JSONBodyVideoConfig(OpenAIVideoConfig):
     def use_multipart_form_data(self) -> bool:
         return False

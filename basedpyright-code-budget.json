@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 19955
+    "limit": 19949
   },
   "reportArgumentType": {
     "limit": 2566
@@ -54,7 +54,7 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5663
+    "limit": 5661
   },
   "reportMissingTypeArgument": {
     "limit": 15555
@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1822
+    "limit": 1810
   },
   "reportRedeclaration": {
     "limit": 8
@@ -105,10 +105,10 @@
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 39011
+    "limit": 39009
   },
   "reportUnknownParameterType": {
-    "limit": 19885
+    "limit": 19883
   },
   "reportUnknownVariableType": {
     "limit": 30569
