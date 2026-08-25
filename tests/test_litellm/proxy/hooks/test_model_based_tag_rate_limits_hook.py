@@ -106,6 +106,7 @@ def _expected_bucket_key(
     limit: float = 1,
     enabled_for: dict | None = None,
     disabled_for: dict | None = None,
+    scope_by_key_hash: bool = False,
 ) -> str:
     """
     Builds the exact key the real code would compute (via _hash_tag's
@@ -130,6 +131,7 @@ def _expected_bucket_key(
             period_seconds=period_seconds,
             enabled_for=enabled_for,
             disabled_for=disabled_for,
+            scope_by_key_hash=scope_by_key_hash,
         ),
         deployment_scope=deployment_scope,
         team_scope=team_scope,
@@ -597,6 +599,28 @@ def test_bucket_key_differs_for_same_named_entries_with_different_scoping_only()
         disabled_for={"tag_id": "end_user_id", "values": ["u2"]},
     )
     assert excluding_u1 != excluding_u2
+
+
+def test_bucket_key_differs_for_same_named_entries_diverging_only_on_scope_by_key_hash():
+    """
+    _DedupSignature already folds scope_by_key_hash into dedup (two
+    deployments declaring the same name/tag_id but different
+    scope_by_key_hash become two distinct _ConfiguredLimit entries, not one
+    merged one), but _policy_fingerprint didn't fold it into the bucket-key
+    hash. When a request's key_hash resolves to None -- e.g. no virtual key
+    on the call -- both entries' key_hash-derived suffix is empty too, so an
+    unscoped entry and a key-hash-scoped entry that otherwise share every
+    other field collided onto the identical counter, letting one entry's
+    admission or accounting silently corrupt the other's.
+    """
+    now = 0.0
+    unscoped = _expected_bucket_key(
+        "grp", "requests", "daily", "end_user_id", "u1", 86400, now, limit=100, scope_by_key_hash=False
+    )
+    key_hash_scoped_but_no_key_present = _expected_bucket_key(
+        "grp", "requests", "daily", "end_user_id", "u1", 86400, now, limit=100, scope_by_key_hash=True, key_hash=None
+    )
+    assert unscoped != key_hash_scoped_but_no_key_present
 
 
 # ---------------------------------------------------------------------------
@@ -1730,10 +1754,10 @@ async def test_log_success_event_accounts_against_the_key_hash_admission_checked
 
     now = time_controller.now().timestamp()
     keyed_bucket = _expected_bucket_key(
-        "grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash="keyA", limit=500000
+        "grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash="keyA", limit=500000, scope_by_key_hash=True
     )
     unkeyed_bucket = _expected_bucket_key(
-        "grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash=None, limit=500000
+        "grp", "tokens", "daily", "end_user_id", "u1", 86400, now, key_hash=None, limit=500000, scope_by_key_hash=True
     )
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=keyed_bucket, litellm_parent_otel_span=None))

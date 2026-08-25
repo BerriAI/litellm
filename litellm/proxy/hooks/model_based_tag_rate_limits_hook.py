@@ -700,18 +700,24 @@ def _fixed_length_identity(tag_value: str) -> str:
 def _policy_fingerprint(entry: TagRateLimitEntry) -> str:
     """
     Two entries can share a `name` and `tag_id` while genuinely disagreeing
-    on `limit`, `period_seconds`, or any of the scoping fields --
-    `_DedupSignature`/`resolve_any` already treat that as two distinct
-    policies (see `distinct_signature_count_by_name` in `_build_group_limits`),
-    so the Redis/in-memory bucket key must too, or two differently-configured
-    entries that happen to share a name check and charge the identical
-    counter. Hashed to a fixed-length digest for the same reason
+    on `limit`, `period_seconds`, `scope_by_key_hash`, or any of the scoping
+    fields -- `_DedupSignature`/`resolve_any` already treat that as two
+    distinct policies (see `distinct_signature_count_by_name` in
+    `_build_group_limits`), so the Redis/in-memory bucket key must too, or two
+    differently-configured entries that happen to share a name check and
+    charge the identical counter. `scope_by_key_hash` specifically needs its
+    own slot here rather than relying on `_hash_tag`'s `key_hash`-derived
+    suffix to carry it: that suffix is empty whenever `key_hash` resolves to
+    `None` (no virtual key on the call), which would otherwise collide an
+    unscoped entry with a key-hash-scoped one that agrees on every other
+    field. Hashed to a fixed-length digest for the same reason
     `_fixed_length_identity` hashes `tag_value`: an operator's own
     `enabled_for`/`disabled_for`/`apply_to_key_alias` list has no length bound.
     """
     fingerprint_source: Final = (
         entry.limit,
         entry.period_seconds,
+        entry.scope_by_key_hash,
         _scope_signature(entry.enabled_for),
         _scope_signature(entry.disabled_for),
         entry.apply_to_key_alias,
