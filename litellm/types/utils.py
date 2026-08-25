@@ -3855,6 +3855,7 @@ class SearchProviders(str, Enum):
     TINYFISH = "tinyfish"
     AGENTCORE = "agentcore"
     NIMBLE = "nimble"
+    BING_GROUNDING = "bing_grounding"
 
 
 # Create a set of all search provider values for quick lookup
