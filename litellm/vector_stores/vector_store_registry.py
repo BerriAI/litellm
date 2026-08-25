@@ -97,6 +97,7 @@ class VectorStoreRegistry:
     def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
         self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
+        self.config_vector_store_ids: frozenset[str] = frozenset()
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
         """
@@ -331,8 +332,13 @@ class VectorStoreRegistry:
                     break
 
             # Verify vector store still exists in database (if we have DB access)
-            # This ensures deleted vector stores are removed from cache
-            if vector_store is not None and prisma_client is not None:
+            # This ensures deleted vector stores are removed from cache.
+            # Config-defined vector stores are never in the database, so skip the check for them
+            if (
+                vector_store is not None
+                and prisma_client is not None
+                and vector_store_id not in self.config_vector_store_ids
+            ):
                 try:
                     # Check if it still exists in database
                     db_vector_store = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
@@ -418,6 +424,7 @@ class VectorStoreRegistry:
                 updated_at=datetime.now(timezone.utc),
             )
             self.vector_stores.append(litellm_managed_vector_store)
+            self.config_vector_store_ids = self.config_vector_store_ids | {vector_store_id}
 
         verbose_logger.debug(
             "all loaded vector stores = %s",
