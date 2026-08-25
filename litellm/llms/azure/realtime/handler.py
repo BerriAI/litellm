@@ -4,6 +4,8 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
@@ -31,15 +33,15 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
 
 class AzureOpenAIRealtime(AzureChatCompletion):
     @staticmethod
-    def get_auth_headers(api_key: str | None, azure_ad_token: str | None) -> dict[str, str]:
+    def get_auth_headers(api_key: str | None, azure_ad_token: str | None) -> Mapping[str, str]:
         """
         Build the websocket handshake auth headers, preferring a static api-key and falling back to
         an Azure AD (Entra ID) bearer token. Never sends both.
         """
         if api_key:
-            return {"api-key": api_key}
+            return MappingProxyType({"api-key": api_key})
         if azure_ad_token:
-            return {"Authorization": f"Bearer {azure_ad_token}"}
+            return MappingProxyType({"Authorization": f"Bearer {azure_ad_token}"})
         raise ValueError(
             "Missing Azure credentials for the realtime endpoint. Set an api_key, or configure Azure AD auth "
             "(azure_ad_token, tenant_id/client_id/client_secret, or a managed identity)"
@@ -132,7 +134,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_params=query_params,
         )
 
-        auth_headers = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
+        auth_headers: Final = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
 
         try:
             ssl_context: Final = get_shared_realtime_ssl_context()
