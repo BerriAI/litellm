@@ -5071,12 +5071,20 @@ async def test_async_post_call_failure_deployment_hook_swallows_callback_errors(
     """A callback that raises inside the hook must not propagate out of the dispatcher."""
 
     class ExplodingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.called = False
+
         async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+            self.called = True
             raise RuntimeError("hook exploded")
 
-    monkeypatch.setattr(litellm, "callbacks", [ExplodingLogger()])
+    exploding_logger = ExplodingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [exploding_logger])
 
     await async_post_call_failure_deployment_hook(request_data={}, exception=ValueError("x"), call_type="acompletion")
+
+    assert exploding_logger.called
 
 
 @pytest.mark.asyncio
