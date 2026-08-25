@@ -320,6 +320,63 @@ async def test_concurrency_reservation_released_on_success(time_controller, monk
 
 
 @pytest.mark.asyncio
+async def test_nested_call_success_does_not_release_the_outer_calls_reservation(time_controller, monkeypatch):
+    """
+    A nested LiteLLM call made inside the request (an LLM-judge guardrail, a
+    silent experiment) mints its own fresh litellm_call_id but inherits the
+    same ContextVar-held stash as the outer call, since it runs in the same
+    task rather than a separate one. The outer call's own concurrency
+    reservation must survive the nested call's admission and success
+    callback: it belongs to a different call id and must not be touched by
+    it.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data=_data(["end_user_id:u1"], call_id="call-outer"),
+        call_type="completion",
+    )
+
+    # Nested call, same task, different tag and a fresh call id -- admits
+    # and completes entirely before the outer call's own success/failure
+    # callback ever fires.
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data=_data(["end_user_id:u2"], call_id="call-nested"),
+        call_type="completion",
+    )
+    await hook.async_log_success_event(
+        kwargs={"litellm_call_id": "call-nested", "metadata": {"tags": ["end_user_id:u2"]}},
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
+    await asyncio.sleep(0)
+
+    # The outer call is still genuinely in flight -- its own reservation
+    # must still be held, so a second end_user_id:u1 request is rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="call-outer-2"),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
 async def test_concurrency_reservation_released_when_a_different_hook_rejects_the_request(time_controller, monkeypatch):
     """
     model_based_tag_rate_limits_hook raises the identical ProxyRateLimitError

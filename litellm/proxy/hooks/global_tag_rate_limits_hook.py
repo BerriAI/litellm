@@ -33,12 +33,14 @@ reservations on `data["litellm_logging_obj"].model_call_details` -- that
 object doesn't exist yet. Per-request state is instead kept on a
 `ContextVar`-based stash, the same established pattern
 `parallel_request_limiter_v3.py`'s v3 handler already uses for exactly this
-problem: the ContextVar is inherited by every asyncio Task forked from this
-request's own task (the SDK call, streaming generators, the logging worker),
-so concurrent requests never see each other's stash regardless of a
-caller-supplied `litellm_call_id` colliding, and `owner_litellm_call_id` only
-exists to tell a nested LiteLLM call (e.g. a guardrail's own LLM judge call)
-apart from the owning request.
+problem, with one difference: the stash here is a dict keyed by
+`litellm_call_id` rather than one shared mutable instance with an
+overwritable "owner" field, so a nested LiteLLM call made inside the request
+(e.g. a guardrail's own LLM judge call) -- which mints its own fresh call id
+but inherits the same ContextVar-held ancestor context, not a separate one
+-- gets its own isolated entry instead of overwriting the outer call's and
+having its own success callback release the outer call's still-pending
+reservations early.
 """
 
 import asyncio
@@ -140,38 +142,58 @@ class _CachePartition:
 
 @dataclass(slots=True)
 class _GlobalTagRateLimitStash:
-    """Per-request bookkeeping `async_pre_call_hook` hands to the success/
-    failure/disconnect callbacks -- see module docstring for why this is a
-    `ContextVar`, not `model_call_details`."""
+    """Per-call bookkeeping `async_pre_call_hook` hands to that same call's
+    success/failure/disconnect callbacks -- see module docstring for why
+    this lives on a `ContextVar`, not `model_call_details`.
 
-    owner_litellm_call_id: str | None = None
+    Keyed by `litellm_call_id` in the dict below rather than one shared
+    mutable instance with an overwritable "owner" field: a nested LiteLLM
+    call made inside the request (an LLM-judge guardrail, a silent
+    experiment) that mints its own fresh call id runs inside the *same*
+    inherited context, not a separate one, so a single shared instance's
+    owner field would get reassigned to the nested call and its own
+    success callback would then release the outer call's still-pending
+    reservations early -- letting extra same-tag requests through while
+    the outer request is still genuinely in flight. Keying by call id
+    isolates each call's own reservations regardless of nesting.
+    """
+
     admission_time: float | None = None
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
 
 
-_request_stash: Final[ContextVar[_GlobalTagRateLimitStash | None]] = ContextVar(
+# Sentinel key for a call with no litellm_call_id at all (claim and lookup
+# both fall back to this same key, so behavior for that degenerate case is
+# unchanged: everything without a call id still shares one bucket).
+_NO_CALL_ID: Final = "<no-call-id>"
+
+_request_stash: Final[ContextVar[dict[str, _GlobalTagRateLimitStash] | None]] = ContextVar(
     "global_tag_rate_limits_request_stash", default=None
 )
 
 
 def _claim_stash_for_data(data: Mapping[str, object]) -> _GlobalTagRateLimitStash:
-    stash = _request_stash.get()  # rebind-ok: lazily initialized below if this ContextVar has never been set
+    by_call_id: dict[str, _GlobalTagRateLimitStash] | None = (
+        _request_stash.get()
+    )  # rebind-ok: lazily initialized below if this ContextVar has never been set
+    if by_call_id is None:
+        by_call_id = {}  # rebind-ok: see above; mutable-ok: one dict per context, entries isolated per call id -- see class docstring
+        _request_stash.set(by_call_id)
+    owner_call_id: Final = data.get("litellm_call_id")
+    key: Final = owner_call_id if isinstance(owner_call_id, str) else _NO_CALL_ID
+    stash = by_call_id.get(key)
     if stash is None:
         stash = _GlobalTagRateLimitStash()  # rebind-ok: see above
-        _request_stash.set(stash)
-    owner_call_id: Final = data.get("litellm_call_id")
-    if isinstance(owner_call_id, str):
-        stash.owner_litellm_call_id = owner_call_id
+        by_call_id[key] = stash  # mutable-ok: see class docstring
     return stash
 
 
 def _stash_for_call(litellm_call_id: str | None) -> _GlobalTagRateLimitStash | None:
-    stash: Final = _request_stash.get()
-    if stash is None:
+    by_call_id: Final = _request_stash.get()
+    if by_call_id is None:
         return None
-    if stash.owner_litellm_call_id is None or litellm_call_id is None:
-        return stash
-    return stash if litellm_call_id == stash.owner_litellm_call_id else None
+    key: Final = litellm_call_id if litellm_call_id is not None else _NO_CALL_ID
+    return by_call_id.get(key)
 
 
 def _call_id_from_kwargs(kwargs: Mapping[str, object]) -> str | None:
