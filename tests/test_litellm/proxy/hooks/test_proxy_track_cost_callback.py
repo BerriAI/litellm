@@ -406,18 +406,18 @@ async def test_track_cost_callback_settles_budget_reservation_when_response_cost
     }
 
     with (
-        patch(
+        patch(  # test-quality-ok: callback reads proxy_logging_obj from the module; no injection seam
             "litellm.proxy.proxy_server.proxy_logging_obj",
         ) as mock_proxy_logging,
-        patch(
+        patch(  # test-quality-ok: assert the hold is settled, not refunded through release_budget_reservation
             "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
             new_callable=AsyncMock,
         ) as mock_release_budget_reservation,
-        patch(
+        patch(  # test-quality-ok: settle is a proxy-internal reservation call, not an HTTP boundary
             "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
             new_callable=AsyncMock,
         ) as mock_reconcile_budget_reservation,
-        patch(
+        patch(  # test-quality-ok: unpriced settle must not write a spend-log row
             "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
             new_callable=AsyncMock,
         ) as mock_update_database,
@@ -468,18 +468,18 @@ async def test_track_cost_callback_settles_async_stream_when_response_cost_missi
     }
 
     with (
-        patch(
+        patch(  # test-quality-ok: callback reads proxy_logging_obj from the module; no injection seam
             "litellm.proxy.proxy_server.proxy_logging_obj",
         ) as mock_proxy_logging,
-        patch(
+        patch(  # test-quality-ok: async-complete streams must settle, not release
             "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
             new_callable=AsyncMock,
         ) as mock_release_budget_reservation,
-        patch(
+        patch(  # test-quality-ok: settle is a proxy-internal reservation call, not an HTTP boundary
             "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
             new_callable=AsyncMock,
         ) as mock_reconcile_budget_reservation,
-        patch(
+        patch(  # test-quality-ok: unpriced settle must not write a spend-log row
             "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
             new_callable=AsyncMock,
         ) as mock_update_database,
@@ -528,23 +528,23 @@ async def test_track_cost_callback_invalidates_reservation_when_settle_fails():
     }
 
     with (
-        patch(
+        patch(  # test-quality-ok: callback reads proxy_logging_obj from the module; no injection seam
             "litellm.proxy.proxy_server.proxy_logging_obj",
         ) as mock_proxy_logging,
-        patch(
+        patch(  # test-quality-ok: a failed settle must not refund through release_budget_reservation
             "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
             new_callable=AsyncMock,
         ) as mock_release_budget_reservation,
-        patch(
+        patch(  # test-quality-ok: force reconcile to fail so the invalidate path can be observed
             "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
             new_callable=AsyncMock,
             side_effect=RuntimeError("redis down"),
         ),
-        patch(
+        patch(  # test-quality-ok: invalidate is the only way to unpin counters after settle fails
             "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
             new_callable=AsyncMock,
         ) as mock_invalidate_budget_reservation_counters,
-        patch(
+        patch(  # test-quality-ok: failed settle must not write a spend-log row
             "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
             new_callable=AsyncMock,
         ) as mock_update_database,
@@ -583,7 +583,7 @@ async def test_track_cost_callback_releases_budget_reservation_for_non_model_cal
         "stream": False,
     }
 
-    with patch(
+    with patch(  # test-quality-ok: health checks have no cost row; release is the observable contract
         "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
         new_callable=AsyncMock,
     ) as mock_release_budget_reservation:
