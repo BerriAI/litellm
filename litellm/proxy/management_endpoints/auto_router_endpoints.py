@@ -36,6 +36,7 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterBenchmarkGroup,
@@ -510,6 +511,53 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     )
 
 
+def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
+    """``(model_name, kind)`` for a deployment whose routing the session rollup records.
+
+    Kinds come from ``classify_strategy_router_model``, the same rule the Router registers a
+    deployment by, so this arm cannot disagree with the arm that stamped ``router_type`` onto
+    the session rows. Semantic auto-routers return None: they record no routing decision, so
+    they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
+    value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
+    """
+    if not isinstance(deployment, Mapping):
+        return None
+    litellm_params: Final = deployment.get("litellm_params")
+    router_name: Final = deployment.get("model_name")
+    if not (isinstance(litellm_params, Mapping) and isinstance(router_name, str) and router_name):
+        return None
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str):
+        return None
+    kind: Final = classify_strategy_router_model(model)
+    return None if kind is None or kind == "semantic" else (router_name, kind)
+
+
+def _idle_router_groups(
+    llm_router: "Router | None", covered: frozenset[tuple[str, str]]
+) -> tuple[AutoRouterBenchmarkGroup, ...]:
+    """Zeroed groups for configured strategy routers the window's traffic did not cover.
+
+    The dashboard's router picker has to list a router the moment it is created rather than
+    once it has spent something, so the registry drives the list and the rollup only supplies
+    the measures. ``_summed_agg_row`` over no sessions is already the zero element of the
+    fold, so a group with every measure at zero costs one relabel rather than a literal that
+    would go stale the next time the response grows a field.
+    """
+    if llm_router is None:
+        return ()
+    zero: Final = _summed_agg_row(())
+    idle: Final = frozenset(
+        key
+        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        if key is not None and key not in covered
+    )
+    return tuple(
+        _benchmark_group(zero.model_copy(update=MappingProxyType({"router_name": name, "router_type": kind})))
+        for name, kind in sorted(idle)
+    )
+
+
 @router.get(
     "/auto_router/benchmarks",
     tags=("auto router",),
@@ -532,8 +580,13 @@ async def get_auto_router_benchmarks(
     overlaps it: its last turn is on or after start_date and its first turn is on or before
     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
+
+    The rollup supplies the measures, never the list. Which routers appear comes from the
+    model registry, so one shows up as soon as it is configured and reads zero until it
+    serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+    window recorded.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     _require_admin_viewer(user_api_key_dict, "view auto-router benchmarks across the deployment")
     if prisma_client is None:
@@ -555,11 +608,14 @@ async def get_auto_router_benchmarks(
         (end_day + timedelta(days=1)).isoformat(),
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
-    groups: Final = tuple(_benchmark_group(row) for row in rows)
+    groups: Final = (
+        *(_benchmark_group(row) for row in rows),
+        *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
+    )
     return AutoRouterBenchmarksResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
         end_date=end_day.strftime("%Y-%m-%d"),
-        routers_in_scope=len(rows),
+        routers_in_scope=len(groups),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
     )
