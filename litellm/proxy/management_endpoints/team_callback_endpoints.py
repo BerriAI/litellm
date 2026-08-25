@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_config_validation import callback_config_error
 from litellm.proxy.common_utils.callback_utils import (
     _CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
@@ -49,6 +50,16 @@ router: Final = APIRouter()
 
 
 _CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
+
+
+def _callback_config_error(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": message})  # mutable-ok: FastAPI detail contract
+
+
+def _validate_team_callback(data: "AddTeamCallback") -> None:
+    error: Final = callback_config_error(data.callback_name, data.callback_vars)
+    if error is not None:
+        raise _callback_config_error(error)
 
 
 def _redact_callback_secrets(metadata: Any) -> Any:
@@ -303,6 +314,8 @@ async def add_team_callbacks(
             team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )
+
+        _validate_team_callback(data)
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata

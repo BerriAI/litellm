@@ -156,6 +156,12 @@ class SpanEmitter:
             links=list(links) if links else None,
         )
 
+    def mark_emitted(self, dedup_key: str | None, role: SpanRole) -> None:
+        """Register a span emitted outside :meth:`emit` (the boundary-opened
+        LLM-call span closed via :meth:`finish_span`) so a later :meth:`emit`
+        for the same ``(dedup_key, role)`` deduplicates against it."""
+        self._seen(dedup_key, role)
+
     def _seen(self, dedup_key: str | None, role: SpanRole) -> bool:
         """Return True once a ``(dedup_key, role)`` pair has been emitted.
 

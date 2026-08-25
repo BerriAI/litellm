@@ -1,14 +1,10 @@
 #### What this tests ####
 # This tests litellm router
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import logging
-import os
 
 
 import litellm
@@ -256,20 +252,17 @@ async def test_error_from_tag_routing():
         enable_tag_filtering=True,
     )
 
-    try:
+    from litellm.types.router import RouterErrors
+
+    with pytest.raises(
+        Exception, match=RouterErrors.no_deployments_with_tag_routing.value
+    ):
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["paid"]},
             mock_response="Tell me a joke.",
         )
-
-        pytest.fail("this should have failed - expected it to fail")
-    except Exception as e:
-        from litellm.types.router import RouterErrors
-
-        assert RouterErrors.no_deployments_with_tag_routing.value in str(e)
-        pass
 
 
 def test_tag_routing_with_list_of_tags():

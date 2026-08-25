@@ -341,6 +341,35 @@ def test_idempotent_on_repeat_callback():
     assert len(exporter.get_finished_spans()) == 1
 
 
+def test_evicted_carrier_completed_call_emits_one_deferred_span():
+    """Eviction over the concurrency budget drops only the boundary carrier, not
+    the call. When an evicted call later closes as a real completed call
+    (``upstream_started``, payload present) it still emits exactly one span
+    through the deferred branch, and a second close for the same id dedups. Only
+    an evicted call that never closes goes unexported."""
+    logger, exporter = _logger()
+    kwargs = {**_kwargs(), "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)}
+    logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    assert "call_1" in logger._open_llm_calls
+
+    # Evict exactly as ``_store_open_call`` does over budget: drop the oldest
+    # carrier and release its routed provider.
+    _, evicted = logger._open_llm_calls.popitem(last=False)
+    logger._release_carrier(evicted)
+    assert not logger._open_llm_calls
+    assert exporter.get_finished_spans() == ()  # the evicted boundary span is never exported
+
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1, "the evicted call's real close re-emits one deferred span, not zero"
+    assert spans[0].name == "chat gpt-4o"
+    assert spans[0].attributes[LiteLLM.CALL_ID] == "call_1"
+
+    # Success-then-failure on one logging object: the deferred branch dedups by id.
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    assert len(exporter.get_finished_spans()) == 1, "second close for the same id must not duplicate"
+
+
 # --------------------------------------------------------------------------- #
 #  MCP tool-call spans
 # --------------------------------------------------------------------------- #
@@ -2522,3 +2551,149 @@ def test_deferred_pre_call_does_not_churn_tenant_cache(monkeypatch):
     server.end()
     headers_b = next(h for h in captured if "proj-b" in h)
     assert [s.name for s in captured[headers_b].get_finished_spans()] == ["chat gpt-4o"]
+
+
+# --- New Relic team-scoped deferred emit + dedup (no pre_call carrier) --- #
+
+
+def test_no_span_when_request_never_reached_upstream():
+    """A request rejected before the upstream call — at the auth/budget gate, or
+    blocked by a pre-call guardrail — carries the ``no upstream call`` marker
+    (stamped in ``proxy/utils.py`` before its handlers fire), so the failure log
+    produces no phantom CLIENT span even though a payload exists."""
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+    logger, exporter = _logger()
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "ProxyException", "error_code": "401"},
+    )
+    kwargs = _kwargs(payload=payload)
+    kwargs[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
+    # No log_pre_api_call: the call never started.
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    assert exporter.get_finished_spans() == ()  # no phantom LLM span
+
+
+def test_success_without_pre_call_emits_deferred_span():
+    """A team/key-scoped logger is registered as a success callback only, so
+    ``pre_call`` never reaches it and no carrier exists. A completed call (it has
+    its payload, no ``no upstream call`` marker) must still get its span — the
+    deferred branch — or team-scoped destinations receive nothing at all."""
+    logger, exporter = _logger()
+    # No log_pre_api_call: this logger never receives the input hook. The
+    # request-level provider-handoff stamp is present (pre_call ran globally).
+    asyncio.run(
+        logger.async_log_success_event({**_kwargs(), "api_call_start_time": 100.0}, None, 100.0, 101.5)
+    )
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes.get("gen_ai.operation.name")
+    # Start time comes from the callback's start_time, not a bogus zero.
+    assert spans[0].start_time == 100_000_000_000
+    assert spans[0].end_time == 101_500_000_000
+
+
+def test_no_carrier_and_no_payload_is_noop():
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event({"litellm_params": {}}, None, None, None)
+    )
+    assert exporter.get_finished_spans() == ()
+
+
+def test_second_close_for_same_call_does_not_duplicate_span():
+    """Success and failure can both fire on one logging object for the same call
+    id. The first close pops the carrier and finishes the boundary span; the
+    second must dedup against it, not fabricate a duplicate through the
+    deferred branch."""
+    logger, exporter = _logger()
+    kwargs = {**_kwargs(), "api_call_start_time": 100.0}
+    # Boundary open: the span is born at pre_call under a live server span and
+    # closed via finish_span, which never passes through emit()'s dedup.
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    _emit_llm(logger, kwargs, ambient=server)
+    server.end()
+    llm_before = [s for s in exporter.get_finished_spans() if s.name.startswith("chat")]
+    assert len(llm_before) == 1
+    # Second close: carrier already popped, payload still present, handoff stamped.
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    llm_after = [s for s in exporter.get_finished_spans() if s.name.startswith("chat")]
+    assert len(llm_after) == 1
+
+
+def test_failure_without_pre_call_emits_deferred_error_span():
+    """A team-scoped logger registered as a failure callback only still gets an
+    ERROR span for a real provider failure (payload present, no marker)."""
+    from opentelemetry.trace import StatusCode
+
+    logger, exporter = _logger()
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "RateLimitError", "error_code": "429"},
+    )
+    asyncio.run(
+        logger.async_log_failure_event(
+            {**_kwargs(payload=payload), "api_call_start_time": 100.0}, None, None, None
+        )
+    )
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code == StatusCode.ERROR
+
+
+def test_boundary_open_with_no_payload_ends_provisional_span():
+    """Opened at pre_call but the payload never materialized: the boundary span
+    is ended provisionally (no payload attributes) rather than leaked open."""
+    logger, exporter = _logger()
+    kwargs = _kwargs()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    asyncio.run(
+        logger.async_log_success_event(
+            {**kwargs, "standard_logging_object": None, "litellm_call_id": "call_1"}, None, None, None
+        )
+    )
+    server.end()
+    llm_spans = [s for s in exporter.get_finished_spans() if s.name.startswith("chat")]
+    assert len(llm_spans) == 1
+    assert "gen_ai.usage.input_tokens" not in llm_spans[0].attributes
+
+
+def test_failure_before_provider_handoff_emits_nothing():
+    """A failure event whose request never handed off to a provider (router
+    pre-call rejection, SDK error before the call, standalone guardrail run)
+    has a payload but no ``api_call_start_time``; without a carrier it must not
+    fabricate an LLM-call span."""
+    logger, exporter = _logger()
+    payload = _payload(
+        status="failure",
+        error_information={"error_class": "RateLimitError", "error_code": "429"},
+    )
+    asyncio.run(logger.async_log_failure_event(_kwargs(payload=payload), None, None, None))
+    assert exporter.get_finished_spans() == ()
+
+
+def test_provisional_close_then_payload_close_does_not_duplicate():
+    """Streaming shape: the success close arrives with no assembled payload (the
+    boundary span is ended provisionally), then the failure close arrives with a
+    payload for the same call id. Exactly one exported span."""
+    logger, exporter = _logger()
+    kwargs = {**_kwargs(), "api_call_start_time": 100.0}
+    payload = kwargs["standard_logging_object"]
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    with trace.use_span(server, end_on_exit=False):
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+    asyncio.run(
+        logger.async_log_success_event(
+            {**kwargs, "standard_logging_object": None, "litellm_call_id": payload["litellm_call_id"]},
+            None,
+            None,
+            None,
+        )
+    )
+    asyncio.run(logger.async_log_failure_event(kwargs, None, None, None))
+    server.end()
+    llm_spans = [s for s in exporter.get_finished_spans() if s.name.startswith("chat")]
+    assert len(llm_spans) == 1

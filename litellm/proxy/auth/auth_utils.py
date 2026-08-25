@@ -1801,7 +1801,7 @@ def _format_model_candidates(
     return candidates
 
 
-def _request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
+def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
     """Whether FastAPI resolved this request to a user-defined pass-through handler.
 
     Reads the marker set by ``create_pass_through_route`` off the dispatched endpoint
@@ -1842,7 +1842,7 @@ def get_model_from_request(
     and does not carry the marker. Built-in provider passthrough routes
     (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
-    if _request_dispatched_to_pass_through_endpoint(request):
+    if request_dispatched_to_pass_through_endpoint(request):
         return None
 
     candidates: Final = _extract_model_candidates_from_request(

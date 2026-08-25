@@ -6,9 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import time
 
@@ -64,7 +61,7 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     assert "2026-05-11" in serialized
 
 
-def test_sentry_sample_rate():
+def test_sentry_sample_rate(monkeypatch):
     existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
     try:
         # test with default value by removing the environment variable
@@ -76,7 +73,7 @@ def test_sentry_sample_rate():
         assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "1.0"
 
         # test with custom value
-        os.environ["SENTRY_API_SAMPLE_RATE"] = "0.5"
+        monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", "0.5")
 
         set_callbacks(["sentry"])
         # Check if the custom sample rate is set correctly
@@ -86,13 +83,13 @@ def test_sentry_sample_rate():
     finally:
         # Restore the original environment variable
         if existing_sample_rate:
-            os.environ["SENTRY_API_SAMPLE_RATE"] = existing_sample_rate
+            monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", existing_sample_rate)
         else:
             if "SENTRY_API_SAMPLE_RATE" in os.environ:
                 del os.environ["SENTRY_API_SAMPLE_RATE"]
 
 
-def test_sentry_environment():
+def test_sentry_environment(monkeypatch):
     """Test that SENTRY_ENVIRONMENT is properly handled during Sentry initialization"""
     existing_environment = os.getenv("SENTRY_ENVIRONMENT")
     existing_dsn = os.getenv("SENTRY_DSN")
@@ -115,7 +112,7 @@ def test_sentry_environment():
 
     try:
         # Set a mock DSN to allow Sentry initialization
-        os.environ["SENTRY_DSN"] = "https://test@sentry.io/123456"
+        monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
 
         # Test with default value (no environment set)
         if existing_environment:
@@ -129,7 +126,7 @@ def test_sentry_environment():
         assert call_kwargs["environment"] == "production"
 
         # Test with custom environment value
-        os.environ["SENTRY_ENVIRONMENT"] = "development"
+        monkeypatch.setenv("SENTRY_ENVIRONMENT", "development")
 
         mock_init.reset_mock()
         set_callbacks(["sentry"])
@@ -139,7 +136,7 @@ def test_sentry_environment():
         assert call_kwargs["environment"] == "development"
 
         # Test with staging environment
-        os.environ["SENTRY_ENVIRONMENT"] = "staging"
+        monkeypatch.setenv("SENTRY_ENVIRONMENT", "staging")
 
         mock_init.reset_mock()
         set_callbacks(["sentry"])
@@ -154,13 +151,13 @@ def test_sentry_environment():
     finally:
         # Restore the original environment variables
         if existing_environment:
-            os.environ["SENTRY_ENVIRONMENT"] = existing_environment
+            monkeypatch.setenv("SENTRY_ENVIRONMENT", existing_environment)
         else:
             if "SENTRY_ENVIRONMENT" in os.environ:
                 del os.environ["SENTRY_ENVIRONMENT"]
 
         if existing_dsn:
-            os.environ["SENTRY_DSN"] = existing_dsn
+            monkeypatch.setenv("SENTRY_DSN", existing_dsn)
         else:
             if "SENTRY_DSN" in os.environ:
                 del os.environ["SENTRY_DSN"]
@@ -4549,6 +4546,323 @@ def test_zero_token_video_usage_preserves_duration_seconds(logging_obj):
     assert payload["completion_tokens"] == 0
 
 
+INTERACTIONS_USAGE_BLOCK = {
+    "total_tokens": 175,
+    "total_input_tokens": 100,
+    "input_tokens_by_modality": [{"modality": "text", "tokens": 100}],
+    "total_cached_tokens": 0,
+    "total_output_tokens": 50,
+    "output_tokens_by_modality": [{"modality": "text", "tokens": 50}],
+    "total_tool_use_tokens": 0,
+    "total_thought_tokens": 25,
+}
+
+
+def _interactions_logging_obj(stream: bool, call_type: str = "acreate"):
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[],
+        stream=stream,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id="interactions-call-id",
+        function_id="interactions-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={},
+        optional_params={},
+        model="gemini-2.5-flash",
+        custom_llm_provider="gemini",
+        input="hi",
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize("call_type", ["create", "acreate", "create_interaction", "acreate_interaction"])
+def test_interactions_response_is_recognized_for_logging(call_type):
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is True
+
+
+@pytest.mark.parametrize("call_type", ["acreate", "acreate_interaction"])
+def test_in_progress_background_create_is_not_billed(call_type):
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is False
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_rebills_after_in_progress_success():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.should_run_logging(event_type="async_success") is False
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert logging_obj.model_call_details["response_cost"] > 0
+    assert logging_obj.model_call_details["standard_logging_object"]["total_tokens"] == 175
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_prices_the_settled_body_itself():
+    """
+    The poll fetches the settled body through its own client call, which
+    prices it against a throwaway logging object holding none of this
+    request's deployment context. Adopting that price would bill a
+    custom-priced deployment at the wrong rate, and it would also satisfy the
+    "already calculated" shortcut and skip repricing, leaving the breakdown at
+    the zeros the usage-less create stamped and writing those to the spend log.
+    """
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+    )
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    completed._hidden_params = {"response_cost": 99.0}
+
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    response_cost = logging_obj.model_call_details["response_cost"]
+    assert response_cost != 99.0
+    assert response_cost > 0
+
+    cost_breakdown = logging_obj.model_call_details["standard_logging_object"]["cost_breakdown"]
+    assert cost_breakdown["total_cost"] == response_cost
+    assert cost_breakdown["input_cost"] > 0
+    assert cost_breakdown["output_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_background_interaction_completion_lets_otel_emit_the_cost_span():
+    """
+    OTEL, and every integration that derives from it, dedupes span emission on
+    a marker kept in the request's own metadata. The in-progress create claims
+    that marker, so without clearing it the settled completion, the only event
+    carrying usage and cost, is discarded as a duplicate and every
+    OTEL-family backend shows the interaction as a span with no cost at all.
+    """
+    import datetime as dt
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+    logging_obj = _interactions_logging_obj(stream=False)
+    in_progress = InteractionsAPIResponse(id="interactions/abc", model="gemini-2.5-flash", status="in_progress")
+    await logging_obj.async_success_handler(
+        result=in_progress,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+    )
+
+    assert otel._emit_once(logging_obj.model_call_details, "success") is True
+    assert otel._emit_once(logging_obj.model_call_details, "success") is False
+
+    completed = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+    await logging_obj.async_log_background_interaction_completion(result=completed)
+
+    assert otel._emit_once(logging_obj.model_call_details, "success") is True
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    ["aget", "get", "aget_interaction", "adelete_interaction", "acancel_interaction"],
+)
+def test_interactions_get_poll_is_not_billed(call_type):
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False, call_type=call_type)
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    assert logging_obj._is_recognized_call_type_for_logging(logging_result=response) is False
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") is None
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
+
+
+def test_non_streaming_interactions_success_sets_response_cost_and_usage():
+    import datetime as dt
+
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    logging_obj = _interactions_logging_obj(stream=False)
+    response = InteractionsAPIResponse(
+        id="interactions/abc",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert logging_obj.model_call_details["response_cost"] > 0
+    standard_logging_object = logging_obj.model_call_details["standard_logging_object"]
+    assert standard_logging_object["prompt_tokens"] == 100
+    assert standard_logging_object["completion_tokens"] == 75
+    assert standard_logging_object["total_tokens"] == 175
+    assert standard_logging_object["response_cost"] == logging_obj.model_call_details["response_cost"]
+
+
+def test_assembled_streaming_response_from_completed_interaction_event():
+    import datetime as dt
+
+    from litellm.types.interactions import (
+        InteractionsAPIResponse,
+        InteractionsAPIStreamingResponse,
+    )
+
+    logging_obj = _interactions_logging_obj(stream=True)
+    completed_event = InteractionsAPIStreamingResponse(
+        event_type="interaction.completed",
+        interaction={
+            "id": "interactions/abc",
+            "model": "gemini-2.5-flash",
+            "status": "completed",
+            "steps": [],
+            "usage": dict(INTERACTIONS_USAGE_BLOCK),
+        },
+    )
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=completed_event,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert isinstance(assembled, InteractionsAPIResponse)
+    assert assembled.usage == INTERACTIONS_USAGE_BLOCK
+
+    in_progress_event = InteractionsAPIStreamingResponse(event_type="interaction.in_progress")
+    assert (
+        logging_obj._get_assembled_streaming_response(
+            result=in_progress_event,
+            start_time=dt.datetime.now(),
+            end_time=dt.datetime.now(),
+            is_async=True,
+            streaming_chunks=[],
+        )
+        is None
+    )
+
+
+def test_assembled_streaming_response_from_legacy_completed_chunk():
+    from litellm.types.interactions import (
+        InteractionsAPIResponse,
+        InteractionsAPIStreamingResponse,
+    )
+
+    legacy_chunk = InteractionsAPIStreamingResponse(
+        event_type="interaction.complete",
+        id="interactions/legacy",
+        model="gemini-2.5-flash",
+        status="completed",
+        outputs=[],
+        usage=dict(INTERACTIONS_USAGE_BLOCK),
+    )
+
+    assembled = LitellmLogging._assemble_completed_interaction_response(legacy_chunk)
+
+    assert isinstance(assembled, InteractionsAPIResponse)
+    assert assembled.id == "interactions/legacy"
+    assert assembled.usage == INTERACTIONS_USAGE_BLOCK
+
+
+def test_standard_logging_payload_maps_interactions_usage():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(
+        response_obj={"usage": dict(INTERACTIONS_USAGE_BLOCK)}
+    )
+
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 75
+    assert usage.total_tokens == 175
+
+
 def test_pre_call_does_not_pin_request_in_module_state(logging_obj):
     """
     pre_call/post_call must not stash their locals (full messages, the Logging
@@ -5203,3 +5517,81 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
             )
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
+def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
+    """With LITELLM_OTEL_V2 on, the "newrelic" callback builds the OTel v2
+    logger (per-team credential routing); with the flag off (default) it keeps
+    the legacy agent-based logger, so existing deployments are untouched."""
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        v2_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(v2_logger, OpenTelemetryV2)
+        assert v2_logger.callback_name == "newrelic"
+        # Same name resolves to the same instance, not a second logger.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
+    from litellm.integrations.newrelic import NewRelicLogger
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        legacy = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(legacy, NewRelicLogger)
+    finally:
+        logging_module._in_memory_loggers.clear()
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
+    """Under LITELLM_OTEL_V2 the "newrelic" instance is an OpenTelemetryV2; the
+    cached-lookup must find it or hook resolution (post-call failure/success
+    hooks) silently skips the callback."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        created = logging_module._init_custom_logger_compatible_class(
+            logging_integration="newrelic",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        found = logging_module.get_custom_logger_compatible_class("newrelic")
+        assert found is created
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()

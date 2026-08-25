@@ -6,14 +6,11 @@ Covers:
   - BaseResponsesAPIStreamingIterator (responses) sync + async
 """
 
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper

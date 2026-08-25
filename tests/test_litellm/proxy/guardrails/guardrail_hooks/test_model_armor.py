@@ -2,13 +2,10 @@ import asyncio
 import base64
 import io
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import httpx
 from fastapi import HTTPException
@@ -1964,7 +1961,6 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
 
 def mock_open(read_data=""):
     """Helper to create a mock file object"""
-    import io
     from unittest.mock import MagicMock
 
     file_object = io.StringIO(read_data)

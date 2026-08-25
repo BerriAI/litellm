@@ -428,9 +428,11 @@ ui:
     maxUnavailable: ""
   podAnnotations: {}
   # Same shape as the gateway blocks of the same name. The nginx runtime
-  # writes its pid, cache, and proxy temp files under the image's root
-  # filesystem, so `securityContext.readOnlyRootFilesystem: true` here needs
-  # emptyDir volumes mounted over those paths.
+  # writes its pid, cache, and proxy temp files under /tmp, so it boots as
+  # any (arbitrary, non-root) uid; `securityContext.readOnlyRootFilesystem:
+  # true` here needs an emptyDir volume mounted over /tmp. Images before
+  # the /tmp move instead need emptyDirs over /var/cache/nginx and /run to
+  # run as a non-root uid at all.
   podLabels: {}
   podSecurityContext: {}
   securityContext: {}

@@ -33,14 +33,23 @@ describe("useDailyActivityRange", () => {
   it("queries every user's activity for an admin", () => {
     renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
 
-    expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), null, true]);
+    expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), null, true, null]);
   });
 
   it("scopes the query to the caller for a non-admin", () => {
     renderHook(() => useDailyActivityRange("test-token", "u1", "internal_user"));
 
-    expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), "u1", true]);
+    expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), "u1", true, null]);
   });
+
+  it.each(["org_admin", "Org Admin"])(
+    "scopes the query to the caller for %s, who has no admin view on this endpoint",
+    (role) => {
+      renderHook(() => useDailyActivityRange("test-token", "u1", role));
+
+      expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), "u1", true, null]);
+    },
+  );
 
   it("fetches through the single-shot aggregated endpoint first so days never fragment across pages", () => {
     renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));

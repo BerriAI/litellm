@@ -1,20 +1,14 @@
 import json
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
-import os
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -513,7 +507,8 @@ async def test_anthropic_no_content_error():
     except litellm.InternalServerError:
         pass
     except litellm.APIError as e:
-        assert e.status_code == 500
+        if e.status_code != 500:
+            raise
     except Exception as e:
         pytest.fail(f"An unexpected error occurred - {str(e)}")
 
@@ -1380,7 +1375,6 @@ def test_ollama_image():
     """
 
     import base64
-    import io
 
     from PIL import Image
 
@@ -4051,7 +4045,7 @@ def test_completion_novita_ai_dynamic_params(api_key):
             "create",
             side_effect=Exception("Invalid API key"),
         ) as mock_call:
-            try:
+            with pytest.raises(Exception, match="Invalid API key") as exc_info:
                 completion(
                     model="novita/meta-llama/llama-3.3-70b-instruct",
                     messages=messages,
@@ -4059,10 +4053,8 @@ def test_completion_novita_ai_dynamic_params(api_key):
                     client=openai_client,
                     api_base="https://api.novita.ai/v3/openai",
                 )
-                pytest.fail(f"This call should have failed!")
-            except Exception as e:
-                # This should fail with the mocked exception
-                assert "Invalid API key" in str(e)
+            e = exc_info.value
+            assert "Invalid API key" in str(e)
 
             mock_call.assert_called_once()
     except Exception as e:

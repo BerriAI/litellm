@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -26,9 +24,6 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
