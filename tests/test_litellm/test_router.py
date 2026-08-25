@@ -10325,3 +10325,168 @@ async def test_factory_function_anthropic_messages_uses_streaming_fallback_dispa
         result = await wrapped(model="primary")
     assert result == "ok"
     mock_anthropic.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_stamps_zero_attempted_fallbacks():
+    """A request served by the primary model group records attempted_fallbacks=0 and
+    the requested model group in metadata, mirroring the x-litellm-attempted-fallbacks header."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    metadata = {}
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=metadata,
+    )
+
+    assert metadata["attempted_fallbacks"] == 0
+    assert metadata["original_model_group"] == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_stamps_route_bucket_not_litellm_metadata():
+    """A chat completion carrying both metadata buckets gets stamped in the route's bucket
+    (metadata), matching where run_async_fallback rewrites, so the two never diverge."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    metadata = {}
+    litellm_metadata = {"client_key": "client_value"}
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=metadata,
+        litellm_metadata=litellm_metadata,
+    )
+
+    assert metadata["attempted_fallbacks"] == 0
+    assert metadata["original_model_group"] == "gpt-3.5-turbo"
+    assert litellm_metadata["client_key"] == "client_value"
+    assert "attempted_fallbacks" not in litellm_metadata
+    assert "original_model_group" not in litellm_metadata
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_overrides_client_supplied_stamp_values():
+    """Client-supplied attempted_fallbacks and original_model_group are replaced on entry,
+    so a reused metadata dict or a spoofed value cannot leak stale attribution into logs."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    metadata = {"attempted_fallbacks": 99, "original_model_group": "stale-group"}
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=metadata,
+    )
+
+    assert metadata["attempted_fallbacks"] == 0
+    assert metadata["original_model_group"] == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_stamps_despite_forged_reentry_params():
+    """A client injecting fallback_depth or a JSON-shaped attempted_targets via request
+    litellm params cannot skip the entry stamp; only the router's own in-process
+    AttemptedFallbackTargets instance marks a genuine re-entrant hop."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    metadata = {"attempted_fallbacks": 99, "original_model_group": "spoofed-group"}
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=metadata,
+        fallback_depth=3,
+        attempted_targets={"keys": ["spoofed-group"]},
+    )
+
+    assert metadata["attempted_fallbacks"] == 0
+    assert metadata["original_model_group"] == "gpt-3.5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_skips_stamp_on_genuine_reentrant_hop():
+    """A re-entrant hop carrying the router's own AttemptedFallbackTargets instance keeps
+    the per-hop metadata that run_async_fallback wrote instead of resetting it to zero."""
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    metadata = {"attempted_fallbacks": 1, "original_model_group": "prod-chat"}
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=metadata,
+        attempted_targets=AttemptedFallbackTargets(keys=frozenset(("prod-chat",))),
+    )
+
+    assert metadata["attempted_fallbacks"] == 1
+    assert metadata["original_model_group"] == "prod-chat"
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_bucket():
+    """Spend logs read a truthy litellm_metadata dict in preference to metadata, so spoofed
+    stamp keys planted in the bucket the route does not own are removed on entry instead of
+    flowing into the spend log row."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "hi"},
+            }
+        ]
+    )
+    metadata = {}
+    litellm_metadata = {
+        "attempted_fallbacks": 99,
+        "original_model_group": "spoofed-group",
+        "client_key": "client_value",
+    }
+
+    await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hey"}],
+        metadata=metadata,
+        litellm_metadata=litellm_metadata,
+    )
+
+    assert "attempted_fallbacks" not in litellm_metadata
+    assert "original_model_group" not in litellm_metadata
+    assert litellm_metadata["client_key"] == "client_value"
+    assert metadata["attempted_fallbacks"] == 0
+    assert metadata["original_model_group"] == "gpt-3.5-turbo"
