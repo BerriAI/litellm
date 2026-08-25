@@ -1130,7 +1130,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return (
                 Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
             )
-        return None
+        if auto_summary_enabled:
+            return Reasoning(effort=reasoning_effort, summary="detailed")
+        return Reasoning(effort=reasoning_effort)
 
     def _add_web_search_tool(
         self,

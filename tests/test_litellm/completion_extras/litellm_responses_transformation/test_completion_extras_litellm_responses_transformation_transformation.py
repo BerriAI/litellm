@@ -1585,10 +1585,11 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
 
-        # Test 5: None/unknown values return None
-        result_unknown = handler._map_reasoning_effort("unknown_value")
-        assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
+        # Test 5: Unrecognized effort values pass through (e.g. "max")
+        result_max = handler._map_reasoning_effort("max")
+        assert result_max is not None, "max should pass through, not return None"
+        assert result_max["effort"] == "max"
+        print("✓ Unrecognized reasoning_effort values pass through (e.g. max)")
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"
