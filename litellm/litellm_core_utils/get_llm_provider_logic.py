@@ -274,7 +274,7 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
                     elif endpoint == "api.together.ai/v1" or endpoint == "api.together.xyz/v1":
                         custom_llm_provider = "together_ai"
-                        dynamic_api_key = (
+                        dynamic_api_key = api_key or (
                             get_secret_str("TOGETHER_API_KEY")
                             or get_secret_str("TOGETHER_AI_API_KEY")
                             or get_secret_str("TOGETHERAI_API_KEY")

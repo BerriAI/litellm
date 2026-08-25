@@ -165,6 +165,18 @@ class TestTogetherApiBaseResolvesProvider:
         assert returned_api_base == api_base
         assert model == "some-model"
 
+    def test_explicit_api_key_beats_together_env_key(self, monkeypatch):
+        monkeypatch.setenv("TOGETHER_API_KEY", "together-key-from-env")
+
+        _, provider, dynamic_api_key, _ = get_llm_provider(
+            model="some-model",
+            api_base="https://api.together.ai/v1",
+            api_key="explicit-caller-key",
+        )
+
+        assert provider == "together_ai"
+        assert dynamic_api_key == "explicit-caller-key"
+
     def test_together_default_api_base_is_together_ai(self, monkeypatch):
         monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
 
