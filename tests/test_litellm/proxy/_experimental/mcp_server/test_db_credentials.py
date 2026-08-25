@@ -12,7 +12,7 @@ import base64
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -197,6 +197,28 @@ async def test_purge_user_oauth_credentials_for_server_invalidates_each_user():
     prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once_with(
         where={"server_id": "srv-1", "user_id": {"in": ["alice", "bob"]}}
     )
+    assert set(invalidations) == {("alice", "srv-1"), ("bob", "srv-1")}
+
+
+@pytest.mark.asyncio
+async def test_purge_user_oauth_credentials_for_server_invalidates_even_when_the_delete_raises():
+    """A delete that raises after touching rows must not skip the invalidation: the cached tokens would
+    stay servable to the end of their TTL, and a retry could not fix it because the enumeration it
+    depends on no longer finds those rows. Invalidating a row that survived only costs a DB read."""
+    from litellm.proxy._experimental.mcp_server.db import purge_user_oauth_credentials_for_server
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[_oauth_row("alice"), _oauth_row("bob")])
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(side_effect=RuntimeError("connection reset"))
+
+    invalidations = []
+
+    async def record_invalidation(user_id: str, server_id: str) -> None:
+        invalidations.append((user_id, server_id))
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await purge_user_oauth_credentials_for_server(prisma, "srv-1", invalidate_token_cache=record_invalidation)
+
     assert set(invalidations) == {("alice", "srv-1"), ("bob", "srv-1")}
 
 
@@ -1337,3 +1359,243 @@ def test_mcp_oauth_token_identity_changes_when_only_upstream_resource_is_edited(
     assert mcp_oauth_token_identity(set_to_explicit) == mcp_oauth_token_identity(
         _identity_server(credentials={**creds, "upstream_resource": "api://audience-one"})
     )
+
+
+def _server_row_with_credentials(credentials, **overrides):
+    """A LiteLLM_MCPServerTable-shaped row as prisma hands it back, for the server-level
+    minted-token clear tests."""
+    base = {
+        "server_id": "srv-clear",
+        "url": "https://upstream.example.com/mcp",
+        "auth_type": MCPAuth.oauth2,
+        "issuer": "https://issuer.example.com",
+        "transport": MCPTransport.http,
+        "credentials": credentials,
+        "env_vars": None,
+        "oauth2_flow": None,
+        "token_url": None,
+        "authorization_url": None,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def _prisma_with_server_row(row):
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=row)
+    prisma.db.litellm_mcpservertable.update = AsyncMock(
+        side_effect=lambda where, data: _server_row_with_credentials(
+            data.get("credentials"), server_id=where["server_id"]
+        )
+    )
+    return prisma
+
+
+def _written_credentials(prisma) -> dict:
+    return json.loads(prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]["credentials"])
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_drops_only_minted_fields():
+    """The server-level clear must remove exactly the minted token material and leave every
+    declared-app credential key behind, so an admin can reauthorize without reconfiguring the
+    OAuth app. A clear that dropped the whole blob would still pass a test that only checked the
+    access token is gone, so the surviving keys are asserted explicitly."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    stored = {
+        "access_token": "at-live",
+        "refresh_token": "rt-live",
+        "expires_in": 3600,
+        "client_id": "declared-client",
+        "client_secret": "declared-secret",
+        "scopes": ["read", "write"],
+        "token_endpoint_auth_method": "client_secret_post",
+        "upstream_resource": "api://audience-one",
+    }
+    prisma = _prisma_with_server_row(_server_row_with_credentials(json.dumps(stored)))
+
+    result = await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+
+    assert result is not None
+    assert result.had_token is True
+
+    written = _written_credentials(prisma)
+    assert "access_token" not in written
+    assert "refresh_token" not in written
+    assert "expires_in" not in written
+    assert written == {
+        "client_id": "declared-client",
+        "client_secret": "declared-secret",
+        "scopes": ["read", "write"],
+        "token_endpoint_auth_method": "client_secret_post",
+        "upstream_resource": "api://audience-one",
+    }
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_leaves_declared_app_columns_untouched():
+    """Clearing the token must not write url, auth_type, issuer or any other declared column.
+    The pre-existing clear paths (client rotation, auth_type/url/issuer change) are destructive
+    side effects; this one has to be surgical or it re-creates the workaround it replaces."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    prisma = _prisma_with_server_row(
+        _server_row_with_credentials(json.dumps({"access_token": "at-live", "client_id": "declared-client"}))
+    )
+
+    await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+
+    written_data = prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]
+    assert set(written_data) == {"credentials", "updated_by"}
+    assert written_data["updated_by"] == "admin-1"
+    for untouched in ("url", "auth_type", "issuer", "client_id", "transport", "env_vars"):
+        assert untouched not in written_data
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_is_a_noop_without_a_minted_token():
+    """A server that only carries a declared app must not be written at all, so a repeated
+    Disconnect does not churn updated_by or bump the row."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    prisma = _prisma_with_server_row(
+        _server_row_with_credentials(json.dumps({"client_id": "declared-client", "client_secret": "declared-secret"}))
+    )
+
+    result = await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+
+    assert result is not None
+    assert result.had_token is False
+    prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_handles_dict_shaped_credentials():
+    """Prisma hands JSONB back as a dict on some read paths; the clear must work there too."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    prisma = _prisma_with_server_row(
+        _server_row_with_credentials({"access_token": "at-live", "client_id": "declared-client"})
+    )
+
+    result = await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+
+    assert result is not None and result.had_token is True
+    assert _written_credentials(prisma) == {"client_id": "declared-client"}
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_returns_none_for_missing_server():
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    prisma = _prisma_with_server_row(None)
+
+    assert await clear_mcp_server_oauth_token(prisma, "srv-missing", touched_by="admin-1") is None
+    prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_drops_the_client_credentials_grant_for_m2m():
+    """An M2M server mints on demand from its stored client, so a clear that kept the grant left the
+    next request free to mint a replacement token and keep calling upstream."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    stored = {
+        "access_token": "at-live",
+        "client_id": "m2m-client",
+        "client_secret": "m2m-secret",
+        "scopes": ["read"],
+    }
+    prisma = _prisma_with_server_row(
+        _server_row_with_credentials(json.dumps(stored), oauth2_flow="client_credentials")
+    )
+
+    result = await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+
+    assert result is not None
+    assert result.had_token is True
+    assert result.cleared_client_credentials is True
+    assert _written_credentials(prisma) == {"scopes": ["read"]}
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_drops_the_grant_for_an_unstamped_m2m_shaped_row():
+    """Rows written before oauth2_flow was stamped carry the M2M shape instead, and the same
+    inference the request path uses has to classify them here or they keep minting."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    prisma = _prisma_with_server_row(
+        _server_row_with_credentials(
+            json.dumps({"client_id": "m2m-client", "client_secret": "m2m-secret"}),
+            token_url="https://auth.example.com/token",
+        )
+    )
+
+    result = await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+
+    assert result is not None
+    assert result.had_token is False
+    assert result.cleared_client_credentials is True
+    assert result.changed_row is True
+    assert _written_credentials(prisma) == {}
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_keeps_the_client_for_an_interactive_server():
+    """An authorization_code server's authorization lives in the per-user rows the caller purges, so
+    its OAuth app must survive for users to reconnect without an admin reconfiguring it."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+
+    prisma = _prisma_with_server_row(
+        _server_row_with_credentials(
+            json.dumps({"access_token": "at-live", "client_id": "declared-client", "client_secret": "declared-secret"}),
+            oauth2_flow="authorization_code",
+            authorization_url="https://auth.example.com/authorize",
+        )
+    )
+
+    result = await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+
+    assert result is not None
+    assert result.cleared_client_credentials is False
+    assert _written_credentials(prisma) == {"client_id": "declared-client", "client_secret": "declared-secret"}
+
+
+@pytest.mark.asyncio
+async def test_cleared_m2m_row_can_no_longer_mint_a_replacement_token():
+    """End state check: the row the clear persists must fail the mint path's precondition, so no
+    request can quietly re-authorize the server."""
+    from litellm.proxy._experimental.mcp_server.db import clear_mcp_server_oauth_token
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import MCPOAuth2TokenCache
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    prisma = _prisma_with_server_row(
+        _server_row_with_credentials(
+            json.dumps({"access_token": "at-live", "client_id": "m2m-client", "client_secret": "m2m-secret"}),
+            oauth2_flow="client_credentials",
+        )
+    )
+
+    await clear_mcp_server_oauth_token(prisma, "srv-clear", touched_by="admin-1")
+    remaining = _written_credentials(prisma)
+    server = MCPServer(
+        server_id="srv-clear",
+        name="srv-clear",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        token_url="https://auth.example.com/token",
+        client_id=remaining.get("client_id"),
+        client_secret=remaining.get("client_secret"),
+    )
+    token_endpoint = AsyncMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=token_endpoint,
+    ):
+        assert await MCPOAuth2TokenCache().async_get_token(server) is None
+
+    token_endpoint.post.assert_not_awaited()

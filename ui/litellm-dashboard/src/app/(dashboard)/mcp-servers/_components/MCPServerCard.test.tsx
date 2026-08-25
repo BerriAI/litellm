@@ -1,5 +1,6 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import MCPServerCard from "./MCPServerCard";
 import type { MCPServer } from "@/components/mcp_tools/types";
@@ -65,5 +66,62 @@ describe("MCPServerCard logo", () => {
     renderCard({ mcp_info: { server_name: "demo_server" } });
     expect(screen.queryByAltText("demo_server logo")).not.toBeInTheDocument();
     expect(screen.getByText("DE")).toBeInTheDocument();
+  });
+});
+
+describe("MCPServerCard OAuth token actions", () => {
+  async function openMenu(overrides: Partial<MCPServer>, handlers: Record<string, () => void>) {
+    render(
+      <MCPServerCard
+        server={{ ...baseServer, ...overrides } as MCPServer}
+        onClick={vi.fn()}
+        onRecheckHealth={vi.fn()}
+        onDelete={vi.fn()}
+        {...handlers}
+      />,
+    );
+    await userEvent.click(screen.getByLabelText("Server actions"));
+  }
+
+  it("offers Disconnect and Reauthorize for an oauth2 server", async () => {
+    await openMenu({ auth_type: "oauth2" }, { onDisconnectOAuth: vi.fn(), onReauthorizeOAuth: vi.fn() });
+
+    expect(await screen.findByText("Disconnect / Clear token")).toBeInTheDocument();
+    expect(screen.getByText("Reauthorize")).toBeInTheDocument();
+    expect(screen.getByText("Test Connection")).toBeInTheDocument();
+    expect(screen.getByText("Delete")).toBeInTheDocument();
+  });
+
+  it("invokes the disconnect handler without triggering the card's own click", async () => {
+    const onDisconnectOAuth = vi.fn();
+    const onClick = vi.fn();
+    render(
+      <MCPServerCard
+        server={{ ...baseServer, auth_type: "oauth2" } as MCPServer}
+        onClick={onClick}
+        onDisconnectOAuth={onDisconnectOAuth}
+      />,
+    );
+    await userEvent.click(screen.getByLabelText("Server actions"));
+    await userEvent.click(await screen.findByText("Disconnect / Clear token"));
+
+    expect(onDisconnectOAuth).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("hides both token actions for a non-oauth2 server", async () => {
+    await openMenu({ auth_type: "api_key" }, { onDisconnectOAuth: vi.fn(), onReauthorizeOAuth: vi.fn() });
+
+    expect(await screen.findByText("Test Connection")).toBeInTheDocument();
+    expect(screen.queryByText("Disconnect / Clear token")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reauthorize")).not.toBeInTheDocument();
+  });
+
+  it("hides both token actions when the caller passes no handlers (non-admin)", async () => {
+    await openMenu({ auth_type: "oauth2" }, {});
+
+    expect(await screen.findByText("Test Connection")).toBeInTheDocument();
+    expect(screen.queryByText("Disconnect / Clear token")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reauthorize")).not.toBeInTheDocument();
   });
 });

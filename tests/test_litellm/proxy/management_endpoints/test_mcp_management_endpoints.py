@@ -1,8 +1,9 @@
+import base64
 import os
 import sys
 import types
 import json
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import List, Optional
@@ -6766,3 +6767,347 @@ class TestConnectedAppViewAnnotation:
 
         assert all(server.connected_app_reachable is None for server in result)
         reload_mock.assert_not_awaited()
+
+
+def _make_admin_auth(user_id: str = "admin-abc") -> "UserAPIKeyAuth":
+    return UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id=user_id,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+
+@contextmanager
+def _patched_clear_oauth_token_endpoint(clear_mock, purge_mock, manager, revoke_mock):
+    """Patch every collaborator the clear endpoint reaches, so a test can assert which stores it
+    actually emptied rather than only what it returned."""
+    manager.revoke_upstream_m2m_tokens = revoke_mock
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
+            new=clear_mock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.purge_user_oauth_credentials_for_server",
+            new=purge_mock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            manager,
+        ),
+    ):
+        yield
+
+
+def _clear_oauth_token_manager():
+    manager = MagicMock()
+    manager.update_server = AsyncMock()
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_empties_every_store_a_token_is_served_from():
+    """A token authorized for a server can be served from the per-user credential rows, from the
+    in-memory client_credentials mint cache, or from the server row's own minted fields. The clear
+    has to empty all three: leaving any one of them behind keeps the old upstream grants live, which
+    is exactly the state the admin asked to get out of."""
+    from litellm.proxy._types import MCPServerOAuthTokenStatus
+
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server.db import ClearedMCPServerOAuthToken
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    server = generate_mock_mcp_server_db_record(server_id="srv-oauth")
+    clear_mock = AsyncMock(return_value=ClearedMCPServerOAuthToken(server=server, had_token=True, cleared_client_credentials=False))
+    purge_mock = AsyncMock(return_value=3)
+    manager = _clear_oauth_token_manager()
+    revoke_mock = AsyncMock()
+
+    with _patched_clear_oauth_token_endpoint(clear_mock, purge_mock, manager, revoke_mock):
+        result = await clear_mcp_server_oauth_token_endpoint(
+            server_id="srv-oauth",
+            user_api_key_dict=_make_admin_auth("admin-1"),
+        )
+
+    assert isinstance(result, MCPServerOAuthTokenStatus)
+    assert result.server_id == "srv-oauth"
+    assert result.has_token is False
+    assert result.cleared is True
+    assert result.cleared_user_tokens == 3
+    assert clear_mock.await_args.kwargs["touched_by"] == "admin-1"
+    purge_mock.assert_awaited_once()
+    assert purge_mock.await_args.args[1] == "srv-oauth"
+    revoke_mock.assert_awaited_once_with("srv-oauth")
+    manager.update_server.assert_awaited_once_with(server)
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_clears_per_user_tokens_with_no_minted_server_row():
+    """The interactive flow stores its token per user and writes nothing to the server row, so a clear
+    that keyed 'did anything happen' off the server row alone would report a no-op while revoking
+    three users. cleared must follow the per-user purge too."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server.db import ClearedMCPServerOAuthToken
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    server = generate_mock_mcp_server_db_record(server_id="srv-oauth")
+    purge_mock = AsyncMock(return_value=3)
+    manager = _clear_oauth_token_manager()
+    revoke_mock = AsyncMock()
+
+    with _patched_clear_oauth_token_endpoint(
+        AsyncMock(return_value=ClearedMCPServerOAuthToken(server=server, had_token=False, cleared_client_credentials=False)),
+        purge_mock,
+        manager,
+        revoke_mock,
+    ):
+        result = await clear_mcp_server_oauth_token_endpoint(
+            server_id="srv-oauth",
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert result.cleared is True
+    assert result.cleared_user_tokens == 3
+    purge_mock.assert_awaited_once()
+    manager.update_server.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_drives_a_real_purge_for_the_authorize_and_fetch_state():
+    """End to end through the endpoint with the real purge, in the state 'Authorize & Fetch Token'
+    actually leaves behind: nothing minted on the server row, one stored per-user token.
+
+    The sibling tests either mock the purge (so they pin the wiring, not the delete) or call the purge
+    helper directly (so they never prove the endpoint reaches it). Between those two a gate reinstated
+    on the endpoint would pass both while no-opping on the ticket's own scenario, so this one drives
+    the endpoint against a prisma double and asserts the delete really issued."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server.db import ClearedMCPServerOAuthToken
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    stored_token = base64.urlsafe_b64encode(
+        json.dumps({"type": "oauth2", "access_token": "upstream-token-a"}).encode()
+    ).decode()
+    prisma = _make_prisma_client()
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", server_id="srv-oauth", credential_b64=stored_token)]
+    )
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(return_value=1)
+
+    server = generate_mock_mcp_server_db_record(server_id="srv-oauth")
+    manager = _clear_oauth_token_manager()
+    manager.invalidate_user_oauth_token_cache = AsyncMock()
+    manager.revoke_upstream_m2m_tokens = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
+            new=AsyncMock(return_value=ClearedMCPServerOAuthToken(server=server, had_token=False, cleared_client_credentials=False)),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            manager,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ),
+    ):
+        result = await clear_mcp_server_oauth_token_endpoint(
+            server_id="srv-oauth",
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert result.cleared_user_tokens == 1
+    assert result.cleared is True
+    prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once_with(
+        where={"server_id": "srv-oauth", "user_id": {"in": ["alice"]}}
+    )
+    manager.invalidate_user_oauth_token_cache.assert_awaited_once_with("alice", "srv-oauth")
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_reconciles_caches_when_the_purge_fails():
+    """The server row is written before the per-user purge runs, so a purge that raises must not skip
+    the in-memory reconciliation: the registry and the mint cache would go on serving material the DB
+    no longer backs, and the admin's retry would look like a no-op while the old grants stayed live.
+    The error still surfaces, because the clear did not finish."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server.db import ClearedMCPServerOAuthToken
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    server = generate_mock_mcp_server_db_record(server_id="srv-oauth")
+    manager = _clear_oauth_token_manager()
+    revoke_mock = AsyncMock()
+
+    with _patched_clear_oauth_token_endpoint(
+        AsyncMock(return_value=ClearedMCPServerOAuthToken(server=server, had_token=True, cleared_client_credentials=False)),
+        AsyncMock(side_effect=RuntimeError("database went away mid-purge")),
+        manager,
+        revoke_mock,
+    ):
+        with pytest.raises(RuntimeError, match="database went away mid-purge"):
+            await clear_mcp_server_oauth_token_endpoint(
+                server_id="srv-oauth",
+                user_api_key_dict=_make_admin_auth(),
+            )
+
+    revoke_mock.assert_awaited_once_with("srv-oauth")
+    manager.update_server.assert_awaited_once_with(server)
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_reports_a_true_noop():
+    """Nothing stored anywhere means nothing to clear: the response says so and the registry is left
+    alone. The mint cache is still flushed, because it is the one store the endpoint cannot count."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server.db import ClearedMCPServerOAuthToken
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    server = generate_mock_mcp_server_db_record(server_id="srv-oauth")
+    manager = _clear_oauth_token_manager()
+    revoke_mock = AsyncMock()
+
+    with _patched_clear_oauth_token_endpoint(
+        AsyncMock(return_value=ClearedMCPServerOAuthToken(server=server, had_token=False, cleared_client_credentials=False)),
+        AsyncMock(return_value=0),
+        manager,
+        revoke_mock,
+    ):
+        result = await clear_mcp_server_oauth_token_endpoint(
+            server_id="srv-oauth",
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert result.cleared is False
+    assert result.has_token is False
+    assert result.cleared_user_tokens == 0
+    revoke_mock.assert_awaited_once_with("srv-oauth")
+    manager.update_server.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_reports_a_dropped_m2m_grant():
+    """An M2M server has no per-user rows and may have nothing minted on the row yet, so dropping its
+    client grant is the whole disconnect: the registry has to be reloaded and the caller told what to
+    re-enter, or the dashboard reports a no-op on the one change that revoked access."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy._experimental.mcp_server.db import ClearedMCPServerOAuthToken
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    server = generate_mock_mcp_server_db_record(server_id="srv-oauth")
+    manager = _clear_oauth_token_manager()
+    revoke_mock = AsyncMock()
+
+    with _patched_clear_oauth_token_endpoint(
+        AsyncMock(
+            return_value=ClearedMCPServerOAuthToken(
+                server=server, had_token=False, cleared_client_credentials=True
+            )
+        ),
+        AsyncMock(return_value=0),
+        manager,
+        revoke_mock,
+    ):
+        result = await clear_mcp_server_oauth_token_endpoint(
+            server_id="srv-oauth",
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert result.cleared is True
+    assert result.cleared_client_credentials is True
+    revoke_mock.assert_awaited_once_with("srv-oauth")
+    manager.update_server.assert_awaited_once_with(server)
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_rejects_non_admin():
+    """Clearing the shared token logs every user of the server out of the upstream, so it is
+    admin-only. A non-admin who wants to drop their own connection uses the per-user revoke."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    clear_mock = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
+            new=clear_mock,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await clear_mcp_server_oauth_token_endpoint(
+            server_id="srv-oauth",
+            user_api_key_dict=_make_user_auth("bob"),
+        )
+
+    assert exc_info.value.status_code == 403
+    clear_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clear_mcp_server_oauth_token_endpoint_404s_for_unknown_server():
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        clear_mcp_server_oauth_token_endpoint,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=_make_prisma_client(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
+            new=AsyncMock(return_value=None),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await clear_mcp_server_oauth_token_endpoint(
+            server_id="srv-missing",
+            user_api_key_dict=_make_admin_auth(),
+        )
+
+    assert exc_info.value.status_code == 404

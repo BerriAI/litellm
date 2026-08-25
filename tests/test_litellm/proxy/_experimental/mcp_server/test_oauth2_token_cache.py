@@ -12,7 +12,10 @@ import pytest
 
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPOAuth2TokenCache,
+    mcp_oauth2_mint_invalidation_key,
+    mcp_oauth2_token_cache,
     resolve_mcp_auth,
+    server_id_from_mint_invalidation_key,
 )
 from litellm.proxy._types import MCPTransport
 from litellm.types.mcp import MCPAuth
@@ -392,3 +395,14 @@ async def test_invalidate_clears_every_identity_for_a_server():
 
     assert refetched == "tok-after-invalidate"
     assert mock_client.post.call_count == 3
+
+
+def test_mint_invalidation_key_round_trips_to_its_server_id():
+    assert server_id_from_mint_invalidation_key(mcp_oauth2_mint_invalidation_key("srv-1")) == "srv-1"
+
+
+def test_unrelated_cache_keys_do_not_name_a_server():
+    """The channel carries every management-object eviction, so a user key must not be read as a
+    server id and wipe an unrelated server's minted tokens."""
+    assert server_id_from_mint_invalidation_key("mcp:per_user_token:user-1:srv-1") is None
+    assert server_id_from_mint_invalidation_key("mcp:oauth2_mint_invalidation:") is None

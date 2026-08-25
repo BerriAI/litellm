@@ -179,6 +179,7 @@ class ClientCredentialsTokenSource:
         self._max_locks = max_locks
         self._clock = clock
         self._locks: dict[str, asyncio.Lock] = {}
+        self._identities: dict[str, frozenset[str]] = {}  # mutable-ok: process-lifetime index, like _locks
 
     def _lock(self, server_id: str) -> asyncio.Lock:
         """Per-server single-flight lock, bounded so ephemeral server ids (e.g. the REST tools
@@ -189,6 +190,20 @@ class ClientCredentialsTokenSource:
         if server_id not in self._locks and len(self._locks) >= self._max_locks:
             self._locks.pop(next(iter(self._locks)), None)
         return self._locks.setdefault(server_id, asyncio.Lock())
+
+    def _remember_identity(self, server_id: str, identity_key: str) -> None:
+        """Record the identities a server minted under, bounded like the locks. ``invalidate`` runs
+        after the stored client credentials were cleared, so the identity key is no longer
+        derivable from config and the cached token would be unreachable without this.
+        """
+        if server_id not in self._identities and len(self._identities) >= self._max_locks:
+            self._identities.pop(next(iter(self._identities)), None)
+        self._identities[server_id] = self._identities.get(server_id, frozenset()) | {identity_key}
+
+    async def invalidate(self, server_id: str) -> None:
+        """Drop every cached token for a server, whichever client identity minted it."""
+        for identity_key in self._identities.pop(server_id, frozenset()):
+            await self._backend.delete(identity_key, server_id)
 
     async def get(self, server_id: str, config: ClientCredentialsConfig) -> Result[OAuthToken, CredError]:
         match _prepare_grant(config):
@@ -262,6 +277,7 @@ class ClientCredentialsTokenSource:
         )
         if ttl > 0:
             await self._backend.set(grant.identity_key, server_id, token, ttl)
+            self._remember_identity(server_id, grant.identity_key)
         return Ok(token)
 
 

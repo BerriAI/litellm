@@ -1,5 +1,5 @@
 import { type FC, type KeyboardEvent, type MouseEvent } from "react";
-import { Check, CircleAlert, Ellipsis, Trash2, Zap } from "lucide-react";
+import { Check, CircleAlert, Ellipsis, Trash2, Unplug, RefreshCw, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +27,8 @@ interface MCPServerCardProps {
   onRecheckHealth?: () => void;
   onByokConnect?: () => void;
   onOpenFillFields?: () => void;
+  onDisconnectOAuth?: () => void;
+  onReauthorizeOAuth?: () => void;
   onDelete?: () => void;
 }
 
@@ -48,6 +50,8 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onRecheckHealth,
   onByokConnect,
   onOpenFillFields,
+  onDisconnectOAuth,
+  onReauthorizeOAuth,
   onDelete,
 }) => {
   const alias = server.alias || server.server_name || "";
@@ -106,7 +110,9 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     }
   };
 
-  const hasMenu = !!onRecheckHealth || !!onDelete;
+  const isOAuthServer = server.auth_type === AUTH_TYPE.OAUTH2;
+  const showOAuthTokenActions = isOAuthServer && (!!onDisconnectOAuth || !!onReauthorizeOAuth);
+  const hasMenu = !!onRecheckHealth || !!onDelete || showOAuthTokenActions;
 
   // Card uses role="button" + nested <button> children (Set, BYOK Connect, the
   // recheck-health Badge), so a real <button> wrapper would produce invalid
@@ -175,7 +181,30 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
                     Test Connection
                   </DropdownMenuItem>
                 )}
-                {onRecheckHealth && onDelete && <DropdownMenuSeparator />}
+                {onRecheckHealth && showOAuthTokenActions && <DropdownMenuSeparator />}
+                {showOAuthTokenActions && onReauthorizeOAuth && (
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      stop(e);
+                      onReauthorizeOAuth();
+                    }}
+                  >
+                    <RefreshCw />
+                    Reauthorize
+                  </DropdownMenuItem>
+                )}
+                {showOAuthTokenActions && onDisconnectOAuth && (
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      stop(e);
+                      onDisconnectOAuth();
+                    }}
+                  >
+                    <Unplug />
+                    Disconnect / Clear token
+                  </DropdownMenuItem>
+                )}
+                {(onRecheckHealth || showOAuthTokenActions) && onDelete && <DropdownMenuSeparator />}
                 {onDelete && (
                   <DropdownMenuItem
                     variant="destructive"

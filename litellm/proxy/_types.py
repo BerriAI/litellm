@@ -1579,6 +1579,19 @@ class MCPOAuthUserCredentialStatus(LiteLLMPydanticObjectBase):
     connected_at: str | None = None  # ISO-8601
 
 
+class MCPServerOAuthTokenStatus(LiteLLMPydanticObjectBase):
+    """Outcome of the admin-wide OAuth token clear for one MCP server.
+
+    Distinct from MCPOAuthUserCredentialStatus, which is scoped to the calling user alone.
+    """
+
+    server_id: str
+    has_token: bool
+    cleared: bool = False
+    cleared_user_tokens: int = 0
+    cleared_client_credentials: bool = False
+
+
 class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
     """One entry in the /user-credentials list."""
 

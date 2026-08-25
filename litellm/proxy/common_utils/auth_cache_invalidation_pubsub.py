@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -122,17 +122,25 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_task", "_user_api_key_cache")
+    __slots__ = (
+        "_additional_in_memory_caches",
+        "_local_invalidators",
+        "_redis_cache",
+        "_task",
+        "_user_api_key_cache",
+    )
 
     def __init__(
         self,
         redis_cache: "RedisCache",
         user_api_key_cache: "UserApiKeyCache",
         additional_in_memory_caches: Sequence["InMemoryCache"] = (),
+        local_invalidators: Sequence[Callable[[str], Awaitable[None]]] = (),
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
+        self._local_invalidators = tuple(local_invalidators)
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -185,9 +193,9 @@ class AuthCacheInvalidationSubscriber:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
-            self._apply_message(message)
+            await self._apply_message(message)
 
-    def _apply_message(self, message: object) -> None:
+    async def _apply_message(self, message: object) -> None:
         data: Final = message.get("data") if isinstance(message, dict) else None
         parsed: Final = _message_from_data(data)
         if parsed is None:
@@ -201,6 +209,13 @@ class AuthCacheInvalidationSubscriber:
             in_memory_cache.delete_cache(parsed.cache_key)
         for additional_cache in self._additional_in_memory_caches:
             additional_cache.delete_cache(parsed.cache_key)
+        for invalidate_local in self._local_invalidators:
+            try:
+                await invalidate_local(parsed.cache_key)
+            except Exception as e:  # noqa: BLE001  # one bad invalidator must not stop the subscriber
+                verbose_proxy_logger.warning(
+                    "auth cache invalidation local handler failed for %s: %s", parsed.cache_key, e
+                )
 
     @staticmethod
     async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:

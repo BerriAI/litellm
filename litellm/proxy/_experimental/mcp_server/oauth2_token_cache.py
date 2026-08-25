@@ -14,6 +14,7 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    MCP_OAUTH2_MINT_INVALIDATION_KEY_PREFIX,
     MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
     MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
     MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
@@ -199,6 +200,24 @@ class MCPOAuth2TokenCache(InMemoryCache):
 mcp_oauth2_token_cache: Final = MCPOAuth2TokenCache()
 
 
+def mcp_oauth2_mint_invalidation_key(server_id: str) -> str:
+    return f"{MCP_OAUTH2_MINT_INVALIDATION_KEY_PREFIX}:{server_id}"
+
+
+def server_id_from_mint_invalidation_key(cache_key: str) -> str | None:
+    """The server a broadcast invalidation key names, or ``None`` for any other key."""
+    prefix: Final = f"{MCP_OAUTH2_MINT_INVALIDATION_KEY_PREFIX}:"
+    if not cache_key.startswith(prefix):
+        return None
+    return cache_key.removeprefix(prefix) or None
+
+
+def per_user_token_cache_key(user_id: str, server_id: str) -> str:
+    """The ``user_api_key_cache`` key holding a user's token for a server. Shared by the legacy
+    per-user cache and the v2 store backend, so broadcasting this one key evicts both."""
+    return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
+
+
 def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
     """Compute Redis TTL for a per-user token.
 
@@ -229,7 +248,7 @@ class MCPPerUserTokenCache:
     """
 
     def _cache_key(self, user_id: str, server_id: str) -> str:
-        return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
+        return per_user_token_cache_key(user_id, server_id)
 
     async def get(self, user_id: str, server_id: str) -> str | None:
         """Return the plaintext access_token, or None on miss/error."""

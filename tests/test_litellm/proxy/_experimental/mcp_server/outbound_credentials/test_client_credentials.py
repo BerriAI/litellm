@@ -425,3 +425,50 @@ def test_bearer_auth_rejects_sync_clients():
     with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)), auth=auth) as client:
         with pytest.raises(RuntimeError):
             client.get("https://upstream.example.com/mcp")
+
+
+@pytest.mark.asyncio
+async def test_invalidate_stops_serving_the_cached_token_for_a_server():
+    """An admin revoke has to reach this source, not just the row: otherwise the worker that already
+    minted keeps serving the revoked authorization from cache until its TTL."""
+    poster = _FakePoster([_success(access_token="tok-before", expires_in=3600), _success(access_token="tok-after", expires_in=3600)])
+    source = ClientCredentialsTokenSource(poster)
+    first = await source.get("s", _config())
+
+    await source.invalidate("s")
+    second = await source.get("s", _config())
+
+    assert isinstance(first, Ok) and isinstance(second, Ok)
+    assert first.ok.access_token == "tok-before"
+    assert second.ok.access_token == "tok-after"
+    assert len(poster.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_drops_tokens_minted_under_credentials_that_are_already_gone():
+    """The revoke clears the stored client credentials first, so the identity key is no longer
+    derivable from config by the time invalidation runs."""
+    poster = _FakePoster([_success(access_token="tok-old", expires_in=3600), _success(access_token="tok-new", expires_in=3600)])
+    source = ClientCredentialsTokenSource(poster)
+    _ = await source.get("s", _config(client_secret=SecretStr("old-secret")))
+
+    await source.invalidate("s")
+    reused = await source.get("s", _config(client_secret=SecretStr("old-secret")))
+
+    assert isinstance(reused, Ok)
+    assert reused.ok.access_token == "tok-new"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_leaves_other_servers_alone():
+    poster = _FakePoster([_success(access_token="tok-a", expires_in=3600), _success(access_token="tok-b", expires_in=3600)])
+    source = ClientCredentialsTokenSource(poster)
+    _ = await source.get("srv-a", _config())
+    _ = await source.get("srv-b", _config())
+
+    await source.invalidate("srv-a")
+    kept = await source.get("srv-b", _config())
+
+    assert isinstance(kept, Ok)
+    assert kept.ok.access_token == "tok-b"
+    assert len(poster.calls) == 2

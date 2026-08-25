@@ -17,6 +17,24 @@ vi.mock("@/components/networking", () => ({
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
+  deleteMCPServerOAuthToken: vi
+    .fn()
+    .mockResolvedValue({ server_id: "server-1", has_token: false, cleared: true, cleared_user_tokens: 1 }),
+  deleteMCPOAuthUserCredential: vi
+    .fn()
+    .mockResolvedValue({ server_id: "server-1", has_credential: false, is_expired: false }),
+}));
+
+// The detail view is stubbed so this file can assert which tab the list page hands it without
+// mounting the edit form and tools viewer underneath. MCP_TAB stays real: the point of the
+// assertion is the shared index, so a stubbed constant would let the two sides drift apart.
+const mcpServerViewProps = vi.fn();
+vi.mock("./mcp_server_view", async (importOriginal) => ({
+  MCP_TAB: ((await importOriginal()) as { MCP_TAB: unknown }).MCP_TAB,
+  MCPServerView: (props: Record<string, unknown>) => {
+    mcpServerViewProps(props);
+    return <div data-testid="mcp-server-view" />;
+  },
 }));
 
 const createQueryClient = () =>
@@ -319,6 +337,48 @@ describe("MCPServers", () => {
 
     // Team B server should not be visible
     expect(screen.queryByText("Team B Server")).not.toBeInTheDocument();
+  });
+
+  it("opens Settings after an all-users Reauthorize from a list card, where Authorize & Fetch Token lives", async () => {
+    // Regression: the list page hardcoded "Tools tab or Overview", so an all-users Reauthorize
+    // dropped the admin on Overview with no authorize button in sight, while the same action on the
+    // detail page correctly opened Settings. Reauthorize that lands nowhere useful is the whole bug.
+    const { MCP_TAB } = await import("./mcp_server_view");
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: "server-1",
+        server_name: "OAuth Server",
+        alias: "oauth-server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("OAuth Server")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("Server actions"));
+    await userEvent.click(await screen.findByText("Reauthorize"));
+    await userEvent.click(await screen.findByRole("button", { name: "Clear & Reauthorize" }));
+
+    expect(await screen.findByTestId("mcp-server-view")).toBeInTheDocument();
+    expect(networking.deleteMCPServerOAuthToken).toHaveBeenCalledWith("123", "server-1");
+    expect(mcpServerViewProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ initialTabIndex: MCP_TAB.SETTINGS, isEditing: true }),
+    );
   });
 
   it("should not trigger an extra health check when the server list changes after deletion", async () => {

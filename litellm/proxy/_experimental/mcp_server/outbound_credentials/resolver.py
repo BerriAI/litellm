@@ -356,6 +356,14 @@ class UpstreamCredentialProvider:
                 subject.inbound_token.get_secret_value(), server, server.config, tenant_id=subject.tenant_id
             )
 
+    async def invalidate_server_m2m_credentials(self, server_id: str) -> None:
+        """Drop the gateway's cached `client_credentials` tokens for a server, for every caller.
+
+        The M2M token belongs to the gateway rather than a subject, so a revoke has to clear the
+        whole server, unlike the per-subject `invalidate_credentials`.
+        """
+        await self._client_credentials_source.invalidate(server_id)
+
     def _invalidate_id_jag(self, subject: Subject, server: ServerSpec) -> None:
         """Evict the bearer this `(subject, server)` last resolved, without depending on the store.
 

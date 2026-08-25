@@ -115,6 +115,10 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACH
 MCP_NPM_CACHE_DIR: Final = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
+# Broadcast-only (never stored) key prefix telling every worker to drop its process-local minted
+# client_credentials tokens for a server.
+MCP_OAUTH2_MINT_INVALIDATION_KEY_PREFIX: Final = "mcp:oauth2_mint_invalidation"
+
 # Per-user OAuth token Redis cache (for server-side token storage)
 MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX: Final = "mcp:per_user_token"
 MCP_PER_USER_TOKEN_DEFAULT_TTL: Final = int(

@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
@@ -70,8 +70,12 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPPerUserTokenCache,
+    mcp_oauth2_mint_invalidation_key,
+    mcp_oauth2_token_cache,
     mcp_per_user_token_cache,
+    per_user_token_cache_key,
     resolve_mcp_auth,
+    server_id_from_mint_invalidation_key,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
@@ -143,6 +147,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
@@ -1399,7 +1406,7 @@ class MCPServerManager:
         return None
 
     @staticmethod
-    def _resolve_oauth2_flow(
+    def resolve_oauth2_flow_from_fields(
         *,
         auth_type: MCPAuthType | None,
         oauth2_flow: str | None,
@@ -1410,8 +1417,9 @@ class MCPServerManager:
     ) -> Literal["client_credentials", "authorization_code"] | None:
         """Infer oauth2_flow from field shape when the value is omitted.
 
-        SECURITY-SENSITIVE: this is the shape-inference engine both request-time security
-        helpers delegate to, so it is what decides M2M-vs-interactive for an unstamped row.
+        SECURITY-SENSITIVE: this is the shape-inference engine the request-time security
+        helpers and the disconnect write path (which must know whether a row's stored client
+        can mint again) delegate to, so it is what decides M2M-vs-interactive for an unstamped row.
         Always access it through ``effective_oauth2_flow`` (boolean/enum decisions) or
         ``resolve_oauth2_flow_for_request`` (the egress object backstop), which are the single
         choke points for request-time resolution; do not call it directly from security sites
@@ -1445,7 +1453,7 @@ class MCPServerManager:
         resolution) goes through this one helper rather than reading the bare
         ``has_client_credentials`` column, which is unreliable for null rows.
         """
-        return MCPServerManager._resolve_oauth2_flow(
+        return MCPServerManager.resolve_oauth2_flow_from_fields(
             auth_type=server.auth_type,
             oauth2_flow=server.oauth2_flow,
             token_url=server.token_url,
@@ -1496,11 +1504,13 @@ class MCPServerManager:
         cred_provider: UpstreamCredentialProvider | None = None,
         per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
+        publish_cache_invalidation: Callable[[str], Awaitable[None]] = publish_auth_cache_invalidation,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
         self._per_user_token_cache = per_user_token_cache or mcp_per_user_token_cache
+        self._publish_cache_invalidation = publish_cache_invalidation
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
@@ -5541,9 +5551,10 @@ class MCPServerManager:
         (re-auth, revoke, config-change purge): the v2 chain's cache and the legacy per-user token
         cache, so the next resolve reads the new row instead of serving the replaced token until its
         cache TTL, whichever path resolves it. This is the single invalidation point for per-user
-        OAuth tokens; callers must not evict individual caches directly. Best-effort: a cache-drop
-        failure is logged, never raised, because the DB write already succeeded and the TTL remains
-        the backstop.
+        OAuth tokens; callers must not evict individual caches directly. Both caches are local-first
+        DualCaches, so the shared key is also broadcast on the auth cache invalidation channel to
+        evict the in-memory copy other workers hold. Best-effort: a cache-drop failure is logged,
+        never raised, because the DB write already succeeded and the TTL remains the backstop.
         """
         try:
             await self._per_user_oauth_token_store.invalidate(user_id, server_id)
@@ -5557,6 +5568,46 @@ class MCPServerManager:
             verbose_logger.warning(
                 "Failed to drop legacy cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
             )
+        await self._publish_cache_invalidation(per_user_token_cache_key(user_id, server_id))
+
+    async def invalidate_local_upstream_m2m_tokens(self, server_id: str) -> None:
+        """Drop this worker's cached gateway-minted (``client_credentials``) tokens for a server.
+
+        Both mint caches are process-local, so this is per worker; ``revoke_upstream_m2m_tokens``
+        is what makes a revoke reach the others.
+        """
+        mcp_oauth2_token_cache.invalidate(server_id)
+        await self._cred_provider.invalidate_server_m2m_credentials(server_id)
+
+    async def refresh_local_server_from_db(self, server_id: str) -> None:
+        """Re-read one server's persisted config into this worker's registry.
+
+        Dropping the cached token is not enough on a worker that did not serve the revoke: its
+        registry entry still holds the pre-revoke ``client_id``/``client_secret``, and mints a
+        replacement token on the next request. Best-effort: the DB write has already committed.
+        """
+        from litellm.proxy._experimental.mcp_server.db import get_mcp_server  # noqa: PLC0415  # avoids circular import
+
+        try:
+            from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # avoids circular import
+
+            if prisma_client is None:
+                return
+            server: Final = await get_mcp_server(prisma_client, server_id)
+            if server is not None:
+                await self.update_server(server)
+        except Exception as exc:  # noqa: BLE001 - registry refresh is best-effort; the periodic reload is the backstop
+            verbose_logger.warning("Failed to refresh MCP server %s from the database: %s", server_id, exc)
+
+    async def revoke_upstream_m2m_tokens(self, server_id: str) -> None:
+        """Revoke a server's gateway-minted tokens on every worker, not just this one.
+
+        A worker that already minted keeps a usable upstream token in memory, so invalidating only
+        the worker that served the admin request left the revoked authorization in use until its
+        TTL. Best-effort broadcast: the DB write has already committed.
+        """
+        await self.invalidate_local_upstream_m2m_tokens(server_id)
+        await self._publish_cache_invalidation(mcp_oauth2_mint_invalidation_key(server_id))
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,
@@ -6535,3 +6586,17 @@ class MCPServerManager:
 
 
 global_mcp_server_manager: Final[MCPServerManager] = MCPServerManager()
+
+
+async def apply_mcp_upstream_m2m_invalidation(cache_key: str) -> None:
+    """Handle a broadcast mint-invalidation key on the worker that receives it.
+
+    The auth cache invalidation subscriber evicts the shared ``user_api_key_cache`` only, which
+    cannot reach the process-local mint caches holding a usable upstream token, so it routes
+    broadcast keys here. Any other key is ignored.
+    """
+    server_id: Final = server_id_from_mint_invalidation_key(cache_key)
+    if server_id is None:
+        return
+    await global_mcp_server_manager.invalidate_local_upstream_m2m_tokens(server_id)
+    await global_mcp_server_manager.refresh_local_server_from_db(server_id)

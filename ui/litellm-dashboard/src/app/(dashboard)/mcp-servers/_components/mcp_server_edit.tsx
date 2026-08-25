@@ -1017,7 +1017,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       </span>
                     }
                     name={["credentials", "auth_value"]}
-                    rules={{ validate: { notWhitespace: notOnlyWhitespace("Authentication value cannot be empty") } }}
+                    rules={{
+                      validate: {
+                        notWhitespace: notOnlyWhitespace(
+                          "Authentication value cannot be empty. To remove a stored token, use Disconnect / Clear token on the server's Overview tab.",
+                        ),
+                      },
+                    }}
                   >
                     {(control) => (
                       <PasswordInput

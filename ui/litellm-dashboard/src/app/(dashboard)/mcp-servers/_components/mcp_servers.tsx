@@ -27,7 +27,8 @@ import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import CreateMCPServer from "./CreateMCPServer";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
-import { MCPServerView } from "./mcp_server_view";
+import MCPDisconnectDialog, { type MCPDisconnectMode } from "./MCPDisconnectDialog";
+import { MCP_TAB, MCPServerView } from "./mcp_server_view";
 import type {
   DiscoverableMCPServer,
   MCPServer,
@@ -152,6 +153,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [disconnectServer, setDisconnectServer] = useState<MCPServer | null>(null);
+  const [disconnectMode, setDisconnectMode] = useState<MCPDisconnectMode>("disconnect");
+  // Set when an all-users Reauthorize is confirmed from a list card, so the detail view opens on
+  // Settings where "Authorize & Fetch Token" lives rather than on Overview.
+  const [settingsTabServerId, setSettingsTabServerId] = useState<string | null>(null);
   // Per-user env-var fill modal target + deep-link source captured once from the URL.
   const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
   const [deepLinkServerId, setDeepLinkServerId] = useState<string | null>(() =>
@@ -338,6 +344,30 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     return [...matches].sort((a, b) => compareServers(a, b, sortKey));
   }, [filteredServers, searchQuery, sortKey]);
 
+  const openDisconnectDialog = (server: MCPServer, mode: MCPDisconnectMode) => {
+    setDisconnectMode(mode);
+    setDisconnectServer(server);
+  };
+
+  const handleDisconnectCleared = (scope: "server" | "self") => {
+    const server = disconnectServer;
+    setDisconnectServer(null);
+    refetch();
+    if (!server || disconnectMode !== "reauthorize") {
+      return;
+    }
+    setToolsTabServerId(scope === "self" ? server.server_id : null);
+    setSettingsTabServerId(scope === "server" ? server.server_id : null);
+    setEditServer(scope === "server");
+    setSelectedServerId(server.server_id);
+  };
+
+  const initialTabIndexForSelectedServer = () => {
+    if (selectedServerId === toolsTabServerId) return MCP_TAB.TOOLS;
+    if (selectedServerId === settingsTabServerId) return MCP_TAB.SETTINGS;
+    return MCP_TAB.OVERVIEW;
+  };
+
   function handleDelete(server_id: string) {
     setServerToDelete(server_id);
     setIsDeleteModalOpen(true);
@@ -407,8 +437,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleBack = React.useCallback(() => {
     setEditServer(false);
     setSelectedServerId(null);
-    // Drop the post-redirect one-shot so re-selecting that server opens Overview.
+    // Drop the post-redirect one-shots so re-selecting that server opens Overview.
     setToolsTabServerId(null);
+    setSettingsTabServerId(null);
     refetch();
   }, [refetch]);
 
@@ -458,6 +489,18 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        {disconnectServer && (
+          <MCPDisconnectDialog
+            open
+            mode={disconnectMode}
+            serverId={disconnectServer.server_id}
+            serverName={disconnectServer.server_name || disconnectServer.alias || undefined}
+            accessToken={accessToken}
+            isProxyAdmin={isAdminRole(userRole)}
+            onOpenChange={(open) => !open && setDisconnectServer(null)}
+            onCleared={handleDisconnectCleared}
+          />
+        )}
         <CreateMCPServer
           userRole={userRole}
           userID={userID}
@@ -555,7 +598,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 userID={userID}
                 userRole={userRole}
                 availableAccessGroups={uniqueMcpAccessGroups}
-                initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
+                initialTabIndex={initialTabIndexForSelectedServer()}
               />
             ) : (
               <div className="w-full h-full">
@@ -694,6 +737,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           }
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
+                          onDisconnectOAuth={() => openDisconnectDialog(server, "disconnect")}
+                          onReauthorizeOAuth={() => openDisconnectDialog(server, "reauthorize")}
                           onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
                         />
                       ))}

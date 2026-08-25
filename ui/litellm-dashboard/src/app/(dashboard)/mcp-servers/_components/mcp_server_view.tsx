@@ -1,16 +1,17 @@
 import React, { useState } from "react";
-import { ArrowLeft, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, RefreshCw, Unplug } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { MCPServer, handleTransport, handleAuth } from "@/components/mcp_tools/types";
+import { AUTH_TYPE, MCPServer, handleTransport, handleAuth } from "@/components/mcp_tools/types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { getSecureItem } from "@/utils/secureStorage";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
+import MCPDisconnectDialog, { type MCPDisconnectMode } from "./MCPDisconnectDialog";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -26,6 +27,8 @@ interface MCPServerViewProps {
   availableAccessGroups: string[];
   initialTabIndex?: number;
 }
+
+export const MCP_TAB = { OVERVIEW: 0, TOOLS: 1, SETTINGS: 2 } as const;
 
 // True when this render is the return from the edit-settings OAuth redirect for this
 // server: the edit form wrote its UI-state snapshot before redirecting. Used to open
@@ -62,7 +65,20 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? MCP_TAB.SETTINGS : initialTabIndex);
+  const [disconnectMode, setDisconnectMode] = useState<MCPDisconnectMode | null>(null);
+
+  const isOAuthServer = mcpServer.auth_type === AUTH_TYPE.OAUTH2;
+
+  const handleDisconnectCleared = (scope: "server" | "self") => {
+    const wasReauthorize = disconnectMode === "reauthorize";
+    setDisconnectMode(null);
+    if (!wasReauthorize) {
+      return;
+    }
+    setEditing(scope === "server");
+    setSelectedTabIndex(scope === "server" ? MCP_TAB.SETTINGS : MCP_TAB.TOOLS);
+  };
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -129,6 +145,19 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         {mcpServer.description && <p className="mt-2 text-sm text-muted-foreground">{mcpServer.description}</p>}
       </div>
 
+      {disconnectMode && accessToken && (
+        <MCPDisconnectDialog
+          open
+          mode={disconnectMode}
+          serverId={mcpServer.server_id}
+          serverName={mcpServer.server_name || mcpServer.alias || undefined}
+          accessToken={accessToken}
+          isProxyAdmin={isProxyAdmin}
+          onOpenChange={(open) => !open && setDisconnectMode(null)}
+          onCleared={handleDisconnectCleared}
+        />
+      )}
+
       <Tabs value={String(selectedTabIndex)} onValueChange={(v: unknown) => setSelectedTabIndex(Number(v))}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="0" className="flex-none rounded-none px-4 py-2">
@@ -183,6 +212,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               </div>
             </Card>
           </div>
+          {isOAuthServer && accessToken && (
+            <Card className="mt-4 p-4">
+              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">OAuth Connection</p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                Clear the stored token to authorize this server again with a different set of upstream grants. The URL,
+                auth type, issuer and OAuth client are kept, so the server does not have to be recreated.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="outline" onClick={() => setDisconnectMode("reauthorize")}>
+                  <RefreshCw />
+                  Reauthorize
+                </Button>
+                <Button variant="outline" onClick={() => setDisconnectMode("disconnect")}>
+                  <Unplug />
+                  Disconnect / Clear token
+                </Button>
+              </div>
+            </Card>
+          )}
           <Card className="mt-4 p-4">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Cost Configuration</p>
             <div className="mt-3">
