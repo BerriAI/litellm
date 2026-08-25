@@ -17,11 +17,21 @@ them, but implements its own, much smaller admission/accounting engine: no
 `_LimitsIndex`, no routing-group or team-alias resolution, no per-deployment
 dedup signatures.
 
-Two independent entry-level knobs decide who a global entry applies to and
+Three independent entry-level knobs decide who a global entry applies to and
 how its bucket is shared:
 
 - `apply_to_key_alias`: unset means every request, any key, any model.  Set
   to a list of virtual-key aliases, only those keys' requests count.
+- `apply_to_models`: unset means every model. Set to a list of model names,
+  only requests whose caller-facing `model` field is in that list count --
+  letting one entry rate-limit a whole fallback chain as a single unit by
+  naming every model in the chain. This is evaluated once, against the
+  caller-requested `model`, before Router does any routing: if the request's
+  own model fails and Router falls back to a model not in `apply_to_models`,
+  that fallback hop is not re-evaluated -- the original admission already
+  stands. An operator who needs the limit to track whichever model actually
+  ends up serving a request, including after a fallback, needs
+  `model_info.tag_rate_limits` instead.
 - `scope_by_key_hash` (already exists on `TagRateLimitEntry`): whether the
   keys an entry applies to share one bucket, or each gets its own.
 
@@ -159,6 +169,11 @@ class _GlobalTagRateLimitStash:
     """
 
     admission_time: float | None = None
+    # The caller-facing `model` admission read from `data.get("model")`, so
+    # async_log_success_event's tokens/dollars accounting gates
+    # apply_to_models against the same, originally-requested model admission
+    # decided on -- not whatever model a later fallback actually served.
+    model: str | None = None
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
 
 
@@ -361,7 +376,13 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         return _bucket_ttl_seconds(entry)
 
     def _classify(
-        self, config: TagRateLimits, tags: Sequence[str], key_alias: str | None, key_hash: str | None, now: float
+        self,
+        config: TagRateLimits,
+        tags: Sequence[str],
+        key_alias: str | None,
+        key_hash: str | None,
+        now: float,
+        model: str | None,
     ) -> tuple[_ClassifiedGlobalCheck, ...]:
         classified: Final = []  # mutable-ok: sequential accumulator, immediately frozen into a tuple below
         for unit in _LIMIT_UNITS:
@@ -372,7 +393,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies(entry, tags, key_alias):
+                if not _entry_applies(entry, tags, key_alias, model):
                     continue
                 effective_key_hash = key_hash if entry.scope_by_key_hash else None
                 if unit == "concurrency":
@@ -481,17 +502,18 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         tags: Final = _get_tags_from_request_kwargs(data, metadata_variable_name=metadata_variable_name)
         key_alias: Final = user_api_key_dict.key_alias
         key_hash: Final = user_api_key_dict.api_key
+        model: Final = data.get("model") if isinstance(data.get("model"), str) else None
 
         now: Final = self._time_provider().timestamp()
         stash.admission_time = now
-        classified: Final = self._classify(config, tags, key_alias, key_hash, now)
+        stash.model = model
+        classified: Final = self._classify(config, tags, key_alias, key_hash, now, model)
         if not classified:
             return data
 
         read_only_checks: Final = tuple(c for c in classified if not c.is_atomic)
         atomic_checks: Final = tuple(c for c in classified if c.is_atomic)
 
-        model: Final = data.get("model") if isinstance(data.get("model"), str) else None
         current_values: Final = await self._read_only_values(read_only_checks, parent_otel_span=None)
         self._raise_if_over_limit(read_only_checks, current_values, model)
 
@@ -588,6 +610,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if stash is not None and stash.admission_time is not None
             else self._time_provider().timestamp()
         )
+        model: Final = stash.model if stash is not None else None
         increment_by_unit: Final[Mapping[_LimitUnit, float]] = MappingProxyType(
             {
                 "tokens": float(standard_logging_object.get("total_tokens") or 0),
@@ -604,7 +627,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies(entry, tags, key_alias):
+                if not _entry_applies(entry, tags, key_alias, model):
                     continue
                 increment_value = increment_by_unit[unit]
                 if increment_value == 0:

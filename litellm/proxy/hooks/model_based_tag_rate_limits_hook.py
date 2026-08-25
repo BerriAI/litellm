@@ -49,13 +49,13 @@ _LIMIT_UNITS: Final[tuple[_LimitUnit, ...]] = ("tokens", "requests", "dollars", 
 # depending on TagRateLimitScope's own hashability.
 _ScopeSignature: TypeAlias = tuple[str, tuple[str, ...]] | None
 # (tag_id, name, limit, period_seconds, scope_by_key_hash, enabled_for,
-# disabled_for, apply_to_key_alias) -- the fields that decide whether two
-# deployments' entries are the same rate limit for dedup purposes; see
-# _build_group_limits. Two deployments that agree on the first five but
-# disagree on any scoping field are declaring genuinely different policies
-# (e.g. one excludes a user the other doesn't) and must not be merged into
-# one shared bucket -- the same class of bug this signature already guards
-# against for a plain divergent `limit`.
+# disabled_for, apply_to_key_alias, apply_to_models) -- the fields that
+# decide whether two deployments' entries are the same rate limit for dedup
+# purposes; see _build_group_limits. Two deployments that agree on the first
+# five but disagree on any scoping field are declaring genuinely different
+# policies (e.g. one excludes a user the other doesn't) and must not be
+# merged into one shared bucket -- the same class of bug this signature
+# already guards against for a plain divergent `limit`.
 _DedupSignature: TypeAlias = tuple[
     str,
     str,
@@ -64,6 +64,7 @@ _DedupSignature: TypeAlias = tuple[
     bool,
     _ScopeSignature,
     _ScopeSignature,
+    tuple[str, ...] | None,
     tuple[str, ...] | None,
 ]
 # Units whose admission must be atomic (check-and-increment in one Redis
@@ -213,11 +214,11 @@ def _scope_signature(scope: TagRateLimitScope | None) -> _ScopeSignature:
     return None if scope is None else (scope.tag_id, scope.values)
 
 
-def _entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str | None) -> bool:
+def _entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str | None, model: str | None) -> bool:
     """
     Applies `entry`'s own scoping fields (`enabled_for`/`disabled_for`/
-    `apply_to_key_alias`), evaluated in this order -- deny overrides allow,
-    checked before either allowlist:
+    `apply_to_key_alias`/`apply_to_models`), evaluated in this order -- deny
+    overrides allow, checked before any allowlist:
 
       1. `disabled_for`: the gate tag (often a SECOND, independent tag, but
          `disabled_for.tag_id` can equally be set to this entry's own
@@ -229,7 +230,10 @@ def _entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str
          NOT in `enabled_for.values` -> doesn't apply. Unlike `disabled_for`,
          absence DOES fail this check -- an allowlist gate requires an
          explicit match, so "not tagged at all" means "not in scope".
-      3. `apply_to_key_alias`: the calling key's own alias is absent, or
+      3. `apply_to_models`: `model` is absent, or present but not in the
+         list -> doesn't apply. Same allowlist semantics as `enabled_for` --
+         a request with no `model` never satisfies this gate.
+      4. `apply_to_key_alias`: the calling key's own alias is absent, or
          present but not in the list -> doesn't apply. Same allowlist
          semantics as `enabled_for` -- a key with no alias set never
          satisfies this gate.
@@ -245,6 +249,8 @@ def _entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str
         enabled_gate_value: Final = _extract_identity(tags, entry.enabled_for.tag_id)
         if enabled_gate_value is None or enabled_gate_value not in entry.enabled_for.values:
             return False
+    if entry.apply_to_models is not None and model not in entry.apply_to_models:
+        return False
     if entry.apply_to_key_alias is None:
         return True
     return key_alias in entry.apply_to_key_alias
@@ -397,6 +403,7 @@ def _build_group_limits(deployments: Sequence[Mapping[str, object]], unit: _Limi
                 _scope_signature(entry.enabled_for),
                 _scope_signature(entry.disabled_for),
                 entry.apply_to_key_alias,
+                entry.apply_to_models,
             )
             ids_for_signature = declaring_ids_by_signature.setdefault(signature, [])  # mutable-ok: see comment above
             # One deployment declaring the identical entry twice (a config
@@ -511,6 +518,7 @@ class _LimitsIndex:
                     _scope_signature(limit.entry.enabled_for),
                     _scope_signature(limit.entry.disabled_for),
                     limit.entry.apply_to_key_alias,
+                    limit.entry.apply_to_models,
                     limit.deployment_scope,
                     limit.team_scope,
                 )
@@ -797,7 +805,7 @@ def _policy_fingerprint(entry: TagRateLimitEntry) -> str:
     unscoped entry with a key-hash-scoped one that agrees on every other
     field. Hashed to a fixed-length digest for the same reason
     `_fixed_length_identity` hashes `tag_value`: an operator's own
-    `enabled_for`/`disabled_for`/`apply_to_key_alias` list has no length bound.
+    `enabled_for`/`disabled_for`/`apply_to_key_alias`/`apply_to_models` list has no length bound.
     """
     fingerprint_source: Final = (
         entry.limit,
@@ -806,6 +814,7 @@ def _policy_fingerprint(entry: TagRateLimitEntry) -> str:
         _scope_signature(entry.enabled_for),
         _scope_signature(entry.disabled_for),
         entry.apply_to_key_alias,
+        entry.apply_to_models,
     )
     return hashlib.sha256(repr(fingerprint_source).encode()).hexdigest()[:16]
 
@@ -881,7 +890,7 @@ def _classify_check(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
-    if not _entry_applies(configured_limit.entry, tags, key_alias):
+    if not _entry_applies(configured_limit.entry, tags, key_alias, model):
         return None
     key_hash: Final = (
         _extract_key_hash(request_kwargs, metadata_variable_name) if configured_limit.entry.scope_by_key_hash else None
@@ -920,7 +929,7 @@ def _increment_operation_for_limit(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
-    if not _entry_applies(configured_limit.entry, tags, key_alias):
+    if not _entry_applies(configured_limit.entry, tags, key_alias, model_group):
         return None
     if configured_limit.unit not in increment_by_unit:
         return None  # "requests" is accounted atomically at admission, not here
@@ -971,7 +980,7 @@ def _resolve_max_in_memory_cache_size() -> int | None:
 # entries can share tag_id/name (see
 # test_bucket_key_differs_for_same_named_entries_with_different_scoping_only)
 # while disagreeing on limit/period_seconds/scope_by_key_hash/enabled_for/
-# disabled_for/apply_to_key_alias -- _DedupSignature already treats that as
+# disabled_for/apply_to_key_alias/apply_to_models -- _DedupSignature already treats that as
 # two distinct policies, so a shared max_in_memory_cache_size must not route
 # them onto the same partition either, or one entry's high-cardinality
 # traffic can evict the other's active counters from a cache neither entry

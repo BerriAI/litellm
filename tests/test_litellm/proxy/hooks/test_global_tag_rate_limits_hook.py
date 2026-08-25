@@ -255,6 +255,261 @@ async def test_apply_to_key_alias_composes_with_scope_by_key_hash(time_controlle
 
 
 # ---------------------------------------------------------------------------
+# apply_to_models -- narrows which requested model an entry applies to,
+# letting one entry rate-limit a whole fallback chain as a single unit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_ignores_non_matching_model(time_controller, monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [
+                    {
+                        "name": "chain_cap",
+                        "tag_id": "end_user_id",
+                        "limit": 1,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    for i in range(3):
+        data = {**_data(["end_user_id:u1"], call_id=f"call-{i}"), "model": "sonnet-chain"}
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="completion"
+        )
+        assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_enforces_for_the_listed_model(time_controller, monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [
+                    {
+                        "name": "chain_cap",
+                        "tag_id": "end_user_id",
+                        "limit": 1,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data1 = {**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain"}
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data1, call_type="completion")
+    data2 = {**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"}
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data2, call_type="completion")
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_shares_one_bucket_across_every_listed_model(time_controller, monkeypatch):
+    """The core "rate limit the whole chain" use case: a single limit shared
+    across every model named in apply_to_models, not one bucket per model."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [
+                    {
+                        "name": "chain_cap",
+                        "tag_id": "end_user_id",
+                        "limit": 1,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain", "sonnet-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data1 = {**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain"}
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data1, call_type="completion")
+
+    data2 = {**_data(["end_user_id:u1"], call_id="call-2"), "model": "sonnet-chain"}
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data2, call_type="completion")
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_composes_with_apply_to_key_alias(time_controller, monkeypatch):
+    """Both gates must pass -- the listed key requesting a non-listed model
+    is unaffected, and only the listed key requesting the listed model is
+    actually enforced."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [
+                    {
+                        "name": "chain_cap",
+                        "tag_id": "end_user_id",
+                        "limit": 1,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain"],
+                        "apply_to_key_alias": ["premium-key"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    # premium-key requesting a non-listed model: apply_to_models alone must
+    # still exclude it, even though apply_to_key_alias matches.
+    for i in range(3):
+        data = {**_data(["end_user_id:u1"], call_id=f"wrong-model-{i}"), "model": "sonnet-chain"}
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=_key(alias="premium-key"), cache=DualCache(), data=data, call_type="completion"
+        )
+        assert result is not None
+
+    # A non-listed key requesting the listed model: apply_to_key_alias alone
+    # must still exclude it, even though apply_to_models matches.
+    for i in range(3):
+        data = {**_data(["end_user_id:u1"], call_id=f"wrong-key-{i}"), "model": "opus-chain"}
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=_key(alias="other-key"), cache=DualCache(), data=data, call_type="completion"
+        )
+        assert result is not None
+
+    # Both gates match: enforced.
+    data1 = {**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain"}
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(alias="premium-key"), cache=DualCache(), data=data1, call_type="completion"
+    )
+    data2 = {**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"}
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(alias="premium-key"), cache=DualCache(), data=data2, call_type="completion"
+        )
+
+
+@pytest.mark.asyncio
+async def test_dollar_limit_respects_apply_to_models_at_accounting_time(time_controller, monkeypatch):
+    """The entry only applies to opus-chain; a non-listed model's spend must
+    not be charged against this bucket at all -- proves apply_to_models
+    gates async_log_success_event's tokens/dollars accounting, not just
+    admission."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "dollar_limits": {
+                "limits": [
+                    {
+                        "name": "chain_spend",
+                        "tag_id": "end_user_id",
+                        "limit": 10.0,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data = {**_data(["end_user_id:u1"], call_id="call-1"), "model": "sonnet-chain"}
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="completion")
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "standard_logging_object": {"total_tokens": 0, "response_cost": 999.0},
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # opus-chain was never charged -- still fully under its own limit.
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"},
+        call_type="completion",
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_fallback_does_not_re_narrow_accounting_to_the_serving_model(time_controller, monkeypatch):
+    """
+    Documented limitation, not a bug: apply_to_models is evaluated exactly
+    once, at admission, against the caller-requested model -- it is never
+    re-evaluated against whichever model a later fallback actually serves.
+    This request names "opus-chain" at admission (the entry applies), but its
+    response accounting reports "sonnet-chain" as the model that actually
+    served it, simulating Router falling back after opus-chain failed. The
+    spend must still land in the opus-chain-scoped bucket: the check already
+    ran and decided at admission, and is not re-run for the fallback target.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "dollar_limits": {
+                "limits": [
+                    {
+                        "name": "chain_spend",
+                        "tag_id": "end_user_id",
+                        "limit": 10.0,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data = {**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain"}
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="completion")
+
+    # The response accounting reports the fallback target as the model that
+    # actually served the request -- not the "opus-chain" admission decided.
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "model": "sonnet-chain",
+        "standard_logging_object": {
+            "total_tokens": 0,
+            "response_cost": 12.0,
+            "model": "sonnet-chain",
+            "model_group": "sonnet-chain",
+        },
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # The spend landed in the opus-chain-scoped bucket regardless -- a fresh
+    # opus-chain request is now over the limit.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"},
+            call_type="completion",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Concurrency: reservation at admission, release on success/failure/disconnect
 # ---------------------------------------------------------------------------
 

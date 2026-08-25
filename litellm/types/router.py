@@ -232,6 +232,12 @@ class TagRateLimitEntry(BaseModel):
     # never satisfies this allowlist, same "absent gate never matches an
     # allowlist" precedent as `enabled_for`.
     apply_to_key_alias: tuple[str, ...] | None = None
+    # Restrict this entry to requests whose caller-facing `model` matches one
+    # of these names. Unset (the default) means the entry applies to every
+    # model. A request with no `model` field never satisfies this allowlist,
+    # same "absent gate never matches an allowlist" precedent as
+    # `apply_to_key_alias`.
+    apply_to_models: tuple[str, ...] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -298,6 +304,18 @@ class TagRateLimitEntry(BaseModel):
         # deployments' entries dedup to one shared bucket.
         if self.apply_to_key_alias is not None:
             self.apply_to_key_alias = tuple(sorted(set(self.apply_to_key_alias)))  # mutable-ok: frozen before escaping
+        return self
+
+    @model_validator(mode="after")
+    def _validate_apply_to_models(self) -> "TagRateLimitEntry":
+        if self.apply_to_models is not None and not self.apply_to_models:
+            raise ValueError("apply_to_models must be a non-empty list of strings when set")
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_apply_to_models(self) -> "TagRateLimitEntry":
+        if self.apply_to_models is not None:
+            self.apply_to_models = tuple(sorted(set(self.apply_to_models)))  # mutable-ok: frozen before escaping
         return self
 
 

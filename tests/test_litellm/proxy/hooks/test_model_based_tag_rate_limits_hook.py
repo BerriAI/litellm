@@ -388,7 +388,7 @@ def test_build_group_limits_empty_when_no_deployment_configures_unit():
 
 def test_entry_applies_with_none_of_the_scoping_fields_set():
     entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
-    assert _entry_applies(entry, ["end_user_id:u1"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is True
 
 
 def test_entry_applies_disabled_for_on_its_own_tag_id_excludes_a_listed_value():
@@ -401,8 +401,8 @@ def test_entry_applies_disabled_for_on_its_own_tag_id_excludes_a_listed_value():
         period_seconds=86400,
         disabled_for=TagRateLimitScope(tag_id="end_user_id", values=("u1",)),
     )
-    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
-    assert _entry_applies(entry, ["end_user_id:u2"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is False
+    assert _entry_applies(entry, ["end_user_id:u2"], None, None) is True
 
 
 def test_entry_applies_enabled_for_on_its_own_tag_id_restricts_to_a_listed_value():
@@ -415,8 +415,8 @@ def test_entry_applies_enabled_for_on_its_own_tag_id_restricts_to_a_listed_value
         period_seconds=86400,
         enabled_for=TagRateLimitScope(tag_id="end_user_id", values=("u2", "u3")),
     )
-    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
-    assert _entry_applies(entry, ["end_user_id:u2"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is False
+    assert _entry_applies(entry, ["end_user_id:u2"], None, None) is True
 
 
 def test_entry_applies_matches_an_enabled_for_gate():
@@ -427,7 +427,7 @@ def test_entry_applies_matches_an_enabled_for_gate():
         period_seconds=86400,
         enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None, None) is True
 
 
 def test_entry_applies_skips_when_enabled_for_gate_tag_is_absent():
@@ -442,7 +442,7 @@ def test_entry_applies_skips_when_enabled_for_gate_tag_is_absent():
         period_seconds=86400,
         enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is False
 
 
 def test_entry_applies_skips_when_disabled_for_gate_matches():
@@ -453,7 +453,7 @@ def test_entry_applies_skips_when_disabled_for_gate_matches():
         period_seconds=86400,
         disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None, None) is False
 
 
 def test_entry_applies_when_disabled_for_gate_tag_is_absent():
@@ -466,7 +466,7 @@ def test_entry_applies_when_disabled_for_gate_tag_is_absent():
         period_seconds=86400,
         disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, ["end_user_id:u1"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is True
 
 
 def test_entry_applies_disabled_for_overrides_a_matching_enabled_for_gate():
@@ -480,27 +480,27 @@ def test_entry_applies_disabled_for_overrides_a_matching_enabled_for_gate():
         enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
         disabled_for=TagRateLimitScope(tag_id="end_user_id", values=("u1",)),
     )
-    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None, None) is False
 
 
 def test_entry_applies_with_apply_to_key_alias_unset_applies_to_every_key():
     entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
-    assert _entry_applies(entry, ["end_user_id:u1"], "any-key-alias") is True
-    assert _entry_applies(entry, ["end_user_id:u1"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], "any-key-alias", None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is True
 
 
 def test_entry_applies_admits_a_key_alias_on_the_allowlist():
     entry = TagRateLimitEntry(
         name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_key_alias=("team-a-key",)
     )
-    assert _entry_applies(entry, ["end_user_id:u1"], "team-a-key") is True
+    assert _entry_applies(entry, ["end_user_id:u1"], "team-a-key", None) is True
 
 
 def test_entry_applies_rejects_a_key_alias_missing_from_the_allowlist():
     entry = TagRateLimitEntry(
         name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_key_alias=("team-a-key",)
     )
-    assert _entry_applies(entry, ["end_user_id:u1"], "team-b-key") is False
+    assert _entry_applies(entry, ["end_user_id:u1"], "team-b-key", None) is False
 
 
 def test_entry_applies_rejects_when_key_has_no_alias_but_allowlist_is_set():
@@ -509,7 +509,53 @@ def test_entry_applies_rejects_when_key_has_no_alias_but_allowlist_is_set():
     entry = TagRateLimitEntry(
         name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_key_alias=("team-a-key",)
     )
-    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is False
+
+
+def test_entry_applies_with_apply_to_models_unset_applies_to_every_model():
+    entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
+    assert _entry_applies(entry, ["end_user_id:u1"], None, "opus-chain") is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is True
+
+
+def test_entry_applies_admits_a_model_on_the_apply_to_models_allowlist():
+    entry = TagRateLimitEntry(
+        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_models=("opus-chain",)
+    )
+    assert _entry_applies(entry, ["end_user_id:u1"], None, "opus-chain") is True
+
+
+def test_entry_applies_rejects_a_model_missing_from_the_apply_to_models_allowlist():
+    entry = TagRateLimitEntry(
+        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_models=("opus-chain",)
+    )
+    assert _entry_applies(entry, ["end_user_id:u1"], None, "sonnet-chain") is False
+
+
+def test_entry_applies_rejects_when_model_is_absent_but_apply_to_models_is_set():
+    """apply_to_models is an allowlist gate: a request with no model at all
+    never satisfies it, same as apply_to_key_alias's absent-key semantics."""
+    entry = TagRateLimitEntry(
+        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_models=("opus-chain",)
+    )
+    assert _entry_applies(entry, ["end_user_id:u1"], None, None) is False
+
+
+def test_entry_applies_apply_to_models_composes_with_apply_to_key_alias():
+    """Both gates must pass: a request against the listed model but a
+    non-listed key alias must not apply, even though apply_to_models alone
+    would have admitted it."""
+    entry = TagRateLimitEntry(
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        apply_to_models=("opus-chain",),
+        apply_to_key_alias=("premium-key",),
+    )
+    assert _entry_applies(entry, ["end_user_id:u1"], "premium-key", "opus-chain") is True
+    assert _entry_applies(entry, ["end_user_id:u1"], "other-key", "opus-chain") is False
+    assert _entry_applies(entry, ["end_user_id:u1"], "premium-key", "sonnet-chain") is False
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +588,18 @@ def test_tag_rate_limit_entry_normalizes_apply_to_key_alias_order_and_duplicates
         name="daily", limit=1, period_seconds=60, apply_to_key_alias=("team-b-key", "team-a-key", "team-a-key")
     )
     assert entry.apply_to_key_alias == ("team-a-key", "team-b-key")
+
+
+def test_tag_rate_limit_entry_rejects_empty_apply_to_models():
+    with pytest.raises(ValidationError, match="apply_to_models must be a non-empty list"):
+        TagRateLimitEntry(name="daily", limit=1, period_seconds=60, apply_to_models=())
+
+
+def test_tag_rate_limit_entry_normalizes_apply_to_models_order_and_duplicates():
+    entry = TagRateLimitEntry(
+        name="daily", limit=1, period_seconds=60, apply_to_models=("sonnet-chain", "opus-chain", "opus-chain")
+    )
+    assert entry.apply_to_models == ("opus-chain", "sonnet-chain")
 
 
 # ---------------------------------------------------------------------------
@@ -1059,6 +1117,47 @@ def test_resolve_any_keeps_divergent_disabled_for_across_member_model_names_sepa
     resolved = index.resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))
     assert len(resolved) == 2
     assert {c.entry.disabled_for.values for c in resolved} == {("u1",), ("u2",)}
+
+
+def test_resolve_any_keeps_divergent_apply_to_models_across_member_model_names_separate():
+    """Same class of bug as the disabled_for test above, for apply_to_models:
+    two routing-group members agreeing on tag_id/limit/period_seconds but
+    scoped to different apply_to_models lists must not collapse to one."""
+    concurrency_limits_for_opus = {
+        "concurrency_limits": {
+            "limits": [
+                {
+                    "name": "inflight",
+                    "tag_id": "end_user_id",
+                    "limit": 1,
+                    "period_seconds": 300,
+                    "apply_to_models": ["opus-chain"],
+                }
+            ]
+        }
+    }
+    concurrency_limits_for_sonnet = {
+        "concurrency_limits": {
+            "limits": [
+                {
+                    "name": "inflight",
+                    "tag_id": "end_user_id",
+                    "limit": 1,
+                    "period_seconds": 300,
+                    "apply_to_models": ["sonnet-chain"],
+                }
+            ]
+        }
+    }
+    index = _build_limits_index(
+        [
+            _deployment("backend-a", "dep-a", concurrency_limits_for_opus),
+            _deployment("backend-b", "dep-b", concurrency_limits_for_sonnet),
+        ]
+    )
+    resolved = index.resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))
+    assert len(resolved) == 2
+    assert {c.entry.apply_to_models for c in resolved} == {("opus-chain",), ("sonnet-chain",)}
 
 
 def test_resolve_any_picks_the_same_resolved_group_regardless_of_hash_seed():
@@ -3830,10 +3929,10 @@ def test_partition_key_distinguishes_entries_that_differ_only_by_scoping_fields(
     A plain, unscoped entry and a scoped override can legitimately share
     name/tag_id/limit/period_seconds/scope_by_key_hash (see
     test_bucket_key_differs_for_same_named_entries_with_different_scoping_only)
-    while disagreeing on enabled_for/disabled_for/apply_to_key_alias --
-    _DedupSignature and _policy_fingerprint already treat that as two
-    distinct policies, so a shared max_in_memory_cache_size must not route
-    them onto the same in-memory partition either, or one entry's
+    while disagreeing on enabled_for/disabled_for/apply_to_key_alias/
+    apply_to_models -- _DedupSignature and _policy_fingerprint already treat
+    that as two distinct policies, so a shared max_in_memory_cache_size must
+    not route them onto the same in-memory partition either, or one entry's
     high-cardinality traffic can evict the other's active counters from a
     cache neither entry asked to share.
     """
@@ -3846,14 +3945,16 @@ def test_partition_key_distinguishes_entries_that_differ_only_by_scoping_fields(
         **base_kwargs, disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",))
     )
     alias_scoped = TagRateLimitEntry(**base_kwargs, apply_to_key_alias=("premium-key",))
+    models_scoped = TagRateLimitEntry(**base_kwargs, apply_to_models=("opus-chain",))
 
     keys = {
         _partition_key(unscoped),
         _partition_key(enabled_for_scoped),
         _partition_key(disabled_for_scoped),
         _partition_key(alias_scoped),
+        _partition_key(models_scoped),
     }
-    assert len(keys) == 4
+    assert len(keys) == 5
 
 
 @pytest.mark.asyncio
@@ -4625,4 +4726,93 @@ async def test_apply_to_key_alias_restricts_a_per_model_entry_to_the_listed_key(
             healthy_deployments=healthy,
             messages=None,
             request_kwargs={"metadata": {"tags": ["end_user_id:u1"], "user_api_key_alias": "premium-key"}},
+        )
+
+
+# ---------------------------------------------------------------------------
+# apply_to_models -- shared TagRateLimitEntry field, also usable on a
+# per-model entry (expected to be rarely useful there, since a per-deployment
+# entry is already implicitly scoped to whichever model_name declares it, but
+# it must compose identically to every other shared scoping field)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_ignores_a_non_matching_model_group(time_controller):
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {
+                                "name": "per_minute",
+                                "tag_id": "end_user_id",
+                                "limit": 1,
+                                "period_seconds": 60,
+                                "apply_to_models": ["other-group"],
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    for _ in range(3):
+        result = await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+        assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_restricts_a_per_model_entry_to_the_listed_model_group(time_controller):
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [
+                            {
+                                "name": "per_minute",
+                                "tag_id": "end_user_id",
+                                "limit": 1,
+                                "period_seconds": 60,
+                                "apply_to_models": ["grp"],
+                            }
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    result = await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    assert result == healthy
+
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
         )
