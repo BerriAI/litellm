@@ -7343,3 +7343,31 @@ class TestRouterModelNameOnNonStreamingResponse:
         )
 
         assert response[ROUTER_MODEL_NAME_RESPONSE_FIELD] == "deep-model"
+
+
+@pytest.mark.parametrize(
+    "exc,expect_traceback",
+    [
+        pytest.param(HTTPException(status_code=400, detail="Invalid model name passed in"), False, id="expected_400"),
+        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error"),
+    ],
+)
+def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_traceback, caplog):
+    """Regression for LIT-6043: expected 4xx errors log without formatting a
+    traceback; unexpected errors keep logger.exception behavior."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.common_request_processing import _log_llm_api_exception
+
+    verbose_proxy_logger.propagate = True
+    try:
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            try:
+                raise exc
+            except Exception as raised:
+                _log_llm_api_exception(raised)
+    finally:
+        verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert (records[0].exc_info is not None) is expect_traceback

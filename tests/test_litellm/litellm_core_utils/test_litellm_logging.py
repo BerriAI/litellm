@@ -5678,3 +5678,62 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+class _ClientError(Exception):
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
+
+def _raise_and_catch(exc):
+    try:
+        raise exc
+    except Exception as caught:
+        return caught
+
+
+def test_get_error_information_skips_traceback_for_expected_4xx(monkeypatch):
+    """Regression for LIT-6043: expected client (4xx) errors must not pay for
+    traceback.format_tb on every rejected request unless
+    litellm.log_client_error_tracebacks is enabled."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    client_exc = _raise_and_catch(_ClientError(status_code=403, message="team does not allow model"))
+    assert client_exc.__traceback__ is not None
+    result = StandardLoggingPayloadSetup.get_error_information(client_exc)
+    assert result["traceback"] == ""
+
+    server_exc = _raise_and_catch(_ClientError(status_code=500, message="boom"))
+    result = StandardLoggingPayloadSetup.get_error_information(server_exc)
+    assert "test_litellm_logging" in result["traceback"]
+
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", True)
+    result = StandardLoggingPayloadSetup.get_error_information(client_exc)
+    assert "test_litellm_logging" in result["traceback"]
+
+
+def test_failure_handler_helper_fn_builds_payload_once_per_exception():
+    """Regression for LIT-6043: async and sync failure handlers both call
+    _failure_handler_helper_fn for the same failed request; the standardized
+    payload must be built once, not once per handler."""
+    obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-6043-1",
+        function_id="f",
+    )
+    exc = _raise_and_catch(_ClientError(status_code=400, message="invalid model"))
+    obj._failure_handler_helper_fn(exception=exc, traceback_exception="")
+    first_payload = obj.model_call_details["standard_logging_object"]
+    assert first_payload is not None
+    obj._failure_handler_helper_fn(exception=exc, traceback_exception="")
+    assert obj.model_call_details["standard_logging_object"] is first_payload
+
+    other_exc = _raise_and_catch(_ClientError(status_code=429, message="rate limited"))
+    obj._failure_handler_helper_fn(exception=other_exc, traceback_exception="")
+    assert obj.model_call_details["standard_logging_object"] is not first_payload

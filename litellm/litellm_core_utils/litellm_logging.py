@@ -62,7 +62,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
-from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
+from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     cost_breakdown_with_guardrail,
@@ -3124,6 +3124,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if not hasattr(self, "model_call_details"):
             self.model_call_details = {}
 
+        if (
+            self.model_call_details.get("log_event_type") == "failed_api_call"
+            and self.model_call_details.get("exception") is exception
+            and self.model_call_details.get("standard_logging_object") is not None
+        ):
+            return start_time, self.model_call_details["end_time"]
+
         self.model_call_details["log_event_type"] = "failed_api_call"
         self.model_call_details["exception"] = exception
         self.model_call_details["traceback_exception"] = (
@@ -5455,9 +5462,10 @@ class StandardLoggingPayloadSetup:
         error_class: Final[str] = str(original_exception.__class__.__name__) if original_exception else ""
         _llm_provider_in_exception: Final = getattr(original_exception, "llm_provider", "")
 
-        # Get traceback information (first 100 lines)
         traceback_info = traceback_str or ""
-        if original_exception:
+        if original_exception and (
+            litellm.log_client_error_tracebacks or not is_expected_client_error(original_exception)
+        ):
             tb: Final[TracebackType | None] = getattr(original_exception, "__traceback__", None)
             if tb:
                 tb_lines: Final = traceback.format_tb(tb)

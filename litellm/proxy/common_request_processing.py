@@ -33,7 +33,7 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -1380,7 +1380,12 @@ def _log_llm_api_exception(e: Exception) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
         return
-    verbose_proxy_logger.exception("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
+    log_fn: Final = (
+        verbose_proxy_logger.error
+        if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
+        else verbose_proxy_logger.exception
+    )
+    log_fn("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
 
 
 async def _cancel_llm_call_on_client_disconnect(
