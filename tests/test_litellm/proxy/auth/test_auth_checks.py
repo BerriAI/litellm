@@ -7173,7 +7173,74 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
             {"type": "message", "data": _published_message_for(cache_key)}
         )
 
-    assert remote_spend_counter_in_memory_cache.get_cache("spend:team_member:user-1:team-1") is None
+    assert remote_spend_counter_in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0
     assert (
-        remote_spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") is None
+        remote_spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0
     ), "the DB-floor marker was not broadcast; a remote worker can re-raise the counter off its stale floor"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_not_erase_the_reset():
+    """The handling worker subscribes to the same invalidation channel it publishes on, so it
+    receives its own reset message. A delete-style broadcast would erase the post-reset counter
+    and floor marker the handler just wrote, reopening the stale-floor race the reset closed
+    (regression: PR #37971 Greptile finding). The broadcast carries the reset value as a SET, so
+    applying the self-delivered message must leave both keys at the post-reset value."""
+    from redis.asyncio import Redis
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    published: list[tuple[str, str]] = []
+
+    class _RecordingRedisClient(Redis):
+        def __init__(self) -> None:
+            pass
+
+        async def publish(self, channel: str, message: str) -> int:
+            published.append((channel, message))
+            return 1
+
+    class _FakeRedisCache:
+        def __init__(self) -> None:
+            self.namespace = None
+
+        def init_async_client(self) -> object:
+            return _RecordingRedisClient()
+
+    local_spend_counter_cache = DualCache()
+    local_user_api_key_cache = UserApiKeyCache()
+
+    with (
+        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+            return_value=_FakeRedisCache(),
+        ),
+    ):
+        await invalidate_team_member_spend_state(
+            user_id="user-1",
+            team_id="team-1",
+            user_api_key_cache=local_user_api_key_cache,
+            new_spend=0.0,
+        )
+
+    own_subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(),
+        user_api_key_cache=local_user_api_key_cache,
+        additional_in_memory_caches=(local_spend_counter_cache.in_memory_cache,),
+    )
+    for _, message in published:
+        own_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
+            {"type": "message", "data": message}
+        )
+
+    assert local_spend_counter_cache.in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0, (
+        "the handler's self-delivered broadcast erased the post-reset spend counter"
+    )
+    assert (
+        local_spend_counter_cache.in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0
+    ), "the handler's self-delivered broadcast erased the post-reset floor marker, reopening the stale-floor race"

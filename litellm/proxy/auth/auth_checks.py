@@ -2445,7 +2445,10 @@ async def invalidate_team_member_spend_state(
     the post-reset floor (not merely deleted) and _authoritative_floor_spend
     re-checks the marker after its DB read, so a floor read already in flight
     on this pod when the reset commits cannot clobber it with the pre-reset
-    value; on remote pods the broadcast delete clears it.
+    value. Both keys are broadcast as SETs carrying new_spend, not deletes:
+    every subscriber (remote pods AND this pod's own, which receives its own
+    message) writes the post-reset value, so the self-delivered message cannot
+    erase the guard just written here.
 
     Raises HTTPException(503) if Redis still holds the stale pre-reset counter
     after both the SET and the fallback DELETE fail: budget checks read Redis
@@ -2495,8 +2498,12 @@ async def invalidate_team_member_spend_state(
             value=new_spend,
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
         )
-        await publish_auth_cache_invalidation(cache_key=spend_counter_key)
-        await publish_auth_cache_invalidation(cache_key=spend_db_floor_key)
+        await publish_auth_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
+        await publish_auth_cache_invalidation(
+            cache_key=spend_db_floor_key,
+            new_value=new_spend,
+            ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+        )
 
     await evict_and_broadcast(
         cache_keys=(
