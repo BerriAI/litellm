@@ -1,12 +1,19 @@
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
+from httpx import Response
+
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
 from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     resolve_mantle_bearer_token,
     resolve_mantle_region,
 )
+from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.types.utils import CostResponseTypes
 
 
 class BedrockMantlePassthroughConfig(BedrockPassthroughConfig):
@@ -42,3 +49,23 @@ class BedrockMantlePassthroughConfig(BedrockPassthroughConfig):
     def get_bedrock_bearer_token(self, litellm_params: Mapping[str, object]) -> str | None:
         api_key: Final = litellm_params.get("api_key")
         return resolve_mantle_bearer_token(api_key if isinstance(api_key, str) else None)
+
+    def logging_non_streaming_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        httpx_response: Response,
+        request_data: dict,  # mutable-ok: mirrors the inherited BedrockPassthroughConfig signature
+        logging_obj: Logging,
+        endpoint: str,
+    ) -> Optional["CostResponseTypes"]:
+        is_converse: Final = "invoke" not in endpoint and "converse" in endpoint
+        shape_provider: Final = LlmProviders.BEDROCK.value if is_converse else custom_llm_provider
+        return super().logging_non_streaming_response(
+            model=model,
+            custom_llm_provider=shape_provider,
+            httpx_response=httpx_response,
+            request_data=request_data,
+            logging_obj=logging_obj,
+            endpoint=endpoint,
+        )
