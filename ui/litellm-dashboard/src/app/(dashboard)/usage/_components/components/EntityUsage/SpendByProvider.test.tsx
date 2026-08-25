@@ -216,15 +216,15 @@ describe("SpendByProvider", () => {
     expect(screen.queryByText("unknown")).not.toBeInTheDocument();
   });
 
-  it("renders one cyan donut sector per visible provider with the $ total as center label", () => {
+  it("gives every visible provider its own donut color and shows the $ total as center label", () => {
     const { container } = render(
       <SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />,
     );
 
     const sectors = container.querySelectorAll(".recharts-pie-sector path");
     expect(sectors).toHaveLength(2);
-    const fills = new Set(Array.from(sectors).map((sector) => sector.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+    const fills = Array.from(sectors).map((sector) => sector.getAttribute("fill"));
+    expect(new Set(fills).size).toBe(fills.length);
 
     const centerLabels = Array.from(container.querySelectorAll("text.fill-foreground")).map((text) => text.textContent);
     expect(centerLabels).toContain("$351.25");
