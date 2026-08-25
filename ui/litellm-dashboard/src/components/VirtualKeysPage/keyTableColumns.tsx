@@ -320,7 +320,11 @@ export const getKeyTableColumns = ({
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
+          inheritedGates={
+            row.original.max_budget == null
+              ? inheritedBudgetGates(team, organization, row.original.team_id ? null : row.original.user)
+              : []
+          }
         />
       );
     },
