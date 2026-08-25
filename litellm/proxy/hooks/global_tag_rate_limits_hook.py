@@ -167,21 +167,23 @@ class _GlobalTagRateLimitStash:
 # unchanged: everything without a call id still shares one bucket).
 _NO_CALL_ID: Final = "<no-call-id>"
 
-_request_stash: Final[ContextVar[dict[str, _GlobalTagRateLimitStash] | None]] = ContextVar(
+_StashByCallId: TypeAlias = dict[
+    str, _GlobalTagRateLimitStash
+]  # mutable-ok: per-call-id entries added over a request's lifetime, see class docstring
+
+_request_stash: Final[ContextVar[_StashByCallId | None]] = ContextVar(
     "global_tag_rate_limits_request_stash", default=None
 )
 
 
 def _claim_stash_for_data(data: Mapping[str, object]) -> _GlobalTagRateLimitStash:
-    by_call_id: dict[str, _GlobalTagRateLimitStash] | None = (
-        _request_stash.get()
-    )  # rebind-ok: lazily initialized below if this ContextVar has never been set
+    by_call_id: _StashByCallId | None = _request_stash.get()  # rebind-ok: lazily initialized below if never set
     if by_call_id is None:
-        by_call_id = {}  # rebind-ok: see above; mutable-ok: one dict per context, entries isolated per call id -- see class docstring
+        by_call_id = {}  # rebind-ok: see above  # mutable-ok: see _StashByCallId
         _request_stash.set(by_call_id)
     owner_call_id: Final = data.get("litellm_call_id")
     key: Final = owner_call_id if isinstance(owner_call_id, str) else _NO_CALL_ID
-    stash = by_call_id.get(key)
+    stash = by_call_id.get(key)  # rebind-ok: reassigned just below when newly created
     if stash is None:
         stash = _GlobalTagRateLimitStash()  # rebind-ok: see above
         by_call_id[key] = stash  # mutable-ok: see class docstring
