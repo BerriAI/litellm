@@ -271,7 +271,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
-                            tool_file_parts: tuple[dict[str, str], ...] = ()  # mutable-ok: json content parts
+                            document_candidates = (
+                                tuple(
+                                    self._translate_anthropic_document_block_to_file_part(c)
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") == "document"
+                                )
+                                if isinstance(inner, list)
+                                else ()
+                            )
+                            tool_file_parts = tuple(part for part in document_candidates if part is not None)
                             if inner is None:
                                 output_text = ""
                             elif isinstance(inner, str):
@@ -297,12 +306,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                         {"type": "input_image", "image_url": url}  # mutable-ok: json content part
                                         for url in image_urls
                                     )
-                                document_candidates = tuple(
-                                    self._translate_anthropic_document_block_to_file_part(c)
-                                    for c in inner
-                                    if isinstance(c, dict) and c.get("type") == "document"
-                                )
-                                tool_file_parts = tuple(part for part in document_candidates if part is not None)
                             else:
                                 output_text = str(inner)
                             # tool_result is a top-level item, not inside the message
