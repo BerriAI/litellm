@@ -772,9 +772,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         if not request_data:
             return False
-        provider = request_data.get("custom_llm_provider") or (request_data.get("litellm_params") or {}).get(
-            "custom_llm_provider"
+        litellm_params: Final = request_data.get("litellm_params")
+        nested_provider: Final = (
+            litellm_params.get("custom_llm_provider") if isinstance(litellm_params, Mapping) else None
         )
+        provider: Final = request_data.get("custom_llm_provider") or nested_provider
         if provider:
             return provider == "bedrock"
         model: Final[str] = request_data.get("model") or ""
@@ -1900,7 +1902,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return BedrockGuardrailResponse()
 
         api_key: Final[str | None] = (
-            request_data.get("api_key") if self._request_api_key_is_a_bedrock_credential(request_data) else None
+            request_data.get("api_key")
+            if request_data and self._request_api_key_is_a_bedrock_credential(request_data)
+            else None
         )
         credentials, aws_region_name = self._load_credentials(bearer_token=bedrock_bearer_token(api_key))
         body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}

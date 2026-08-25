@@ -11,8 +11,6 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
-
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
