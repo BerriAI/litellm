@@ -288,7 +288,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return rewritten
 
     @classmethod
-    def _normalize_codex_input_item(cls, item: object) -> "tuple[Any, str | None]":
+    def _normalize_codex_input_item(cls, item: object) -> "tuple[object, str | None]":
         """Returns (normalized item or None to drop it, original type when rewritten)."""
         if not isinstance(item, dict):
             return item, None
@@ -324,7 +324,8 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 "Bedrock Mantle Responses API: rewrote Codex input item type(s) %s that Mantle rejects.",
                 rewritten_types,
             )
-        return [item for item, _ in normalized if item is not None]  # mutable-ok: ResponseInputParam is a list
+        kept: Final = [item for item, _ in normalized if item is not None]  # mutable-ok: ResponseInputParam is a list
+        return kept  # pyright: ignore[reportReturnType]  # Codex passthrough items sit outside the OpenAI input union
 
     def map_openai_params(
         self,
