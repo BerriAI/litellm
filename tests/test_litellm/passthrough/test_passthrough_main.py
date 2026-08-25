@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -9,12 +7,8 @@ from fastapi.testclient import TestClient
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route

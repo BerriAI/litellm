@@ -5,7 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
 
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
@@ -21,6 +21,9 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    responses_reasoning_item_from_thinking_blocks,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
@@ -32,6 +35,7 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
+    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
@@ -83,6 +87,22 @@ def _get_reasoning_items(
     if items:
         return items
     return []
+
+
+def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]:  # mutable-ok: API message payload
+    """Reasoning input items for an assistant message.
+
+    Stored reasoning items win because they carry an id the Responses API minted; thinking
+    blocks are the fallback for turns that arrived over another API surface.
+    """
+    items: Final = _get_reasoning_items(msg)
+    stored: Final = [_reasoning_item_to_response_input(item) for item in items]  # mutable-ok: API message payload
+    if stored:
+        return stored
+    raw_blocks: Final = msg.get("thinking_blocks") or ()
+    blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
+    from_thinking: Final = responses_reasoning_item_from_thinking_blocks(blocks)
+    return [] if from_thinking is None else [dict(from_thinking)]  # mutable-ok: API message payload
 
 
 def _build_reasoning_item(
@@ -372,8 +392,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                     )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
-                for r_item in _get_reasoning_items(msg):
-                    input_items.append(_reasoning_item_to_response_input(r_item))
+                input_items.extend(_reasoning_input_items(msg))
+                if content:
+                    input_items.append(
+                        {  # mutable-ok: API message payload
+                            "type": "message",
+                            "role": "assistant",
+                            "content": self._convert_content_to_responses_format(content, "assistant"),
+                        }
+                    )
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     custom = tool_call.get("custom")
@@ -400,15 +427,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
                 if role == "assistant":
-                    for r_item in _get_reasoning_items(msg):
-                        input_items.append(_reasoning_item_to_response_input(r_item))
+                    input_items.extend(_reasoning_input_items(msg))
                 input_items.append(
-                    {
+                    {  # mutable-ok: API message payload
                         "type": "message",
                         "role": role,
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),
                     }
                 )
+            elif role == "assistant":
+                input_items.extend(_reasoning_input_items(msg))
 
         return input_items, instructions
 
@@ -1086,22 +1114,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        # If string is passed, map with optional summary based on flag/env var
-        if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")
-        elif reasoning_effort == "high":
-            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
-        elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")
-        elif reasoning_effort == "medium":
+        if reasoning_effort in get_args(REASONING_EFFORT):
             return (
-                Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
-            )
-        elif reasoning_effort == "low":
-            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
-        elif reasoning_effort == "minimal":
-            return (
-                Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
+                Reasoning(effort=reasoning_effort, summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort=reasoning_effort)
             )
         return None
 

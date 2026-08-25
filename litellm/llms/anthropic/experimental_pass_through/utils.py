@@ -13,6 +13,11 @@ def prompt_cache_key_from_user_id(user_id: object) -> str | None:
     return str(user_id)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
 
 
+def local_model_name(model: str, custom_llm_provider: object) -> str:
+    """The id the provider itself knows, for reporting back to the caller in ``message_start``."""
+    return model.removeprefix(f"{custom_llm_provider}/") if isinstance(custom_llm_provider, str) else model
+
+
 def is_reasoning_auto_summary_enabled() -> bool:
     """Check whether the default 'summary: detailed' injection is enabled (opt-in)."""
     return litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"

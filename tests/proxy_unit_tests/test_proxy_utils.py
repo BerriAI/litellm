@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
@@ -14,9 +13,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm

@@ -12,6 +12,14 @@ export const usd = (value: number): string => {
 
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;
 
+export const shortDate = (iso: string): string =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+export const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
+export const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
+export const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
+export const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
+
 export type CacheLeakageDimension = "key" | "model";
 
 export interface CacheLeakageRow {

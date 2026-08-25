@@ -49,7 +49,7 @@ TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
 DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3
-DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: Final[int] = 200
+DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS: Final[int] = 8000
 
 
 class KeywordTierRule(BaseModel):
@@ -645,12 +645,30 @@ class ComplexityRouterConfig(BaseModel):
             "classifier_type is 'llm'."
         ),
     )
-    classifier_context_per_turn_chars: int = Field(
-        default=DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+    classifier_context_budget_chars: int = Field(
+        default=DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
+        ge=0,
+        description=(
+            "Maximum characters of prior-turn text quoted to the LLM classifier, across the whole "
+            "context window, per classification call. Turns are taken newest first and quoted whole "
+            "while they fit, so a conversation small enough to quote entirely is never cut; once the "
+            "budget runs out the older turns are dropped whole and only the turn straddling the "
+            "boundary is truncated, into whatever space is left. The current ask and the caller's "
+            "system prompt sit outside this budget and are always sent in full, as does the numbering "
+            "each quoted turn carries. A budget under 120 leaves no room to quote a turn and "
+            "suppresses the block; set classifier_context_window_size to 0 to turn context off "
+            "deliberately. Only applies when classifier_type is 'llm'."
+        ),
+    )
+    classifier_context_per_turn_chars: int | None = Field(
+        default=None,
         gt=0,
         description=(
-            "Maximum character length for each prior turn's text in the classifier context window. "
-            "Turns exceeding this are truncated. Only applies when classifier_type is 'llm'."
+            "Optional cap on each individual prior turn's text, applied before "
+            "classifier_context_budget_chars bounds the block. Unset by default, so one long turn may "
+            "spend the whole budget, which is usually what a follow-up needs; set it when no single "
+            "turn should dominate the context the classifier sees. A capped turn keeps its opening "
+            "and its ending with the middle elided. Only applies when classifier_type is 'llm'."
         ),
     )
     classifier_context_include_assistant_turns: bool = Field(
@@ -662,9 +680,9 @@ class ComplexityRouterConfig(BaseModel):
             "word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the "
             "conversation across both roles rather than the last N user turns, and assistant text is "
             "sent to the classifier model, which may be a different deployment or provider than the "
-            "routed completion model. Assistant replies share classifier_context_per_turn_chars with "
-            "user turns, so raise it if replies are truncated before the part that carries the "
-            "difficulty. Off by default because enabling it shifts tier decisions, and therefore "
+            "routed completion model. Assistant replies spend classifier_context_budget_chars "
+            "alongside user turns, so raise it if the oldest turns stop being quoted once replies "
+            "join the window. Off by default because enabling it shifts tier decisions, and therefore "
             "spend, for an already-deployed router. Only applies when classifier_type is 'llm'."
         ),
     )

@@ -50,7 +50,7 @@ from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
 )
-from litellm.types.llms.openai import OpenAIFileObject
+from litellm.types.llms.openai import BATCH_GUARDRAIL_RESPONSE_FIELD, OpenAIFileObject
 from litellm.types.passthrough_endpoints.managed_id_rewriter import (
     ManagedFileIdReader,
     ManagedFileIdWriter,
@@ -980,6 +980,7 @@ def _serialize_file_list_item(row: ManagedFileRow) -> dict[str, JsonValue]:
     file_object: Final = _parse_file_object(row.file_object)
     if isinstance(file_object, dict):
         item.update(file_object)
+    item.pop(BATCH_GUARDRAIL_RESPONSE_FIELD, None)
     item["id"] = row.unified_file_id  # managed ID always wins over stored raw id
     return item
 

@@ -16,15 +16,12 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 
 import json
 import logging
-import os
-import sys
 from types import MappingProxyType
 
 import httpx
 import pytest
 import respx
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.batches.batch_utils as bu
@@ -798,6 +795,43 @@ async def test_output_file_content_vertex_unified_file_id_extracts_gcs_uri(monke
 
     assert captured["file_id"] == "gs://litellm-bucket/output/predictions.jsonl"
     assert captured["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_output_file_content_model_encoded_file_id_decoded_to_provider_id(monkeypatch):
+    import litellm.files.main as files_main
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b'{"a": 1}'})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    encoded_id = encode_file_id_with_model("file-Y3FHrMpi7uCkDpY6fgWGeR", "my-batch-model")
+
+    await bu._fetch_batch_output_file_content(_batch(encoded_id), custom_llm_provider="openai")
+
+    assert captured["file_id"] == "file-Y3FHrMpi7uCkDpY6fgWGeR"
+    assert captured["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_output_file_content_raw_openai_file_id_passes_through(monkeypatch):
+    import litellm.files.main as files_main
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b'{"a": 1}'})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+
+    await bu._fetch_batch_output_file_content(_batch("file-abc123"), custom_llm_provider="openai")
+
+    assert captured["file_id"] == "file-abc123"
 
 
 def _vertex_predictions_row(custom_id, prompt_tokens, completion_tokens):
