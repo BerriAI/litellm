@@ -301,3 +301,29 @@ def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
     )
 
     assert cost_zero == cost_none
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cache_rate"),
+    [
+        ("gemini-flash-latest", 3e-08),
+        ("gemini/gemini-flash-latest", 3e-08),
+        ("gemini-flash-lite-latest", 1e-08),
+        ("gemini/gemini-flash-lite-latest", 1e-08),
+        ("gemini/gemini-2.5-flash-preview-09-2025", 3e-08),
+        ("gemini-2.5-flash-preview-09-2025", 3e-08),
+        ("gemini/gemini-2.5-flash-lite-preview-06-17", 1e-08),
+        ("gemini-2.5-flash-lite-preview-06-17", 1e-08),
+    ],
+)
+def test_gemini_flash_cache_read_pricing(monkeypatch, model: str, expected_cache_rate: float):
+    """Regression: Gemini 2.5/flash aliases price cache reads at 10% of input cost."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    model_info = litellm.get_model_info(model=model)
+    assert model_info.get("cache_read_input_token_cost") == expected_cache_rate
+    assert model_info.get("cache_read_input_token_cost") == pytest.approx(
+        0.10 * model_info.get("input_cost_per_token")
+    )
+
+
