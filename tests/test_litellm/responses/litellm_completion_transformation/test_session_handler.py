@@ -638,3 +638,65 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
 
     assert spend_logs == []
     assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+
+
+@pytest.mark.asyncio
+async def test_message_history_normalizes_redacted_tool_call_arguments():
+    """Sessions stored with turn_off_message_logging before the fix hold the bare
+    sentinel in tool-call arguments; replay must normalize it to valid JSON."""
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-redacted-1",
+            "call_type": "aresponses",
+            "session_id": "sess-redacted",
+            "proxy_server_request": {
+                "input": "what is the weather in sf",
+                "model": "gpt-4o",
+            },
+            "response": {
+                "id": "chatcmpl-redacted-1",
+                "model": "gpt-4o",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "redacted-by-litellm",
+                                    },
+                                }
+                            ],
+                            "function_call": None,
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "created": 1748575031,
+                "usage": {"total_tokens": 10, "prompt_tokens": 5, "completion_tokens": 5},
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-redacted-1"
+        )
+
+    assistant_message = result["messages"][-1]
+    tool_call = assistant_message.tool_calls[0]
+    assert tool_call.function.arguments == "{}"
+    assert json.loads(tool_call.function.arguments) == {}

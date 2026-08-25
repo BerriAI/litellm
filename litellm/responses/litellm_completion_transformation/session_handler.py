@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -27,6 +28,18 @@ else:
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
 ########################################################
+
+
+def _normalize_redacted_tool_call_arguments(message: Message) -> None:
+    """Older releases redacted tool-call arguments to the bare sentinel (invalid JSON);
+    normalize replayed history to "{}" so provider converters can parse it."""
+    for tool_call in message.tool_calls or []:
+        function: Final = tool_call.function
+        if function.arguments == REDACTED_BY_LITELLM:
+            function.arguments = "{}"
+    function_call: Final = message.function_call
+    if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
+        function_call.arguments = "{}"
 
 
 class ResponsesSessionHandler:
@@ -143,7 +156,9 @@ class ResponsesSessionHandler:
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
-                    chat_completion_message_history.append(getattr(choice, "message"))
+                    message: Final = getattr(choice, "message")
+                    _normalize_redacted_tool_call_arguments(message)
+                    chat_completion_message_history.append(message)
         return chat_completion_message_history
 
     @staticmethod
