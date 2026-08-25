@@ -23009,6 +23009,17 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityErrorBucket */
+        CacheActivityErrorBucket: {
+            /** Call Type */
+            call_type: string;
+            /** Count */
+            count: number;
+            /** Error Class */
+            error_class: string;
+            /** Error Code */
+            error_code: string;
+        };
         /** CacheActivityFilterOptions */
         CacheActivityFilterOptions: {
             /** Key Aliases */
@@ -23033,6 +23044,8 @@ export interface components {
         };
         /** CacheActivityResponse */
         CacheActivityResponse: {
+            /** Error Breakdown */
+            error_breakdown: components["schemas"]["CacheActivityErrorBucket"][];
             filter_options: components["schemas"]["CacheActivityFilterOptions"];
             /** Groups */
             groups: components["schemas"]["CacheActivityGroup"][];
