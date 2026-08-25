@@ -4110,7 +4110,7 @@ def test_translate_anthropic_messages_to_openai_tool_result_empty_content_list()
     ],
 )
 def test_translate_anthropic_messages_to_openai_tool_result_odd_content_shapes(
-    tool_result_content, expected_tool_content
+    tool_result_content: object, expected_tool_content: str
 ):
     """LIT-6103: off-contract content shapes must still emit the tool message."""
 
@@ -4233,3 +4233,38 @@ def test_translate_anthropic_messages_to_openai_tool_result_all_image_parts_unco
     assert len(tool_messages) == 1, "Tool message must be emitted even when no parts convert"
     assert tool_messages[0]["tool_call_id"] == "toolu_img01"
     assert tool_messages[0]["content"] == ""
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_bare_string_items():
+    """LIT-6103: bare string items keep their pre-fix behavior through the restructured dispatch."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "toolu_str01", "name": "str_tool", "input": {}}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "tool_result", "tool_use_id": "toolu_str01", "content": ["bare result"]}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "toolu_str02", "name": "str_tool", "input": {}}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "tool_result", "tool_use_id": "toolu_str02", "content": ["part one", "part two"]}],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 2
+    assert tool_messages[0]["content"] == "bare result"
+    assert tool_messages[1]["content"] == [
+        {"type": "text", "text": "part one"},
+        {"type": "text", "text": "part two"},
+    ]
