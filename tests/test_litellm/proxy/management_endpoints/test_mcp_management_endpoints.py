@@ -17,7 +17,6 @@ from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -762,6 +761,151 @@ class TestListMCPServers:
             assert result.status == "healthy"
 
     @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_preserves_upstream_resource_for_admin(self):
+        """upstream_resource is non-secret admin config, so the admin edit form must receive its real
+        value to change or clear it; secrets sharing the blob are still dropped."""
+        mock_server = generate_mock_mcp_server_db_record(server_id="server-ur", alias="UR")
+        mock_server.credentials = {"client_secret": "top-secret", "upstream_resource": "api://audience"}
+
+        mock_prisma_client = MagicMock()
+        mock_health_result = generate_mock_mcp_server_db_record(server_id="server-ur", alias="UR")
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="server-ur",
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result.credentials == {"upstream_resource": "api://audience"}
+
+    @pytest.mark.parametrize(
+        "stored_credentials, expected",
+        [
+            ({"client_secret": "s", "upstream_resource": "api://audience"}, {"upstream_resource": "api://audience"}),
+            ('{"client_secret": "s", "upstream_resource": "api://audience"}', {"upstream_resource": "api://audience"}),
+            ("not-json{{", None),
+            ("null", None),
+            ("{}", None),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_redaction_is_total_over_malformed_credentials(
+        self, stored_credentials, expected
+    ):
+        """Redaction runs on every admin list and get, so a row whose credentials blob is a corrupt or
+        non-object JSON string must fall back to full redaction rather than raise and fail the whole
+        request. A valid JSON-object string still has its admin config lifted out. Bare non-object JSON
+        (a list or scalar) is not a reachable stored shape, since writes always persist a JSON object."""
+        mock_server = generate_mock_mcp_server_db_record(server_id="server-mal", alias="MAL")
+        mock_server.credentials = stored_credentials
+
+        mock_health_result = generate_mock_mcp_server_db_record(server_id="server-mal", alias="MAL")
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="server-mal",
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result.credentials == expected
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_strips_upstream_resource_for_non_admin(self):
+        """A non-full-admin viewer gets the whole blob nulled, including the non-secret admin config,
+        so admin-typed settings never leak to a discovery-only caller."""
+        mock_server = generate_mock_mcp_server_db_record(server_id="server-ur2", alias="UR2")
+        mock_server.credentials = {"client_secret": "top-secret", "upstream_resource": "api://audience"}
+
+        mock_prisma_client = MagicMock()
+        mock_health_result = generate_mock_mcp_server_db_record(server_id="server-ur2", alias="UR2")
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+        mock_user_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=mock_server),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+                AsyncMock(return_value=mock_health_result),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="server-ur2",
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert result.credentials is None
+
+    @pytest.mark.asyncio
     async def test_fetch_single_mcp_server_handles_missing_credentials_field(self):
         mock_server = generate_mock_mcp_server_db_record(server_id="server-2", alias="Server 2")
         # Simulate ORM object without credentials attribute (e.g., older schema)
@@ -1428,6 +1572,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_session_token = None
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
+        existing_server.upstream_resource = None
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = existing_server
@@ -1449,6 +1594,68 @@ class TestTemporaryMCPSessionEndpoints:
             "scopes": ["scope:a", "scope:b"],
         }
         mock_manager.get_mcp_server_by_id.assert_called_once_with("server-123")
+
+    @staticmethod
+    def _inherit_with(payload_credentials, **server_overrides):
+        existing_server = MagicMock()
+        existing_server.authentication_token = None
+        existing_server.client_id = "client-123"
+        existing_server.client_secret = "secret-xyz"
+        existing_server.scopes = None
+        existing_server.aws_access_key_id = None
+        existing_server.aws_secret_access_key = None
+        existing_server.aws_session_token = None
+        existing_server.aws_region_name = None
+        existing_server.aws_service_name = None
+        existing_server.upstream_resource = None
+        for key, value in server_overrides.items():
+            setattr(existing_server, key, value)
+
+        payload = NewMCPServerRequest(
+            server_id="server-123",
+            alias="Temp Server",
+            url="https://temp.example.com",
+            transport=MCPTransport.http,
+            credentials=payload_credentials,
+        )
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = existing_server
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                _inherit_credentials_from_existing_server,
+            )
+
+            return _inherit_credentials_from_existing_server(payload)
+
+    def test_admin_config_alone_does_not_suppress_credential_inheritance(self):
+        """The edit form round-trips upstream_resource, which is admin config rather than a credential.
+        Treating the blob as "credentials supplied" left the Authorize session with no declared app on
+        the exact path where this knob is configured."""
+        updated = self._inherit_with({"upstream_resource": "api://audience"})
+
+        assert updated.credentials["client_id"] == "client-123"
+        assert updated.credentials["client_secret"] == "secret-xyz"
+
+    def test_supplied_credential_still_wins_over_inheritance(self):
+        """A caller that supplies a real credential keeps it; inheritance must not overwrite it."""
+        updated = self._inherit_with({"auth_value": "caller-token"})
+
+        assert updated.credentials == {"auth_value": "caller-token"}
+
+    def test_inheritance_carries_upstream_resource_to_the_session_server(self):
+        """Without this the temporary server omits the resource indicator and the Authorize leg it
+        exists for fails as invalid_target."""
+        updated = self._inherit_with(None, upstream_resource="api://stored")
+
+        assert updated.credentials["upstream_resource"] == "api://stored"
+
+    def test_supplied_upstream_resource_wins_over_the_stored_one(self):
+        updated = self._inherit_with({"upstream_resource": "api://typed"}, upstream_resource="api://stored")
+
+        assert updated.credentials["upstream_resource"] == "api://typed"
 
     def test_cache_temporary_mcp_server_stores_entry_with_ttl(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -1480,14 +1687,376 @@ class TestTemporaryMCPSessionEndpoints:
             expires_at=datetime.utcnow() - timedelta(seconds=30),
         )
         cache = {"expired": expired_entry}
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
-            cache,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
+                cache,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
         ):
             result = await get_cached_temporary_mcp_server("expired")
 
         assert result is None
         assert "expired" not in cache
+
+    @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_resolves_draft_written_by_another_worker(self):
+        """Regression: the OAuth session must resolve on a worker that did not serve /session.
+
+        `_temporary_mcp_servers` is per-process, so on a multi-worker or multi-replica proxy the
+        /authorize and /token legs land on a process whose dict is empty and 404. An empty dict
+        here IS that other worker. Before the DB-backed draft this returned None.
+        """
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_cached_temporary_mcp_server,
+        )
+
+        draft_row = generate_mock_mcp_server_db_record(server_id="drafted-elsewhere")
+        rebuilt_server = generate_mock_mcp_server_config_record(server_id="drafted-elsewhere")
+        mock_manager = MagicMock()
+        mock_manager.build_mcp_server_from_table = AsyncMock(return_value=rebuilt_server)
+        get_draft = AsyncMock(return_value=draft_row)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
+                {},
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_draft_mcp_server",
+                get_draft,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await get_cached_temporary_mcp_server("drafted-elsewhere")
+
+        assert result is rebuilt_server
+        # The shared row, not the empty per-process dict, is what answered.
+        assert get_draft.await_count == 1
+        assert get_draft.await_args.args[1] == "drafted-elsewhere"
+
+    @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_still_works_without_a_database(self):
+        """A proxy configured with no database keeps the in-memory session, rather than 404ing.
+
+        Pins the deliberate divergence from a DB-only design: single-process deployments with no
+        DATABASE_URL must keep working exactly as before.
+        """
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _TemporaryMCPServerEntry,
+            get_cached_temporary_mcp_server,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="no-db")
+        entry = _TemporaryMCPServerEntry(
+            server=server,
+            expires_at=datetime.utcnow() + timedelta(seconds=300),
+        )
+        get_draft = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
+                {"no-db": entry},
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_draft_mcp_server",
+                get_draft,
+            ),
+        ):
+            result = await get_cached_temporary_mcp_server("no-db")
+
+        assert result is server
+        # No database means no draft lookup is even attempted.
+        assert get_draft.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_create_draft_mcp_server_never_overwrites_a_real_server(self):
+        """The edit form authorizes against a saved server's own id, so a draft write would
+        collide on the primary key. That row is already visible to every worker, so it is
+        returned untouched and no draft is created."""
+        from litellm.proxy._experimental.mcp_server.db import create_draft_mcp_server
+
+        real_row = generate_mock_mcp_server_db_record(server_id="already-saved")
+        real_row.approval_status = "active"
+        create_call = AsyncMock()
+        delete_call = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_row",
+                AsyncMock(return_value=real_row),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows",
+                AsyncMock(return_value=[]),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.db.create_mcp_server", create_call),
+            patch("litellm.proxy._experimental.mcp_server.db.delete_mcp_server", delete_call),
+        ):
+            result = await create_draft_mcp_server(
+                MagicMock(),
+                NewMCPServerRequest(server_id="already-saved", url="https://x.example.com/mcp"),
+                "tester",
+                ttl_seconds=300,
+            )
+
+        assert result.server_id == "already-saved"
+        assert create_call.await_count == 0
+        assert delete_call.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_create_draft_mcp_server_adopts_the_winner_when_it_loses_a_create_race(self):
+        """Regression: the read, delete and create are three statements, not one.
+
+        Two concurrent sessions for the same server_id raced and 13 of 20 returned 500 against a
+        live two-worker proxy. The loser's session is in fact ready, because the winner wrote a
+        draft for it, so it adopts that row instead of failing the caller.
+        """
+        from litellm.proxy._experimental.mcp_server.db import create_draft_mcp_server
+
+        winner_draft = generate_mock_mcp_server_db_record(server_id="raced")
+        winner_draft.approval_status = "draft"
+        # First lookup: nothing yet. After the losing create blows up: the winner's row.
+        lookups = AsyncMock(side_effect=[None, winner_draft])
+
+        with (
+            patch("litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_row", lookups),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.create_mcp_server",
+                AsyncMock(side_effect=Exception("duplicate key value violates unique constraint")),
+            ),
+        ):
+            result = await create_draft_mcp_server(
+                MagicMock(),
+                NewMCPServerRequest(server_id="raced", url="https://x.example.com/mcp"),
+                "tester",
+                ttl_seconds=300,
+            )
+
+        assert result.server_id == "raced"
+        assert lookups.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_create_draft_mcp_server_reraises_when_the_create_failure_was_not_a_race(self):
+        """A genuine database error must not be swallowed by the race-adoption path."""
+        from litellm.proxy._experimental.mcp_server.db import create_draft_mcp_server
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_row",
+                AsyncMock(side_effect=[None, None]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.create_mcp_server",
+                AsyncMock(side_effect=Exception("connection refused")),
+            ),
+            pytest.raises(Exception, match="connection refused"),
+        ):
+            await create_draft_mcp_server(
+                MagicMock(),
+                NewMCPServerRequest(server_id="broken", url="https://x.example.com/mcp"),
+                "tester",
+                ttl_seconds=300,
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_draft_mcp_server_prunes_drafts_past_their_lifetime(self):
+        """Regression: abandoned OAuth sessions accumulated forever. Verified against a live
+        proxy, where 12 drafts aged past the lifetime were still present and a 13th was added."""
+        from litellm.proxy._experimental.mcp_server.db import create_draft_mcp_server
+
+        from datetime import timezone
+
+        now = datetime.now(timezone.utc)
+        stale_one = generate_mock_mcp_server_db_record(server_id="stale-1")
+        stale_one.updated_at = now - timedelta(hours=1)
+        stale_two = generate_mock_mcp_server_db_record(server_id="stale-2")
+        stale_two.updated_at = now - timedelta(hours=1)
+        # A draft still inside its lifetime must survive the sweep.
+        fresh_draft = generate_mock_mcp_server_db_record(server_id="still-live")
+        fresh_draft.updated_at = now
+        find_rows = AsyncMock(return_value=[stale_one, stale_two, fresh_draft])
+        delete_call = AsyncMock()
+
+        with (
+            patch("litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows", find_rows),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_row",
+                AsyncMock(return_value=None),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.db.delete_mcp_server", delete_call),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.create_mcp_server",
+                AsyncMock(return_value=generate_mock_mcp_server_db_record(server_id="fresh")),
+            ),
+        ):
+            await create_draft_mcp_server(
+                MagicMock(),
+                NewMCPServerRequest(server_id="fresh", url="https://x.example.com/mcp"),
+                "tester",
+                ttl_seconds=300,
+            )
+
+        # Only drafts are considered, only the expired ones are removed, and the live one stays.
+        assert find_rows.await_args.kwargs["where"]["approval_status"] == "draft"
+        assert sorted(c.args[1] for c in delete_call.await_args_list) == ["stale-1", "stale-2"]
+
+    @pytest.mark.asyncio
+    async def test_get_all_mcp_servers_hides_drafts_without_hiding_legacy_null_rows(self):
+        """Drafts are addressable only by their own id and must never appear in a listing, but a
+        bare inequality would also drop pre-approval-workflow rows, since SQL evaluates
+        NULL != 'draft' as NULL."""
+        from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
+
+        find_rows = AsyncMock(return_value=[])
+        with patch(
+            "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows",
+            find_rows,
+        ):
+            await get_all_mcp_servers(MagicMock())
+
+        where = find_rows.await_args.args[1]
+        assert where == {"OR": [{"approval_status": None}, {"approval_status": {"not": "draft"}}]}
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_server_id_refuses_an_unknown_caller_supplied_id(self):
+        """Regression: two concurrent sessions must never land on one id.
+
+        Honouring an arbitrary caller-supplied id lets a second session adopt the first's draft and
+        run OAuth against its URL and client credentials, silently. An id naming no real server is
+        therefore replaced with a fresh one.
+        """
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _resolve_session_server_id,
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=None),
+            ),
+        ):
+            resolved = await _resolve_session_server_id(
+                NewMCPServerRequest(server_id="someone-elses-id", url="https://x.example.com/mcp")
+            )
+
+        assert resolved != "someone-elses-id"
+        uuid.UUID(resolved)
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_server_id_refuses_an_id_that_names_another_sessions_draft(self):
+        """A draft row is another session's, not a saved server. Replaying an id this endpoint
+        previously returned must not let a later session inherit the earlier one's config."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _resolve_session_server_id,
+        )
+
+        someone_elses_draft = generate_mock_mcp_server_db_record(server_id="earlier-session")
+        someone_elses_draft.approval_status = "draft"
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+                AsyncMock(return_value=someone_elses_draft),
+            ),
+        ):
+            resolved = await _resolve_session_server_id(
+                NewMCPServerRequest(server_id="earlier-session", url="https://x.example.com/mcp")
+            )
+
+        assert resolved != "earlier-session"
+        uuid.UUID(resolved)
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_server_id_keeps_a_real_servers_id_for_the_edit_flow(self):
+        """The edit form re-authorizes a saved server against its own id, which must be preserved
+        or the flow would authorize a throwaway id instead of the server being edited."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _resolve_session_server_id,
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = generate_mock_mcp_server_config_record(server_id="saved")
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            resolved = await _resolve_session_server_id(
+                NewMCPServerRequest(server_id="saved", url="https://x.example.com/mcp")
+            )
+
+        assert resolved == "saved"
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_server_id_keeps_the_supplied_id_without_a_database(self):
+        """No database means nothing shared to collide over, so behaviour stays as it is today."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _resolve_session_server_id,
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
+        ):
+            resolved = await _resolve_session_server_id(
+                NewMCPServerRequest(server_id="no-db-id", url="https://x.example.com/mcp")
+            )
+
+        assert resolved == "no-db-id"
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_or_404(self):
@@ -1686,6 +2255,7 @@ class TestTemporaryMCPSessionEndpoints:
             aws_session_token=None,
             aws_region_name=None,
             aws_service_name=None,
+            upstream_resource=None,
         )
         built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
         mock_manager = MagicMock()
@@ -1709,6 +2279,10 @@ class TestTemporaryMCPSessionEndpoints:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server_in_redis",
                 AsyncMock(),
             ) as redis_cache_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
         ):
             response = await add_session_mcp_server(
                 payload=payload,
@@ -1750,7 +2324,7 @@ class TestTemporaryMCPSessionEndpoints:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
             MagicMock(),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='User does not have permission to create temporary mcp') as exc_info:
                 await add_session_mcp_server(
                     payload=payload,
                     user_api_key_dict=non_admin,
@@ -2853,6 +3427,10 @@ class TestTemporaryMCPSessionEndpoints:
                 patch(
                     "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
                     return_value=serialized,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                    return_value=None,
                 ),
             ):
                 result = await get_cached_temporary_mcp_server("from-redis")
@@ -5496,7 +6074,9 @@ def _edit_endpoint_patches(old_record, update_mock):
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            AsyncMock(side_effect=old_record) if isinstance(old_record, Exception) else AsyncMock(return_value=old_record),
+            AsyncMock(side_effect=old_record)
+            if isinstance(old_record, Exception)
+            else AsyncMock(return_value=old_record),
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
@@ -5901,11 +6481,16 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
     authorization_url would recreate the exact 400 ("authorization url is not set") the catalog
     exists to prevent for spec-only servers, which never run OAuth endpoint discovery."""
     import json
-    import os
 
     registry_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "..", "..", "..", "..", "litellm", "proxy", "openapi_registry.json",
+        "..",
+        "..",
+        "..",
+        "..",
+        "litellm",
+        "proxy",
+        "openapi_registry.json",
     )
     with open(registry_path) as f:
         registry = json.load(f)
@@ -5929,3 +6514,255 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
                 )
         for tool in entry.get("key_tools", []):
             assert tool.get("name") and tool.get("description"), f"{entry['name']}: malformed key_tool"
+
+
+class TestConnectedAppViewAnnotation:
+    """LIT-4861: GET /v1/mcp/server?connected_app_view=true must annotate each server with
+    whether the caller's gateway OAuth sessions (connected apps) are served it on /mcp.
+    The view is honored only for the dashboard's UI session credential; a caller-passed
+    virtual key must never be widened to its owning user's identity."""
+
+    def _ui_session_auth(self, user_role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN) -> UserAPIKeyAuth:
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        return generate_mock_user_api_key_auth(user_role=user_role, team_id=UI_SESSION_TOKEN_TEAM_ID)
+
+    def _mock_manager(self, servers, reachable_ids):
+        mock_manager = MagicMock()
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=servers)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=servers)
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=reachable_ids)
+        return mock_manager
+
+    def _servers(self):
+        return [
+            generate_mock_mcp_server_db_record(server_id="server-1", alias="Granted"),
+            generate_mock_mcp_server_db_record(server_id="server-2", alias="Ungranted"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_annotates_reachability_via_admitted_resolver(self):
+        caller_auth = self._ui_session_auth()
+        admitted_auth = UserAPIKeyAuth(user_id="test_user_id")
+        admitted_auth.mcp_admitted_user_subject = True
+        mock_manager = self._mock_manager(self._servers(), ["server-1"])
+        reload_mock = AsyncMock(return_value=admitted_auth)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[caller_auth]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                reload_mock,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        flags = {server.server_id: server.connected_app_reachable for server in result}
+        assert flags == {"server-1": True, "server-2": False}
+        reload_mock.assert_awaited_once_with("test_user_id")
+        mock_manager.get_allowed_mcp_servers.assert_awaited_once_with(admitted_auth)
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_stamps_view_all_list_and_survives_non_admin_sanitizer(self):
+        """view_all preempts the manager's admin shortcut with a second whole-registry
+        shortcut; the annotation must still land, and must survive the non-admin sanitizer."""
+        caller_auth = self._ui_session_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        mock_manager = self._mock_manager(self._servers(), ["server-2"])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id")),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        mock_manager.get_all_mcp_servers_unfiltered.assert_awaited_once()
+        flags = {server.server_id: server.connected_app_reachable for server in result}
+        assert flags == {"server-1": False, "server-2": True}
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_lists_user_granted_servers_via_admitted_context(self):
+        """A server granted only through the user's own object permission must be listed and
+        flagged reachable: the REAL build_effective_auth_contexts appends the admitted-user
+        context, so the page and every action endpoint resolve it identically."""
+        caller_auth = self._ui_session_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        admitted_auth = UserAPIKeyAuth(user_id="test_user_id", org_id="admitted-org")
+        listed_row = generate_mock_mcp_server_db_record(server_id="server-1", alias="TeamGranted")
+        user_granted_row = generate_mock_mcp_server_db_record(server_id="server-2", alias="UserGranted")
+
+        async def per_context_servers(user_api_key_auth=None):
+            if user_api_key_auth is not None and user_api_key_auth.org_id == "admitted-org":
+                return [listed_row, user_granted_row]
+            return [listed_row]
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(side_effect=per_context_servers)
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server-1", "server-2"])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                AsyncMock(return_value=admitted_auth),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        flags = {server.server_id: server.connected_app_reachable for server in result}
+        assert flags == {"server-1": True, "server-2": True}
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_fails_closed_when_admitted_reload_fails(self):
+        caller_auth = self._ui_session_auth()
+        mock_manager = self._mock_manager(self._servers(), ["server-1"])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[caller_auth]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                AsyncMock(side_effect=HTTPException(status_code=401, detail="expired")),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        assert all(server.connected_app_reachable is False for server in result)
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_off_leaves_field_unset(self):
+        caller_auth = generate_mock_user_api_key_auth()
+        mock_manager = self._mock_manager(self._servers(), ["server-1"])
+        reload_mock = AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id"))
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[caller_auth]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                reload_mock,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth)
+
+        assert all(server.connected_app_reachable is None for server in result)
+        reload_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_userless_ui_credential_leaves_field_unset(self):
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        caller_auth = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="test_api_key", team_id=UI_SESSION_TOKEN_TEAM_ID
+        )
+        caller_auth.user_id = None
+        mock_manager = self._mock_manager(self._servers(), ["server-1"])
+        reload_mock = AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id"))
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[caller_auth]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                reload_mock,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        assert all(server.connected_app_reachable is None for server in result)
+        reload_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_connected_app_view_ignored_for_caller_passed_virtual_keys(self):
+        """A virtual key the user passes themselves is never widened to the owning user's
+        identity: the view param is a no-op and the admitted resolver is never consulted."""
+        caller_auth = generate_mock_user_api_key_auth(team_id="some-real-team")
+        mock_manager = self._mock_manager(self._servers(), ["server-1"])
+        reload_mock = AsyncMock(return_value=UserAPIKeyAuth(user_id="test_user_id"))
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[caller_auth]),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+                reload_mock,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=caller_auth, connected_app_view=True)
+
+        assert all(server.connected_app_reachable is None for server in result)
+        reload_mock.assert_not_awaited()

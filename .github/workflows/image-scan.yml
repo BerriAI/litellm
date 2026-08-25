@@ -8,10 +8,23 @@ on:
       - litellm_oss_branch
       - "litellm_**"
     paths:
+      - Dockerfile
       - docker/Dockerfile.non_root
-      - tests/proxy_migration_tests/test_offline_image_migration.py
+      - migrations/Dockerfile
+      - migrations/run.py
+      - gateway/Dockerfile
+      - gateway/main.py
+      - backend/Dockerfile
+      - backend/main.py
+      - docker/component_entrypoint.sh
+      - docker/entrypoint.sh
+      - litellm/proxy/prisma_migration.py
+      - litellm-proxy-extras/**
+      - tests/proxy_migration_tests/**
       - uv.lock
       - ui/litellm-dashboard/package-lock.json
+      - ui/Dockerfile
+      - ui/nginx.conf
       - .github/workflows/image-scan.yml
   schedule:
     - cron: "41 6 * * *"
@@ -83,3 +96,152 @@ jobs:
             --only-fixed \
             --fail-on high \
             --output table
+
+  runtime-image:
+    name: runtime-image
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Build runtime image
+        run: docker build -f Dockerfile -t litellm-runtime-scan:${{ github.sha }} .
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify offline migration as a non-root uid
+        env:
+          LITELLM_IMAGE: litellm-runtime-scan:${{ github.sha }}
+        run: |
+          python -m pip install "pytest==9.0.3"
+          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py -v
+
+  migrations-image:
+    name: migrations-image
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Build migrations image
+        run: docker build -f migrations/Dockerfile -t litellm-migrations-scan:${{ github.sha }} .
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify offline migration as a non-root uid
+        env:
+          LITELLM_IMAGE: litellm-migrations-scan:${{ github.sha }}
+          LITELLM_MIGRATION_INTERPRETER: python3
+          LITELLM_MIGRATION_SCRIPT: /app/run.py
+        run: |
+          python -m pip install "pytest==9.0.3"
+          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py -v
+
+  gateway-image:
+    name: gateway-image
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Build gateway image
+        run: docker build -f gateway/Dockerfile -t litellm-gateway-scan:${{ github.sha }} .
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify the gateway serves offline as a non-root uid
+        env:
+          LITELLM_IMAGE: litellm-gateway-scan:${{ github.sha }}
+          LITELLM_COMPONENT_PORT: "4000"
+        run: |
+          python -m pip install "pytest==9.0.3"
+          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py -v
+
+  ui-image:
+    name: ui-image
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Build UI image
+        run: docker build -f ui/Dockerfile -t litellm-ui-scan:${{ github.sha }} .
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify the UI serves offline as an arbitrary uid with a read-only root fs
+        env:
+          LITELLM_IMAGE: litellm-ui-scan:${{ github.sha }}
+        run: |
+          python -m pip install "pytest==9.0.3"
+          python -m pytest tests/proxy_migration_tests/test_ui_image_serves_offline.py -v
+
+  backend-image:
+    name: backend-image
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Build backend image
+        run: docker build -f backend/Dockerfile -t litellm-backend-scan:${{ github.sha }} .
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify the backend serves offline as a non-root uid
+        env:
+          LITELLM_IMAGE: litellm-backend-scan:${{ github.sha }}
+          LITELLM_COMPONENT_PORT: "4001"
+        run: |
+          python -m pip install "pytest==9.0.3"
+          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py -v

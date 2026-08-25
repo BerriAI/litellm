@@ -11,7 +11,7 @@ is unset.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 FieldSource = Literal["db", "env", "default", "unset"]
 
@@ -41,10 +41,10 @@ def _resolve_one(
     env: Mapping[str, str],
     empty_db_is_set: bool,
 ) -> tuple[str, str | None, FieldSource]:
-    db_value = db_values.get(descriptor.db_key)
+    db_value: Final = db_values.get(descriptor.db_key)
     if _db_is_set(db_value, empty_db_is_set):
         return descriptor.field_name, db_value if isinstance(db_value, str) else str(db_value), "db"
-    env_value = env.get(descriptor.env_var)
+    env_value: Final = env.get(descriptor.env_var)
     if isinstance(env_value, str) and env_value.strip():
         return descriptor.field_name, env_value, "env"
     if descriptor.default is not None:
@@ -67,7 +67,7 @@ def resolve_fields(
     ``True`` treats it as an explicit clear that wins over env (alerting, whose
     clear path stores "" without unsetting the env var).
     """
-    resolved = tuple(_resolve_one(descriptor, db_values, env, empty_db_is_set) for descriptor in descriptors)
-    values = {field_name: value for field_name, value, _ in resolved}
-    provenance = {field_name: source for field_name, _, source in resolved}
+    resolved: Final = tuple(_resolve_one(descriptor, db_values, env, empty_db_is_set) for descriptor in descriptors)
+    values: Final = {field_name: value for field_name, value, _ in resolved}
+    provenance: Final = {field_name: source for field_name, _, source in resolved}
     return values, provenance

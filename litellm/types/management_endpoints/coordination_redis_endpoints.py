@@ -2,7 +2,7 @@
 Types and field definitions for coordination Redis settings management endpoints
 """
 
-from typing import Literal, Optional
+from typing import Final, Literal
 
 from pydantic import BaseModel
 
@@ -14,14 +14,14 @@ CoordinationRedisSource = Literal["coordination_redis", "cache_backend", "enviro
 class CoordinationRedisSettingsField(BaseModel):
     field_name: str
     field_type: str
-    field_value: Optional[object] = None
+    field_value: object | None = None
     field_description: str
-    field_default: Optional[object] = None
+    field_default: object | None = None
     ui_field_name: str
     section: CoordinationRedisSection
 
 
-COORDINATION_REDIS_SETTINGS_FIELDS: list[CoordinationRedisSettingsField] = [
+COORDINATION_REDIS_SETTINGS_FIELDS: Final[list[CoordinationRedisSettingsField]] = [
     CoordinationRedisSettingsField(
         field_name="host",
         field_type="String",

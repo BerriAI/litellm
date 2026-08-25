@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -16,13 +16,13 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
-        workspace_id = self._get_workspace_id(optional_params, litellm_params)
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
+        workspace_id: Final = self._get_workspace_id(optional_params, litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
                 message=(
@@ -33,7 +33,7 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
                 model=model,
             )
 
-        resolved_api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
+        resolved_api_key: Final = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
         headers = {
             **headers,
             "anthropic-version": headers.get("anthropic-version", DEFAULT_ANTHROPIC_API_VERSION),
@@ -53,11 +53,11 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         return super().transform_anthropic_messages_request(
             model=strip_claude_platform_route(model),
             messages=messages,

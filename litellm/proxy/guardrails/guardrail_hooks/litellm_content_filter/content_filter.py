@@ -9,20 +9,10 @@ import asyncio
 import json
 import os
 import re
+from collections.abc import AsyncGenerator, Coroutine, Mapping, Sequence
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Pattern,
-    Tuple,
-    Union,
-    cast,
-)
+from re import Pattern
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
 
 import yaml
 from fastapi import HTTPException
@@ -34,9 +24,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
     CallTypes,
+    Function,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
+    ModelResponse,
     ModelResponseStream,
 )
 
@@ -66,11 +58,11 @@ from .competitor_intent import (
 )
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
-MAX_KEYWORD_VALUE_GAP_WORDS = 1
-GAP_WORD_TOKENIZER = re.compile(r"\b\w+\b")
+MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
+GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 
 
-WORD_NUMBER_MAP = {
+WORD_NUMBER_MAP: Final = {
     "zero": "0",
     "oh": "0",
     "one": "1",
@@ -84,12 +76,52 @@ WORD_NUMBER_MAP = {
     "nine": "9",
 }
 
-WORD_NUMBER_TOKEN_REGEX = "|".join(WORD_NUMBER_MAP.keys())
-WORD_NUMBER_SEQUENCE_PATTERN = re.compile(
+WORD_NUMBER_TOKEN_REGEX: Final = "|".join(WORD_NUMBER_MAP.keys())
+WORD_NUMBER_SEQUENCE_PATTERN: Final = re.compile(
     rf"(?<![A-Za-z])(?:{WORD_NUMBER_TOKEN_REGEX})(?:[\s\-]+(?:{WORD_NUMBER_TOKEN_REGEX}))+(?![A-Za-z])",
     re.IGNORECASE,
 )
-WORD_NUMBER_TOKEN_FINDER = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
+WORD_NUMBER_TOKEN_FINDER: Final = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
+
+
+class ConditionalCategoryConfig(TypedDict):
+    identifier_words: Sequence[str]
+    block_words: Sequence[str]
+    action: ContentFilterAction
+    severity: str
+
+
+class CompiledPatternEntry(TypedDict):
+    regex: Pattern[str]
+    pattern_name: str
+    action: ContentFilterAction
+    keyword_regex: Pattern[str] | None
+    allow_word_numbers: bool
+
+
+class _PatternExtraLookup(TypedDict):
+    keyword_pattern: str | None
+    allow_word_numbers: bool
+
+
+class _CategoryConfigView(TypedDict):
+    category: object
+    enabled: object
+    action: object
+    category_file: str | None
+
+
+class CategoryFileData(TypedDict, total=False):
+    category_name: str
+    description: str
+    default_action: str
+    keywords: Sequence[Mapping[str, str]]
+    exceptions: Sequence[str]
+    identifier_words: Sequence[str]
+    always_block_keywords: Sequence[Mapping[str, str]]
+    inherit_from: str
+    additional_block_words: Sequence[str]
+    phrase_patterns: Sequence[str]
 
 
 # Helper data structure for category-based detection
@@ -101,13 +133,13 @@ class CategoryConfig:
         category_name: str,
         description: str,
         default_action: ContentFilterAction,
-        keywords: List[Dict[str, str]],
-        exceptions: List[str],
-        identifier_words: Optional[List[str]] = None,
-        always_block_keywords: Optional[List[Dict[str, str]]] = None,
-        inherit_from: Optional[str] = None,
-        additional_block_words: Optional[List[str]] = None,
-        phrase_patterns: Optional[List[str]] = None,
+        keywords: Sequence[Mapping[str, str]],
+        exceptions: Sequence[str],
+        identifier_words: Sequence[str] | None = None,
+        always_block_keywords: Sequence[Mapping[str, str]] | None = None,
+        inherit_from: str | None = None,
+        additional_block_words: Sequence[str] | None = None,
+        phrase_patterns: Sequence[str] | None = None,
     ):
         self.category_name = category_name
         self.description = description
@@ -120,12 +152,12 @@ class CategoryConfig:
         self.inherit_from = inherit_from
         self.additional_block_words = [w.lower() for w in additional_block_words] if additional_block_words else []
         # Phrase patterns: regex patterns for catching paraphrases
-        self.phrase_patterns: List[Tuple[str, Pattern]] = []
+        self.phrase_patterns: list[tuple[str, Pattern]] = []
         for p in phrase_patterns or []:
             try:
                 self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))
             except re.error:
-                verbose_proxy_logger.warning(f"Invalid phrase pattern in {category_name}: {p}")
+                verbose_proxy_logger.warning("Invalid phrase pattern in %s: %s", category_name, p)
 
 
 class ContentFilterGuardrail(CustomGuardrail):
@@ -146,21 +178,21 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def __init__(
         self,
-        guardrail_name: Optional[str] = None,
-        guardrail_id: Optional[str] = None,
-        policy_template: Optional[str] = None,
-        patterns: Optional[List[ContentFilterPattern]] = None,
-        blocked_words: Optional[List[BlockedWord]] = None,
-        blocked_words_file: Optional[str] = None,
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
+        guardrail_name: str | None = None,
+        guardrail_id: str | None = None,
+        policy_template: str | None = None,
+        patterns: list[ContentFilterPattern] | None = None,
+        blocked_words: list[BlockedWord] | None = None,
+        blocked_words_file: str | None = None,
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
-        pattern_redaction_format: Optional[str] = None,
-        keyword_redaction_tag: Optional[str] = None,
-        categories: Optional[List[ContentFilterCategoryConfig]] = None,
+        pattern_redaction_format: str | None = None,
+        keyword_redaction_tag: str | None = None,
+        categories: list[ContentFilterCategoryConfig] | None = None,
         severity_threshold: str = "medium",
-        llm_router: Optional[Router] = None,
-        image_model: Optional[str] = None,
-        competitor_intent_config: Optional[Dict[str, Any]] = None,
+        llm_router: Router | None = None,
+        image_model: str | None = None,
+        competitor_intent_config: dict[str, object] | None = None,
         **kwargs,
     ):
         """
@@ -196,19 +228,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.llm_router = llm_router
         self.image_model = image_model
         # Store loaded categories
-        self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[
-            str, Tuple[str, str, ContentFilterAction]
+        self.loaded_categories: dict[str, CategoryConfig] = {}
+        self.category_keywords: dict[
+            str, tuple[str, str, ContentFilterAction]
         ] = {}  # keyword -> (category, severity, action)
         # Always-block keywords are checked after exceptions (exceptions take precedence)
-        self.always_block_category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = {}
+        self.always_block_category_keywords: dict[str, tuple[str, str, ContentFilterAction]] = {}
         # Store conditional categories (identifier_words + block_words)
-        self.conditional_categories: Dict[
-            str, Dict[str, Any]
-        ] = {}  # category_name -> {identifier_words, block_words, action, severity}
+        self.conditional_categories: dict[str, ConditionalCategoryConfig] = {}
 
         # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
-        self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
+        self._competitor_intent_checker: BaseCompetitorIntentChecker | None = None
         if competitor_intent_config and isinstance(competitor_intent_config, dict):
             self._init_competitor_intent_checker(competitor_intent_config)
 
@@ -217,11 +247,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             self._load_categories(categories)
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
-        normalized_patterns = self._normalize_patterns(patterns)
-        normalized_blocked_words = self._normalize_blocked_words(blocked_words)
+        normalized_patterns: Final = self._normalize_patterns(patterns)
+        normalized_blocked_words: Final = self._normalize_blocked_words(blocked_words)
 
         # Compile regex patterns
-        self.compiled_patterns: List[Dict[str, Any]] = []
+        self.compiled_patterns: list[CompiledPatternEntry] = []
         for pattern_config in normalized_patterns:
             self._add_pattern(pattern_config)
 
@@ -230,19 +260,19 @@ class ContentFilterGuardrail(CustomGuardrail):
             p["action"] == ContentFilterAction.MASK for p in self.compiled_patterns
         ):
             verbose_proxy_logger.warning(
-                f"ContentFilterGuardrail '{self.guardrail_name}': 'during_call' mode with 'MASK' action is unstable due to race conditions. "
-                "Use 'pre_call' mode for reliable request masking."
+                "ContentFilterGuardrail '%s': 'during_call' mode with 'MASK' action is unstable due to race conditions. Use 'pre_call' mode for reliable request masking.",
+                self.guardrail_name,
             )
 
         # Load blocked words - always initialize as dict
-        self.blocked_words: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
+        self.blocked_words: dict[str, tuple[ContentFilterAction, str | None]] = {}
         for word in normalized_blocked_words:
             self.blocked_words[word.keyword.lower()] = (word.action, word.description)
 
         # Defensive check: ensure blocked_words is a dict (not a list)
         if not isinstance(self.blocked_words, dict):
             verbose_proxy_logger.error(
-                f"blocked_words is not a dict, got {type(self.blocked_words)}. Resetting to empty dict."
+                "blocked_words is not a dict, got %s. Resetting to empty dict.", type(self.blocked_words)
             )
             self.blocked_words = {}
 
@@ -251,16 +281,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             self._load_blocked_words_file(blocked_words_file)
 
         verbose_proxy_logger.debug(
-            f"ContentFilterGuardrail initialized with {len(self.compiled_patterns)} patterns "
-            f"and {len(self.blocked_words)} blocked words"
+            "ContentFilterGuardrail initialized with %s patterns and %s blocked words",
+            len(self.compiled_patterns),
+            len(self.blocked_words),
         )
         verbose_proxy_logger.debug(
-            f"Loaded {len(self.loaded_categories)} categories with {len(self.category_keywords)} keywords"
+            "Loaded %s categories with %s keywords", len(self.loaded_categories), len(self.category_keywords)
         )
 
-    def _init_competitor_intent_checker(self, competitor_intent_config: Dict[str, Any]) -> None:
+    def _init_competitor_intent_checker(self, competitor_intent_config: dict[str, object]) -> None:
         try:
-            competitor_intent_type = competitor_intent_config.get("competitor_intent_type", "airline")
+            competitor_intent_type: Final = competitor_intent_config.get("competitor_intent_type", "airline")
             if competitor_intent_type == "generic":
                 self._competitor_intent_checker = BaseCompetitorIntentChecker(competitor_intent_config)
             else:
@@ -277,9 +308,9 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     @staticmethod
     def _normalize_patterns(
-        patterns: Optional[List[ContentFilterPattern]],
-    ) -> List[ContentFilterPattern]:
-        result: List[ContentFilterPattern] = []
+        patterns: list[ContentFilterPattern] | None,
+    ) -> list[ContentFilterPattern]:
+        result: Final[list[ContentFilterPattern]] = []
         if patterns:
             for pattern_config in patterns:
                 if isinstance(pattern_config, dict):
@@ -290,9 +321,9 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     @staticmethod
     def _normalize_blocked_words(
-        blocked_words: Optional[List[BlockedWord]],
-    ) -> List[BlockedWord]:
-        result: List[BlockedWord] = []
+        blocked_words: list[BlockedWord] | None,
+    ) -> list[BlockedWord]:
+        result: Final[list[BlockedWord]] = []
         if blocked_words:
             for word in blocked_words:
                 if isinstance(word, dict):
@@ -302,12 +333,21 @@ class ContentFilterGuardrail(CustomGuardrail):
         return result
 
     @staticmethod
+    def _category_config_view(cat_config: ContentFilterCategoryConfig) -> _CategoryConfigView:
+        return {
+            "category": cat_config.get("category"),
+            "enabled": cat_config.get("enabled", True),
+            "action": cat_config.get("action"),
+            "category_file": cat_config.get("category_file"),
+        }
+
+    @staticmethod
     def _assert_within_categories_dir(path: str, categories_dir: str) -> None:
         """Raise ValueError if path escapes the categories directory."""
-        resolved = os.path.realpath(path)
-        allowed = os.path.realpath(categories_dir)
+        resolved: Final = os.path.realpath(path)
+        allowed: Final = os.path.realpath(categories_dir)
         try:
-            common = os.path.commonpath([resolved, allowed])
+            common: Final = os.path.commonpath([resolved, allowed])
         except ValueError:
             # commonpath() raises ValueError on Windows when paths span different drives
             raise ValueError(f"Category file path '{path}' is outside the allowed categories directory")
@@ -350,8 +390,8 @@ class ContentFilterGuardrail(CustomGuardrail):
             ValueError: If the resolved path escapes the module directory
                 and ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS`` is not set.
         """
-        module_dir = os.path.dirname(__file__)
-        allow_external = os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower() == "true"
+        module_dir: Final = os.path.dirname(__file__)
+        allow_external: Final = os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower() == "true"
 
         if os.path.isabs(file_path) or os.path.exists(file_path):
             if not allow_external:
@@ -372,7 +412,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             return candidate
 
         # Progressively strip leading components to find a matching suffix
-        parts = file_path.split("/")
+        parts: Final = file_path.split("/")
         for i in range(1, len(parts)):
             suffix = os.path.join(*parts[i:])
             candidate = os.path.join(module_dir, suffix)
@@ -388,7 +428,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             self._assert_within_categories_dir(os.path.join(module_dir, file_path), module_dir)
         return file_path
 
-    def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
+    def _load_categories(self, categories: list[ContentFilterCategoryConfig]) -> None:
         """
         Load content categories from configuration.
 
@@ -400,28 +440,29 @@ class ContentFilterGuardrail(CustomGuardrail):
                   severity_threshold: "medium"
                   category_file: "/path/to/custom_file.yaml"  # optional override
         """
-        categories_dir = os.path.join(os.path.dirname(__file__), "categories")
+        categories_dir: Final = os.path.join(os.path.dirname(__file__), "categories")
 
         for cat_config in categories:
-            category_name = cat_config.get("category")
+            view = self._category_config_view(cat_config)
+            category_name = view["category"]
             if not category_name or not isinstance(category_name, str):
                 verbose_proxy_logger.warning("Category name missing or invalid in config, skipping")
                 continue
 
             # Prevent path traversal via category_name (e.g. "../../etc/passwd")
             if not re.match(r"^[a-zA-Z0-9_\-]+$", category_name):
-                verbose_proxy_logger.warning(f"Category name '{category_name}' contains invalid characters, skipping")
+                verbose_proxy_logger.warning("Category name '%s' contains invalid characters, skipping", category_name)
                 continue
 
-            enabled = cat_config.get("enabled", True)
-            action = cat_config.get("action")
+            enabled = view["enabled"]
+            action = view["action"]
             severity_threshold = (
                 cat_config.get("severity_threshold", self.severity_threshold) or self.severity_threshold
             )
-            custom_file = cat_config.get("category_file")
+            custom_file = view["category_file"]
 
             if not enabled:
-                verbose_proxy_logger.debug(f"Category {category_name} is disabled, skipping")
+                verbose_proxy_logger.debug("Category %s is disabled, skipping", category_name)
                 continue
 
             # Load category file (custom or default)
@@ -429,7 +470,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                 try:
                     category_file_path = self._resolve_category_file_path(custom_file)
                 except ValueError as e:
-                    verbose_proxy_logger.warning(f"Category {category_name}: invalid category_file path, skipping. {e}")
+                    verbose_proxy_logger.warning(
+                        "Category %s: invalid category_file path, skipping. %s", category_name, e
+                    )
                     continue
             else:
                 # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
@@ -443,7 +486,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     category_file_path = yaml_path  # will trigger "not found" below
 
             if not os.path.exists(category_file_path):
-                verbose_proxy_logger.warning(f"Category file not found: {category_file_path}, skipping")
+                verbose_proxy_logger.warning("Category file not found: %s, skipping", category_file_path)
                 continue
 
             try:
@@ -491,13 +534,14 @@ class ContentFilterGuardrail(CustomGuardrail):
                         )
 
                 verbose_proxy_logger.info(
-                    f"Loaded category {category_name}: "
-                    f"{len(category_config_obj.keywords)} keywords, "
-                    f"{len(category_config_obj.always_block_keywords)} always-block keywords, "
-                    f"conditional: {bool(category_config_obj.identifier_words)}"
+                    "Loaded category %s: %s keywords, %s always-block keywords, conditional: %s",
+                    category_name,
+                    len(category_config_obj.keywords),
+                    len(category_config_obj.always_block_keywords),
+                    bool(category_config_obj.identifier_words),
                 )
             except Exception as e:
-                verbose_proxy_logger.error(f"Error loading category {category_name}: {e}")
+                verbose_proxy_logger.error("Error loading category %s: %s", category_name, e)
 
     def _load_conditional_category(
         self,
@@ -519,17 +563,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             categories_dir: Directory containing category files
         """
         try:
-            block_words = []
+            block_words: Final[list[str]] = []
             inherit_from = category_config_obj.inherit_from
 
             # Load inherited block words if specified
             if inherit_from:
                 # Remove .json or .yaml extension if included
-                inherit_base = inherit_from.replace(".json", "").replace(".yaml", "")
+                inherit_base: Final = inherit_from.replace(".json", "").replace(".yaml", "")
 
                 # Find the inherited category file
-                inherit_yaml_path = os.path.join(categories_dir, f"{inherit_base}.yaml")
-                inherit_json_path = os.path.join(categories_dir, f"{inherit_base}.json")
+                inherit_yaml_path: Final = os.path.join(categories_dir, f"{inherit_base}.yaml")
+                inherit_json_path: Final = os.path.join(categories_dir, f"{inherit_base}.json")
 
                 inherit_file_path = None
                 if os.path.exists(inherit_yaml_path):
@@ -538,13 +582,16 @@ class ContentFilterGuardrail(CustomGuardrail):
                     inherit_file_path = inherit_json_path
                 else:
                     verbose_proxy_logger.warning(
-                        f"Category {category_name}: inherit_from '{inherit_from}' file not found at {categories_dir}"
+                        "Category %s: inherit_from '%s' file not found at %s",
+                        category_name,
+                        inherit_from,
+                        categories_dir,
                     )
-                    verbose_proxy_logger.debug(f"Tried paths: {inherit_yaml_path}, {inherit_json_path}")
+                    verbose_proxy_logger.debug("Tried paths: %s, %s", inherit_yaml_path, inherit_json_path)
 
                 if inherit_file_path:
                     # Load the inherited category
-                    inherited_category = self._load_category_file(inherit_file_path)
+                    inherited_category: Final = self._load_category_file(inherit_file_path)
 
                     # Extract block words from inherited category that meet severity threshold
                     for keyword_data in inherited_category.keywords:
@@ -575,7 +622,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 f"{len(block_words)} block words"
             )
             if inherit_from and category_config_obj.additional_block_words:
-                inherited_count = len(block_words) - len(category_config_obj.additional_block_words)
+                inherited_count: Final = len(block_words) - len(category_config_obj.additional_block_words)
                 log_msg += (
                     f" ({len(category_config_obj.additional_block_words)} additional + "
                     f"{inherited_count} from {inherit_from})"
@@ -587,7 +634,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             verbose_proxy_logger.info(log_msg)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error loading conditional category for {category_name}: {e}")
+            verbose_proxy_logger.error("Error loading conditional category for %s: %s", category_name, e)
 
     def _load_category_file(self, file_path: str) -> CategoryConfig:
         """
@@ -607,11 +654,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         if file_path.lower().endswith(".json"):
             return self._load_category_file_json(file_path)
-        with open(file_path, "r") as f:
-            data = yaml.safe_load(f)
-
-        # Handle always_block_keywords if present
-        always_block = data.get("always_block_keywords", [])
+        data: Final = self._read_category_yaml(file_path)
 
         return CategoryConfig(
             category_name=data.get("category_name", "unknown"),
@@ -620,11 +663,16 @@ class ContentFilterGuardrail(CustomGuardrail):
             keywords=data.get("keywords", []),
             exceptions=data.get("exceptions", []),
             identifier_words=data.get("identifier_words"),
-            always_block_keywords=always_block,
+            always_block_keywords=data.get("always_block_keywords", []),
             inherit_from=data.get("inherit_from"),
             additional_block_words=data.get("additional_block_words"),
             phrase_patterns=data.get("phrase_patterns"),
         )
+
+    @staticmethod
+    def _read_category_yaml(file_path: str) -> CategoryFileData:
+        with open(file_path, "r") as f:
+            return yaml.safe_load(f)
 
     def _load_category_file_json(self, file_path: str) -> CategoryConfig:
         """
@@ -638,10 +686,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         if not isinstance(entries, list):
             entries = [entries]
         # Derive category name from filename (e.g. harm_toxic_abuse.json -> harm_toxic_abuse)
-        category_name = os.path.splitext(os.path.basename(file_path))[0]
-        severity_map = {4: "high", 3: "high", 2: "medium", 1: "low"}
-        keywords: List[Dict[str, str]] = []
-        seen = set()
+        category_name: Final = os.path.splitext(os.path.basename(file_path))[0]
+        severity_map: Final = {4: "high", 3: "high", 2: "medium", 1: "low"}
+        keywords: Final[list[dict[str, str]]] = []
+        seen: Final = set()
         for item in entries:
             if not isinstance(item, dict):
                 continue
@@ -673,7 +721,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             True if severity meets or exceeds threshold
         """
-        severity_order = {"low": 0, "medium": 1, "high": 2}
+        severity_order: Final = {"low": 0, "medium": 1, "high": 2}
         return severity_order.get(severity, 0) >= severity_order.get(threshold, 1)
 
     def _add_pattern(self, pattern_config: ContentFilterPattern) -> None:
@@ -684,13 +732,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             pattern_config: ContentFilterPattern configuration
         """
         try:
-            extra_config: Dict[str, Any] = {}
+            extra_config: _PatternExtraLookup = {"keyword_pattern": None, "allow_word_numbers": False}
             if pattern_config.pattern_type == "prebuilt":
                 if not pattern_config.pattern_name:
                     raise ValueError("pattern_name is required for prebuilt patterns")
                 compiled = get_compiled_pattern(pattern_config.pattern_name)
                 pattern_name = pattern_config.pattern_name
-                extra_config = PATTERN_EXTRA_CONFIG.get(pattern_name, {}) or {}
+                extra_config = self._lookup_pattern_extra(pattern_name)
             elif pattern_config.pattern_type == "regex":
                 if not pattern_config.pattern:
                     raise ValueError("pattern is required for regex patterns")
@@ -699,9 +747,8 @@ class ContentFilterGuardrail(CustomGuardrail):
             else:
                 raise ValueError(f"Unknown pattern_type: {pattern_config.pattern_type}")
 
-            keyword_regex: Optional[Pattern] = None
-            if extra_config.get("keyword_pattern"):
-                keyword_regex = re.compile(extra_config["keyword_pattern"], re.IGNORECASE)
+            keyword_pattern: Final = extra_config["keyword_pattern"]
+            keyword_regex: Final = re.compile(keyword_pattern, re.IGNORECASE) if keyword_pattern else None
 
             self.compiled_patterns.append(
                 {
@@ -709,13 +756,21 @@ class ContentFilterGuardrail(CustomGuardrail):
                     "pattern_name": pattern_name,
                     "action": pattern_config.action,
                     "keyword_regex": keyword_regex,
-                    "allow_word_numbers": bool(extra_config.get("allow_word_numbers")),
+                    "allow_word_numbers": extra_config["allow_word_numbers"],
                 }
             )
-            verbose_proxy_logger.debug(f"Added pattern: {pattern_name} with action {pattern_config.action}")
+            verbose_proxy_logger.debug("Added pattern: %s with action %s", pattern_name, pattern_config.action)
         except Exception as e:
-            verbose_proxy_logger.error(f"Error adding pattern {pattern_config}: {e}")
+            verbose_proxy_logger.error("Error adding pattern %s: %s", pattern_config, e)
             raise
+
+    @staticmethod
+    def _lookup_pattern_extra(pattern_name: str) -> _PatternExtraLookup:
+        extra: Final = PATTERN_EXTRA_CONFIG.get(pattern_name)
+        return {
+            "keyword_pattern": extra.get("keyword_pattern") if extra is not None else None,
+            "allow_word_numbers": bool(extra.get("allow_word_numbers")) if extra is not None else False,
+        }
 
     def _load_blocked_words_file(self, file_path: str) -> None:
         """
@@ -734,14 +789,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         try:
             with open(file_path, "r") as f:
-                data = yaml.safe_load(f)
+                data: Final = yaml.safe_load(f)
 
             if not isinstance(data, dict) or "blocked_words" not in data:
                 raise ValueError("Invalid format: file must contain 'blocked_words' key with list of words")
 
             for word_data in data["blocked_words"]:
                 if not isinstance(word_data, dict) or "keyword" not in word_data or "action" not in word_data:
-                    verbose_proxy_logger.warning(f"Skipping invalid word entry: {word_data}")
+                    verbose_proxy_logger.warning("Skipping invalid word entry: %s", word_data)
                     continue
 
                 keyword = word_data["keyword"].lower()
@@ -750,26 +805,24 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 self.blocked_words[keyword] = (action, description)
 
-            verbose_proxy_logger.info(f"Loaded {len(data['blocked_words'])} blocked words from {file_path}")
+            verbose_proxy_logger.info("Loaded %s blocked words from %s", len(data["blocked_words"]), file_path)
         except FileNotFoundError:
             raise FileNotFoundError(f"Blocked words file not found: {file_path}")
         except Exception as e:
-            raise Exception(f"Error loading blocked words file {file_path}: {str(e)}")
+            raise Exception(f"Error loading blocked words file {file_path}: {e}")
 
-    def _find_pattern_spans(self, text: str, pattern_entry: Dict[str, Any]) -> List[Tuple[int, int]]:
+    def _find_pattern_spans(self, text: str, pattern_entry: CompiledPatternEntry) -> list[tuple[int, int]]:
         """Return all match spans for a pattern, applying contextual rules if required."""
 
-        regex: Pattern = pattern_entry["regex"]
-        keyword_regex: Optional[Pattern] = pattern_entry.get("keyword_regex")
-        allow_word_numbers: bool = pattern_entry.get("allow_word_numbers", False)
+        regex: Final[Pattern[str]] = pattern_entry["regex"]
+        keyword_regex: Final[Pattern[str] | None] = pattern_entry.get("keyword_regex")
+        allow_word_numbers: Final[bool] = pattern_entry.get("allow_word_numbers", False)
 
-        keyword_matches: Optional[List[re.Match]] = None
-        if keyword_regex is not None:
-            keyword_matches = list(keyword_regex.finditer(text))
-            if not keyword_matches:
-                return []
+        keyword_matches: Final = list(keyword_regex.finditer(text)) if keyword_regex is not None else None
+        if keyword_matches is not None and not keyword_matches:
+            return []
 
-        match_spans: List[Tuple[int, int]] = []
+        match_spans: Final[list[tuple[int, int]]] = []
 
         for match in regex.finditer(text):
             if keyword_matches is not None and not self._match_near_keyword(
@@ -797,7 +850,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         value_start: int,
         value_end: int,
-        keyword_matches: List[re.Match],
+        keyword_matches: Sequence[re.Match[str]],
         text: str,
     ) -> bool:
         """Check if a value is separated from a keyword by an allowed gap."""
@@ -825,17 +878,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         if any(char.isdigit() for char in gap_text):
             return False
 
-        words = GAP_WORD_TOKENIZER.findall(gap_text)
+        words: Final = GAP_WORD_TOKENIZER.findall(gap_text)
         return len(words) <= MAX_KEYWORD_VALUE_GAP_WORDS
 
-    def _merge_spans(self, spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    def _merge_spans(self, spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
         """Merge overlapping spans to avoid double-masking."""
 
         if not spans:
             return []
 
         spans.sort(key=lambda item: item[0])
-        merged: List[Tuple[int, int]] = [spans[0]]
+        merged: Final[list[tuple[int, int]]] = [spans[0]]
 
         for start, end in spans[1:]:
             last_start, last_end = merged[-1]
@@ -845,13 +898,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 merged.append((start, end))
         return merged
 
-    def _mask_spans(self, text: str, spans: List[Tuple[int, int]], redaction: str) -> str:
+    def _mask_spans(self, text: str, spans: list[tuple[int, int]], redaction: str) -> str:
         """Apply masking for the provided spans using the given redaction tag."""
 
         if not spans:
             return text
 
-        result_parts: List[str] = []
+        result_parts: Final[list[str]] = []
         previous_end = 0
         for start, end in spans:
             result_parts.append(text[previous_end:start])
@@ -860,14 +913,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         result_parts.append(text[previous_end:])
         return "".join(result_parts)
 
-    def _convert_word_number_sequence(self, sequence: str) -> Optional[str]:
+    def _convert_word_number_sequence(self, sequence: str) -> str | None:
         """Convert a spelled-out digit sequence (e.g., 'One-Two') into digits."""
 
-        tokens = WORD_NUMBER_TOKEN_FINDER.findall(sequence)
+        tokens: Final[list[str]] = WORD_NUMBER_TOKEN_FINDER.findall(sequence)
         if not tokens:
             return None
 
-        digits: List[str] = []
+        digits: Final[list[str]] = []
         for token in tokens:
             digit = WORD_NUMBER_MAP.get(token.lower())
             if digit is None:
@@ -876,7 +929,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return "".join(digits) if digits else None
 
-    def _check_patterns(self, text: str) -> Optional[Tuple[str, str, ContentFilterAction]]:
+    def _check_patterns(self, text: str) -> tuple[str, str, ContentFilterAction] | None:
         """
         Check text against all compiled regex patterns.
 
@@ -893,13 +946,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 matched_text = text[start:end]
                 pattern_name = pattern_entry["pattern_name"]
                 action = pattern_entry["action"]
-                verbose_proxy_logger.debug(f"Pattern '{pattern_name}' matched: {matched_text[:20]}...")
+                verbose_proxy_logger.debug("Pattern '%s' matched: %s...", pattern_name, matched_text[:20])
                 return (matched_text, pattern_name, action)
         return None
 
     def _check_conditional_categories(
-        self, text: str, exceptions: List[str]
-    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        self, text: str, exceptions: list[str]
+    ) -> tuple[str, str, str, ContentFilterAction] | None:
         """
         Check text for conditional category matches (identifier + block word in same sentence).
 
@@ -913,7 +966,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             Tuple of (matched_phrase, category, severity, action) if match found, None otherwise
         """
-        text_lower = text.lower()
+        text_lower: Final = text.lower()
 
         # First check if any exception applies
         for exception in exceptions:
@@ -922,7 +975,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Split text into sentences for more precise matching
         # Simple sentence splitting on common terminators
-        sentences = re.split(r"[.!?]+", text)
+        sentences: Final = re.split(r"[.!?]+", text)
 
         for category_name, config in self.conditional_categories.items():
             identifier_words = config["identifier_words"]
@@ -937,7 +990,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 for exception in category_obj.exceptions:
                     if exception in text_lower:
                         verbose_proxy_logger.debug(
-                            f"Category exception '{exception}' found for {category_name}, skipping"
+                            "Category exception '%s' found for %s, skipping", exception, category_name
                         )
                         exception_found = True
                         break
@@ -979,15 +1032,15 @@ class ContentFilterGuardrail(CustomGuardrail):
                 if block_word_found:
                     matched_phrase = f"{identifier_found} + {block_word_found}"
                     verbose_proxy_logger.warning(
-                        f"Conditional match in {category_name}: '{matched_phrase}' in sentence"
+                        "Conditional match in %s: '%s' in sentence", category_name, matched_phrase
                     )
                     return (matched_phrase, category_name, severity, action)
 
         return None
 
     def _check_phrase_patterns(
-        self, text: str, exceptions: List[str]
-    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        self, text: str, exceptions: list[str]
+    ) -> tuple[str, str, str, ContentFilterAction] | None:
         """
         Check text against phrase patterns from loaded categories.
 
@@ -1001,7 +1054,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             Tuple of (matched_pattern, category, severity, action) if match found, None otherwise
         """
-        text_lower = text.lower()
+        text_lower: Final = text.lower()
 
         for exception in exceptions:
             if exception in text_lower:
@@ -1024,7 +1077,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 for pattern_str, pattern in config.phrase_patterns:
                     if pattern.search(text):
-                        verbose_proxy_logger.warning(f"Phrase pattern match in {category_name}: '{pattern_str}'")
+                        verbose_proxy_logger.warning("Phrase pattern match in %s: '%s'", category_name, pattern_str)
                         return (
                             f"phrase: {pattern_str}",
                             category_name,
@@ -1035,8 +1088,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         return None
 
     def _check_category_keywords(
-        self, text: str, exceptions: List[str]
-    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        self, text: str, exceptions: list[str]
+    ) -> tuple[str, str, str, ContentFilterAction] | None:
         """
         Check text for category keywords.
 
@@ -1047,12 +1100,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             Tuple of (keyword, category, severity, action) if match found, None otherwise
         """
-        text_lower = text.lower()
+        text_lower: Final = text.lower()
 
         # Check exceptions first — they take precedence over always-block keywords too.
         for exception in exceptions:
             if exception in text_lower:
-                verbose_proxy_logger.debug(f"Exception phrase '{exception}' found, skipping category keyword check")
+                verbose_proxy_logger.debug("Exception phrase '%s' found, skipping category keyword check", exception)
                 return None
 
         # Always-block keywords are checked after exceptions.
@@ -1068,7 +1121,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
                 keyword_found = bool(re.search(keyword_pattern, text_lower))
             if keyword_found:
-                verbose_proxy_logger.debug(f"Always-block keyword '{keyword}' found in category '{category}'")
+                verbose_proxy_logger.debug("Always-block keyword '%s' found in category '%s'", keyword, category)
                 return (keyword, category, severity, action)
 
         # Check category keywords
@@ -1099,7 +1152,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     for exception in category_obj.exceptions:
                         if exception in text_lower:
                             verbose_proxy_logger.debug(
-                                f"Category exception '{exception}' found for keyword '{keyword}', skipping"
+                                "Category exception '%s' found for keyword '%s', skipping", exception, keyword
                             )
                             exception_found = True
                             break
@@ -1107,12 +1160,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                         continue
 
                 verbose_proxy_logger.debug(
-                    f"Category keyword '{keyword}' found in category '{category}' with severity {severity}"
+                    "Category keyword '%s' found in category '%s' with severity %s", keyword, category, severity
                 )
                 return (keyword, category, severity, action)
         return None
 
-    def _check_blocked_words(self, text: str) -> Optional[Tuple[str, ContentFilterAction, Optional[str]]]:
+    def _check_blocked_words(self, text: str) -> tuple[str, ContentFilterAction, str | None] | None:
         """
         Check text for blocked keywords.
 
@@ -1129,7 +1182,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 "This suggests an old guardrail instance is still in use. Please restart the server."
             )
             # Convert list to dict on-the-fly
-            temp_dict: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
+            temp_dict: Final[dict[str, tuple[ContentFilterAction, str | None]]] = {}
             for word in self.blocked_words:
                 if isinstance(word, dict):
                     temp_dict[word.get("keyword", "").lower()] = (
@@ -1141,10 +1194,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         if not self.blocked_words:
             return None
 
-        text_lower = text.lower()
+        text_lower: Final = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
             if keyword in text_lower:
-                verbose_proxy_logger.debug(f"Blocked word '{keyword}' found with action {action}")
+                verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
                 return (keyword, action, description)
         return None
 
@@ -1154,11 +1207,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         category_name: str,
         severity: str,
         action: ContentFilterAction,
-        detections: Optional[List[ContentFilterDetection]],
+        detections: list[ContentFilterDetection] | None,
     ) -> None:
         """Handle conditional category match detection and action."""
         if detections is not None:
-            category_detection: CategoryKeywordDetection = {
+            category_detection: Final[CategoryKeywordDetection] = {
                 "type": "category_keyword",
                 "category": category_name,
                 "keyword": matched_phrase,
@@ -1168,7 +1221,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             detections.append(category_detection)
 
         if action == ContentFilterAction.BLOCK:
-            error_msg = (
+            error_msg: Final = (
                 f"Content blocked: {category_name} conditional match '{matched_phrase}' detected (severity: {severity})"
             )
             verbose_proxy_logger.warning(error_msg)
@@ -1183,7 +1236,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
         elif action == ContentFilterAction.MASK:
             verbose_proxy_logger.warning(
-                f"Conditional match '{matched_phrase}' from {category_name} detected but MASK action not supported for conditional categories"
+                "Conditional match '%s' from %s detected but MASK action not supported for conditional categories",
+                matched_phrase,
+                category_name,
             )
 
     def _handle_category_keyword_match(
@@ -1193,11 +1248,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         severity: str,
         action: ContentFilterAction,
         text: str,
-        detections: Optional[List[ContentFilterDetection]],
+        detections: list[ContentFilterDetection] | None,
     ) -> str:
         """Handle category keyword match detection and action."""
         if detections is not None:
-            category_detection: CategoryKeywordDetection = {
+            category_detection: Final[CategoryKeywordDetection] = {
                 "type": "category_keyword",
                 "category": category_name,
                 "keyword": keyword,
@@ -1219,7 +1274,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 },
             )
         elif action == ContentFilterAction.MASK:
-            keyword_pattern_for_masking = self._keyword_to_regex_pattern(keyword)
+            keyword_pattern_for_masking: Final = self._keyword_to_regex_pattern(keyword)
             text = re.sub(
                 keyword_pattern_for_masking,
                 self.keyword_redaction_tag,
@@ -1227,7 +1282,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 flags=re.IGNORECASE,
             )
             verbose_proxy_logger.info(
-                f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
+                "Masked category keyword '%s' from %s (severity: %s)", keyword, category_name, severity
             )
 
         return text
@@ -1237,12 +1292,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         pattern_name: str,
         action: ContentFilterAction,
         text: str,
-        spans: List[Tuple[int, int]],
-        detections: Optional[List[ContentFilterDetection]],
+        spans: list[tuple[int, int]],
+        detections: list[ContentFilterDetection] | None,
     ) -> str:
         """Handle regex pattern match detection and action."""
         if detections is not None:
-            pattern_detection: PatternDetection = {
+            pattern_detection: Final[PatternDetection] = {
                 "type": "pattern",
                 "pattern_name": pattern_name,
                 "action": action.value,
@@ -1250,16 +1305,16 @@ class ContentFilterGuardrail(CustomGuardrail):
             detections.append(pattern_detection)
 
         if action == ContentFilterAction.BLOCK:
-            error_msg = f"Content blocked: {pattern_name} pattern detected"
+            error_msg: Final = f"Content blocked: {pattern_name} pattern detected"
             verbose_proxy_logger.warning(error_msg)
             raise HTTPException(
                 status_code=400,
                 detail={"error": error_msg, "pattern": pattern_name},
             )
         elif action == ContentFilterAction.MASK:
-            redaction_tag = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
+            redaction_tag: Final = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
             text = self._mask_spans(text, spans, redaction_tag)
-            verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
+            verbose_proxy_logger.info("Masked all %s matches in content", pattern_name)
 
         return text
 
@@ -1267,15 +1322,15 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         keyword: str,
         action: ContentFilterAction,
-        description: Optional[str],
+        description: str | None,
         text: str,
-        detections: Optional[List[ContentFilterDetection]],
+        detections: list[ContentFilterDetection] | None,
     ) -> str:
         """Handle blocked word match detection and action."""
-        verbose_proxy_logger.debug(f"Blocked word '{keyword}' found with action {action}")
+        verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
 
         if detections is not None:
-            blocked_word_detection: BlockedWordDetection = {
+            blocked_word_detection: Final[BlockedWordDetection] = {
                 "type": "blocked_word",
                 "keyword": keyword,
                 "action": action.value,
@@ -1297,18 +1352,18 @@ class ContentFilterGuardrail(CustomGuardrail):
                 },
             )
         elif action == ContentFilterAction.MASK:
-            keyword_pattern_for_masking = self._keyword_to_regex_pattern(keyword)
+            keyword_pattern_for_masking: Final = self._keyword_to_regex_pattern(keyword)
             text = re.sub(
                 keyword_pattern_for_masking,
                 self.keyword_redaction_tag,
                 text,
                 flags=re.IGNORECASE,
             )
-            verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+            verbose_proxy_logger.info("Masked keyword '%s' in content", keyword)
 
         return text
 
-    def _filter_single_text(self, text: str, detections: Optional[List[ContentFilterDetection]] = None) -> str:
+    def _filter_single_text(self, text: str, detections: list[ContentFilterDetection] | None = None) -> str:
         """
         Apply all content filtering checks to a single text.
 
@@ -1328,24 +1383,24 @@ class ContentFilterGuardrail(CustomGuardrail):
             HTTPException: If sensitive content is detected and action is BLOCK
         """
         # Collect all exceptions from loaded categories
-        all_exceptions = []
+        all_exceptions: Final[list[str]] = []
         for category in self.loaded_categories.values():
             all_exceptions.extend(category.exceptions)
 
         # Check conditional categories first
-        conditional_match = self._check_conditional_categories(text, all_exceptions)
+        conditional_match: Final = self._check_conditional_categories(text, all_exceptions)
         if conditional_match:
             matched_phrase, category_name, severity, action = conditional_match
             self._handle_conditional_match(matched_phrase, category_name, severity, action, detections)
 
         # Check phrase patterns (regex-based paraphrase detection)
-        phrase_match = self._check_phrase_patterns(text, all_exceptions)
+        phrase_match: Final = self._check_phrase_patterns(text, all_exceptions)
         if phrase_match:
             matched_phrase, category_name, severity, action = phrase_match
             self._handle_conditional_match(matched_phrase, category_name, severity, action, detections)
 
         # Check category keywords
-        category_keyword_match = self._check_category_keywords(text, all_exceptions)
+        category_keyword_match: Final = self._check_category_keywords(text, all_exceptions)
         if category_keyword_match:
             keyword, category_name, severity, action = category_keyword_match
             text = self._handle_category_keyword_match(keyword, category_name, severity, action, text, detections)
@@ -1390,10 +1445,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             Text with sensitive content masked
         """
-        redaction_tag = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
+        redaction_tag: Final = self.pattern_redaction_format.format(pattern_name=pattern_name.upper())
         return redaction_tag
 
-    async def _process_images(self, images: List[str], detections: List[ContentFilterDetection]) -> None:
+    async def _process_images(self, images: list[str], detections: list[ContentFilterDetection]) -> None:
         """
         Process images by describing them and applying content filtering.
 
@@ -1404,7 +1459,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         if not (images and self.image_model and self.llm_router):
             return
 
-        tasks = []
+        tasks: Final[list[Coroutine[object, object, ModelResponse]]] = []
         for image in images:
             task = self.llm_router.acompletion(
                 model=self.image_model,
@@ -1424,21 +1479,19 @@ class ContentFilterGuardrail(CustomGuardrail):
             )
             tasks.append(task)
 
-        responses = await asyncio.gather(*tasks)
-        descriptions = []
+        responses: Final = await asyncio.gather(*tasks)
+        descriptions: Final[list[str]] = []
         for response in responses:
-            choice = response.choices[0]
-            message = getattr(choice, "message", None)
-            if message and getattr(message, "content", None):
-                image_description = message.content
-                verbose_proxy_logger.debug(f"Image description: {image_description}")
+            image_description = self._describe_image_response_content(response)
+            if image_description:
+                verbose_proxy_logger.debug("Image description: %s", image_description)
                 descriptions.append(image_description)
             else:
                 verbose_proxy_logger.warning("No image description found")
 
         # Apply content filtering to image descriptions
         verbose_proxy_logger.debug(
-            f"ContentFilterGuardrail: Applying guardrail to {len(descriptions)} image description(s)"
+            "ContentFilterGuardrail: Applying guardrail to %s image description(s)", len(descriptions)
         )
         for description in descriptions:
             # This will raise HTTPException if BLOCK action is triggered
@@ -1447,7 +1500,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             except HTTPException as e:
                 # e.detail can be a string or dict
                 if isinstance(e.detail, dict) and "error" in e.detail:
-                    detail_dict = cast(Dict[str, Any], e.detail)
+                    detail_dict = cast(dict[str, str], e.detail)
                     detail_dict["error"] = detail_dict["error"] + " (Image description): " + description
                 elif isinstance(e.detail, str):
                     e.detail = e.detail + " (Image description): " + description
@@ -1455,10 +1508,18 @@ class ContentFilterGuardrail(CustomGuardrail):
                     e.detail = "Content blocked: Image description detected" + description
                 raise e
 
+    @staticmethod
+    def _describe_image_response_content(response: ModelResponse) -> str | None:
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        if message and getattr(message, "content", None):
+            return message.content
+        return None
+
     def _count_masked_entities(
         self,
-        detections: List[ContentFilterDetection],
-        masked_entity_count: Dict[str, int],
+        detections: list[ContentFilterDetection],
+        masked_entity_count: dict[str, int],
     ) -> None:
         """
         Count masked entities by type from detections.
@@ -1484,12 +1545,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                     category = category_detection["category"]
                     masked_entity_count[category] = masked_entity_count.get(category, 0) + 1
 
-    def _build_match_details(self, detections: List[ContentFilterDetection]) -> List[dict]:
+    def _build_match_details(self, detections: list[ContentFilterDetection]) -> list[dict[str, object]]:
         """Build match_details list from content filter detections."""
-        match_details: List[dict] = []
+        match_details: Final[list[dict[str, object]]] = []
         for detection in detections:
             action_taken = detection.get("action", detection.get("action_hint", ""))
-            detail: dict = {"type": detection["type"], "action_taken": action_taken}
+            detail: dict[str, object] = {"type": detection["type"], "action_taken": action_taken}
             if detection["type"] == "pattern":
                 detail["detection_method"] = "regex"
                 detail["snippet"] = cast(PatternDetection, detection).get("pattern_name", "")
@@ -1508,9 +1569,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             match_details.append(detail)
         return match_details
 
-    def _get_detection_methods(self, detections: List[ContentFilterDetection]) -> str:
+    def _get_detection_methods(self, detections: list[ContentFilterDetection]) -> str:
         """Get comma-separated detection methods used."""
-        methods: set = set()
+        methods: Final[set[str]] = set()
         for detection in detections:
             if detection["type"] == "pattern":
                 methods.add("regex")
@@ -1529,17 +1590,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             + len(self.always_block_category_keywords)
         )
 
-    def _get_policy_templates(self) -> Optional[str]:
+    def _get_policy_templates(self) -> str | None:
         """Get comma-separated policy template names from loaded categories."""
         if not self.loaded_categories:
             return None
-        names = [cat.description or cat.category_name for cat in self.loaded_categories.values()]
+        names: Final = [cat.description or cat.category_name for cat in self.loaded_categories.values()]
         return ", ".join(names) if names else None
 
     def _compute_risk_score(
         self,
-        detections: List[ContentFilterDetection],
-        masked_entity_count: Dict[str, int],
+        detections: list[ContentFilterDetection],
+        masked_entity_count: dict[str, int],
         status: "GuardrailStatus",
     ) -> float:
         """
@@ -1553,15 +1614,15 @@ class ContentFilterGuardrail(CustomGuardrail):
         if status == "guardrail_intervened":
             return 10.0
 
-        total_masked = sum(masked_entity_count.values()) if masked_entity_count else 0
-        patterns_checked = self._get_patterns_checked_count()
+        total_masked: Final = sum(masked_entity_count.values()) if masked_entity_count else 0
+        patterns_checked: Final = self._get_patterns_checked_count()
 
         # Match ratio contribution (0-7 points)
-        match_ratio = total_masked / patterns_checked if patterns_checked > 0 else 0.0
-        ratio_score = match_ratio * 7.0
+        match_ratio: Final = total_masked / patterns_checked if patterns_checked > 0 else 0.0
+        ratio_score: Final = match_ratio * 7.0
 
         # Detection count contribution (0-3 points, capped)
-        detection_score = min(len(detections), 5) * 0.6
+        detection_score: Final = min(len(detections), 5) * 0.6
 
         score = ratio_score + detection_score
 
@@ -1575,17 +1636,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         self,
         intent_result: CompetitorIntentResult,
         request_data: dict,
-        detections: List[ContentFilterDetection],
+        detections: list[ContentFilterDetection],
     ) -> None:
         """
         Apply policy for competitor intent result: refuse (raise), reframe (passthrough), or log_only/allow (return).
         Appends competitor_intent detection to detections. Never returns for refuse/reframe.
         """
-        intent_val = intent_result.get("intent", "other")
-        confidence_val = intent_result.get("confidence", 0.0)
-        action_hint_val = intent_result.get("action_hint", "allow")
-        evidence_list = intent_result.get("evidence", [])
-        detection: CompetitorIntentDetection = {
+        intent_val: Final = intent_result.get("intent", "other")
+        confidence_val: Final = intent_result.get("confidence", 0.0)
+        action_hint_val: Final = intent_result.get("action_hint", "allow")
+        evidence_list: Final = intent_result.get("evidence", [])
+        detection: Final[CompetitorIntentDetection] = {
             "type": "competitor_intent",
             "intent": intent_val,
             "confidence": confidence_val,
@@ -1636,10 +1697,10 @@ class ContentFilterGuardrail(CustomGuardrail):
     def _log_guardrail_information(
         self,
         request_data: dict,
-        detections: List[ContentFilterDetection],
+        detections: list[ContentFilterDetection],
         status: "GuardrailStatus",
         start_time: datetime,
-        masked_entity_count: Dict[str, int],
+        masked_entity_count: dict[str, int],
         exception_str: str,
     ) -> None:
         """
@@ -1654,12 +1715,12 @@ class ContentFilterGuardrail(CustomGuardrail):
             exception_str: Exception string if guardrail failed
         """
         # Convert TypedDict detections to regular dicts for JSON serialization
-        guardrail_json_response: Union[Exception, str, dict, List[dict]] = [dict(detection) for detection in detections]
+        guardrail_json_response: Exception | str | dict | list[dict] = [dict(detection) for detection in detections]
         if status != "success":
             guardrail_json_response = exception_str if exception_str else [dict(detection) for detection in detections]
 
         # Competitor intent: add confidence and classification to tracing if present
-        tracing_kw: Dict[str, Any] = {
+        tracing_kw: Final[GuardrailTracingDetail] = {
             "guardrail_id": self.config_guardrail_id or self.guardrail_name,
             "policy_template": self.config_policy_template or self._get_policy_templates(),
             "detection_method": (self._get_detection_methods(detections) if detections else None),
@@ -1682,45 +1743,56 @@ class ContentFilterGuardrail(CustomGuardrail):
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
             masked_entity_count=masked_entity_count,
-            tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
+            tracing_detail=GuardrailTracingDetail(**tracing_kw),
         )
 
     @staticmethod
     def _get_mcp_tool_name(request_data: dict) -> str | None:
-        raw_name: object = request_data.get("mcp_tool_name")
+        raw_name: Final[object] = request_data.get("mcp_tool_name")
         if isinstance(raw_name, str) and raw_name:
             return raw_name
         return None
 
-    def _assert_mcp_argument_label_clean(self, text: str, detections: list[ContentFilterDetection]) -> None:
+    def _assert_argument_label_clean(
+        self, text: str, detections: list[ContentFilterDetection], context_label: str
+    ) -> None:
         if self._filter_single_text(text, detections=detections) != text:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Content blocked: MCP tool call argument matched a masking rule on a non-rewritable field"
+                    "error": (
+                        f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field"
+                    )
                 },
             )
 
-    def _filter_mcp_argument_value(
-        self, value: object, detections: list[ContentFilterDetection], depth: int = 0
+    def _filter_argument_value(
+        self,
+        value: object,
+        detections: list[ContentFilterDetection],
+        context_label: str,
+        depth: int = 0,
     ) -> object:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "Content blocked: MCP tool call arguments exceed the maximum nesting depth"},
+                detail={"error": f"Content blocked: {context_label} arguments exceed the maximum nesting depth"},
             )
         if isinstance(value, str):
             return self._filter_single_text(value, detections=detections)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            self._assert_mcp_argument_label_clean(str(value), detections)
+            self._assert_argument_label_clean(str(value), detections, context_label)
             return value
         if isinstance(value, dict):
             for key in value:
                 if isinstance(key, str):
-                    self._assert_mcp_argument_label_clean(key, detections)
-            return {key: self._filter_mcp_argument_value(item, detections, depth + 1) for key, item in value.items()}
+                    self._assert_argument_label_clean(key, detections, context_label)
+            return {
+                key: self._filter_argument_value(item, detections, context_label, depth + 1)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
-            return [self._filter_mcp_argument_value(item, detections, depth + 1) for item in value]
+            return [self._filter_argument_value(item, detections, context_label, depth + 1) for item in value]
         return value
 
     def _scan_mcp_tool_call_arguments(
@@ -1731,19 +1803,66 @@ class ContentFilterGuardrail(CustomGuardrail):
     ) -> None:
         if not self._event_hook_is_event_type(GuardrailEventHooks.pre_mcp_call):
             return
-        call_type: object = getattr(logging_obj, "call_type", None)
+        call_type: Final[object] = getattr(logging_obj, "call_type", None)
         if logging_obj is not None and call_type != CallTypes.call_mcp_tool.value:
             return
         if self._get_mcp_tool_name(request_data) is None:
             return
-        raw_arguments: object = request_data.get("mcp_arguments")
+        raw_arguments: Final[object] = request_data.get("mcp_arguments")
         if not isinstance(raw_arguments, dict) or not raw_arguments:
             return
-        filtered_arguments = self._filter_mcp_argument_value(raw_arguments, detections)
+        filtered_arguments: Final = self._filter_argument_value(raw_arguments, detections, "MCP tool call")
         if filtered_arguments == raw_arguments:
             return
         request_data["mcp_arguments"] = filtered_arguments
         request_data["modified_arguments"] = filtered_arguments
+
+    @staticmethod
+    def _get_tool_call_arguments(tool_call: object) -> str | None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        arguments: Final[object] = (
+            function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+        )
+        return arguments if isinstance(arguments, str) and arguments.strip() else None
+
+    @staticmethod
+    def _set_tool_call_arguments(tool_call: object, arguments: str) -> None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        if isinstance(function, dict):
+            function["arguments"] = arguments
+        elif isinstance(function, Function):
+            function.arguments = arguments
+
+    def _filter_tool_call_arguments(
+        self,
+        arguments: str,
+        detections: list[ContentFilterDetection],  # mutable-ok: _filter_single_text appends into a caller-owned list
+    ) -> str:
+        try:
+            parsed: Final[object] = json.loads(arguments)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return self._filter_single_text(arguments, detections=detections)
+        if not isinstance(parsed, (dict, list)):
+            return self._filter_single_text(arguments, detections=detections)
+        filtered: Final = self._filter_argument_value(parsed, detections, "tool call")
+        return arguments if filtered == parsed else json.dumps(filtered)
+
+    def _scan_tool_call_arguments(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        detections: list[ContentFilterDetection],  # mutable-ok: _filter_single_text appends into a caller-owned list
+    ) -> None:
+        for tool_call in inputs.get("tool_calls") or ():
+            arguments = self._get_tool_call_arguments(tool_call)
+            if arguments is None:
+                continue
+            filtered_arguments = self._filter_tool_call_arguments(arguments, detections)
+            if filtered_arguments != arguments:
+                self._set_tool_call_arguments(tool_call, filtered_arguments)
 
     async def apply_guardrail(
         self,
@@ -1770,23 +1889,23 @@ class ContentFilterGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
-        start_time = datetime.now()
-        detections: List[ContentFilterDetection] = []
-        masked_entity_count: Dict[str, int] = {}
+        start_time: Final = datetime.now()
+        detections: Final[list[ContentFilterDetection]] = []
+        masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
         exception_str: str = ""
 
         try:
-            texts = inputs.get("texts", [])
-            images = inputs.get("images", [])
+            texts: Final = inputs.get("texts", [])
+            images: Final = inputs.get("images", [])
 
             # Process images if present
             await self._process_images(images, detections)
 
             # Process texts
-            verbose_proxy_logger.debug(f"ContentFilterGuardrail: Applying guardrail to {len(texts)} text(s)")
+            verbose_proxy_logger.debug("ContentFilterGuardrail: Applying guardrail to %s text(s)", len(texts))
 
-            processed_texts = []
+            processed_texts: Final = []
             for text in texts:
                 # Competitor intent check first (optional; may refuse/reframe)
                 if self._competitor_intent_checker and text:
@@ -1798,6 +1917,8 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
             inputs["texts"] = processed_texts
+
+            self._scan_tool_call_arguments(inputs=inputs, detections=detections)
 
             if input_type == "request":
                 self._scan_mcp_tool_call_arguments(
@@ -1844,19 +1965,19 @@ class ContentFilterGuardrail(CustomGuardrail):
         and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
         contract.
         """
-        accumulated_text_by_choice: Dict[int, str] = {}
-        yielded_masked_text_len_by_choice: Dict[int, int] = {}
-        latest_detections_by_choice: Dict[int, List[ContentFilterDetection]] = {}
-        buffer_size = 50  # Increased buffer to catch patterns split across many chunks
+        accumulated_text_by_choice: Final[dict[int, str]] = {}
+        yielded_masked_text_len_by_choice: Final[dict[int, int]] = {}
+        latest_detections_by_choice: Final[dict[int, list[ContentFilterDetection]]] = {}
+        buffer_size: Final = 50  # Increased buffer to catch patterns split across many chunks
 
-        start_time = datetime.now()
-        detections: List[ContentFilterDetection] = []
-        masked_entity_count: Dict[str, int] = {}
+        start_time: Final = datetime.now()
+        detections: list[ContentFilterDetection] = []
+        masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
         exception_str: str = ""
 
         verbose_proxy_logger.info(
-            f"ContentFilterGuardrail: Starting robust streaming masking for model {request_data.get('model')}"
+            "ContentFilterGuardrail: Starting robust streaming masking for model %s", request_data.get("model")
         )
 
         try:
@@ -1885,7 +2006,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                         # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
                         text_to_scan = text_to_check + (" " if is_final else "")
-                        choice_detections: List[ContentFilterDetection] = []
+                        choice_detections: list[ContentFilterDetection] = []
 
                         try:
                             # _filter_single_text scans the whole accumulated
@@ -1901,7 +2022,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                             latest_detections_by_choice[choice_index] = choice_detections
                             raise
                         except Exception as e:
-                            verbose_proxy_logger.error(f"ContentFilterGuardrail: Error in masking: {e}")
+                            verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
                             masked_text = text_to_scan  # Fallback to current text
 
                         # Determine how much can be safely yielded
@@ -1964,11 +2085,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         return LitellmContentFilterGuardrailConfigModel
 
     @classmethod
-    def get_supported_event_hooks(cls) -> List[GuardrailEventHooks]:
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_call,
             GuardrailEventHooks.realtime_input_transcription,
             GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]

@@ -6,7 +6,6 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from pydantic import ConfigDict, Field, model_validator
 
@@ -19,32 +18,32 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
-    user_alias: Optional[str] = None
-    team_id: Optional[str] = None
-    sso_user_id: Optional[str] = None
-    organization_id: Optional[str] = None
-    object_permission_id: Optional[str] = None
-    password: Optional[str] = Field(default=None, exclude=True)
-    teams: List[str] = []
-    user_role: Optional[str] = None
-    max_budget: Optional[float] = None
+    user_alias: str | None = None
+    team_id: str | None = None
+    sso_user_id: str | None = None
+    organization_id: str | None = None
+    object_permission_id: str | None = None
+    password: str | None = Field(default=None, exclude=True)
+    teams: list[str] = []
+    user_role: str | None = None
+    max_budget: float | None = None
     spend: float = 0.0
-    user_email: Optional[str] = None
+    user_email: str | None = None
     models: list = []
-    metadata: Optional[dict] = None
-    max_parallel_requests: Optional[int] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    allowed_cache_controls: List[str] = []
-    policies: List[str] = []
-    model_spend: Optional[Dict] = {}
-    model_max_budget: Optional[Dict] = {}
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    metadata: dict | None = None
+    max_parallel_requests: int | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    allowed_cache_controls: list[str] = []
+    policies: list[str] = []
+    model_spend: dict | None = {}
+    model_max_budget: dict | None = {}
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    organization_memberships: list[LiteLLM_OrganizationMembershipTable] | None = None
+    object_permission: LiteLLM_ObjectPermissionTable | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 

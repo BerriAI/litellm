@@ -9,7 +9,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
+import { UserBanner } from "@/components/UserBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
@@ -67,7 +69,7 @@ export function AgentControlPlaneView() {
 
   if (!agentPlatformUrl) {
     return (
-      <div className="flex flex-1 items-center justify-center text-gray-500">
+      <div className="flex flex-1 items-center justify-center text-muted-foreground">
         <div className="text-center">
           <p className="text-lg font-medium mb-2">Plugin</p>
           <p className="text-sm">Configure the plugin URL in settings</p>
@@ -119,7 +121,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
       <div className="flex h-screen flex-col overflow-hidden bg-background">
         <Navbar accessToken={accessToken} isPublicPage={false} />
         <DebugWarningBanner accessToken={accessToken} />
+        <NoRedisWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
+        <UserBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
         </main>
@@ -141,7 +145,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DashboardHeader page={page} />
         <DebugWarningBanner accessToken={accessToken} />
+        <NoRedisWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
+        <UserBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

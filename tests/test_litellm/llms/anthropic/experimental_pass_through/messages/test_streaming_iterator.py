@@ -1,11 +1,9 @@
+import asyncio
 import json
-import os
-import sys
 from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
@@ -20,9 +18,11 @@ class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
     def __init__(self, litellm_logging_obj: LiteLLMLoggingObj, request_body: dict):
         super().__init__(litellm_logging_obj=litellm_logging_obj, request_body=request_body)
         self.logged_chunks: list = []
+        self.logging_call_count: int = 0
 
     async def _handle_streaming_logging(self, collected_chunks):
         self.logged_chunks = list(collected_chunks)
+        self.logging_call_count += 1
 
 
 def _make_logging_obj(test_name: str) -> LiteLLMLoggingObj:
@@ -231,6 +231,70 @@ async def test_async_sse_wrapper_excludes_synthetic_error_event_from_logged_chun
     assert chunks[-1].startswith(b"event: error\n")
     assert iterator.logged_chunks == chunks[:-1]
     assert not any(chunk.startswith(b"event: error\n") for chunk in iterator.logged_chunks)
+
+
+async def _events_then_hang(events):
+    for event in events:
+        yield event
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_logs_partial_chunks_on_client_disconnect():
+    """
+    Regression test for LIT-5839: a client disconnect tears the generator
+    down with GeneratorExit at the yield, which used to skip the post-loop
+    logging dispatch entirely, so the partial output tokens the provider
+    already generated (and billed) never reached spend tracking.
+    """
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_disconnect_logs_partial_chunks"),
+        request_body={},
+    )
+    wrapped = iterator.async_sse_wrapper(_events_then_hang(TRUNCATED_TOOL_USE_EVENTS))
+    streamed = [await wrapped.__anext__() for _ in range(len(TRUNCATED_TOOL_USE_EVENTS))]
+    assert iterator.logging_call_count == 0
+
+    await wrapped.aclose()
+
+    assert iterator.logging_call_count == 1
+    assert iterator.logged_chunks == streamed
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_logs_partial_chunks_on_cancellation():
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_cancellation_logs_partial_chunks"),
+        request_body={},
+    )
+    wrapped = iterator.async_sse_wrapper(_events_then_hang(TRUNCATED_TOOL_USE_EVENTS))
+    streamed = [await wrapped.__anext__() for _ in range(len(TRUNCATED_TOOL_USE_EVENTS))]
+
+    consume_task = asyncio.ensure_future(wrapped.__anext__())
+    await asyncio.sleep(0.01)
+    consume_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consume_task
+
+    assert iterator.logging_call_count == 1
+    assert iterator.logged_chunks == streamed
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_skips_logging_on_disconnect_before_first_chunk():
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_disconnect_before_first_chunk"),
+        request_body={},
+    )
+    wrapped = iterator.async_sse_wrapper(_events_then_hang(()))
+
+    consume_task = asyncio.ensure_future(wrapped.__anext__())
+    await asyncio.sleep(0.01)
+    consume_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consume_task
+
+    assert iterator.logging_call_count == 0
 
 
 def test_incomplete_stream_error_sse_event_is_valid_anthropic_error():

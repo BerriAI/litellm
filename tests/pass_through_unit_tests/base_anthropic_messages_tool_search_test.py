@@ -8,12 +8,9 @@ Reference: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-se
 """
 
 import json
-import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 import litellm

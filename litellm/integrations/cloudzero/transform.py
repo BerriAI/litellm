@@ -19,7 +19,7 @@
 """Transform LiteLLM data to CloudZero AnyCost CBF format."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Final
 
 import polars as pl
 
@@ -40,7 +40,7 @@ class CBFTransformer:
             return pl.DataFrame()
 
         # Filter out records with zero successful_requests first
-        original_count = len(data)
+        original_count: Final = len(data)
         if "successful_requests" in data.columns:
             filtered_data = data.filter(pl.col("successful_requests") > 0)
             zero_requests_dropped = original_count - len(filtered_data)
@@ -48,9 +48,9 @@ class CBFTransformer:
             filtered_data = data
             zero_requests_dropped = 0
 
-        cbf_data = []
+        cbf_data: Final = []
         czrn_dropped_count = 0
-        filtered_count = len(filtered_data)
+        filtered_count: Final = len(filtered_data)
 
         for row in filtered_data.iter_rows(named=True):
             try:
@@ -65,7 +65,7 @@ class CBFTransformer:
         # Print summary of dropped records if any
         from rich.console import Console
 
-        console = Console()
+        console: Final = Console()
 
         if zero_requests_dropped > 0:
             console.print(
@@ -86,35 +86,35 @@ class CBFTransformer:
         """Create a single CBF record from LiteLLM daily spend row."""
 
         # Parse date (daily spend tables use date strings like '2025-04-19')
-        usage_date = self._parse_date(row.get("date"))
+        usage_date: Final = self._parse_date(row.get("date"))
 
         # Calculate total tokens
-        prompt_tokens = int(row.get("prompt_tokens", 0))
-        completion_tokens = int(row.get("completion_tokens", 0))
-        total_tokens = prompt_tokens + completion_tokens
+        prompt_tokens: Final = int(row.get("prompt_tokens", 0))
+        completion_tokens: Final = int(row.get("completion_tokens", 0))
+        total_tokens: Final = prompt_tokens + completion_tokens
 
         # Create CloudZero Resource Name (CZRN) as resource_id
-        resource_id = self.czrn_generator.create_from_litellm_data(row)
+        resource_id: Final = self.czrn_generator.create_from_litellm_data(row)
 
         # Build dimensions for CloudZero
-        model = str(row.get("model", ""))
-        api_key_hash = str(row.get("api_key", ""))[:8]  # First 8 chars for identification
+        model: Final = str(row.get("model", ""))
+        api_key_hash: Final = str(row.get("api_key", ""))[:8]  # First 8 chars for identification
 
         # Handle team information with fallbacks
-        team_id = row.get("team_id")
-        team_alias = row.get("team_alias")
-        user_email = row.get("user_email")
+        team_id: Final = row.get("team_id")
+        team_alias: Final = row.get("team_alias")
+        user_email: Final = row.get("user_email")
 
         # Use team_alias if available, otherwise team_id, otherwise fallback to 'unknown'
-        entity_id = str(team_alias) if team_alias else (str(team_id) if team_id else "unknown")
+        entity_id: Final = str(team_alias) if team_alias else (str(team_id) if team_id else "unknown")
 
         # Get alias fields if they exist
-        api_key_alias = row.get("api_key_alias")
-        organization_alias = row.get("organization_alias")
-        project_alias = row.get("project_alias")
-        user_alias = row.get("user_alias")
+        api_key_alias: Final = row.get("api_key_alias")
+        organization_alias: Final = row.get("organization_alias")
+        project_alias: Final = row.get("project_alias")
+        user_alias: Final = row.get("user_alias")
 
-        dimensions = {
+        dimensions: Final = {
             "entity_type": CZEntityType.TEAM.value,
             "entity_id": entity_id,
             "team_alias": str(team_alias) if team_alias else "unknown",
@@ -135,7 +135,7 @@ class CBFTransformer:
         }
 
         # Extract CZRN components to populate corresponding CBF columns
-        czrn_components = self.czrn_generator.extract_components(resource_id)
+        czrn_components: Final = self.czrn_generator.extract_components(resource_id)
         (
             service_type,
             provider,
@@ -146,10 +146,10 @@ class CBFTransformer:
         ) = czrn_components
 
         # Build resource/account as concat of api_key_alias and api_key_prefix
-        resource_account = f"{api_key_alias}|{api_key_hash}" if api_key_alias else api_key_hash
+        resource_account: Final = f"{api_key_alias}|{api_key_hash}" if api_key_alias else api_key_hash
 
         # CloudZero CBF format with proper column names
-        cbf_record = {
+        cbf_record: Final = {
             # Required CBF fields
             "time/usage_start": (
                 usage_date.isoformat() if usage_date else None
@@ -187,7 +187,7 @@ class CBFTransformer:
 
         return CBFRecord(cbf_record)
 
-    def _parse_date(self, date_str) -> Optional[datetime]:
+    def _parse_date(self, date_str) -> datetime | None:
         """Parse date string from daily spend tables (e.g., '2025-04-19')."""
         if date_str is None:
             return None

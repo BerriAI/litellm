@@ -2,7 +2,8 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-from typing import Any, Dict, List, Union
+from collections.abc import Mapping
+from typing import Any, Final
 
 import httpx
 
@@ -28,7 +29,7 @@ class HostedVLLMRerankError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] | None = None,
+        headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -70,22 +71,22 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Map parameters for Hosted VLLM rerank
         """
         if max_chunks_per_doc is not None:
             raise ValueError("Hosted VLLM does not support max_chunks_per_doc")
 
-        mapped_params = OptionalRerankParams(
+        mapped_params: Final = OptionalRerankParams(
             query=query,
             documents=documents,
             top_n=top_n,
@@ -107,11 +108,12 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
@@ -127,7 +129,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
+        optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -136,7 +138,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Hosted VLLM rerank")
 
-        rerank_request = RerankRequest(
+        rerank_request: Final = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
             documents=optional_rerank_params["documents"],
@@ -162,31 +164,29 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         Process response from Hosted VLLM rerank API
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise ValueError(f"Error parsing response: {raw_response.text}, status_code={raw_response.status_code}")
 
         return self._transform_response(raw_response_json)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
 
     def _transform_response(self, response: dict) -> RerankResponse:
         # Extract usage information
-        usage_data = response.get("usage", {})
-        _billed_units = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
-        _tokens = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        usage_data: Final = response.get("usage", {})
+        _billed_units: Final = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
+        _tokens: Final = RerankTokens(input_tokens=usage_data.get("total_tokens", 0))
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results
-        _results: List[dict] | None = response.get("results")
+        _results: Final[list[dict] | None] = response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
 
-        rerank_results: List[RerankResponseResult] = []
+        rerank_results: Final[list[RerankResponseResult]] = []
 
         for result in _results:
             # Validate required fields exist

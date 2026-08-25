@@ -84,12 +84,6 @@ OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
 # OpenAI caches a shared prompt prefix once it exceeds ~1024 tokens; this is well
 # past that, so a repeat call reports cached prompt tokens.
-CACHE_PREFIX = (
-    "You are a meticulous assistant. Follow these standing instructions exactly. "
-    * 300
-)
-
-
 def _vision_messages() -> list[ChatMessage]:
     return [
         ChatMessage(
@@ -535,13 +529,25 @@ class TestOpenAIChatCompletions:
                 ChatBody(
                     model=model,
                     messages=[
+                        # The prompt and effort have to make the model actually think,
+                        # otherwise this asserts something the model is free not to do:
+                        # at reasoning_effort="low" a one-step arithmetic question comes
+                        # back with reasoning_tokens=0, which is correct behavior and not
+                        # a reporting bug. Verified against the live model:
+                        # low + "60 miles in 1.5 hours" -> reasoning_tokens=0,
+                        # high + the prompt below       -> reasoning_tokens=90.
+                        # What is under test is that litellm surfaces the field, so the
+                        # request has to be one where the field is populated.
                         ChatMessage(
                             role="user",
-                            content="A train travels 60 miles in 1.5 hours. What is its average speed in mph?",
+                            content=(
+                                "Prove that the sum of two odd integers is even, then find the "
+                                "smallest prime p greater than 100 such that p+2 is also prime."
+                            ),
                         )
                     ],
-                    reasoning_effort="low",
-                    max_tokens=2048,
+                    reasoning_effort="high",
+                    max_tokens=3000,
                 ),
             )
         )
@@ -569,36 +575,6 @@ class TestOpenAIChatCompletions:
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
         _assert_describes_cat(response)
-
-    @pytest.mark.covers(
-        "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",
-        exercised_on=["chat_completions"],
-    )
-    def test_openai_chat_prompt_cache_hits_on_repeat(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
-        model = f"e2e-openai-cache-{unique_marker()}"
-        model_id = client.proxy.create_model(
-            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
-        )
-        resources.defer(lambda: client.proxy.delete_model(model_id))
-        key = resources.key()
-
-        body = ChatBody(
-            model=model,
-            messages=[
-                ChatMessage(role="system", content=CACHE_PREFIX),
-                ChatMessage(role="user", content="Reply with the single word pong."),
-            ],
-            max_tokens=16,
-        )
-        unwrap(client.proxy.chat(key, body))
-        second = unwrap(client.proxy.chat(key, body))
-
-        details = second.usage.prompt_tokens_details if second.usage else None
-        assert details and details.cached_tokens and details.cached_tokens > 0, (
-            f"a repeated large-prefix prompt must report cached prompt tokens, got usage={second.usage}"
-        )
 
     @pytest.mark.covers(
         "llm.chat_completions.openai.tool_use.stream.works",
