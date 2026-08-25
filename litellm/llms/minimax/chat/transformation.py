@@ -2,7 +2,11 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import (
+    TYPE_CHECKING,
+    Any,  # noqa: TID251  # LiteLLMLoggingObj has no concrete public type; matches OpenAIGPTConfig's own alias
+    Final,
+)
 
 import httpx
 
