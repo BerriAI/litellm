@@ -2301,38 +2301,42 @@ def supports_url_context(model: str, custom_llm_provider: str | None = None) -> 
     )
 
 
-def supports_native_streaming(model: str, custom_llm_provider: str | None) -> bool:
+def supports_native_streaming(model: str, custom_llm_provider: str | None, base_model: str | None = None) -> bool:
     """
     Check if the given model supports native streaming and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
     custom_llm_provider (str): The provider to be checked.
+    base_model (str): Optional fallback looked up when ``model`` is not in the
+        model cost map, e.g. a custom Azure deployment name whose underlying
+        model is identified by the deployment's ``model_info.base_model``.
 
     Returns:
     bool: True if the model supports native streaming, False otherwise.
-
-    Raises:
-    Exception: If the given model is not found in model_prices_and_context_window.json.
+    A model found in the model cost map answers from its own entry; ``base_model``
+    is only consulted when ``model`` itself is unknown.
     """
-    try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        model_info: Final = _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
-        supports_native_streaming = model_info.get("supports_native_streaming", True)
-        if supports_native_streaming is None:
-            supports_native_streaming = True
-        return supports_native_streaming
-    except Exception as e:
-        verbose_logger.debug(
-            "Model not found or error in checking supports_native_streaming support. You passed model=%s, custom_llm_provider=%s. Error: %s",
-            model,
-            custom_llm_provider,
-            e,
-        )
-        return False
+    for candidate in (model, base_model):
+        if candidate is None:
+            continue
+        try:
+            resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
+                model=candidate, custom_llm_provider=custom_llm_provider
+            )
+            supports = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(
+                "supports_native_streaming", True
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "Model not found or error in checking supports_native_streaming support. You passed model=%s, custom_llm_provider=%s. Error: %s",
+                candidate,
+                custom_llm_provider,
+                e,
+            )
+            continue
+        return supports is not False
+    return False
 
 
 def supports_response_schema(model: str, custom_llm_provider: str | None = None) -> bool:

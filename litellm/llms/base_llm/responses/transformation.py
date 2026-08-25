@@ -237,8 +237,9 @@ class BaseResponsesAPIConfig(ABC):
         model: str | None,
         stream: bool | None,
         custom_llm_provider: str | None = None,
+        base_model: str | None = None,
     ) -> bool:
-        """Returns True if litellm should fake a stream for the given model and stream value"""
+        """Returns True if litellm should fake a stream for the given model, stream value and base_model fallback"""
         return False
 
     def supports_native_websocket(self) -> bool:

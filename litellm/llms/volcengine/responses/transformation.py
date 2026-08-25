@@ -407,6 +407,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str | None,
         stream: bool | None,
         custom_llm_provider: str | None = None,
+        base_model: str | None = None,
     ) -> bool:
         """
         Volcengine Responses API supports native streaming; never fall back to fake stream.

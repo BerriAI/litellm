@@ -427,6 +427,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str | None,
         stream: bool | None,
         custom_llm_provider: str | None = None,
+        base_model: str | None = None,
     ) -> bool:
         if stream is not True:
             return False
@@ -436,6 +437,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     litellm.utils.supports_native_streaming(
                         model=model,
                         custom_llm_provider=custom_llm_provider,
+                        base_model=base_model,
                     )
                     is False
                 ):

@@ -1593,3 +1593,38 @@ class TestPromptCacheOptionsOnResponsesPath:
             "text": "hi",
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
+class TestShouldFakeStreamBaseModelFallback:
+    def setup_method(self):
+        self.config = OpenAIResponsesAPIConfig()
+
+    def test_unknown_model_with_streaming_base_model_streams_natively(self):
+        assert (
+            self.config.should_fake_stream(
+                model="azure/my-custom-ptu-deployment",
+                stream=True,
+                custom_llm_provider="azure",
+                base_model="gpt-4o",
+            )
+            is False
+        )
+
+    def test_unknown_model_without_base_model_fake_streams(self):
+        assert (
+            self.config.should_fake_stream(
+                model="azure/my-custom-ptu-deployment",
+                stream=True,
+                custom_llm_provider="azure",
+            )
+            is True
+        )
+
+    def test_stream_not_requested_never_fake_streams(self):
+        assert (
+            self.config.should_fake_stream(
+                model="azure/my-custom-ptu-deployment",
+                stream=None,
+                custom_llm_provider="azure",
+                base_model="gpt-4o",
+            )
+            is False
+        )
