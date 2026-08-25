@@ -118,6 +118,51 @@ class TestXAIResponsesAPITransformation:
         assert tool["filters"]["allowed_domains"] == ["wikipedia.org", "x.ai"]
         assert tool["enable_image_understanding"] is True
 
+    def test_web_search_nested_filters_preserved(self):
+        """The documented nested 'filters' shape must reach xAI instead of being dropped"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[
+                {
+                    "type": "web_search",
+                    "filters": {"allowed_domains": ["grokipedia.com"], "excluded_domains": ["example.com"]},
+                }
+            ]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        tool = result["tools"][0]
+        assert tool["filters"]["allowed_domains"] == ["grokipedia.com"]
+        assert tool["filters"]["excluded_domains"] == ["example.com"]
+
+    def test_web_search_nested_filters_win_over_flat(self):
+        """Nested filters take precedence when both shapes are sent"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[
+                {
+                    "type": "web_search",
+                    "allowed_domains": ["flat.com"],
+                    "filters": {"allowed_domains": ["nested.com"]},
+                }
+            ]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        assert result["tools"][0]["filters"] == {"allowed_domains": ["nested.com"]}
+
     def test_web_search_search_context_size_removed(self):
         """Test that search_context_size is removed from web_search tools"""
         config = XAIResponsesAPIConfig()

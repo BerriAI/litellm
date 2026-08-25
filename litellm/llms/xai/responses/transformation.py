@@ -54,30 +54,24 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - enable_image_understanding
 
         XAI does NOT support search_context_size (OpenAI-specific).
+
+        Domains may come nested under 'filters' (the OpenAI/XAI documented shape) or flat on the tool.
         """
         xai_tool: Final[dict[str, Any]] = {"type": "web_search"}
 
-        # Remove search_context_size if present (not supported by XAI)
         if "search_context_size" in tool:
             verbose_logger.info(
                 "XAI does not support 'search_context_size' parameter. Removing it from web_search tool."
             )
 
-        # Handle filters (XAI-specific structure)
-        filters: Final = {}
-        if "allowed_domains" in tool:
-            allowed_domains: Final = tool["allowed_domains"]
-            filters["allowed_domains"] = allowed_domains
+        domains: Final = tool.get("filters") or tool
+        filters: Final = {
+            key: domains[key] for key in ("allowed_domains", "excluded_domains") if key in domains
+        }
 
-        if "excluded_domains" in tool:
-            excluded_domains: Final = tool["excluded_domains"]
-            filters["excluded_domains"] = excluded_domains
-
-        # Add filters if any were specified
         if filters:
             xai_tool["filters"] = filters
 
-        # Handle enable_image_understanding (top-level in XAI format)
         if "enable_image_understanding" in tool:
             xai_tool["enable_image_understanding"] = tool["enable_image_understanding"]
 
