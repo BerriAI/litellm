@@ -4,13 +4,21 @@ Enforced by tests/code_coverage_tests/check_e2e_no_raw_requests.py. Every reques
 body / query / header / response is a pydantic model; outcomes are a tagged union
 (``Result[R]``) so callers ``match`` on them instead of catching exceptions.
 
+``forward`` relays one provider-bound request for the provider edge and buffers
+the whole body; ``forward_stream`` relays the same request but hands back the
+response head plus a lazy iterator over the upstream's own transfer chunks, which
+is what lets a recording keep the split points a streamed response arrived on.
+
 Named e2e_http (not http) so it does not shadow the stdlib ``http`` package that
 requests itself imports.
 """
 
 from __future__ import annotations
 
-from typing import Generic, Iterator, Literal, NewType, TypeVar, cast
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Generator, Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
@@ -73,6 +81,8 @@ class NetworkError(BaseModel):
 
 class UnauthorizedError(BaseModel):
     kind: Literal["unauthorized"] = "unauthorized"
+    # litellm 401s for key auth, model access, and tag routing alike, so keep the body to tell them apart.
+    body: str = ""
 
 
 class RateLimitedError(BaseModel):
@@ -137,6 +147,7 @@ class StreamingResponse(BaseModel):
     # quota) arrive as SSE error events inside an otherwise-successful response;
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
+    stream_done: bool = False
 
     @property
     def ok(self) -> bool:
@@ -216,6 +227,17 @@ def require_successful_call(result: StreamingResponse) -> None:
     )
 
 
+def assert_client_error(result: StreamingResponse, context: str) -> None:
+    assert 400 <= result.status_code < 500, (
+        f"{context}: expected 4xx, got {result.status_code}: {result.body[:300]}"
+    )
+
+
+def assert_auth_denied(result: StreamingResponse, context: str) -> None:
+    assert result.status_code in (401, 403), (
+        f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
+    )
+
 def _headers(headers: BaseModel) -> dict[str, str]:
     dumped: dict[str, object] = headers.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
@@ -228,11 +250,54 @@ def _params(params: BaseModel | None) -> dict[str, str]:
     return {key: str(value) for key, value in dumped.items()}
 
 
+TRANSIENT_STATUSES: frozenset[int] = frozenset({529})
+RETRY_ATTEMPTS: int = 3
+RETRY_BACKOFF_SECONDS: float = 0.5
+
+
+class RetryableResponse(Protocol):
+    status_code: int
+
+    def close(self) -> None: ...
+
+
+def request_with_retry[T: RetryableResponse](
+    issue: Callable[[], T], *, sleep: Callable[[float], None] = time.sleep
+) -> T:
+    """Bounded retry on statuses attributable to the PROVIDER, never the proxy.
+
+    The system under test is the proxy, so the transport may only absorb
+    statuses the proxy itself cannot emit; today that is exactly 529, the
+    Anthropic overloaded_error passed through verbatim (their own SDK retries
+    it too). 500/502/503/504 stay first-class failures: at this layer a 5xx
+    from the proxy is indistinguishable from one it relayed, and retrying them
+    could mask an intermittently failing proxy. Widen the set only for a
+    status litellm provably never originates, with an observed flake in hand.
+
+    Also deliberately NOT retried: 429, because this suite asserts the proxy's
+    own rate-limit and budget 429s; network errors and timeouts, because a
+    hang should surface as a hang instead of doubling the wall clock. Every
+    retry prints, so flakiness stays visible in the run log instead of
+    vanishing into green."""
+    for attempt in range(1, RETRY_ATTEMPTS):
+        resp = issue()
+        if resp.status_code not in TRANSIENT_STATUSES:
+            return resp
+        delay = RETRY_BACKOFF_SECONDS * (1 << (attempt - 1))
+        print(
+            f"e2e-http: transient {resp.status_code}; retry {attempt}/{RETRY_ATTEMPTS - 1} in {delay}s",
+            flush=True,
+        )
+        resp.close()
+        sleep(delay)
+    return issue()
+
+
 def _classify[R: BaseModel](
     resp: requests.Response, response_type: type[R]
 ) -> Result[R]:
     if resp.status_code == 401:
-        return UnauthorizedError()
+        return UnauthorizedError(body=resp.text)
     if resp.status_code == 429:
         return RateLimitedError(body=resp.text)
     if not resp.ok:
@@ -252,11 +317,13 @@ def post[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.post(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.post(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -272,11 +339,13 @@ def get[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.get(
-            str(url),
-            headers=_headers(headers),
-            params=params.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.get(
+                str(url),
+                headers=_headers(headers),
+                params=params.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -313,12 +382,14 @@ def delete[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.delete(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            params=_params(params),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.delete(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                params=_params(params),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -334,11 +405,13 @@ def patch[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.patch(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.patch(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -354,11 +427,13 @@ def put[R: BaseModel](
     timeout: float = 30.0,
 ) -> Result[R]:
     try:
-        resp = requests.put(
-            str(url),
-            headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.put(
+                str(url),
+                headers=_headers(headers),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -369,11 +444,13 @@ def probe(
     url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0
 ) -> ProbeResult:
     try:
-        resp = requests.get(
-            str(url),
-            headers=_headers(headers),
-            params=params.model_dump(by_alias=True, exclude_none=True),
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.get(
+                str(url),
+                headers=_headers(headers),
+                params=params.model_dump(by_alias=True, exclude_none=True),
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return ProbeResult(status_code=-1, body=str(exc))
@@ -408,6 +485,7 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
     chunks = 0
     stream_error: str | None = None
     stream_events: list[str] = []
+    stream_done = False
     for line in lines:
         if not line:
             continue
@@ -415,7 +493,9 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         decoded_line = line.decode(errors="replace")
         if decoded_line.startswith("data: "):
             payload = decoded_line.removeprefix("data: ")
-            if payload != "[DONE]":
+            if payload == "[DONE]":
+                stream_done = True
+            else:
                 stream_events.append(payload)
         if stream_error is None and (
             line.startswith(b"event: error")
@@ -433,6 +513,7 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         body="<streamed>",
         chunks=chunks,
         stream_events=stream_events,
+        stream_done=stream_done,
         stream_error=stream_error,
     )
 
@@ -451,13 +532,15 @@ def send(
     status rather than a typed JSON model (e.g. a budget block is a non-2xx). With
     ``stream=True`` the SSE body is consumed and its events counted instead."""
     try:
-        resp = requests.post(
-            str(url),
-            headers=_headers(headers),
-            params=_params(params),
-            json=json.model_dump(by_alias=True, exclude_none=True),
-            stream=stream,
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.post(
+                str(url),
+                headers=_headers(headers),
+                params=_params(params),
+                json=json.model_dump(by_alias=True, exclude_none=True),
+                stream=stream,
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return StreamingResponse(status_code=-1, body=str(exc))
@@ -492,13 +575,15 @@ def upload[R: BaseModel](
     dumped: dict[str, object] = form.model_dump(by_alias=True, exclude_none=True)
     data = {key: str(value) for key, value in dumped.items()}
     try:
-        resp = requests.post(
-            str(url),
-            headers=_headers(headers),
-            params=_params(params),
-            data=data,
-            files={file_field: (filename, content, file_content_type)},
-            timeout=timeout,
+        resp = request_with_retry(
+            lambda: requests.post(
+                str(url),
+                headers=_headers(headers),
+                params=_params(params),
+                data=data,
+                files={file_field: (filename, content, file_content_type)},
+                timeout=timeout,
+            )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
@@ -567,4 +652,123 @@ def download(
         call_id=_hdr(resp, "x-litellm-call-id"),
         content_type=_hdr(resp, "content-type"),
         body=resp.text,
+    )
+
+
+class RawResponse(BaseModel):
+    """A verbatim upstream HTTP response for the provider edge (provider_edge.py):
+    status, lowercased headers, raw bytes. No Result classification because the
+    edge relays provider errors to the proxy untouched."""
+
+    status_code: int
+    headers: dict[str, str]
+    body: bytes
+
+
+def forward(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = 60.0,
+) -> RawResponse | NetworkError:
+    """Relay one provider-bound request verbatim for the provider edge's record
+    mode. No retries, no redirects, no schema: the proxy owns retry policy and
+    the recorded bundle must hold exactly what the provider returned."""
+    try:
+        resp = requests.request(
+            method, url, headers=headers, data=body, timeout=timeout, allow_redirects=False
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return RawResponse(
+        status_code=resp.status_code,
+        headers={name.lower(): value for name, value in resp.headers.items()},
+        body=resp.content,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StreamChunk:
+    """One transfer chunk of a response body, exactly as the upstream framed it."""
+
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class StreamTruncation:
+    """The body ended without its terminator, i.e. the upstream hung up mid-message.
+    Always the last step, and ``reason`` is the transport's own description of it."""
+
+    reason: str
+
+
+type StreamStep = StreamChunk | StreamTruncation
+
+
+@dataclass(frozen=True, slots=True)
+class StreamHead:
+    """An upstream response whose head has arrived and whose body has not been read.
+
+    A dataclass rather than a BaseModel because it owns a live socket: ``steps`` is
+    consumed once, in order, and closing it closes the underlying response."""
+
+    status_code: int
+    headers: dict[str, str]
+    steps: Generator[StreamStep, None, None]
+
+
+def _stream_steps(resp: requests.Response) -> Generator[StreamStep, None, None]:
+    """The body as the upstream framed it, one step per transfer chunk.
+
+    ``chunk_size=None`` is the whole point: urllib3 then returns exactly one piece
+    per wire chunk, so the provider's split points survive into the recording. Any
+    integer would re-slice the body into fixed-size pieces instead. Empty pieces are
+    dropped because a zero-length chunk is the terminator on the wire, and a failure
+    part way through becomes a final truncation step rather than an exception, since
+    the chunks already delivered are exactly what makes a mid-stream failure
+    different from a request that never streamed at all."""
+    try:
+        for piece in cast("Iterator[bytes]", resp.iter_content(chunk_size=None)):
+            if piece:
+                yield StreamChunk(data=piece)
+    except requests.RequestException as exc:
+        yield StreamTruncation(reason=str(exc))
+    finally:
+        resp.close()
+
+
+def forward_stream(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = 60.0,
+) -> StreamHead | NetworkError:
+    """Relay one provider-bound request for the provider edge and return as soon as
+    the response head arrives, with the body left unread behind ``StreamHead.steps``.
+
+    Same contract as ``forward`` otherwise: no retries, no redirects, no schema. A
+    failure before the head arrives is still a ``NetworkError``; one raised while the
+    body streams arrives as the last step. With ``stream=True`` the timeout bounds
+    each socket read rather than the whole body, which is the right bound for a
+    stream and strictly more permissive for a long generation."""
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=headers,
+            data=body,
+            timeout=timeout,
+            allow_redirects=False,
+            stream=True,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return StreamHead(
+        status_code=resp.status_code,
+        headers={name.lower(): value for name, value in resp.headers.items()},
+        steps=_stream_steps(resp),
     )

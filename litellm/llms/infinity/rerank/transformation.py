@@ -4,12 +4,13 @@ Transformation logic from Cohere's /v1/rerank format to Infinity's  `/v1/rerank`
 Why separate file? Make it easy to see how transformation works
 """
 
-from litellm._uuid import uuid
-from typing import List, Optional
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 
 import litellm
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -28,9 +29,9 @@ from ..common_utils import InfinityError
 class InfinityRerankConfig(CohereRerankConfig):
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Infinity rerank")
@@ -44,13 +45,14 @@ class InfinityRerankConfig(CohereRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("INFINITY_API_KEY") or get_secret_str("INFINITY_API_KEY") or litellm.infinity_key
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
@@ -69,7 +71,7 @@ class InfinityRerankConfig(CohereRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -80,21 +82,21 @@ class InfinityRerankConfig(CohereRerankConfig):
         No transformation required, Infinity follows Cohere API response format
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise InfinityError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _billed_units = RerankBilledUnits(**raw_response_json.get("usage", {}))
-        _tokens = RerankTokens(
+        _billed_units: Final = RerankBilledUnits(**raw_response_json.get("usage", {}))
+        _tokens: Final = RerankTokens(
             input_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
             output_tokens=(
                 raw_response_json.get("usage", {}).get("total_tokens", 0)
                 - raw_response_json.get("usage", {}).get("prompt_tokens", 0)
             ),
         )
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        cohere_results: List[RerankResponseResult] = []
+        cohere_results: Final[list[RerankResponseResult]] = []
         if raw_response_json.get("results"):
             for result in raw_response_json.get("results"):
                 _rerank_response = RerankResponseResult(

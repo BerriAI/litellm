@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
 import { fetchDiscoverableMCPServers } from "@/components/networking";
 import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "@/components/mcp_tools/types";
-import { mcpLogoImg } from "./create_mcp_server";
+import { mcpLogoImg } from "./CreateMCPServer";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 
 interface MCPDiscoveryProps {
@@ -19,13 +19,13 @@ interface MCPDiscoveryProps {
 }
 
 const INITIAL_COLORS = [
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-amber-500",
-  "bg-red-500",
+  "bg-info",
+  "bg-success",
+  "bg-warning",
+  "bg-destructive",
   "bg-violet-500",
   "bg-pink-500",
-  "bg-cyan-500",
+  "bg-info",
   "bg-lime-500",
 ];
 
@@ -103,14 +103,14 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
 
   return (
     <Dialog open={isVisible} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-[1000px]">
+      <DialogContent className="sm:max-w-[1000px]">
         <DialogHeader>
           <div className="flex items-center justify-between border-b border-border pb-4">
             <div className="flex items-center space-x-3">
               <img src={resolveLogoSrc(mcpLogoImg)} alt="MCP Logo" className="mr-2 size-5 object-contain" />
               <DialogTitle className="text-xl font-semibold">Add MCP Server</DialogTitle>
             </div>
-            <Button variant="link" size="sm" onClick={onCustomServer}>
+            <Button variant="link" size="sm" className="mr-8" onClick={onCustomServer}>
               + Custom Server
             </Button>
           </div>

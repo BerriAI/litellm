@@ -8,13 +8,10 @@ Covers:
 - transform_request: response_mime_type coalescing, image_config migration
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.interactions.litellm_responses_transformation.streaming_iterator import (
@@ -86,29 +83,21 @@ class TestValidateEnvironment:
         assert headers["X-Custom"] == "value"
         assert headers["x-goog-api-key"] == "test-key"
 
-    def test_api_revision_new_schema_by_default(self, config):
+    def test_api_revision_new_schema_by_default(self, config, monkeypatch: pytest.MonkeyPatch):
         # Default: use_legacy_interactions_schema=False → new steps schema
-        original = litellm.use_legacy_interactions_schema
-        try:
-            litellm.use_legacy_interactions_schema = False
-            headers = config.validate_environment(
-                headers={}, model="gemini-2.5-flash", litellm_params=None
-            )
-            assert headers["Api-Revision"] == "2026-05-20"
-        finally:
-            litellm.use_legacy_interactions_schema = original
+        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
+        headers = config.validate_environment(
+            headers={}, model="gemini-2.5-flash", litellm_params=None
+        )
+        assert headers["Api-Revision"] == "2026-05-20"
 
-    def test_api_revision_legacy_schema_when_flag_set(self, config):
+    def test_api_revision_legacy_schema_when_flag_set(self, config, monkeypatch: pytest.MonkeyPatch):
         # Flag on → legacy outputs schema until June 8, 2026
-        original = litellm.use_legacy_interactions_schema
-        try:
-            litellm.use_legacy_interactions_schema = True
-            headers = config.validate_environment(
-                headers={}, model="gemini-2.5-flash", litellm_params=None
-            )
-            assert headers["Api-Revision"] == "2026-05-07"
-        finally:
-            litellm.use_legacy_interactions_schema = original
+        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", True)
+        headers = config.validate_environment(
+            headers={}, model="gemini-2.5-flash", litellm_params=None
+        )
+        assert headers["Api-Revision"] == "2026-05-07"
 
 
 class TestGetCompleteUrl:
@@ -561,23 +550,19 @@ class TestInteractionOperationUrls:
 class TestTransformRequestSchemaCoalescing:
     """Test new-schema request coalescing (Api-Revision: 2026-05-20)."""
 
-    def test_response_mime_type_folded_into_response_format(self, config):
-        original = litellm.use_legacy_interactions_schema
-        try:
-            litellm.use_legacy_interactions_schema = False
-            body = config.transform_request(
-                model="gemini/gemini-2.5-flash",
-                agent=None,
-                input="summarise",
-                optional_params={
-                    "response_mime_type": "application/json",
-                    "response_format": {"type": "object", "properties": {}},
-                },
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
-            )
-        finally:
-            litellm.use_legacy_interactions_schema = original
+    def test_response_mime_type_folded_into_response_format(self, config, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
+        body = config.transform_request(
+            model="gemini/gemini-2.5-flash",
+            agent=None,
+            input="summarise",
+            optional_params={
+                "response_mime_type": "application/json",
+                "response_format": {"type": "object", "properties": {}},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
         # response_mime_type must not appear as a top-level body key
         assert "response_mime_type" not in body
@@ -586,25 +571,21 @@ class TestTransformRequestSchemaCoalescing:
         assert rf["mime_type"] == "application/json"
         assert "schema" in rf
 
-    def test_image_config_moved_to_response_format(self, config):
-        original = litellm.use_legacy_interactions_schema
-        try:
-            litellm.use_legacy_interactions_schema = False
-            body = config.transform_request(
-                model="gemini/gemini-2.5-flash",
-                agent=None,
-                input="draw a sunset",
-                optional_params={
-                    "generation_config": {
-                        "temperature": 0.7,
-                        "image_config": {"aspect_ratio": "1:1", "image_size": "1K"},
-                    }
-                },
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
-            )
-        finally:
-            litellm.use_legacy_interactions_schema = original
+    def test_image_config_moved_to_response_format(self, config, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
+        body = config.transform_request(
+            model="gemini/gemini-2.5-flash",
+            agent=None,
+            input="draw a sunset",
+            optional_params={
+                "generation_config": {
+                    "temperature": 0.7,
+                    "image_config": {"aspect_ratio": "1:1", "image_size": "1K"},
+                }
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
         # image_config removed from generation_config
         assert "image_config" not in body.get("generation_config", {})
@@ -613,95 +594,85 @@ class TestTransformRequestSchemaCoalescing:
         assert rf["type"] == "image"
         assert rf["aspect_ratio"] == "1:1"
 
-    def test_response_mime_type_skipped_when_response_format_is_list(self, config):
+    def test_response_mime_type_skipped_when_response_format_is_list(self, config, monkeypatch: pytest.MonkeyPatch):
         """Lists are already polymorphic; do not wrap them into schema."""
-        original = litellm.use_legacy_interactions_schema
-        try:
-            litellm.use_legacy_interactions_schema = False
-            rf_list = [
-                {"type": "text", "mime_type": "application/json"},
-                {"type": "image", "aspect_ratio": "1:1"},
-            ]
-            body = config.transform_request(
-                model="gemini/gemini-2.5-flash",
-                agent=None,
-                input="multimodal",
-                optional_params={
-                    "response_format": rf_list,
-                    "response_mime_type": "application/json",
-                },
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
-            )
-        finally:
-            litellm.use_legacy_interactions_schema = original
+        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
+        rf_list = [
+            {"type": "text", "mime_type": "application/json"},
+            {"type": "image", "aspect_ratio": "1:1"},
+        ]
+        body = config.transform_request(
+            model="gemini/gemini-2.5-flash",
+            agent=None,
+            input="multimodal",
+            optional_params={
+                "response_format": rf_list,
+                "response_mime_type": "application/json",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
         assert body["response_format"] == rf_list
         assert "response_mime_type" not in body
 
     def test_image_config_appended_to_response_format_list_without_mutating_input(
-        self, config
+        self,
+        config,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """When response_format is already a list, image_config must not mutate optional_params."""
-        original = litellm.use_legacy_interactions_schema
-        try:
-            litellm.use_legacy_interactions_schema = False
-            text_rf = {"type": "text", "mime_type": "application/json"}
-            optional_params = {
-                "response_format": [text_rf],
-                "generation_config": {
-                    "image_config": {"aspect_ratio": "16:9", "image_size": "2K"},
-                },
-            }
-            original_rf = optional_params["response_format"]
+        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", False)
+        text_rf = {"type": "text", "mime_type": "application/json"}
+        optional_params = {
+            "response_format": [text_rf],
+            "generation_config": {
+                "image_config": {"aspect_ratio": "16:9", "image_size": "2K"},
+            },
+        }
+        original_rf = optional_params["response_format"]
 
-            body = config.transform_request(
-                model="gemini/gemini-2.5-flash",
-                agent=None,
-                input="draw and summarise",
-                optional_params=optional_params,
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
-            )
+        body = config.transform_request(
+            model="gemini/gemini-2.5-flash",
+            agent=None,
+            input="draw and summarise",
+            optional_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
-            assert optional_params["response_format"] is original_rf
-            assert len(optional_params["response_format"]) == 1
-            assert body["response_format"] == [
-                text_rf,
-                {"type": "image", "aspect_ratio": "16:9", "image_size": "2K"},
-            ]
+        assert optional_params["response_format"] is original_rf
+        assert len(optional_params["response_format"]) == 1
+        assert body["response_format"] == [
+            text_rf,
+            {"type": "image", "aspect_ratio": "16:9", "image_size": "2K"},
+        ]
 
-            # Retry must not append a second image entry into the caller's list.
-            body_retry = config.transform_request(
-                model="gemini/gemini-2.5-flash",
-                agent=None,
-                input="draw and summarise",
-                optional_params=optional_params,
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
-            )
-            assert len(optional_params["response_format"]) == 1
-            assert body_retry["response_format"] == body["response_format"]
-        finally:
-            litellm.use_legacy_interactions_schema = original
+        # Retry must not append a second image entry into the caller's list.
+        body_retry = config.transform_request(
+            model="gemini/gemini-2.5-flash",
+            agent=None,
+            input="draw and summarise",
+            optional_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert len(optional_params["response_format"]) == 1
+        assert body_retry["response_format"] == body["response_format"]
 
-    def test_legacy_schema_passes_fields_unchanged(self, config):
-        original = litellm.use_legacy_interactions_schema
-        try:
-            litellm.use_legacy_interactions_schema = True
-            body = config.transform_request(
-                model="gemini/gemini-2.5-flash",
-                agent=None,
-                input="hello",
-                optional_params={
-                    "response_mime_type": "application/json",
-                    "generation_config": {"image_config": {"aspect_ratio": "16:9"}},
-                },
-                litellm_params=GenericLiteLLMParams(),
-                headers={},
-            )
-        finally:
-            litellm.use_legacy_interactions_schema = original
+    def test_legacy_schema_passes_fields_unchanged(self, config, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "use_legacy_interactions_schema", True)
+        body = config.transform_request(
+            model="gemini/gemini-2.5-flash",
+            agent=None,
+            input="hello",
+            optional_params={
+                "response_mime_type": "application/json",
+                "generation_config": {"image_config": {"aspect_ratio": "16:9"}},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
         assert body["response_mime_type"] == "application/json"
         assert body["generation_config"]["image_config"]["aspect_ratio"] == "16:9"

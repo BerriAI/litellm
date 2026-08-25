@@ -22,6 +22,6 @@ describe("DefaultProxyAdminTag", () => {
   it("should render empty text when userId is null", () => {
     const { container } = render(<DefaultProxyAdminTag userId={null} />);
     expect(screen.queryByText("Default Proxy Admin")).not.toBeInTheDocument();
-    expect(container.textContent).toBe("");
+    expect(container).toHaveTextContent("");
   });
 });

@@ -1,5 +1,5 @@
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:42df77a9974d6ec8b17a5ee8bc23b532600a44d705acef2409e0933c1251b45f
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a31344ab2cb8618db84f535eec56f76f6178b142cb92cb2e48676cc2dcebea72
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a31344ab2cb8618db84f535eec56f76f6178b142cb92cb2e48676cc2dcebea72
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 
 FROM $UV_IMAGE AS uvbin
@@ -61,9 +61,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra bedrock-realtime \
         --python python3
 
-RUN mkdir -p /home/nonroot && \
-    HOME=/home/nonroot prisma generate --schema=./schema.prisma && \
-    chown -R nonroot:nonroot /home/nonroot/.cache
+RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
+    npm_config_cache=/root/.npm \
+    prisma generate --schema=./schema.prisma
+
+RUN sed -i 's/\r$//' docker/component_entrypoint.sh && chmod +x docker/component_entrypoint.sh
 
 # ---------- Runtime ----------
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
@@ -83,17 +85,20 @@ ENV HOME=/home/nonroot \
     PATH="/app/.venv/bin:${PATH}" \
     PYTHONPATH="/app" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries
 
 COPY --from=builder --chown=nonroot:nonroot /app /app
-COPY --from=builder --chown=nonroot:nonroot /home/nonroot/.cache /home/nonroot/.cache
+COPY --from=builder /opt/prisma /opt/prisma
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
-    find /app/.venv -type d -path "*/tornado/test" -delete
+    find /app/.venv -type d -path "*/tornado/test" -delete && \
+    chmod -R a+rX /opt/prisma && \
+    python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
 
 USER nonroot
 
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["sh", "-c", "exec uvicorn gateway.main:app --workers \"${NUM_WORKERS:-1}\" \"$@\"", "--"]
+ENTRYPOINT ["sh", "-c", "exec /app/docker/component_entrypoint.sh uvicorn gateway.main:app --workers \"${NUM_WORKERS:-1}\" \"$@\"", "--"]
 CMD ["--host", "0.0.0.0", "--port", "4000"]
