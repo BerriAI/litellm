@@ -13697,7 +13697,9 @@
     },
     "dashscope/deepseek-v4-pro-0813": {
         "cache_read_input_token_cost": 6.4e-08,
+        "cache_read_input_token_cost_thinking": 1.27e-07,
         "input_cost_per_token": 6.36e-07,
+        "input_cost_per_token_thinking": 1.272e-06,
         "litellm_provider": "dashscope",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
@@ -13705,6 +13707,7 @@
         "mode": "chat",
         "output_cost_per_reasoning_token": 3.816e-06,
         "output_cost_per_token": 1.908e-06,
+        "output_cost_per_token_thinking": 3.816e-06,
         "source": "https://help.aliyun.com/en/model-studio/deepseek-v4-pro",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
