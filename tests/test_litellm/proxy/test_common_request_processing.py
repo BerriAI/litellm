@@ -5904,6 +5904,65 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert processor.data["model"] == primary_model
 
     @pytest.mark.asyncio
+    async def test_cross_model_scoped_rejection_is_not_retried_via_fallback(self):
+        """
+        veria-ai finding on PR #36541: an entry using ``apply_to_models`` to cap
+        an entire fallback chain as one unit is defeated by this exact mechanism
+        if a fallback model isn't also listed in ``apply_to_models`` -- the
+        rejection here is a deliberate "this whole chain is capped" decision,
+        not a "this one model is unhealthy" signal, so retrying against an
+        unlisted fallback silently serves a request the operator's policy meant
+        to block. ``detail["cross_model_scope"]`` is the marker
+        global_tag_rate_limits_hook sets for exactly this case; the fallback
+        handler must re-raise immediately instead of trying any fallback model.
+        """
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        primary_model = "opus-chain"
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        call_count = 0
+
+        async def mock_pre_call_logic(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise ProxyRateLimitError(
+                detail={"error": "tag_rate_limit_exceeded", "cross_model_scope": True},
+                headers={"retry-after": "30"},
+            )
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"opus-chain": ["sonnet-chain"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ProxyRateLimitError):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model=primary_model,
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        assert call_count == 1
+        assert processor.data["model"] == primary_model
+
+    @pytest.mark.asyncio
     async def test_real_parallel_request_limiter_model_tpm_limit_triggers_fallback(self):
         """
         Customer-reported scenario from LIT-3890 / GH #8822.
