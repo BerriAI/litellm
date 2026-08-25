@@ -163,6 +163,13 @@ async def _route_registered_provider(
     logging_obj: Final = data.get("litellm_logging_obj")
     if isinstance(logging_obj, Logging):
         provider_params["no-log"] = True
+        provider_model: Final = litellm_params.get("model")
+        if isinstance(provider_model, str):
+            logging_obj.model_call_details["model"] = provider_model
+            logging_obj.model_call_details.setdefault("litellm_params", {})["model"] = provider_model
+        provider_name: Final = litellm_params.get("custom_llm_provider")
+        if isinstance(provider_name, str):
+            logging_obj.model_call_details["custom_llm_provider"] = provider_name
         pricing_params = {
             key: litellm_params[key]
             for key in _A2A_PRICING_PARAMS

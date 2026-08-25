@@ -280,6 +280,9 @@ class A2ACompletionBridgeHandler:
 
         # 3. Forward content as artifact updates
         accumulated_tool_calls: Final[list[object]] = []  # mutable-ok: collect streaming tool-call deltas
+        choice_texts: dict[int, str] = {}
+        choice_tool_calls: dict[int, list[object]] = {}
+        choice_finish_reasons: dict[int, str] = {}
         stream_usage: object | None = None
         stream_finish_reason: str | None = None
         chunk_count = 0
@@ -304,24 +307,34 @@ class A2ACompletionBridgeHandler:
                                 stream_usage = dumped_usage
 
                 # Extract delta content
-                content = ""
-                if chunk is not None and hasattr(chunk, "choices") and chunk.choices:
-                    choice = chunk.choices[0]
-                    raw_finish_reason = getattr(choice, "finish_reason", None)
-                    if isinstance(raw_finish_reason, str) and raw_finish_reason:
-                        stream_finish_reason = raw_finish_reason
-                    if hasattr(choice, "delta") and choice.delta:
-                        content = choice.delta.content or ""
-                        tool_calls = getattr(choice.delta, "tool_calls", None)
-                        if isinstance(tool_calls, (list, tuple)):
-                            accumulated_tool_calls.extend(tool_calls)
+                choices = getattr(chunk, "choices", None) if chunk is not None else None
+                if isinstance(choices, (list, tuple)):
+                    for choice_position, choice in enumerate(choices):
+                        raw_index = getattr(choice, "index", choice_position)
+                        choice_index = raw_index if isinstance(raw_index, int) else choice_position
+                        choice_texts.setdefault(choice_index, "")
+                        raw_finish_reason = getattr(choice, "finish_reason", None)
+                        if isinstance(raw_finish_reason, str) and raw_finish_reason:
+                            choice_finish_reasons[choice_index] = raw_finish_reason
+                            if choice_index == 0 or stream_finish_reason is None:
+                                stream_finish_reason = raw_finish_reason
+                        content = ""
+                        delta = getattr(choice, "delta", None)
+                        if delta:
+                            raw_content = getattr(delta, "content", None)
+                            content = raw_content if isinstance(raw_content, str) else ""
+                            choice_texts[choice_index] += content
+                            tool_calls = getattr(delta, "tool_calls", None)
+                            if isinstance(tool_calls, (list, tuple)):
+                                accumulated_tool_calls.extend(tool_calls)
+                                choice_tool_calls.setdefault(choice_index, []).extend(tool_calls)
 
-                if content:
-                    artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
-                        ctx=ctx,
-                        text=content,
-                    )
-                    yield artifact_event
+                        if content:
+                            artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
+                                ctx=ctx,
+                                text=content,
+                            )
+                            yield artifact_event
         finally:
             close_response = getattr(response, "aclose", None)
             if close_response is not None:
@@ -339,6 +352,28 @@ class A2ACompletionBridgeHandler:
             completed_event["result"]["finish_reason"] = stream_finish_reason
         if stream_usage is not None:
             completed_event["usage"] = stream_usage
+        if len(choice_texts) > 1:
+            completed_event["result"]["choices"] = [
+                {
+                    "index": choice_index,
+                    "message": {
+                        "kind": "message",
+                        "role": "agent",
+                        "parts": [{"kind": "text", "text": choice_texts[choice_index]}],
+                        **(
+                            {"tool_calls": choice_tool_calls[choice_index]}
+                            if choice_tool_calls.get(choice_index)
+                            else {}
+                        ),
+                    },
+                    **(
+                        {"finish_reason": choice_finish_reasons[choice_index]}
+                        if choice_index in choice_finish_reasons
+                        else {}
+                    ),
+                }
+                for choice_index in sorted(choice_texts)
+            ]
         yield completed_event
 
         verbose_logger.info(

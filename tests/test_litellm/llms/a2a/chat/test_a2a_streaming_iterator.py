@@ -50,6 +50,31 @@ async def test_async_iterator_preserves_tool_calls():
 
 
 @pytest.mark.asyncio
+async def test_async_iterator_preserves_parallel_tool_calls():
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"},
+        },
+        {
+            "id": "call-2",
+            "type": "function",
+            "function": {"name": "write", "arguments": "{}"},
+        },
+    ]
+
+    async def _events():
+        yield {"jsonrpc": "2.0", "result": {"tool_calls": tool_calls}}
+
+    iterator = A2AModelResponseIterator(streaming_response=_events(), sync_stream=False)
+
+    chunk = await iterator.__aiter__().__anext__()
+
+    assert chunk["tool_use"] == tool_calls
+
+
+@pytest.mark.asyncio
 async def test_async_iterator_serializes_delta_tool_calls_and_usage():
     delta = Delta(
         tool_calls=[

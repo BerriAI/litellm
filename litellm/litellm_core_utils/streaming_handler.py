@@ -1233,7 +1233,8 @@ class CustomStreamWrapper:
                 )
 
             if "tool_use" in anthropic_response_obj and anthropic_response_obj["tool_use"] is not None:
-                completion_obj["tool_calls"] = [anthropic_response_obj["tool_use"]]
+                tool_use = anthropic_response_obj["tool_use"]
+                completion_obj["tool_calls"] = tool_use if isinstance(tool_use, list) else [tool_use]
 
             if (
                 "provider_specific_fields" in anthropic_response_obj
@@ -2559,6 +2560,8 @@ def convert_generic_chunk_to_model_response_stream(
 ) -> ModelResponseStream:
     from litellm.types.utils import Delta
 
+    tool_use = chunk.get("tool_use", None)
+    tool_calls = tool_use if isinstance(tool_use, list) else [tool_use] if tool_use is not None else None
     model_response_stream: Final = ModelResponseStream(
         id=str(uuid.uuid4()),
         model="",
@@ -2567,7 +2570,7 @@ def convert_generic_chunk_to_model_response_stream(
                 index=chunk.get("index", 0),
                 delta=Delta(
                     content=chunk["text"],
-                    tool_calls=chunk.get("tool_use", None),
+                    tool_calls=tool_calls,
                 ),
             )
         ],

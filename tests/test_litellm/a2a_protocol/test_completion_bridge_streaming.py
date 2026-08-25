@@ -250,6 +250,44 @@ async def test_handle_streaming_emits_proper_events():
 
 
 @pytest.mark.asyncio
+async def test_handle_streaming_preserves_multiple_choices():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    mock_chunk = MagicMock()
+    first_choice = MagicMock()
+    first_choice.index = 0
+    first_choice.finish_reason = None
+    first_choice.delta.content = "first"
+    second_choice = MagicMock()
+    second_choice.index = 1
+    second_choice.finish_reason = "length"
+    second_choice.delta.content = "second"
+    mock_chunk.choices = [first_choice, second_choice]
+
+    async def mock_streaming_response():
+        yield mock_chunk
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_streaming_response()
+        events = [
+            event
+            async for event in A2ACompletionBridgeHandler.handle_streaming(
+                request_id="req-choices",
+                params={"message": {"role": "user", "parts": []}},
+                litellm_params={"custom_llm_provider": "langgraph", "model": "agent", "n": 2},
+            )
+        ]
+
+    choices = events[-1]["result"]["choices"]
+    assert [choice["index"] for choice in choices] == [0, 1]
+    assert choices[0]["message"]["parts"][0]["text"] == "first"
+    assert choices[1]["message"]["parts"][0]["text"] == "second"
+    assert choices[1]["finish_reason"] == "length"
+
+
+@pytest.mark.asyncio
 async def test_provider_config_receives_full_message_history():
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (
         A2ACompletionBridgeHandler,

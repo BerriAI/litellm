@@ -149,16 +149,18 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 return raw_usage
         return raw_usage
 
-    def _get_tool_calls(self, chunk: dict) -> ChatCompletionToolCallChunk | None:
+    def _get_tool_calls(
+        self, chunk: dict
+    ) -> ChatCompletionToolCallChunk | list[ChatCompletionToolCallChunk] | None:
         result: Final = chunk.get("result", {})
         if not isinstance(result, dict):
             return None
         tool_calls = result.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
-            return self._serialize_tool_call(tool_calls[0])
+            return self._serialize_tool_calls(tool_calls)
         message = result.get("message")
         if isinstance(message, dict) and isinstance(message.get("tool_calls"), list) and message["tool_calls"]:
-            return self._serialize_tool_call(message["tool_calls"][0])
+            return self._serialize_tool_calls(message["tool_calls"])
         return None
 
     @staticmethod
@@ -170,6 +172,19 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         if hasattr(tool_call, "dict"):
             return tool_call.dict(exclude_none=True)
         return None
+
+    @classmethod
+    def _serialize_tool_calls(
+        cls, tool_calls: list[object]
+    ) -> ChatCompletionToolCallChunk | list[ChatCompletionToolCallChunk] | None:
+        serialized: Final = [
+            tool_call_value
+            for tool_call in tool_calls
+            if (tool_call_value := cls._serialize_tool_call(tool_call)) is not None
+        ]
+        if len(serialized) == 1:
+            return serialized[0]
+        return serialized or None
 
     async def aclose(self) -> None:
         streaming_response = self.streaming_response

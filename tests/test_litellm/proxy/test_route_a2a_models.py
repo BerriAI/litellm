@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.a2a_routing import (
+    _route_registered_provider,
     merge_a2a_agent_guardrails_before_hooks,
     route_a2a_agent_request,
 )
@@ -640,6 +641,39 @@ async def test_route_a2a_stream_uses_registered_provider():
     )
     generic_completion.assert_not_called()
     assert response is wrapper
+
+
+@pytest.mark.asyncio
+async def test_registered_provider_logging_uses_provider_model_for_builtin_pricing():
+    class FakeLogging:
+        def __init__(self) -> None:
+            self.model_call_details = {"litellm_params": {}}
+            self.litellm_params = self.model_call_details["litellm_params"]
+            self.custom_pricing = False
+
+    logging_obj = FakeLogging()
+    response = {"result": {"message": {"parts": [{"kind": "text", "text": "hello"}]}}}
+    with (
+        patch("litellm.litellm_core_utils.litellm_logging.Logging", FakeLogging),
+        patch(
+            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_non_streaming",
+            AsyncMock(return_value=response),
+        ),
+    ):
+        await _route_registered_provider(
+            data={
+                "messages": [{"role": "user", "content": "hello"}],
+                "litellm_logging_obj": logging_obj,
+            },
+            model_name="a2a/agent",
+            api_base="https://provider.example",
+            litellm_params={"model": "gpt-4o", "custom_llm_provider": "openai"},
+            static_headers=None,
+        )
+
+    assert logging_obj.model_call_details["model"] == "gpt-4o"
+    assert logging_obj.model_call_details["custom_llm_provider"] == "openai"
+    assert logging_obj.model_call_details["litellm_params"]["model"] == "gpt-4o"
 
 
 @pytest.mark.asyncio

@@ -1841,11 +1841,6 @@ class ProxyBaseLLMRequestProcessing:
             merge_a2a_agent_guardrails_before_hooks,
         )
 
-        self.data = await authorize_a2a_agent_before_hooks(
-            data=self.data,
-            user_api_key_dict=user_api_key_dict,
-        )
-
         logging_obj, self.data = litellm.utils.function_setup(
             original_function=route_type,
             rules_obj=litellm.utils.Rules(),
@@ -1854,6 +1849,11 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        self.data = await authorize_a2a_agent_before_hooks(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         self.data = await merge_a2a_agent_guardrails_before_hooks(self.data)
 
