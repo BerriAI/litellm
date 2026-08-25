@@ -71,6 +71,7 @@ LlmCapability = Literal[
     "pdf_input",
     "prompt_cache_1h",
     "prompt_cache_5m",
+    "response_headers",
     "service_tier",
     "structured_output",
     "thinking",
