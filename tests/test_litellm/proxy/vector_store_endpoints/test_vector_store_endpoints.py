@@ -3107,3 +3107,65 @@ class TestAzureAIAnalyzeNamedIndexClassification:
             user_api_key_dict=self._team_member("analyze", ["read"]),
         )
         assert result is True
+
+
+# ---------------------------------------------------------------------------
+# /vector_store/list — config-sourced entries must survive DB reconciliation.
+# Regression test for: config.yaml-loaded stores were pruned from the
+# in-memory registry on every list call because they had no DB row.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_vector_stores_returns_config_sourced_and_leaves_registry_intact():
+    from litellm.proxy.vector_store_endpoints.management_endpoints import list_vector_stores
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "docs-kb",
+                "litellm_params": {
+                    "vector_store_id": "vs_from_config",
+                    "custom_llm_provider": "bedrock",
+                },
+            }
+        ]
+    )
+
+    original_registry = litellm.vector_store_registry
+    try:
+        litellm.vector_store_registry = registry
+
+        with (
+            # Empty DB — the store exists only in config/memory.
+            patch(
+                "litellm.vector_stores.vector_store_registry.VectorStoreRegistry._get_vector_stores_from_db",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            response = await list_vector_stores(
+                user_api_key_dict=UserAPIKeyAuth(
+                    token="sk-test",
+                    key_name="sk-...test",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                ),
+            )
+
+        returned_ids = [vs["vector_store_id"] for vs in response.data]
+        assert "vs_from_config" in returned_ids
+        # And, critically, the registry must NOT have been mutated —
+        # config-loaded stores stay resident for downstream routing.
+        assert any(vs.get("vector_store_id") == "vs_from_config" for vs in registry.vector_stores)
+    finally:
+        litellm.vector_store_registry = original_registry

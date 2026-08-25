@@ -94,8 +94,12 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
+        # Never bind a mutable default: the previous `= []` default caused every
+        # VectorStoreRegistry() with no argument to share the same list, so a
+        # mutation in one place (test, request handler, etc.) leaked into every
+        # other caller.
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = list(vector_stores) if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
         # IDs of vector stores that were loaded from config.yaml / kustomization.
         # These have no DB row, so reconciliation code paths that treat "in memory
@@ -400,8 +404,7 @@ class VectorStoreRegistry:
         list-endpoint reconciliation on the very next reload.
         """
         new_config_ids: set[str] = {
-            (cfg.get("litellm_params") or {}).get("vector_store_id")
-            for cfg in vector_stores_config
+            (cfg.get("litellm_params") or {}).get("vector_store_id") for cfg in vector_stores_config
         }
         new_config_ids.discard(None)  # ids missing here will re-raise below with a clearer error
 
