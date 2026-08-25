@@ -24,7 +24,7 @@ from models import (
 )
 from pydantic import BaseModel
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 
 class _OptionalMessagesBody(BaseModel):
@@ -171,7 +171,7 @@ class TestAnthropicMessages:
                 model=model,
                 max_tokens=64,
                 stream=True,
-                messages=[ChatMessage(role="user", content="Count from one to three.")],
+                messages=[ChatMessage(role="user", content="Count from 1 to 20, one number per line.")],
             ),
         )
         require_successful_call(result)
