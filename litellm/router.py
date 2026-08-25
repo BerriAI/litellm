@@ -20,7 +20,7 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -4806,6 +4806,305 @@ class Router:
             )
         return response
 
+    @staticmethod
+    def _anthropic_messages_stream_error(
+        frame: bytes,
+        model: str,
+        llm_provider: str,
+    ) -> Exception | None:
+        from litellm.exceptions import MidStreamFallbackError
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            ANTHROPIC_STREAM_ERROR_STATUS_CODE_MAP,
+            AnthropicMessagesSSEDecoder,
+        )
+
+        event, payload = AnthropicMessagesSSEDecoder.event_data(frame)
+        if event != "error" and not (isinstance(payload, dict) and payload.get("type") == "error"):
+            return None
+
+        error: Final = payload.get("error") if isinstance(payload, dict) else None
+        error_type: Final = error.get("type") if isinstance(error, dict) else None
+        raw_message: Final = error.get("message") if isinstance(error, dict) else None
+        status_code: Final = ANTHROPIC_STREAM_ERROR_STATUS_CODE_MAP.get(
+            error_type if isinstance(error_type, str) else "",
+            500,
+        )
+        mapped_exception: Final = litellm.APIError(
+            status_code=status_code,
+            message=str(raw_message) if raw_message is not None else "Anthropic in-stream error",
+            llm_provider=llm_provider,
+            model=model,
+        )
+        if 400 <= status_code < 500 and status_code != 429:
+            return mapped_exception
+        return MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=model,
+            llm_provider=llm_provider,
+            original_exception=mapped_exception,
+            is_pre_first_chunk=True,
+        )
+
+    @staticmethod
+    def _anthropic_messages_frame_commits_stream(frame: bytes) -> bool:
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            AnthropicMessagesSSEDecoder,
+        )
+
+        event, payload = AnthropicMessagesSSEDecoder.event_data(frame)
+        if event is None and payload is None:
+            return False
+        if event in ("message_start", "ping"):
+            return False
+        if event != "content_block_start" or not isinstance(payload, dict):
+            return True
+        content_block: Final = payload.get("content_block")
+        if not isinstance(content_block, dict):
+            return True
+        return content_block.get("type") not in ("text", "thinking") or bool(content_block.get("text"))
+
+    @staticmethod
+    def _anthropic_messages_transport_error(
+        error: Exception,
+        model: str,
+        llm_provider: str,
+    ) -> Exception:
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(error, MidStreamFallbackError):
+            return error
+        try:
+            mapped_exception: Exception = litellm.exception_type(  # rebind-ok: exception mapper may return or raise
+                model=model,
+                original_exception=error,
+                custom_llm_provider=llm_provider,
+                completion_kwargs=MappingProxyType({}),
+                extra_kwargs=MappingProxyType({}),
+            )
+        except Exception as mapped_error:
+            mapped_exception = mapped_error  # rebind-ok: exception mapper communicates most results by raising
+        status_code: Final = getattr(mapped_exception, "status_code", None)
+        if isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429:
+            return mapped_exception
+        return MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=model,
+            llm_provider=llm_provider,
+            original_exception=mapped_exception,
+            is_pre_first_chunk=True,
+        )
+
+    async def _aanthropic_messages_streaming_iterator(
+        self,
+        response: AsyncIterable[bytes],
+        initial_kwargs: dict[str, object],  # mutable-ok: Router fallback utilities enrich the request in place
+    ) -> AsyncIterator[bytes]:
+        from litellm.exceptions import MidStreamFallbackError
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            AnthropicMessagesSSEDecoder,
+            AnthropicMessagesStreamHiddenParams,
+            AnthropicMessagesStreamingResponse,
+            aclose_if_supported,
+        )
+
+        source_iterator: Final = response
+        model: Final = str(initial_kwargs.get("model") or "")
+        llm_provider: Final = str(initial_kwargs.get("custom_llm_provider") or "anthropic")
+
+        async def stream_with_fallbacks() -> AsyncGenerator[bytes]:
+            decoder: Final = AnthropicMessagesSSEDecoder()
+            buffered_frames: Final[list[bytes]] = []  # mutable-ok: holds protocol frames until content commits
+            primary_frame_emitted = False  # rebind-ok: tracks client-visible stream state
+            fallback_response: object | None = None  # rebind-ok: retained for shielded cleanup
+            try:
+                try:
+                    async for chunk in source_iterator:
+                        frames = decoder.feed(chunk)
+                        for frame in frames:
+                            frame_error = self._anthropic_messages_stream_error(
+                                frame=frame,
+                                model=model,
+                                llm_provider=llm_provider,
+                            )
+                            if frame_error is not None:
+                                raise frame_error
+                            if not primary_frame_emitted and not self._anthropic_messages_frame_commits_stream(frame):
+                                buffered_frames.append(frame)
+                                continue
+                            if not primary_frame_emitted:
+                                for buffered_frame in buffered_frames:
+                                    yield buffered_frame
+                                buffered_frames.clear()
+                                primary_frame_emitted = True  # rebind-ok: client-visible state is committed
+                            yield frame
+
+                    remainder: Final = decoder.flush_frame()
+                    if remainder:
+                        remainder_error: Final = self._anthropic_messages_stream_error(
+                            frame=remainder,
+                            model=model,
+                            llm_provider=llm_provider,
+                        )
+                        if remainder_error is not None:
+                            raise remainder_error
+                        if not primary_frame_emitted:
+                            for buffered_frame in buffered_frames:
+                                yield buffered_frame
+                            primary_frame_emitted = True  # rebind-ok: incomplete remainder is client-visible
+                        yield remainder
+                    elif not primary_frame_emitted:
+                        for buffered_frame in buffered_frames:
+                            yield buffered_frame
+                except Exception as error:
+                    fallback_error: Final = self._anthropic_messages_transport_error(
+                        error=error,
+                        model=model,
+                        llm_provider=llm_provider,
+                    )
+                    if primary_frame_emitted or not isinstance(fallback_error, MidStreamFallbackError):
+                        original_exception: Final = getattr(fallback_error, "original_exception", None)
+                        if primary_frame_emitted and isinstance(original_exception, Exception):
+                            raise original_exception from fallback_error
+                        raise fallback_error
+
+                    model_group_value: Final = initial_kwargs.get("model")
+                    if not isinstance(model_group_value, str):
+                        raise fallback_error
+                    model_group: Final = model_group_value
+                    initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+                    self._update_kwargs_before_fallbacks(
+                        model=model_group,
+                        kwargs=initial_kwargs,
+                        metadata_variable_name="litellm_metadata",
+                    )
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            await aclose_if_supported(source_iterator)
+                        except BaseException as close_error:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks(anthropic_messages): error closing source before fallback: %s",
+                                close_error,
+                            )
+                    try:
+                        fallback_response = cast(  # rebind-ok: legacy result retained for cleanup # cast-ok: legacy return
+                            object,
+                            await self.async_function_with_fallbacks_common_utils(  # rebind-ok: cleanup owns it
+                                e=fallback_error,
+                                disable_fallbacks=False,
+                                fallbacks=cast(  # cast-ok: public Router fallback config is normalized to list-or-none
+                                    list[object] | None,
+                                    initial_kwargs.get("fallbacks", self.fallbacks),
+                                ),
+                                context_window_fallbacks=cast(  # cast-ok: Router config is normalized to list-or-none
+                                    list[object] | None,
+                                    initial_kwargs.get("context_window_fallbacks", self.context_window_fallbacks),
+                                ),
+                                content_policy_fallbacks=cast(  # cast-ok: Router config is normalized to list-or-none
+                                    list[object] | None,
+                                    initial_kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks),
+                                ),
+                                model_group=model_group,
+                                args=(),
+                                kwargs=initial_kwargs,
+                                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+                            ),
+                        )
+                        if isinstance(fallback_response, AsyncIterable):
+                            fallback_stream: Final = cast(  # cast-ok: runtime AsyncIterable check narrows the protocol
+                                "AsyncIterable[bytes]", fallback_response
+                            )
+                            async for fallback_item in fallback_stream:
+                                yield fallback_item
+                        else:
+                            if not isinstance(fallback_response, bytes):
+                                raise TypeError("Anthropic streaming fallback must return an async iterator or bytes")
+                            yield fallback_response
+                    except MidStreamFallbackError as unresolved_error:
+                        if unresolved_error.original_exception is not None:
+                            raise unresolved_error.original_exception from unresolved_error
+                        raise
+            finally:
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await aclose_if_supported(source_iterator)
+                    except BaseException as close_error:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks(anthropic_messages): error closing source: %s",
+                            close_error,
+                        )
+                    if fallback_response is not None:
+                        try:
+                            await aclose_if_supported(fallback_response)
+                        except BaseException as close_error:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks(anthropic_messages): error closing fallback: %s",
+                                close_error,
+                            )
+
+        source_hidden_params_dict: Final = get_hidden_params_dict(source_iterator)
+        source_headers: Final = source_hidden_params_dict.get("additional_headers")
+        additional_headers: Final[dict[str, str]] = (  # mutable-ok: response metadata is mutable by contract
+            cast(  # cast-ok: runtime dict check plus copy isolates provider response headers
+                "dict[str, str]", source_headers.copy()
+            )
+            if isinstance(source_headers, dict)
+            else {}  # mutable-ok: response metadata is mutable by contract
+        )
+        hidden_params: Final = AnthropicMessagesStreamHiddenParams(additional_headers=additional_headers)
+        wrapped: Final = AnthropicMessagesStreamingResponse(
+            completion_stream=stream_with_fallbacks(),
+            hidden_params=hidden_params,
+        )
+        wrapped_hidden_params: Final[dict[str, object]] = {  # mutable-ok: response metadata is mutable by contract
+            **source_hidden_params_dict,
+            "additional_headers": additional_headers,
+        }
+        cast(  # cast-ok: response wrapper owns this mutable metadata mapping
+            _HiddenParamsHost, wrapped
+        )._hidden_params = (  # pyright: ignore[reportPrivateUsage]  # response owns its metadata mapping
+            wrapped_hidden_params
+        )
+        return wrapped
+
+    async def _aanthropic_messages_with_streaming_fallbacks(
+        self,
+        original_function: Callable[..., object],
+        **kwargs: object,  # kwargs-ok: provider-specific fields are validated by the downstream API
+    ) -> object:
+        """Add consumption-time fallbacks to streaming Anthropic Messages calls."""
+
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()  # mutable-ok: fallback utilities enrich this snapshot
+        if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
+            fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
+        if isinstance(fallback_kwargs.get("metadata"), dict):
+            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
+        fallback_kwargs["original_generic_function"] = original_function
+
+        model: Final = kwargs.get("model")
+        if not isinstance(model, str):
+            raise TypeError("Anthropic messages routing requires a string model")
+        request_kwargs: Final[dict[str, object]] = {  # mutable-ok: generic Router accepts provider-specific fields
+            key: value for key, value in kwargs.items() if key != "model"
+        }
+        response: Final = cast(  # cast-ok: generic Router has an untyped legacy return contract
+            object,
+            await self._ageneric_api_call_with_fallbacks(
+                model=model,
+                original_function=original_function,
+                **request_kwargs,
+            ),
+        )
+        if kwargs.get("stream") and isinstance(response, AsyncIterable):
+            return await self._aanthropic_messages_streaming_iterator(
+                response=cast(  # cast-ok: runtime AsyncIterable check narrows the streaming bytes protocol
+                    "AsyncIterable[bytes]", response
+                ),
+                initial_kwargs=fallback_kwargs,
+            )
+        return response
+
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
         Make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
@@ -5954,6 +6253,11 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+            elif call_type == "anthropic_messages":
+                return await self._aanthropic_messages_with_streaming_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type in (
                 "acreate_realtime_client_secret",
                 "arealtime_calls",
@@ -5965,7 +6269,6 @@ class Router:
                     **kwargs,
                 )
             elif call_type in (
-                "anthropic_messages",
                 "_arealtime",
                 "_aresponses_websocket",
                 "acreate_fine_tuning_job",

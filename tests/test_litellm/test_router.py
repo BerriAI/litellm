@@ -2746,6 +2746,30 @@ class _AsyncList:
         return item
 
 
+class _AnthropicMessagesStream(_AsyncList):
+    def __init__(self, items=(), error=None, hidden_params=None):
+        super().__init__(items)
+        self._error = error
+        self._hidden_params = hidden_params or {}
+        self.closed = False
+
+    async def __anext__(self):
+        try:
+            return await super().__anext__()
+        except StopAsyncIteration:
+            if self._error is not None:
+                raise self._error
+            raise
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _UncopyableMetadata:
+    def __deepcopy__(self, memo):
+        raise TypeError("not copyable")
+
+
 def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
     return litellm.Router(
         model_list=[
@@ -2760,6 +2784,269 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
         ],
         fallbacks=[{primary: [secondary]}],
     )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_falls_back_on_fragmented_sse_error():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    primary = _AnthropicMessagesStream(
+        [
+            b'event: message_start\r\ndata: {"type":"message_start"}\r\n\r\nevent: error\r\n',
+            b'data: {"type":"error","error":{"type":"overloaded_error","message":"busy"}}\r\n\r\n',
+        ],
+        hidden_params={
+            "model_id": "primary",
+            "additional_headers": {"x-request-id": "one"},
+        },
+    )
+    fallback_chunks = [
+        b'event: message_start\ndata: {"type":"message_start"}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]
+    fallback = _AnthropicMessagesStream(fallback_chunks)
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        side_effect=lambda **kwargs: fallback if primary.closed else pytest.fail("source stream remained open"),
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary,
+            initial_kwargs={
+                "model": "anthropic/claude",
+                "stream": True,
+                "original_generic_function": litellm.anthropic_messages,
+            },
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+    assert wrapped._hidden_params["model_id"] == "primary"
+    assert primary.closed is True
+    assert fallback.closed is True
+    call = mock_fallback.call_args.kwargs
+    assert call["e"].status_code == 529
+    assert (
+        call["kwargs"]["original_function"]
+        == router._ageneric_api_call_with_fallbacks_helper
+    )
+    assert (
+        call["kwargs"]["original_generic_function"]
+        is litellm.anthropic_messages
+    )
+    assert call["kwargs"]["litellm_metadata"]["model_group"] == "anthropic/claude"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_falls_back_on_transport_error():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    request = httpx.Request("POST", "https://example.com/v1/messages")
+    primary = _AnthropicMessagesStream(
+        [b'event: message_start\ndata: {"type":"message_start"}\n\n'],
+        error=httpx.ReadError("connection reset", request=request),
+    )
+    fallback_chunks = [
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    ]
+    fallback = _AnthropicMessagesStream(fallback_chunks)
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=fallback,
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary,
+            initial_kwargs={
+                "model": "anthropic/claude",
+                "stream": True,
+                "original_generic_function": litellm.anthropic_messages,
+            },
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+    assert primary.closed is True
+    assert fallback.closed is True
+    assert mock_fallback.call_args.kwargs["e"].is_pre_first_chunk is True
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_comment_keepalive_does_not_block_fallback():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    primary = _AnthropicMessagesStream(
+        [
+            b": keepalive\n\n",
+            b'event: error\ndata: {"type":"error","error":'
+            b'{"type":"rate_limit_error","message":"slow down"}}\n\n',
+        ]
+    )
+    fallback_chunks = [b'event: message_stop\ndata: {"type":"message_stop"}\n\n']
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_AnthropicMessagesStream(fallback_chunks),
+    ):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary,
+            initial_kwargs={
+                "model": "anthropic/claude",
+                "stream": True,
+                "original_generic_function": litellm.anthropic_messages,
+            },
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_unterminated_error_frame_falls_back():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    primary = _AnthropicMessagesStream(
+        [
+            b'event: error\ndata: {"type":"error","error":'
+            b'{"type":"overloaded_error","message":"busy"}}'
+        ]
+    )
+    fallback_chunks = [b'event: message_stop\ndata: {"type":"message_stop"}\n\n']
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_AnthropicMessagesStream(fallback_chunks),
+    ):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary,
+            initial_kwargs={
+                "model": "anthropic/claude",
+                "stream": True,
+                "original_generic_function": litellm.anthropic_messages,
+            },
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_non_retryable_sse_error_is_not_fallbacked():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    primary = _AnthropicMessagesStream(
+        [
+            b'event: error\ndata: {"type":"error","error":'
+            b'{"type":"invalid_request_error","message":"bad input"}}\n\n'
+        ]
+    )
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils") as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary,
+            initial_kwargs={
+                "model": "anthropic/claude",
+                "stream": True,
+                "original_generic_function": litellm.anthropic_messages,
+            },
+        )
+        with pytest.raises(litellm.APIError) as exc_info:
+            _ = [chunk async for chunk in wrapped]
+
+    assert exc_info.value.status_code == 400
+    mock_fallback.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_unresolved_fallback_surfaces_provider_error():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    primary = _AnthropicMessagesStream(
+        [
+            b'event: error\ndata: {"type":"error","error":'
+            b'{"type":"internal_server_error","message":"failed"}}\n\n'
+        ]
+    )
+
+    async def no_fallback(**kwargs):
+        raise kwargs["e"]
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        side_effect=no_fallback,
+    ):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary,
+            initial_kwargs={
+                "model": "anthropic/claude",
+                "stream": True,
+                "original_generic_function": litellm.anthropic_messages,
+            },
+        )
+        with pytest.raises(litellm.APIError) as exc_info:
+            _ = [chunk async for chunk in wrapped]
+
+    assert exc_info.value.status_code == 500
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_does_not_fallback_after_content():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    content_frame = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta",'
+        b'"delta":{"type":"text_delta","text":"partial"}}\n\n'
+    )
+    error_frame = (
+        b'event: error\ndata: {"type":"error","error":'
+        b'{"type":"internal_server_error","message":"failed"}}\n\n'
+    )
+    primary = _AnthropicMessagesStream([content_frame, error_frame])
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils"
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=primary,
+            initial_kwargs={
+                "model": "anthropic/claude",
+                "stream": True,
+                "original_generic_function": litellm.anthropic_messages,
+            },
+        )
+        iterator = wrapped.__aiter__()
+        assert await iterator.__anext__() == content_frame
+        with pytest.raises(litellm.APIError) as exc_info:
+            await iterator.__anext__()
+
+    assert exc_info.value.status_code == 500
+    assert mock_fallback.called is False
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_factory_wraps_streaming_response():
+    router = _make_router_with_fallback("anthropic/claude", "bedrock/claude")
+    primary = _AnthropicMessagesStream()
+    span = _UncopyableMetadata()
+    original_metadata = {"trace_id": "test", "span": span}
+
+    with patch.object(
+        router,
+        "_ageneric_api_call_with_fallbacks",
+        return_value=primary,
+    ):
+        factory = router.factory_function(
+            litellm.anthropic_messages,
+            call_type="anthropic_messages",
+        )
+        response = await factory(
+            model="anthropic/claude",
+            stream=True,
+            litellm_metadata=original_metadata,
+        )
+
+    assert response is not primary
+    assert hasattr(response, "__aiter__")
+    assert original_metadata == {"trace_id": "test", "span": span}
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,8 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final, Protocol, runtime_checkable
 
 import httpx
@@ -23,6 +24,79 @@ INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
     "Provider stream ended before emitting a message_stop event; "
     "the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated."
 )
+
+ANTHROPIC_STREAM_ERROR_STATUS_CODE_MAP: Final[Mapping[str, int]] = MappingProxyType(
+    {  # mutable-ok: immediately frozen into a read-only error lookup
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "request_too_large": 413,
+        "rate_limit_error": 429,
+        "api_error": 500,
+        "internal_server_error": 500,
+        "overloaded_error": 529,
+        "timeout_error": 504,
+    }
+)
+
+
+class AnthropicMessagesSSEDecoder:
+    """Incrementally separates SSE frames without retaining event state."""
+
+    def __init__(self) -> None:
+        self._buffer = b""
+
+    @staticmethod
+    def _frame_boundary(buffer: bytes) -> tuple[int, int] | None:
+        boundaries: Final = tuple(
+            (position, len(separator))
+            for separator in (b"\r\n\r\n", b"\n\n", b"\r\r")
+            if (position := buffer.find(separator)) >= 0
+        )
+        return min(boundaries) if boundaries else None
+
+    @staticmethod
+    def event_data(frame: bytes) -> tuple[str | None, object | None]:
+        event: str | None = None  # rebind-ok: the last event field defines this frame's event type
+        data_lines: Final[list[str]] = []  # mutable-ok: SSE permits multiple data fields per event
+        for raw_line in frame.splitlines():
+            line = raw_line.decode("utf-8", errors="replace")
+            if line.startswith(":"):
+                continue
+            field, separator, raw_value = line.partition(":")
+            value = raw_value.removeprefix(" ") if separator else ""
+            if field == "event":
+                event = value  # rebind-ok: the last event field defines this frame's event type
+            elif field == "data":
+                data_lines.append(value)
+        if not data_lines:
+            return event, None
+        try:
+            return event, json.loads("\n".join(data_lines))
+        except json.JSONDecodeError:
+            return event, None
+
+    def feed(self, chunk: bytes) -> tuple[bytes, ...]:
+        self._buffer += chunk
+        frames: Final[list[bytes]] = []  # mutable-ok: bounded to frames in the current transport chunk
+        while (boundary := self._frame_boundary(self._buffer)) is not None:
+            position, separator_length = boundary
+            frame_end = position + separator_length
+            frames.append(self._buffer[:frame_end])
+            self._buffer = self._buffer[frame_end:]
+        return tuple(frames)
+
+    def flush(self) -> bytes:
+        remainder: Final = self._buffer
+        self._buffer = b""
+        return remainder
+
+    def flush_frame(self) -> bytes | None:
+        remainder: Final = self.flush()
+        if not remainder or not remainder.splitlines():
+            return None
+        return remainder
 
 
 def _is_message_stop_chunk(chunk: object) -> bool:
