@@ -1629,6 +1629,9 @@ if TYPE_CHECKING:
         AmazonMantleMessagesConfig as AmazonMantleMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
+    from .llms.together_ai.chat.transformation import (
+        TogetherAIChatConfig as TogetherAIChatConfig,
+    )
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig as VertexGeminiConfig,
