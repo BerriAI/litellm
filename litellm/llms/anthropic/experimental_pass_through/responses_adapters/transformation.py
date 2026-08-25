@@ -88,6 +88,51 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return None
 
     @staticmethod
+    def _translate_anthropic_document_block_to_file_part(
+        block: Mapping[str, object],
+    ) -> dict[str, str] | None:  # mutable-ok: API message payload
+        """Convert an Anthropic document block to a Responses input_file part."""
+        raw_source: Final = block.get("source")
+        if not isinstance(raw_source, Mapping):
+            return None
+        source: Final = cast(Mapping[str, object], raw_source)  # cast-ok: untrusted client payload
+        source_type: Final = source.get("type")
+        if source_type == "base64":
+            data: Final = source.get("data")
+            if not isinstance(data, str) or not data:
+                return None
+            raw_media_type: Final = source.get("media_type")
+            media_type: Final = (
+                raw_media_type if isinstance(raw_media_type, str) and raw_media_type else "application/pdf"
+            )
+            raw_title: Final = block.get("title")
+            filename: Final = raw_title if isinstance(raw_title, str) and raw_title else "document.pdf"
+            return {  # mutable-ok: API message payload
+                "type": "input_file",
+                "filename": filename,
+                "file_data": f"data:{media_type};base64,{data}",
+            }
+        if source_type == "url":
+            url: Final = source.get("url")
+            if not isinstance(url, str) or not url:
+                return None
+            return {"type": "input_file", "file_url": url}  # mutable-ok: API message payload
+        return None
+
+    @staticmethod
+    def _tool_result_output_value(
+        output_text: str,
+        file_parts: tuple[dict[str, str], ...],  # mutable-ok: json content parts
+    ) -> str | list[dict[str, str]]:  # mutable-ok: API message payload
+        """Plain string output, or a part list when document file parts are present."""
+        if not file_parts:
+            return output_text
+        text_parts: Final = (
+            [{"type": "input_text", "text": output_text}] if output_text else []  # mutable-ok: API message payload
+        )
+        return [*text_parts, *file_parts]  # mutable-ok: API message payload
+
+    @staticmethod
     def _translate_midturn_system_content_to_responses(
         content: str | Iterable[AnthropicSystemMessageContent],
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
@@ -226,6 +271,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            document_candidates = (
+                                tuple(
+                                    self._translate_anthropic_document_block_to_file_part(c)
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") == "document"
+                                )
+                                if isinstance(inner, list)
+                                else ()
+                            )
+                            tool_file_parts = tuple(part for part in document_candidates if part is not None)
                             if inner is None:
                                 output_text = ""
                             elif isinstance(inner, str):
@@ -258,7 +313,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 {
                                     "type": "function_call_output",
                                     "call_id": tool_use_id,
-                                    "output": output_text,
+                                    "output": self._tool_result_output_value(output_text, tool_file_parts),
                                 }
                             )
                     if tool_image_parts:
