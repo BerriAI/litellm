@@ -250,7 +250,9 @@ def test_bedrock_converse_streaming_consistent_id():
     expected_id = f"chatcmpl-{native_conversation_id}"
 
     for response in parsed_responses:
-        assert response.id == expected_id, "All chunk IDs must match the one captured from the messageStart event"
+        assert (
+            response.id == expected_id
+        ), "All chunk IDs must match the one captured from the messageStart event"
 
 
 @pytest.mark.asyncio
