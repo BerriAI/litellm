@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3315,7 +3316,7 @@ def test_get_tool_calls_from_response_silences_redacted_arguments(caplog):
         get_tool_calls_from_response,
     )
 
-    response = {
+    response: Final = {
         "choices": [
             {
                 "message": {
@@ -3334,7 +3335,7 @@ def test_get_tool_calls_from_response_silences_redacted_arguments(caplog):
     }
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        tool_calls = get_tool_calls_from_response(response)
+        tool_calls: Final = get_tool_calls_from_response(response)
 
     assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
     assert "Failed to parse tool call arguments" not in caplog.text
@@ -3345,7 +3346,7 @@ def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
         get_tool_calls_from_response,
     )
 
-    response = {
+    response: Final = {
         "choices": [
             {
                 "message": {
@@ -3364,7 +3365,7 @@ def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
     }
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        tool_calls = get_tool_calls_from_response(response)
+        tool_calls: Final = get_tool_calls_from_response(response)
 
     assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
     assert "Failed to parse tool call arguments" in caplog.text
