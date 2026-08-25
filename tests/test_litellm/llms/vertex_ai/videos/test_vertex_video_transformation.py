@@ -479,7 +479,7 @@ class TestVertexAIVideoConfig:
             },
         }
 
-        url, data = self.config.transform_video_edit_request(
+        url, data, files = self.config.transform_video_edit_request(
             prompt="Make it brighter",
             video_id=operation_name,
             api_base=api_base,
@@ -488,6 +488,7 @@ class TestVertexAIVideoConfig:
             prefetched_source_data=prefetched,
         )
 
+        assert files is None
         assert url.endswith(":predictLongRunning")
         assert "veo-3.1-generate-001" in url
         instance = data["instances"][0]
@@ -507,7 +508,7 @@ class TestVertexAIVideoConfig:
             },
         }
 
-        _, data = self.config.transform_video_edit_request(
+        _, data, _ = self.config.transform_video_edit_request(
             prompt="Make it darker",
             video_id=operation_name,
             api_base=api_base,

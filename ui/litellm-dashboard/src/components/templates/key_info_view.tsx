@@ -100,6 +100,9 @@ export default function KeyInfoView({
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
+  const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
+    null,
+  );
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
@@ -352,6 +355,7 @@ export default function KeyInfoView({
   };
 
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
+    const regeneratedAt = new Date();
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
       if (!prevData) return undefined;
@@ -359,20 +363,26 @@ export default function KeyInfoView({
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
-        created_at: new Date().toLocaleString(),
+        created_at: regeneratedAt.toLocaleString(),
       };
       return newData;
     });
 
     // Track regeneration timestamp
-    setLastRegeneratedAt(new Date());
+    setLastRegeneratedAt(regeneratedAt);
     setIsRecentlyRegenerated(true);
 
-    if (onKeyDataUpdate) {
-      onKeyDataUpdate({
-        ...updatedKeyData,
-        created_at: new Date().toLocaleString(),
-      });
+    setKeyDataUpdateHeldUntilModalClose({
+      ...updatedKeyData,
+      created_at: regeneratedAt.toLocaleString(),
+    });
+  };
+
+  const handleRegenerateModalClose = () => {
+    setIsRegenerateModalOpen(false);
+    if (keyDataUpdateHeldUntilModalClose) {
+      setKeyDataUpdateHeldUntilModalClose(null);
+      onKeyDataUpdate?.(keyDataUpdateHeldUntilModalClose);
     }
   };
 
@@ -506,7 +516,7 @@ export default function KeyInfoView({
       <RegenerateKeyModal
         selectedToken={currentKeyData}
         visible={isRegenerateModalOpen}
-        onClose={() => setIsRegenerateModalOpen(false)}
+        onClose={handleRegenerateModalClose}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 

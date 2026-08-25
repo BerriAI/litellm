@@ -777,6 +777,11 @@ export interface paths {
          *     overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
+         *
+         *     The rollup supplies the measures, never the list. Which routers appear comes from the
+         *     model registry, so one shows up as soon as it is configured and reads zero until it
+         *     serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+         *     window recorded.
          */
         get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
         put?: never;
@@ -21965,9 +21970,15 @@ export interface components {
              * @description Window end day, YYYY-MM-DD UTC, inclusive
              */
             end_date: string;
-            /** Groups */
+            /**
+             * Groups
+             * @description One entry per auto-router, listed from the model registry rather than from the rollup, so a router appears as soon as it is configured and reads zero until it serves traffic. Semantic auto-routers are absent: they record no routing decision, so no session can ever be attributed to them
+             */
             groups: components["schemas"]["AutoRouterBenchmarkGroup"][];
-            /** Routers In Scope */
+            /**
+             * Routers In Scope
+             * @description How many groups this response carries. Every auto-router configured on the proxy counts, whether or not it served anything in the window. To count only the routers that did serve traffic, filter `groups` to the entries whose `sessions` is above zero
+             */
             routers_in_scope: number;
             /**
              * Start Date
@@ -22998,6 +23009,17 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityErrorBucket */
+        CacheActivityErrorBucket: {
+            /** Call Type */
+            call_type: string;
+            /** Count */
+            count: number;
+            /** Error Class */
+            error_class: string;
+            /** Error Code */
+            error_code: string;
+        };
         /** CacheActivityFilterOptions */
         CacheActivityFilterOptions: {
             /** Key Aliases */
@@ -23022,6 +23044,8 @@ export interface components {
         };
         /** CacheActivityResponse */
         CacheActivityResponse: {
+            /** Error Breakdown */
+            error_breakdown: components["schemas"]["CacheActivityErrorBucket"][];
             filter_options: components["schemas"]["CacheActivityFilterOptions"];
             /** Groups */
             groups: components["schemas"]["CacheActivityGroup"][];
@@ -23142,7 +23166,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -27624,6 +27648,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -36833,6 +36861,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
