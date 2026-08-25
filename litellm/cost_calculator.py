@@ -1557,9 +1557,6 @@ def completion_cost(
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
                 ) and not has_together_registry_entry(model, litellm.model_cost):
-                    # together ai prices unmapped models based on size of llm
-                    # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-
                     model = get_model_params_and_category(model, call_type=CallTypes(call_type))
 
                 # replicate llms are calculate based on time for request running
