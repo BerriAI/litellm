@@ -322,9 +322,9 @@ class TestScimTransformations:
             assert scim_group.id == mock_team.team_id
             assert scim_group.displayName == mock_team.team_alias
             assert len(scim_group.members) == 2
-            assert scim_group.members[0].value == "test@example.com"
+            assert scim_group.members[0].value == "user-123"
             assert scim_group.members[0].display == "test@example.com"
-            assert scim_group.members[1].value == "test2@example.com"
+            assert scim_group.members[1].value == "user-456"
             assert scim_group.members[1].display == "test2@example.com"
 
     @pytest.mark.asyncio
@@ -382,14 +382,13 @@ class TestScimTransformations:
         assert result == ScimTransformations.DEFAULT_SCIM_NAME
 
     def test_get_scim_member_value(self):
-        # Member with email
+        # value is the SCIM resource id (user_id), never the email (RFC 7643)
         member_with_email = Member(
             user_id="user-123", user_email="test@example.com", role="admin"
         )
         result = ScimTransformations._get_scim_member_value(member_with_email)
-        assert result == member_with_email.user_email
+        assert result == member_with_email.user_id
 
-        # Member without email should fall back to user_id
         member_without_email = Member(user_id="user-456", user_email=None, role="user")
         result = ScimTransformations._get_scim_member_value(member_without_email)
         assert result == member_without_email.user_id
