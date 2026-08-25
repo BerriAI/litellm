@@ -5552,3 +5552,64 @@ def test_accumulated_json_skips_non_dict_leading_value():
 
     assert len(out) == 1
     assert out[0].choices[0].delta.content == "a"
+@pytest.mark.parametrize(
+    "vertex_location, expected_region_name",
+    [
+        ("europe-west1", "europe-west1"),
+        ("global", "global"),
+        (None, None),
+    ],
+)
+def test_vertex_region_name_propagated_from_vertex_location(
+    vertex_location, expected_region_name
+):
+    """
+    Regression for #34393: region-based cost tracking worked for bedrock (aws_region_name)
+    and azure but never for vertex_ai, because completion() only copied aws_region_name into
+    _hidden_params["region_name"]. vertex_location was dropped, so cost_calculator could never
+    build the region-scoped "vertex_ai/{region}/{model}" price key and every vertex region was
+    billed at the same model-name price.
+
+    completion() must now propagate vertex_location as region_name (and leave it None when no
+    location is supplied, so a request that opts out does not accidentally match a region key).
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    response_body = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "hi"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+        "modelVersion": "gemini-2.5-flash",
+    }
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = response_body
+
+    completion_kwargs = dict(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        vertex_project="fake-project",
+        vertex_credentials='{"type": "service_account"}',
+        client=client,
+    )
+    if vertex_location is not None:
+        completion_kwargs["vertex_location"] = vertex_location
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+        return_value=("fake-token", "fake-project"),
+    ):
+        with patch.object(client, "post", return_value=mock_response):
+            response = completion(**completion_kwargs)
+
+    assert response._hidden_params.get("custom_llm_provider") == "vertex_ai"
+    assert response._hidden_params.get("region_name") == expected_region_name
