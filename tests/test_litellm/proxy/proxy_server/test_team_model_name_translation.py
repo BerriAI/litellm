@@ -1507,6 +1507,61 @@ def test_get_direct_access_models_resolves_explicit_model_names():
     router.get_model_list.assert_called_once_with(model_name="gpt-4o")
 
 
+def test_get_direct_access_models_empty_models_grants_all_non_team_models():
+    """An empty user.models list means unrestricted access at call time
+    (can_user_call_model), so the listing must resolve it like 'all-proxy-models'
+    instead of returning nothing. Regression for a user with models=[] and no
+    teams seeing an empty Models+Endpoints page."""
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1", "global-id-2"]
+
+    user = LiteLLM_UserTable(user_id="u", models=[], teams=[])
+
+    result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
+
+    assert result == ["global-id-1", "global-id-2"]
+    router.get_model_ids.assert_called_once_with(exclude_team_models=True)
+    router.get_model_list.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_grants_empty_models_user_direct_access(monkeypatch):
+    """An internal user with models=[] and no teams can call every non-team model,
+    so the Models+Endpoints page must list them instead of rendering empty."""
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+
+    router = MagicMock()
+    router.get_model_ids.return_value = ["global-id-1"]
+
+    user_row = LiteLLM_UserTable(
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+        teams=[],
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+
+    monkeypatch.setattr(ps, "get_all_team_models", AsyncMock(return_value={}))
+
+    caller = UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, team_models=[])
+
+    populated = await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[global_row],
+    )
+    visible = ps._filter_models_to_user_accessible(populated)
+
+    assert [m["model_info"]["id"] for m in visible] == ["global-id-1"]
+    assert visible[0]["model_info"]["direct_access"] is True
+
+
 @pytest.mark.asyncio
 async def test_populate_team_access_grants_all_proxy_models_user_direct_access(
     monkeypatch,
