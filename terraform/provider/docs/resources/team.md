@@ -24,10 +24,17 @@ resource "litellm_team" "advanced_team" {
 
   # Budget and rate limiting
   max_budget      = 1000.0
+  soft_budget     = 800.0
   budget_duration = "1mo"
   tpm_limit       = 500000
   rpm_limit       = 5000
   blocked         = false
+
+  # Who gets paged when spend crosses soft_budget
+  soft_budget_alerting_emails = ["finops@example.com"]
+
+  # Tags for spend tracking and tag-based routing
+  tags = ["team:ai-research", "environment:production"]
 
   # Team member permissions
   team_member_permissions = [
@@ -91,7 +98,9 @@ The following arguments are supported:
 
 * `models` - (Optional) List of model names that this team can access.
 
-* `metadata` - (Optional) A map of metadata key-value pairs associated with the team.
+* `metadata` - (Optional) A map of string metadata key-value pairs associated with the team. `tags` and `soft_budget_alerting_emails` are stored by the proxy under metadata but are managed through their own attributes below, not this map.
+
+* `tags` - (Optional) List of tags applied to the team, used for [spend tracking](https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags) and [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing).
 
 * `blocked` - (Optional) Whether the team is blocked from making requests. Default is `false`.
 
@@ -100,6 +109,10 @@ The following arguments are supported:
 * `rpm_limit` - (Optional) Team-wide requests per minute limit.
 
 * `max_budget` - (Optional) Maximum budget allocated to the team.
+
+* `soft_budget` - (Optional) Spend threshold at which the proxy sends a soft budget alert without blocking requests.
+
+* `soft_budget_alerting_emails` - (Optional) List of email addresses notified when the team's spend crosses `soft_budget`.
 
 * `budget_duration` - (Optional) Duration for the budget cycle. Valid values are:
   * `daily`

@@ -176,6 +176,10 @@ class UserProvisionerHelpers:
         is persisted too, so re-upserting an existing email demotes a user who is no
         longer in the admin group instead of leaving the stale role.
 
+        IdPs like Entra manage membership exclusively through /Groups and never send
+        ``groups`` on POST /Users, so a request without teams means "unspecified",
+        not "remove from every team": existing memberships are preserved then.
+
         Args:
             prisma_client: Database client
             new_user_request: New user request data
@@ -194,7 +198,8 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
-        new_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
