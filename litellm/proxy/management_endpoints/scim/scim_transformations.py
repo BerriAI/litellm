@@ -33,7 +33,8 @@ class ScimTransformations:
 
         # Get user's teams/groups
         groups: Final = []
-        for team_id in user.teams or []:
+        team_ids: Final[list[str]] = user.teams or []  # mutable-ok: scim reads the user row's team ids
+        for team_id in team_ids:
             team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             if team:
                 team_alias = getattr(team, "team_alias", team.team_id)

@@ -1851,6 +1851,39 @@ def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_nam
 
 
 @pytest.mark.asyncio
+async def test_non_admin_all_models_raises_400_when_user_row_missing():
+    """
+    Regression test: a key whose user row no longer exists made find_unique return
+    None, and _check_if_model_is_team_model then dereferenced it
+    (`model_team_id in user_row.teams`) and raised AttributeError, surfacing as a
+    500. The miss must reuse the 400 "User not found" contract the neighbouring
+    except-branch already raises.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.proxy_server import non_admin_all_models
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        {"model_info": {"id": "gpt-4-model-1", "team_id": "team-a"}},
+    ]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await non_admin_all_models(
+            all_models=[],
+            llm_router=llm_router,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="deleted-user"),
+            prisma_client=prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "User not found"}
+
+
+@pytest.mark.asyncio
 async def test_apply_search_filter_matches_team_public_model_name():
     """
     Regression test: team BYOK models persist an internal model_name

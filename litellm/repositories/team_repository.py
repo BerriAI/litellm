@@ -5,7 +5,7 @@ Team repository for database operations on LiteLLM_TeamTable.
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -15,9 +15,11 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
+from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma import models as prisma_models
 
 _MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
 _JSON_ENCODED_TEAM_FIELDS: Final = (
@@ -34,11 +36,11 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
     @property
-    def table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
+    def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
         return self.prisma_client.db.litellm_teamtable
 
     @property
-    def deleted_table(self) -> Any:  # any-ok: PrismaClient.db is an untyped runtime wrapper
+    def deleted_table(self) -> TableActions["prisma_models.LiteLLM_DeletedTeamTable"]:
         return self.prisma_client.db.litellm_deletedteamtable
 
     @property

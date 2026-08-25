@@ -86,6 +86,20 @@ class _PrismaTeamMembershipTable(Protocol):
     async def create(self, *, data: Mapping[str, object], include: Mapping[str, bool]) -> _PrismaRecord: ...
 
 
+def _user_table(prisma_client: PrismaClient) -> _PrismaUserTable:
+    table: Final[_PrismaUserTable] = UserRepository(prisma_client).table
+    return table
+
+
+async def _find_users_by_email(prisma_client: PrismaClient, user_email: str) -> Sequence[_PrismaUserRecord] | None:
+    rows: Final[Sequence[_PrismaUserRecord] | None] = await prisma_client.get_data(
+        key_val={"user_email": user_email},
+        table_name="user",
+        query_type="find_all",
+    )
+    return rows
+
+
 def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict[str, object]:
     user_info: Final = litellm.default_internal_user_params or {}
 
@@ -309,8 +323,7 @@ async def _append_team_id_if_absent(prisma_client: PrismaClient, user_id: str, t
     number of teams a user belongs to). Teams added concurrently for a different
     team id are unaffected, since each update filters on its own team id.
     """
-    user_table: Final[_PrismaUserTable] = UserRepository(prisma_client).table
-    await user_table.update_many(
+    await _user_table(prisma_client).update_many(
         where={"user_id": user_id, "NOT": {"teams": {"has": team_id}}},
         data={"teams": {"push": [team_id]}},
     )
@@ -348,8 +361,7 @@ async def add_new_member(
         # Prisma only compiles an upsert down to INSERT ... ON CONFLICT when it
         # is non-empty, and falls back to a racy SELECT-then-INSERT when it is
         # not, so this re-states user_id as a no-op rather than being empty.
-        user_table: Final[_PrismaUserTable] = UserRepository(prisma_client).table
-        _returned_user: _PrismaUserRecord | None = await user_table.upsert(
+        _returned_user: _PrismaRecord | None = await _user_table(prisma_client).upsert(
             where={"user_id": new_member.user_id},
             data={
                 "create": {"teams": [team_id], **new_user_defaults},
@@ -363,11 +375,7 @@ async def add_new_member(
         new_user_defaults = get_new_internal_user_defaults(user_id=str(uuid.uuid4()), user_email=new_member.user_email)
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row: Final[list[_PrismaUserRecord] | None] = await prisma_client.get_data(
-            key_val={"user_email": new_member.user_email},
-            table_name="user",
-            query_type="find_all",
-        )
+        existing_user_row: Final = await _find_users_by_email(prisma_client, new_member.user_email)
         if existing_user_row is None or (isinstance(existing_user_row, list) and len(existing_user_row) == 0):
             new_user_defaults["teams"] = [team_id]
             _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")
