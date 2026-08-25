@@ -30,10 +30,9 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
         verbose_logger.debug(
             "Only some together models support function calling/response_format. Docs - https://docs.together.ai/docs/function-calling"
         )
-        for param in FUNCTION_CALLING_ONLY_PARAMS:
-            if param in supported_params:
-                supported_params.remove(param)
-        return supported_params
+        return [  # mutable-ok: the inherited contract returns a plain list; building fresh avoids mutating the base class's value
+            param for param in supported_params if param not in FUNCTION_CALLING_ONLY_PARAMS
+        ]
 
     def map_openai_params(
         self,
