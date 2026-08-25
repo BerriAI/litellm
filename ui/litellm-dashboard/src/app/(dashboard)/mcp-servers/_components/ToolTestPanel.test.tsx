@@ -160,9 +160,8 @@ describe("ToolTestPanel defaults", () => {
   });
 
   it("renders inputs for nullable (type-array) schema properties instead of leaving them blank", () => {
-    // JSON Schema represents an optional/nullable field as an array type, e.g. ["string", "null"] -
-    // the shape Pydantic's model_json_schema() emits for Optional[str]. A real Azure DevOps MCP tool
-    // schema (testplan_test_suite_write) declares its optional fields exactly this way.
+    // A real Azure DevOps MCP tool schema (testplan_test_suite_write) declares its optional
+    // fields exactly this way.
     const schema: InputSchema = {
       type: "object",
       properties: {
@@ -175,8 +174,33 @@ describe("ToolTestPanel defaults", () => {
     renderPanel(schema);
 
     expect(screen.getByLabelText("name")).toHaveValue("");
-    expect(screen.getByLabelText("parentSuiteId")).toHaveValue(0);
+    expect(screen.getByLabelText("parentSuiteId")).toHaveValue(null);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
+  });
+
+  it("omits an untouched nullable numeric field from the submitted payload instead of sending a synthetic 0", async () => {
+    const schema: InputSchema = {
+      type: "object",
+      properties: {
+        parentSuiteId: { type: ["integer", "null"], description: "Optional parent suite id" },
+      },
+    };
+    const onSubmit = vi.fn();
+
+    render(
+      <ToolTestPanel
+        tool={buildTool(schema)}
+        onSubmit={onSubmit}
+        isLoading={false}
+        result={null}
+        error={null}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Call Tool" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({});
   });
 
   it("coerces a nullable integer field to a number on submit, not a string", async () => {

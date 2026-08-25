@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
+import { resolveSchemaType, getInitialValueForField } from "./mcpToolSchemaDefaults";
 
 type ToolFormValues = Record<string, unknown>;
 
@@ -73,87 +74,6 @@ const labelFor = (key: string, prop: InputSchemaProperty, required: boolean): Re
     )}
   </span>
 );
-
-const isPlainObject = (value: unknown): value is Record<string, any> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-// JSON Schema allows "type" to be an array (e.g. ["string", "null"]) for a nullable field, the
-// shape Pydantic's model_json_schema() emits for Optional[str] / str | None. Every branch below
-// that decides a widget or a value conversion from a property's type needs the single effective
-// (non-null) type, not the raw field verbatim.
-function resolveSchemaType(type: InputSchemaProperty["type"] | undefined): string | undefined {
-  if (Array.isArray(type)) {
-    return type.find((t) => t !== "null") ?? type[0];
-  }
-  return type;
-}
-
-function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): any[] {
-  if (!items) return [];
-  if (Array.isArray(items)) {
-    return items.map((item) => buildDefaultValue(item)).filter((value) => value !== undefined);
-  }
-  const itemDefault = buildDefaultValue(items);
-  return itemDefault !== undefined ? [itemDefault] : [];
-}
-
-function buildDefaultValue(prop?: InputSchemaProperty, overrideDefault?: any): any {
-  if (!prop) return undefined;
-  const effectiveDefault = overrideDefault !== undefined ? overrideDefault : prop.default;
-  const effectiveType = resolveSchemaType(prop.type);
-
-  if (effectiveType === "object") {
-    const base = isPlainObject(effectiveDefault) ? { ...effectiveDefault } : {};
-    if (prop.properties) {
-      Object.entries(prop.properties).forEach(([childKey, childProp]) => {
-        base[childKey] = buildDefaultValue(childProp, base[childKey]);
-      });
-    }
-    return base;
-  }
-
-  if (effectiveType === "array") {
-    if (Array.isArray(effectiveDefault)) {
-      const itemSchema = prop.items;
-      if (!itemSchema) return effectiveDefault;
-      if (effectiveDefault.length === 0) {
-        const sample = buildArrayItems(itemSchema);
-        return sample.length ? sample : effectiveDefault;
-      }
-      if (Array.isArray(itemSchema)) {
-        return effectiveDefault.map((value, index) => {
-          const schema = itemSchema[index] ?? itemSchema[itemSchema.length - 1];
-          return buildDefaultValue(schema, value);
-        });
-      }
-      return effectiveDefault.map((value) => buildDefaultValue(itemSchema, value));
-    }
-    if (effectiveDefault !== undefined) return effectiveDefault;
-    return buildArrayItems(prop.items);
-  }
-
-  if (effectiveDefault !== undefined) return effectiveDefault;
-  switch (effectiveType) {
-    case "integer":
-    case "number":
-      return 0;
-    case "boolean":
-      return false;
-    case "string":
-    default:
-      return "";
-  }
-}
-
-const getInitialValueForField = (prop: InputSchemaProperty): any => {
-  const defaultValue = buildDefaultValue(prop);
-  const effectiveType = resolveSchemaType(prop.type);
-  if (effectiveType === "object" || effectiveType === "array") {
-    const fallback = effectiveType === "array" ? [] : {};
-    return JSON.stringify(defaultValue ?? fallback, null, 2);
-  }
-  return defaultValue;
-};
 
 function convertFormValues(
   values: Record<string, any>,
@@ -391,7 +311,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                           {...field}
                           type="number"
                           step={effectiveType === "integer" ? 1 : undefined}
-                          value={field.value as number | string}
+                          value={(field.value as number | string) ?? ""}
                           placeholder={prop.description || `Enter ${key}`}
                         />
                       );

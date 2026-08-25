@@ -296,8 +296,9 @@ export const handleAuth = (authType?: string | null): string => {
 export interface InputSchemaProperty {
   // JSON Schema allows an array here (e.g. ["string", "null"]) for a nullable/optional field —
   // the shape Pydantic's model_json_schema() emits for Optional[str] / str | None. Callers must
-  // resolve to a single type with resolveSchemaType before branching on it. Optional because a
-  // property may instead be described purely via anyOf/oneOf, with no top-level type at all.
+  // resolve to a single type with resolveSchemaType (mcpToolSchemaDefaults.ts / toolCallArguments.ts)
+  // before branching on it. Optional because a property may instead be described purely via
+  // anyOf/oneOf, with no top-level type at all.
   type?: string | string[];
   description?: string;
   properties?: Record<string, InputSchemaProperty>; // For nested object properties

@@ -180,11 +180,10 @@ describe("MCPToolArgumentsForm", () => {
 });
 
 describe("MCPToolArgumentsForm nullable schema types", () => {
-  it("renders inputs for nullable (type-array) schema properties instead of a plain text fallback", () => {
-    // JSON Schema represents an optional/nullable field as an array type, e.g. ["integer", "null"] -
-    // the shape Pydantic's model_json_schema() emits for Optional[int]. Unlike ToolTestPanel, this
-    // component has a final "else" branch that falls back to a plain text Input, so the bug here
-    // is a wrong widget (text instead of number), not a missing one.
+  it("renders a number widget for nullable (type-array) schema properties instead of a plain text fallback", () => {
+    // Unlike ToolTestPanel, this component has a final "else" branch that falls back to a plain
+    // text Input, so the pre-fix bug here was a wrong widget (text instead of number), not a
+    // missing one; the field must also start empty, not a synthetic 0.
     renderForm({
       type: "object",
       properties: {
@@ -193,8 +192,21 @@ describe("MCPToolArgumentsForm nullable schema types", () => {
       required: [],
     });
 
+    // Native type="number" input: jest-dom reports an empty one as null, not "".
     const input = screen.getByLabelText("parentSuiteId");
-    expect(input).toHaveValue(0);
+    expect(input).toHaveValue(null);
+  });
+
+  it("omits an untouched nullable numeric field from getSubmitValues instead of sending a synthetic 0", async () => {
+    const ref = renderForm({
+      type: "object",
+      properties: {
+        parentSuiteId: { type: ["integer", "null"], description: "Optional parent suite id" },
+      },
+      required: [],
+    });
+
+    await expect(submit(ref)).resolves.toEqual({});
   });
 
   it("coerces a nullable integer field to a number in getSubmitValues, not a string", async () => {
