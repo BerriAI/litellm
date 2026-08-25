@@ -312,6 +312,10 @@ class AnthropicMessagesStreamingResponse:
         self.completion_stream = completion_stream
         self._hidden_params = hidden_params
 
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self.completion_stream, "has_buffered_provider_output", False) is True
+
     def __aiter__(self) -> "AnthropicMessagesStreamingResponse":
         return self
 

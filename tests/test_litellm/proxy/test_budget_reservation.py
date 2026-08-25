@@ -10,6 +10,9 @@ from fastapi import HTTPException
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    AnthropicMessagesStreamingResponse,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
 )
@@ -2527,6 +2530,18 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
         server_fulfilled_tool_names=frozenset({"headroom_retrieve"}),
         ping_interval_seconds=0.01,
     )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-haiku-4-5",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-test"},
+            }
+        ]
+    )
+    response = await router._aanthropic_messages_streaming_iterator(
+        response=AnthropicMessagesStreamingResponse(completion_stream=held_back, hidden_params={"additional_headers": {}}),
+        initial_kwargs={"model": "claude-haiku-4-5"},
+    )
 
     async def ping_then_cancel(user_api_key_dict, response, request_data):
         yield await response.__anext__()
@@ -2538,7 +2553,7 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
     streaming_logging_obj.async_post_call_streaming_iterator_hook = ping_then_cancel
     streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
-        response=held_back,
+        response=response,
         user_api_key_dict=valid_token,
         request_data=_request_body(),
         proxy_logging_obj=streaming_logging_obj,
@@ -2553,7 +2568,7 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
             received.append(chunk)
 
     with pytest.raises(asyncio.CancelledError):
-        await _drain()
+        await asyncio.wait_for(_drain(), timeout=5)
 
     assert received and received == [STREAM_SSE_KEEPALIVE_PING_BYTES] * len(received)
     assert counter_cache.in_memory_cache.get_cache(

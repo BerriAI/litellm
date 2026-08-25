@@ -48,9 +48,6 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
-from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
-    AgenticAnthropicStreamingIterator,
-)
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -207,7 +204,7 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 
 
 def _withheld_provider_output(response: object) -> bool:
-    return isinstance(response, AgenticAnthropicStreamingIterator) and response.has_buffered_provider_output
+    return getattr(response, "has_buffered_provider_output", False) is True
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
