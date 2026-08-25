@@ -102,13 +102,27 @@ def test_invalid_caller_identity_mode_fails_during_prometheus_initialization(
 ):
     _set_caller_identity(monkeypatch, "invalid")
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(
+        ValueError,
+        match="prometheus_deployment_and_latency_caller_identity",
+    ) as exc_info:
         PrometheusLogger()
 
     message = str(exc_info.value)
     assert "prometheus_deployment_and_latency_caller_identity" in message
     for accepted_value in IDENTITY_MODES:
         assert accepted_value in message
+
+
+def test_label_resolution_rejects_non_string_class_labels(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        PrometheusMetricLabels,
+        "litellm_deployment_total_requests",
+        ["api_key_alias", 1],
+    )
+
+    with pytest.raises(TypeError, match=r"Prometheus labels .* must be strings"):
+        PrometheusMetricLabels.get_labels("litellm_deployment_total_requests")
 
 
 @pytest.mark.parametrize(
