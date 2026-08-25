@@ -10948,11 +10948,11 @@ class TestOAuthDiscoveryAgainstAnOpenEventStream:
         handler, transport = self._handler(gap=timeout / 4, timeout=timeout)
 
         with (
-            patch(
+            patch(  # test-quality-ok: the fake IS the HTTP boundary, a real httpx.AsyncClient over MockTransport; _discover_metadata_recording_attempts builds its own client with no injection seam, and the other discovery tests in this file substitute it the same way
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
                 return_value=handler,
             ),
-            patch(
+            patch(  # test-quality-ok: a module constant, not wiring; shortened so the read-timeout assertion does not take the production timeout to run
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_METADATA_TIMEOUT",
                 timeout,
             ),
