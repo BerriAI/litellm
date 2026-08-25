@@ -24,6 +24,7 @@ import re
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime, timezone
+from typing import Final
 from unittest import mock
 
 from dotenv import load_dotenv
@@ -2595,10 +2596,19 @@ async def test_proxy_load_test_db(prisma_client):
         await asyncio.sleep(120)
         try:
             # call spend logs
-            spend_logs = await view_spend_logs(
-                api_key=generated_key,
-                user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+            page_size: Final = 1000
+            spend_log_pages: Final = await asyncio.gather(
+                *(
+                    view_spend_logs(
+                        api_key=generated_key,
+                        page=page,
+                        page_size=page_size,
+                        user_api_key_dict=UserAPIKeyAuth(api_key=generated_key),
+                    )
+                    for page in range(1, (n + page_size - 1) // page_size + 1)
+                )
             )
+            spend_logs: Final = tuple(log for page in spend_log_pages for log in page)
 
             print(f"len responses: {len(spend_logs)}")
             assert len(spend_logs) == n

@@ -13162,16 +13162,18 @@ export interface paths {
         };
         /**
          * View Spend Logs
-         * @description [DEPRECATED] This endpoint is not paginated and can cause performance issues.
-         *     Please use `/spend/logs/v2` instead for paginated access to spend logs.
+         * @description [DEPRECATED] Individual log responses from this endpoint are bounded list pages.
+         *     Please use `/spend/logs/v2` for a pagination envelope and total count.
          *
-         *     View all spend logs, if request_id is provided, only logs for that request_id will be returned
+         *     View spend logs. If request_id is provided, only logs for that request_id will be returned.
+         *
+         *     Individual log responses accept page and page_size. The default page size is 50 and the maximum is 1000.
          *
          *     When start_date and end_date are provided:
          *     - summarize=true (default): Returns aggregated spend data grouped by date (maintains backward compatibility)
          *     - summarize=false: Returns filtered individual log entries within the date range
          *
-         *     Example Request for all logs
+         *     Example Request for the first page of logs
          *     ```
          *     curl -X GET "http://0.0.0.0:8000/spend/logs" -H "Authorization: Bearer sk-1234"
          *     ```
@@ -53146,6 +53148,10 @@ export interface operations {
                 end_date?: string | null;
                 /** @description When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs */
                 summarize?: boolean;
+                /** @description Page number for individual spend logs */
+                page?: number;
+                /** @description Number of individual spend logs per page */
+                page_size?: number;
             };
             header?: never;
             path?: never;
