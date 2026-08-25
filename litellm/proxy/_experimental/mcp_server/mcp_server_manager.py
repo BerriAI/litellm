@@ -46,7 +46,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme
 from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
 )
@@ -123,6 +123,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
     logging_safe_mcp_headers,
+    lookup_mcp_server_auth_in_headers,
     match_known_server_prefix,
     match_known_tool_name,
     merge_mcp_headers,
@@ -840,12 +841,17 @@ def _without_authorization(
 
 
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
-    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection."""
+    """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection.
+
+    A non-BYOK server short-circuits ``_resolve_byok_mcp_auth_header``, so the value here can also
+    be the deprecated global ``x-mcp-auth``, which is a complete header value and would otherwise
+    be given a second scheme.
+    """
     if mcp_server.auth_type == MCPAuth.api_key:
-        return f"ApiKey {mcp_auth_header}"
+        return f"ApiKey {strip_auth_scheme(mcp_auth_header, 'ApiKey')}"
     if mcp_server.auth_type == MCPAuth.basic:
-        return f"Basic {mcp_auth_header}"
-    return f"Bearer {mcp_auth_header}"
+        return f"Basic {strip_auth_scheme(mcp_auth_header, 'Basic')}"
+    return f"Bearer {strip_auth_scheme(mcp_auth_header, 'Bearer')}"
 
 
 def _openapi_forwarded_extra_headers(
@@ -871,6 +877,53 @@ def _openapi_forwarded_extra_headers(
         if value is not None:
             forwarded[header_name] = value
     return forwarded or None
+
+
+def _resolve_openapi_tool_auth(
+    mcp_server: MCPServer,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: Mapping[str, str | dict[str, str]] | None,  # mutable-ok: sink shape
+    raw_headers: dict[str, str] | None,  # mutable-ok: sink takes a concrete dict
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> tuple[str | None, dict[str, str] | None, str | dict[str, str] | None]:  # mutable-ok: sink shapes
+    """The caller's upstream credential for one ``spec_path`` server, for both OpenAPI dispatch arms.
+
+    A per-server ``x-mcp-{alias}-authorization`` wins over the deprecated global / BYOK
+    ``mcp_auth_header``, the same precedence ``_call_regular_mcp_tool`` applies, so the OpenAPI and
+    managed paths cannot disagree about which credential is authoritative. The two kinds are not
+    interchangeable: a per-server value is already a complete header value and is forwarded verbatim,
+    while a BYOK credential is a raw secret that takes the server's auth-type prefix. Formatting the
+    former would ship ``Bearer Bearer <token>``.
+
+    Returns the ``Authorization`` value to inject, the extra headers to forward, and the credential to
+    hand ``resolve_openapi_upstream_auth``, whose passthrough arm reads it via
+    ``_passthrough_token_from_mcp_auth_header``. The per-server Authorization travels only in the
+    credential, never also in the forwarded headers, because the resolver pops Authorization out of
+    those and would otherwise have two sources to reconcile.
+    """
+    forwarded: Final = _openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth)
+    per_server: Final = (
+        lookup_mcp_server_auth_in_headers(
+            mcp_server_auth_headers,
+            alias=mcp_server.alias,
+            server_name=mcp_server.server_name,
+        )
+        if mcp_server_auth_headers
+        else None
+    )
+
+    if isinstance(per_server, dict):
+        authorization: Final = next((v for k, v in per_server.items() if k.lower() == "authorization"), None)
+        merged: Final = merge_mcp_headers(extra_headers=forwarded, static_headers=_without_authorization(per_server))
+        if authorization is None:
+            byok: Final = _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            return byok, merged, mcp_auth_header
+        return authorization, merged, per_server
+    if isinstance(per_server, str) and per_server:
+        return per_server, forwarded, per_server
+    if mcp_auth_header:
+        return _format_byok_openapi_auth_header(mcp_server, mcp_auth_header), forwarded, mcp_auth_header
+    return None, forwarded, None
 
 
 async def _resolve_byok_mcp_auth_header(
@@ -2282,7 +2335,15 @@ class MCPServerManager:
                     input_schema = build_input_schema(resolved_operation)
 
                     # Create tool function with headers using imported function
-                    tool_func = create_tool_function(path, method, resolved_operation, base_url, headers=headers)
+                    tool_func = create_tool_function(
+                        path,
+                        method,
+                        resolved_operation,
+                        base_url,
+                        headers=headers,
+                        server_label=server.name or server.server_name or server.alias or server.server_id,
+                        relays_upstream_auth=server.is_client_forwarded_token,
+                    )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description
 
@@ -2882,17 +2943,14 @@ class MCPServerManager:
         2. If admin and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
-        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-
         allow_all_server_ids: Final = self.get_allow_all_keys_server_ids()
 
         # A keyless admitted subject is resolved per grant source, and channel decisions that are
         # absolute for a scoped KEY credential are not absolute for it: its own opt-out silences its
-        # own source (handled per source in the resolver), never its teams' grants, and its admin
-        # role does not swallow the grant model — a session bearer is a third-party client
-        # credential, not the dashboard, so an admin signing in through the connect flow gets their
-        # grants like anyone else rather than handing the client the full registry ahead of every
-        # per-team org ceiling.
+        # own source (handled per source in the resolver), never its teams' grants. Its admin role
+        # rides the HUMAN, not the credential: an admin's session resolves the same registry their
+        # dashboard shows (connect-page parity), bounded like an admin key by explicit
+        # object_permission scope, the entitlement ceiling, and the session resource scope below.
         is_admitted_subject: Final = _is_mcp_admitted_user_subject(user_api_key_auth)
 
         # The key explicitly opted out of every MCP server. Return zero before
@@ -2921,26 +2979,16 @@ class MCPServerManager:
         )
 
         try:
-            # If admin but NO explicit object permission, get all servers (never for an admitted
-            # subject — see is_admitted_subject above)
-            if (
-                user_api_key_auth
-                and not is_admitted_subject
-                and _user_has_admin_view(user_api_key_auth)
-                and not has_explicit_object_permission
-                # An entitlement attached to the HUMAN binds them whatever their role: it is the
-                # person's scope, not the credential's, so an admin role is not a waiver of it. An
-                # UNRESOLVED entitlement also skips the shortcut, so the resolver denies rather than
-                # handing over the whole registry on a transient fault.
-                and not await MCPRequestHandler._user_places_mcp_ceiling(user_api_key_auth)
-            ):
-                verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
-                return list(self.get_registry().keys())
-
-            # Get allowed servers from object permissions (respects object_permission even for admins)
-            allowed_mcp_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
-            verbose_logger.debug("Allowed MCP Servers for user api key auth: %s", allowed_mcp_servers)
-            combined_servers: Final = set(allowed_mcp_servers)
+            # Admin view with no explicit object permission and no entitlement ceiling resolves the
+            # whole registry, for keys AND admitted session subjects alike (one predicate owns the
+            # question). Seeded into the union rather than returned early so the session resource
+            # scope below still bounds a per-server envelope held by an admin.
+            combined_servers: Final = (
+                set(self.get_registry().keys())
+                if await MCPRequestHandler.admin_view_unscoped(user_api_key_auth)
+                else set(await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth))
+            )
+            verbose_logger.debug("Allowed MCP Servers for user api key auth: %s", combined_servers)
             combined_servers.update(
                 await self.operator_open_server_ids(
                     user_api_key_auth,
@@ -3193,10 +3241,6 @@ class MCPServerManager:
             # Get server-specific auth header if available
             server_auth_header: str | dict[str, str] | None = None
             if mcp_server_auth_headers:
-                from litellm.proxy._experimental.mcp_server.utils import (
-                    lookup_mcp_server_auth_in_headers,
-                )
-
                 server_auth_header = lookup_mcp_server_auth_in_headers(
                     mcp_server_auth_headers,
                     alias=server.alias,
@@ -4935,6 +4979,12 @@ class MCPServerManager:
 
             return result
 
+        except MCPUpstreamAuthError:
+            # The caller must re-authenticate upstream, so this keeps its type all the way to the
+            # renderers: the streamable path turns it into an isError result naming the status, and
+            # the REST path relays a real 401 with the upstream's WWW-Authenticate. Flattening it
+            # into the generic message below would lose both.
+            raise
         except Exception as e:
             error_msg = f"Error calling OpenAPI tool {tool_name}: {e}"
             verbose_logger.error(error_msg)
@@ -5221,11 +5271,6 @@ class MCPServerManager:
         # the exact case of server alias/name (e.g., '1litellmagcgateway' vs '1LiteLLMAGCGateway')
         server_auth_header: dict[str, str] | str | None = None
         if mcp_server_auth_headers:
-            # Normalize keys for case-insensitive lookup
-            from litellm.proxy._experimental.mcp_server.utils import (
-                lookup_mcp_server_auth_in_headers,
-            )
-
             server_auth_header = lookup_mcp_server_auth_in_headers(
                 mcp_server_auth_headers,
                 alias=mcp_server.alias,
@@ -5718,16 +5763,20 @@ class MCPServerManager:
                     server_name,
                 )
 
-            auth_header_value: Final = (
-                _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
+            auth_header_value, openapi_forwarded_headers, upstream_credential = _resolve_openapi_tool_auth(
+                mcp_server=mcp_server,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
             )
             resolved_auth_headers, forwarded_headers = await self.resolve_openapi_upstream_auth(
                 mcp_server=mcp_server,
                 oauth2_headers=caller_oauth2_headers,
                 raw_headers=raw_headers,
-                mcp_auth_header=mcp_auth_header,
+                mcp_auth_header=upstream_credential,
                 user_api_key_auth=user_api_key_auth,
-                forwarded_headers=_openapi_forwarded_extra_headers(mcp_server, raw_headers, user_api_key_auth),
+                forwarded_headers=openapi_forwarded_headers,
             )
 
             async def _call_openapi_via_handler():

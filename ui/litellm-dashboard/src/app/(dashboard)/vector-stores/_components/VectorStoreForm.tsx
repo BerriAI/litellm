@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Alert } from "antd";
-import { CircleHelp, Eye, EyeOff } from "lucide-react";
+import { CircleHelp, Eye, EyeOff, Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useWatch } from "react-hook-form";
 import { z } from "zod/v4";
 import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
@@ -15,7 +15,7 @@ import {
 import { Logo } from "@/components/molecules/logo/Logo";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { toast } from "@/lib/toast";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +26,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -264,56 +265,60 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           : "Enter vector store ID from your provider";
 
   return (
-    <Modal title="Add New Vector Store" open={isVisible} width={1000} footer={null} onCancel={handleCancel}>
-      <TooltipProvider>
-        <form onSubmit={form.handleSubmit(handleCreate)}>
-          <FieldGroup>
-            <FormField
-              control={form.control}
-              name="custom_llm_provider"
-              label={labelWithHint("Provider", "Select the provider for this vector store")}
-            >
-              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                <Select value={value} onValueChange={makeProviderChangeHandler(onChange)}>
-                  <SelectTrigger
-                    id={id}
-                    aria-invalid={ariaInvalid}
-                    aria-describedby={ariaDescribedBy}
-                    className="w-full"
-                  >
-                    <SelectValue>
-                      {(provider: string) => {
-                        const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
-                        return (
-                          <>
-                            <Logo src={logo} label={displayName} className="w-5 h-5" />
-                            <span>{displayName}</span>
-                          </>
-                        );
-                      }}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => (
-                      <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
-                        <Logo
-                          src={vectorStoreProviderLogoMap[providerDisplayName]}
-                          label={providerDisplayName}
-                          className="w-5 h-5"
-                        />
-                        <span>{providerDisplayName}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </FormField>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+        <DialogHeader>
+          <DialogTitle>Add New Vector Store</DialogTitle>
+        </DialogHeader>
+        <TooltipProvider>
+          <form onSubmit={form.handleSubmit(handleCreate)}>
+            <FieldGroup>
+              <FormField
+                control={form.control}
+                name="custom_llm_provider"
+                label={labelWithHint("Provider", "Select the provider for this vector store")}
+              >
+                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                  <Select value={value} onValueChange={makeProviderChangeHandler(onChange)}>
+                    <SelectTrigger
+                      id={id}
+                      aria-invalid={ariaInvalid}
+                      aria-describedby={ariaDescribedBy}
+                      className="w-full"
+                    >
+                      <SelectValue>
+                        {(provider: string) => {
+                          const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
+                          return (
+                            <>
+                              <Logo src={logo} label={displayName} className="w-5 h-5" />
+                              <span>{displayName}</span>
+                            </>
+                          );
+                        }}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => (
+                        <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
+                          <Logo
+                            src={vectorStoreProviderLogoMap[providerDisplayName]}
+                            label={providerDisplayName}
+                            className="w-5 h-5"
+                          />
+                          <span>{providerDisplayName}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </FormField>
 
-            {selectedProvider === "pg_vector" && (
-              <Alert
-                message="PG Vector Setup Required"
-                description={
-                  <div>
+              {selectedProvider === "pg_vector" && (
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>PG Vector Setup Required</AlertTitle>
+                  <AlertDescription>
                     <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
                     <ol style={{ marginLeft: "16px", marginTop: "8px", listStyleType: "decimal" }}>
                       <li>
@@ -326,18 +331,15 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                       <li>Start the server and note the API base URL and API key</li>
                       <li>Enter those details in the fields below</li>
                     </ol>
-                  </div>
-                }
-                type="info"
-                showIcon
-              />
-            )}
+                  </AlertDescription>
+                </Alert>
+              )}
 
-            {selectedProvider === "valkey" && (
-              <Alert
-                message="Valkey Setup Required"
-                description={
-                  <div>
+              {selectedProvider === "valkey" && (
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Valkey Setup Required</AlertTitle>
+                  <AlertDescription>
                     <p>
                       LiteLLM searches documents you have already stored in Valkey. It does not create the index or
                       upload documents for you. Before creating this vector store, make sure:
@@ -364,18 +366,15 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                       When a query comes in, LiteLLM converts it to an embedding with the model below and returns the
                       closest matching documents from your index.
                     </p>
-                  </div>
-                }
-                type="info"
-                showIcon
-              />
-            )}
+                  </AlertDescription>
+                </Alert>
+              )}
 
-            {selectedProvider === "vertex_rag_engine" && (
-              <Alert
-                message="Vertex AI RAG Engine Setup"
-                description={
-                  <div>
+              {selectedProvider === "vertex_rag_engine" && (
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Vertex AI RAG Engine Setup</AlertTitle>
+                  <AlertDescription>
                     <p>To use Vertex AI RAG Engine:</p>
                     <p style={{ marginTop: "4px", fontStyle: "italic" }}>
                       Note: Google Cloud has renamed this to &quot;RAG Engine&quot; in its console — the steps below
@@ -399,18 +398,15 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                       </li>
                       <li>Enter the corpus ID in the Vector Store ID field below</li>
                     </ol>
-                  </div>
-                }
-                type="info"
-                showIcon
-              />
-            )}
+                  </AlertDescription>
+                </Alert>
+              )}
 
-            {selectedProvider === "vertex_ai/search_api" && (
-              <Alert
-                message="Vertex AI Search Setup"
-                description={
-                  <div>
+              {selectedProvider === "vertex_ai/search_api" && (
+                <Alert variant="info">
+                  <Info />
+                  <AlertTitle>Vertex AI Search Setup</AlertTitle>
+                  <AlertDescription>
                     <p>To use Vertex AI Search (Discovery Engine):</p>
                     <p style={{ marginTop: "4px", fontStyle: "italic" }}>
                       Note: Google Cloud has renamed this to &quot;Agent Search&quot; in its console — the steps below
@@ -441,104 +437,102 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                         record, but it isn&apos;t used in the GCP URL when Engine ID is set.
                       </li>
                     </ol>
-                  </div>
-                }
-                type="info"
-                showIcon
-              />
-            )}
-
-            <FormField
-              control={form.control}
-              name="vector_store_id"
-              label={labelWithHint("Vector Store ID", "Enter the vector store ID from your api provider")}
-            >
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder={vectorStoreIdPlaceholder} />}
-            </FormField>
-
-            {getProviderSpecificFields(selectedProvider)
-              .filter(isSupportedProviderField)
-              .map((field) => (
-                <ProviderField key={field.name} field={field} control={form.control} modelInfo={modelInfo} />
-              ))}
-
-            <FormField
-              control={form.control}
-              name="vector_store_name"
-              label={labelWithHint(
-                "Vector Store Name",
-                "Custom name you want to give to the vector store, this name will be rendered on the LiteLLM UI",
+                  </AlertDescription>
+                </Alert>
               )}
-            >
-              {({ ref, value, ...field }) => <Input {...field} ref={ref} value={value ?? ""} />}
-            </FormField>
 
-            <FormField control={form.control} name="vector_store_description" label="Description">
-              {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={4} />}
-            </FormField>
+              <FormField
+                control={form.control}
+                name="vector_store_id"
+                label={labelWithHint("Vector Store ID", "Enter the vector store ID from your api provider")}
+              >
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder={vectorStoreIdPlaceholder} />}
+              </FormField>
 
-            <FormField
-              control={form.control}
-              name="litellm_credential_name"
-              label={labelWithHint(
-                "Existing Credentials",
-                "Optionally select API provider credentials for this vector store eg. Bedrock API KEY",
-              )}
-            >
-              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                <Combobox
-                  items={credentialOptions}
-                  value={credentialOptions.find((option) => option.value === value) ?? null}
-                  onValueChange={(option: CredentialOption | null) => onChange(option ? option.value : undefined)}
-                  itemToStringLabel={(option: CredentialOption) => option.label}
-                  isItemEqualToValue={(option: CredentialOption, selected: CredentialOption) =>
-                    option.value === selected.value
-                  }
-                >
-                  <ComboboxInput
-                    id={id}
-                    aria-invalid={ariaInvalid}
-                    aria-describedby={ariaDescribedBy}
-                    placeholder="Select or search for existing credentials"
-                    className="w-full"
-                    showClear={value !== undefined}
-                  />
-                  <ComboboxContent>
-                    <ComboboxEmpty>No matching credentials</ComboboxEmpty>
-                    <ComboboxList>
-                      {(option: CredentialOption) => (
-                        <ComboboxItem key={option.label} value={option}>
-                          {option.label}
-                        </ComboboxItem>
-                      )}
-                    </ComboboxList>
-                  </ComboboxContent>
-                </Combobox>
-              )}
-            </FormField>
+              {getProviderSpecificFields(selectedProvider)
+                .filter(isSupportedProviderField)
+                .map((field) => (
+                  <ProviderField key={field.name} field={field} control={form.control} modelInfo={modelInfo} />
+                ))}
 
-            <div role="group" className="flex w-full flex-col gap-3">
-              <span className="flex w-fit gap-2 text-sm leading-snug font-medium">
-                {labelWithHint("Metadata", "JSON metadata for the vector store (optional)")}
-              </span>
-              <Textarea
-                rows={4}
-                value={metadataJson}
-                onChange={(event) => setMetadataJson(event.target.value)}
-                placeholder='{"key": "value"}'
-              />
+              <FormField
+                control={form.control}
+                name="vector_store_name"
+                label={labelWithHint(
+                  "Vector Store Name",
+                  "Custom name you want to give to the vector store, this name will be rendered on the LiteLLM UI",
+                )}
+              >
+                {({ ref, value, ...field }) => <Input {...field} ref={ref} value={value ?? ""} />}
+              </FormField>
+
+              <FormField control={form.control} name="vector_store_description" label="Description">
+                {({ ref, value, ...field }) => <Textarea {...field} ref={ref} value={value ?? ""} rows={4} />}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="litellm_credential_name"
+                label={labelWithHint(
+                  "Existing Credentials",
+                  "Optionally select API provider credentials for this vector store eg. Bedrock API KEY",
+                )}
+              >
+                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                  <Combobox
+                    items={credentialOptions}
+                    value={credentialOptions.find((option) => option.value === value) ?? null}
+                    onValueChange={(option: CredentialOption | null) => onChange(option ? option.value : undefined)}
+                    itemToStringLabel={(option: CredentialOption) => option.label}
+                    isItemEqualToValue={(option: CredentialOption, selected: CredentialOption) =>
+                      option.value === selected.value
+                    }
+                  >
+                    <ComboboxInput
+                      id={id}
+                      aria-invalid={ariaInvalid}
+                      aria-describedby={ariaDescribedBy}
+                      placeholder="Select or search for existing credentials"
+                      className="w-full"
+                      showClear={value !== undefined}
+                    />
+                    <ComboboxContent>
+                      <ComboboxEmpty>No matching credentials</ComboboxEmpty>
+                      <ComboboxList>
+                        {(option: CredentialOption) => (
+                          <ComboboxItem key={option.label} value={option}>
+                            {option.label}
+                          </ComboboxItem>
+                        )}
+                      </ComboboxList>
+                    </ComboboxContent>
+                  </Combobox>
+                )}
+              </FormField>
+
+              <div role="group" className="flex w-full flex-col gap-3">
+                <span className="flex w-fit gap-2 text-sm leading-snug font-medium">
+                  {labelWithHint("Metadata", "JSON metadata for the vector store (optional)")}
+                </span>
+                <Textarea
+                  rows={4}
+                  value={metadataJson}
+                  onChange={(event) => setMetadataJson(event.target.value)}
+                  placeholder='{"key": "value"}'
+                />
+              </div>
+            </FieldGroup>
+
+            <div className="mt-6 flex justify-end space-x-3">
+              <Button type="button" variant="outline" onClick={handleCancel}>
+                Cancel
+              </Button>
+              <Button type="submit">Create</Button>
             </div>
-          </FieldGroup>
-
-          <div className="mt-6 flex justify-end space-x-3">
-            <Button type="button" variant="outline" onClick={handleCancel}>
-              Cancel
-            </Button>
-            <Button type="submit">Create</Button>
-          </div>
-        </form>
-      </TooltipProvider>
-    </Modal>
+          </form>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

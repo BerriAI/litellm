@@ -7,8 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Alert as AntdAlert, Modal, Space, Tabs, Typography } from "antd";
-import { Info } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Info, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
@@ -29,12 +29,11 @@ import {
 } from "@/components/Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
 import UIAccessControlForm from "@/components/UIAccessControlForm";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { useZodForm } from "@/lib/forms/useZodForm";
-
-const { Title, Paragraph, Text } = Typography;
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const allowedIPSchema = z.object({
   ip: z.string().min(1, "Please enter an IP address"),
@@ -222,13 +221,15 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       children: (
         <>
           <Card className="block p-6">
-            <Title level={4}> ✨ Security Settings</Title>
-            <AntdAlert
-              message="SSO Configuration Deprecated"
-              description="Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the SSO Settings tab for SSO configuration."
-              type="warning"
-              showIcon
-            />
+            <h3 className="mb-2 text-base font-semibold text-foreground">✨ Security Settings</h3>
+            <Alert variant="warning">
+              <TriangleAlert />
+              <AlertTitle>SSO Configuration Deprecated</AlertTitle>
+              <AlertDescription>
+                Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the
+                SSO Settings tab for SSO configuration.
+              </AlertDescription>
+            </Alert>
             <div
               style={{
                 display: "flex",
@@ -276,87 +277,86 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
               accessToken={accessToken}
               ssoConfigured={ssoConfigured}
             />
-            <Modal
-              title="Manage Allowed IP Addresses"
-              width={800}
-              open={isAllowedIPModalVisible}
-              onCancel={() => setIsAllowedIPModalVisible(false)}
-              footer={[
-                <Button className="mx-1" key="add" onClick={() => setIsAddIPModalVisible(true)}>
-                  Add IP Address
-                </Button>,
-                <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
-                  Close
-                </Button>,
-              ]}
-            >
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>IP Address</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {allowedIPs.map((ip, index) => (
-                    <TableRow key={index}>
-                      <TableCell>{ip}</TableCell>
-                      <TableCell className="text-right">
-                        {ip !== all_ip_address_allowed && (
-                          <Button onClick={() => handleDeleteIP(ip)} variant="destructive" size="sm">
-                            Delete
-                          </Button>
-                        )}
-                      </TableCell>
+            <Dialog open={isAllowedIPModalVisible} onOpenChange={(open) => !open && setIsAllowedIPModalVisible(false)}>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+                <DialogHeader>
+                  <DialogTitle>Manage Allowed IP Addresses</DialogTitle>
+                </DialogHeader>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>IP Address</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Modal>
+                  </TableHeader>
+                  <TableBody>
+                    {allowedIPs.map((ip, index) => (
+                      <TableRow key={index}>
+                        <TableCell>{ip}</TableCell>
+                        <TableCell className="text-right">
+                          {ip !== all_ip_address_allowed && (
+                            <Button onClick={() => handleDeleteIP(ip)} variant="destructive" size="sm">
+                              Delete
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <DialogFooter>
+                  <Button className="mx-1" onClick={() => setIsAddIPModalVisible(true)}>
+                    Add IP Address
+                  </Button>
+                  <Button onClick={() => setIsAllowedIPModalVisible(false)}>Close</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
-            <Modal
-              title="Add Allowed IP Address"
-              open={isAddIPModalVisible}
-              onCancel={() => setIsAddIPModalVisible(false)}
-              footer={null}
-            >
-              <AddAllowedIPForm onSubmit={handleAddIP} />
-            </Modal>
+            <Dialog open={isAddIPModalVisible} onOpenChange={(open) => !open && setIsAddIPModalVisible(false)}>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Add Allowed IP Address</DialogTitle>
+                </DialogHeader>
+                <AddAllowedIPForm onSubmit={handleAddIP} />
+              </DialogContent>
+            </Dialog>
 
-            <Modal
-              title="Confirm Delete"
-              open={isDeleteIPModalVisible}
-              onCancel={() => setIsDeleteIPModalVisible(false)}
-              onOk={confirmDeleteIP}
-              footer={[
-                <Button className="mx-1" key="delete" onClick={() => confirmDeleteIP()}>
-                  Yes
-                </Button>,
-                <Button key="close" onClick={() => setIsDeleteIPModalVisible(false)}>
-                  Close
-                </Button>,
-              ]}
-            >
-              <Text>Are you sure you want to delete the IP address: {ipToDelete}?</Text>
-            </Modal>
+            <Dialog open={isDeleteIPModalVisible} onOpenChange={(open) => !open && setIsDeleteIPModalVisible(false)}>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Confirm Delete</DialogTitle>
+                </DialogHeader>
+                <span className="text-sm text-foreground">
+                  Are you sure you want to delete the IP address: {ipToDelete}?
+                </span>
+                <DialogFooter>
+                  <Button className="mx-1" onClick={() => confirmDeleteIP()}>
+                    Yes
+                  </Button>
+                  <Button onClick={() => setIsDeleteIPModalVisible(false)}>Close</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             {/* UI Access Control Modal */}
-            <Modal
-              title="UI Access Control Settings"
+            <Dialog
               open={isUIAccessControlModalVisible}
-              width={600}
-              footer={null}
-              onOk={handleUIAccessControlOk}
-              onCancel={handleUIAccessControlCancel}
+              onOpenChange={(open) => !open && handleUIAccessControlCancel()}
             >
-              <UIAccessControlForm
-                accessToken={accessToken}
-                onSuccess={() => {
-                  handleUIAccessControlOk();
-                  toast.success("UI Access Control settings updated successfully");
-                }}
-              />
-            </Modal>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+                <DialogHeader>
+                  <DialogTitle>UI Access Control Settings</DialogTitle>
+                </DialogHeader>
+                <UIAccessControlForm
+                  accessToken={accessToken}
+                  onSuccess={() => {
+                    handleUIAccessControlOk();
+                    toast.success("UI Access Control settings updated successfully");
+                  }}
+                />
+              </DialogContent>
+            </Dialog>
           </div>
           <Alert variant="info">
             <Info />
@@ -379,11 +379,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     {
       key: "ui-settings",
       label: (
-        <Space>
-          <Text>
-            UI Settings <NewBadge />
-          </Text>
-        </Space>
+        <span className="flex items-center gap-1.5">
+          UI Settings
+          <NewBadge />
+        </span>
       ),
       children: (
         <div className="flex flex-col gap-4">
@@ -411,9 +410,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
 
   return (
     <div className="w-full m-2 mt-2 p-8">
-      <Title level={4}>Admin Access </Title>
-      <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
-      <Tabs items={tabItems} />
+      <h2 className="mb-2 text-base font-semibold text-foreground">Admin Access</h2>
+      <p className="mb-4 text-sm text-foreground">Go to &apos;Internal Users&apos; page to add other admins.</p>
+      <Tabs defaultValue={tabItems[0].key}>
+        <TabsList variant="line" className="mb-4 h-auto flex-wrap">
+          {tabItems.map((item) => (
+            <TabsTrigger key={item.key} value={item.key} className="flex-none">
+              {item.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {tabItems.map((item) => (
+          <TabsContent key={item.key} value={item.key}>
+            {item.children}
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 };

@@ -301,7 +301,7 @@ const AllModelsTab = ({
             {selectedTeamValue === PERSONAL_TEAM_VALUE ? (
               <span>
                 To access these models, create a Virtual Key without selecting a team on the{" "}
-                <a href="/public?login=success&page=api-keys" className="font-medium text-blue-600 hover:underline">
+                <a href="/public?login=success&page=api-keys" className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .
@@ -309,7 +309,7 @@ const AllModelsTab = ({
             ) : (
               <span>
                 To access these models, create a Virtual Key and select Team as &quot;{teamAccessLabel}&quot; on the{" "}
-                <a href="/public?login=success&page=api-keys" className="font-medium text-blue-600 hover:underline">
+                <a href="/public?login=success&page=api-keys" className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .

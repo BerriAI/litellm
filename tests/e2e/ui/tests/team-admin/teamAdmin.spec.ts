@@ -61,7 +61,7 @@ test.describe("Team Admin", () => {
     await page.getByRole("tab", { name: "Members" }).click();
     await page.getByRole("button", { name: /Add Member/i }).click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Add Team Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     // Use a dedicated invitee user so this doesn't race with the proxy-admin
@@ -144,9 +144,10 @@ test.describe("Team Admin", () => {
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
     await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
 
-    // Models — pick "All Team Models"
-    await page.locator(".ant-select-selection-overflow").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Team Models").click();
+    // Models — pick "All Team Models". The popup is portaled to the body, so
+    // scope the option lookup to the page.
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "All Team Models", exact: true }).click();
     await page.keyboard.press("Escape");
 
     const generate = await captureRequestBody(page, { method: "POST", urlIncludes: "/key/generate" }, async () => {

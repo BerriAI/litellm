@@ -1,4 +1,5 @@
 import re
+from collections.abc import Sequence
 from typing import Final
 
 from fastapi import HTTPException, Request, status
@@ -163,6 +164,19 @@ class RouteChecks:
                         # these paths are admin-only management writes and
                         # are intentionally not covered.
                         if RouteChecks._is_get_mcp_server_discovery_route(route=route, request=request):
+                            return True
+
+                        # Agent registry CRUD moved from llm_api_routes into
+                        # management_routes so DISABLE_LLM_API_ENDPOINTS stops
+                        # blocking it. Keys configured with
+                        # allowed_routes=["llm_api_routes"] before that split
+                        # could reach these paths, so keep them reachable here;
+                        # the handlers in agent_endpoints/endpoints.py still
+                        # enforce proxy-admin on writes and scope reads by role.
+                        if RouteChecks.check_route_access(
+                            route=route,
+                            allowed_routes=LiteLLMRoutes.agent_management_routes.value,
+                        ):
                             return True
 
         # check if wildcard pattern is allowed
@@ -367,7 +381,7 @@ class RouteChecks:
         if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value):
             return True
 
-        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_routes.value):
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_inference_routes.value):
             return True
 
         if route in LiteLLMRoutes.litellm_native_routes.value:
@@ -558,13 +572,13 @@ class RouteChecks:
         return False
 
     @staticmethod
-    def check_route_access(route: str, allowed_routes: list[str]) -> bool:
+    def check_route_access(route: str, allowed_routes: Sequence[str]) -> bool:
         """
         Check if a route has access by checking both exact matches and patterns
 
         Args:
             route (str): The route to check
-            allowed_routes (list): List of allowed routes/patterns
+            allowed_routes (Sequence): Allowed routes/patterns
 
         Returns:
             bool: True if route is allowed, False otherwise
@@ -579,10 +593,12 @@ class RouteChecks:
         # wildcard match route is in allowed_routes
         # e.g calling /anthropic/v1/messages is allowed if allowed_routes has /anthropic/*
         #########################################################
-        wildcard_allowed_routes = [route for route in allowed_routes if RouteChecks._is_wildcard_pattern(pattern=route)]
-        for allowed_route in wildcard_allowed_routes:
-            if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
-                return True
+        if any(
+            RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route)
+            for allowed_route in allowed_routes
+            if RouteChecks._is_wildcard_pattern(pattern=allowed_route)
+        ):
+            return True
 
         #########################################################
         # pattern match route is in allowed_routes

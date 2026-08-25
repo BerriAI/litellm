@@ -8,9 +8,14 @@ vi.mock(
 );
 
 const mockModelInfo = [
-  { model_group: "gpt-4", mode: "chat" },
+  {
+    model_group: "gpt-4",
+    mode: "chat",
+    supports_reasoning: true,
+    supported_reasoning_efforts: ["medium", "high", "xhigh"],
+  },
   { model_group: "gpt-3.5-turbo", mode: "chat" },
-  { model_group: "claude-3-opus", mode: "chat" },
+  { model_group: "claude-3-opus", mode: "chat", supports_reasoning: true },
   { model_group: "text-embedding-3-small", mode: "embedding" },
 ] as any[];
 
@@ -108,7 +113,7 @@ describe("ComplexityRouterConfig", () => {
       classifier_type: "llm",
       classifier_llm_config: { model: "", timeout_ms: 3000, classification_rubric: "agentic" },
       classifier_context_window_size: 3,
-      classifier_context_per_turn_chars: 200,
+      classifier_context_budget_chars: 8000,
     };
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
@@ -130,11 +135,10 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByDisplayValue("750")).toBeInTheDocument();
     expect(screen.getByText("Context Window Size")).toBeInTheDocument();
     expect(screen.getByDisplayValue("5")).toBeInTheDocument();
-    expect(screen.getByText("Context Per-Turn Character Limit")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("400")).toBeInTheDocument();
+    expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
-  it("should default classifier context fields to 3 and 200 when llm is selected without explicit values", () => {
+  it("should default the context window and budget when llm is selected", () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
       classifier_type: "llm",
@@ -147,8 +151,42 @@ describe("ComplexityRouterConfig", () => {
     const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
     expect(within(windowSizeSection).getByDisplayValue("3")).toBeInTheDocument();
 
-    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
-    expect(within(perTurnCharsSection).getByDisplayValue("200")).toBeInTheDocument();
+    const budgetSection = screen.getByText("Context Character Budget").closest("div") as HTMLElement;
+    expect(within(budgetSection).getByDisplayValue("8000")).toBeInTheDocument();
+  });
+
+  it("should warn when the budget is too small to quote any turn that does not already fit", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+      classifier_context_budget_chars: 50,
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.getByText(/no room to quote a turn/i)).toBeInTheDocument();
+  });
+
+  it("should not warn on a budget large enough to quote a turn, nor on a deliberate zero", () => {
+    for (const budget of [120, 8000, 0]) {
+      const { unmount } = renderWithProviders(
+        <ComplexityRouterConfig
+          modelInfo={mockModelInfo}
+          value={{
+            ...defaultValue,
+            classifier_type: "llm",
+            classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+            classifier_context_budget_chars: budget,
+          }}
+          onChange={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByText("Advanced: Classification Method"));
+      expect(screen.queryByText(/no room to quote a turn/i)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("should show the assistant-turns switch with its configured value when classifier_type is llm", () => {
@@ -229,26 +267,6 @@ describe("ComplexityRouterConfig", () => {
     });
   });
 
-  it("should call onChange with the updated classifier_context_per_turn_chars when edited", () => {
-    const onChange = vi.fn();
-    const llmValue: ComplexityRouterConfigValue = {
-      ...defaultValue,
-      classifier_type: "llm",
-      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
-    };
-    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
-    fireEvent.click(screen.getByText("Advanced: Classification Method"));
-
-    const perTurnCharsSection = screen.getByText("Context Per-Turn Character Limit").closest("div") as HTMLElement;
-    const input = within(perTurnCharsSection).getByRole("spinbutton");
-    fireEvent.change(input, { target: { value: "500" } });
-
-    expect(onChange).toHaveBeenCalledWith({
-      ...llmValue,
-      classifier_context_per_turn_chars: 500,
-    });
-  });
-
   it("should render the custom technical keywords field", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
@@ -280,9 +298,26 @@ describe("ComplexityRouterConfig", () => {
     );
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
-    const input = within(keywordsSection).getByRole("combobox");
-    await user.type(input, "udp,");
+    await user.type(within(keywordsSection).getByRole("combobox"), "udp");
+    await user.click(await screen.findByText('Create "udp"'));
     expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp"]);
+  });
+
+  it("splits a comma-separated keyword entry into one keyword per token", async () => {
+    const user = userEvent.setup();
+    const onCustomTechnicalKeywordsChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        customTechnicalKeywords={[]}
+        onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const keywordsSection = screen.getByText("Custom Technical Keywords").closest("div")?.parentElement as HTMLElement;
+    await user.type(within(keywordsSection).getByRole("combobox"), "udp, kafka ,terraform");
+    await user.click(await screen.findByText('Create "udp, kafka ,terraform"'));
+    expect(onCustomTechnicalKeywordsChange).toHaveBeenCalledWith(["udp", "kafka", "terraform"]);
   });
 
   it("should render an empty state when no keyword tier rules exist", () => {
@@ -314,9 +349,7 @@ describe("ComplexityRouterConfig", () => {
     expect(newRules[0]).toMatchObject({ keywords: [], tier: "COMPLEX" });
   });
 
-  // The dropdown is closed, so antd has nothing for Enter to select and the word would only land
-  // on blur. Submitting used to provide that blur; it no longer can while the row reads as empty.
-  it("commits a typed keyword on Enter, with the dropdown closed", async () => {
+  it("commits a typed keyword to the rule it was typed into", async () => {
     const user = userEvent.setup();
     const onKeywordTierRulesChange = vi.fn();
     renderWithProviders(
@@ -329,7 +362,8 @@ describe("ComplexityRouterConfig", () => {
     fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
 
     const field = screen.getByText("Keywords 1").closest("div") as HTMLElement;
-    await user.type(within(field).getByRole("combobox"), "invoice{enter}");
+    await user.type(within(field).getByRole("combobox"), "invoice");
+    await user.click(await screen.findByText('Create "invoice"'));
 
     expect(onKeywordTierRulesChange).toHaveBeenCalledWith([{ id: "rule-1", keywords: ["invoice"], tier: "COMPLEX" }]);
   });
@@ -387,7 +421,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
 
     const simpleTierSection = screen.getByText("Simple Tier").closest(".mb-4") as HTMLElement;
-    const combobox = within(simpleTierSection).getByRole("combobox");
+    const combobox = within(simpleTierSection).getByRole("combobox", { name: "Select model(s) for simple queries" });
     await user.click(combobox);
 
     expect((await screen.findAllByText("gpt-3.5-turbo")).length).toBeGreaterThan(0);
@@ -482,7 +516,7 @@ describe("ComplexityRouterConfig classifier fallback", () => {
     };
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={noTiers} onChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("hides the fallback choice for the heuristic classifier, which has nothing to fall back from", () => {
@@ -584,8 +618,8 @@ describe("ComplexityRouterConfig classifier rubric", () => {
 
   it("records the chat preset the operator picks", async () => {
     const onChange = openClassificationPanel(llmValue);
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Classification Rubric" }));
-    await userEvent.click(await screen.findByTitle("Chat"));
+    await userEvent.click(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Chat" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ classifier_llm_config: expect.objectContaining({ classification_rubric: "chat" }) }),
     );
@@ -597,6 +631,25 @@ describe("ComplexityRouterConfig classifier rubric", () => {
       classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "chat" },
     });
     expect(screen.getByText(/only conversational traffic/)).toBeInTheDocument();
+  });
+
+  it("records the business preset the operator picks", async () => {
+    const onChange = openClassificationPanel(llmValue);
+    await userEvent.click(screen.getByRole("combobox", { name: "Classification Rubric" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Business" }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_llm_config: expect.objectContaining({ classification_rubric: "business" }),
+      }),
+    );
+  });
+
+  it("shows the stored preset when editing a router already on business", () => {
+    openClassificationPanel({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, classification_rubric: "business" },
+    });
+    expect(screen.getByText(/business-oriented tier definitions/)).toBeInTheDocument();
   });
 
   it("disables the preset once a custom prompt replaces the rubric it would select", () => {
@@ -678,7 +731,7 @@ describe("ComplexityRouterConfig tier labels", () => {
       />,
     );
     fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
-    expect(screen.getByTitle("Deep")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Route keyword rule 1 to tier" })).toHaveTextContent("Deep");
   });
 });
 
@@ -716,7 +769,7 @@ describe("ComplexityRouterConfig default model", () => {
 
   it("shows what the tiers currently imply, so an untouched router still names its default", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
-    expect(screen.getByText("Derived from tiers: gpt-3.5-turbo")).toBeInTheDocument();
+    expect(getDefaultModelSelect()).toHaveAttribute("placeholder", "Derived from tiers: gpt-3.5-turbo");
   });
 
   it("asks for a model rather than naming a derived one when no tier holds one", () => {
@@ -725,7 +778,7 @@ describe("ComplexityRouterConfig default model", () => {
       tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={noTiers} />);
-    expect(screen.getByText("Add a model to the Simple or Medium tier")).toBeInTheDocument();
+    expect(getDefaultModelSelect()).toHaveAttribute("placeholder", "Add a model to the Simple or Medium tier");
   });
 
   it("records a pinned model", async () => {
@@ -734,7 +787,7 @@ describe("ComplexityRouterConfig default model", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
 
     await user.click(getDefaultModelSelect());
-    await user.click((await screen.findAllByTitle("claude-3-opus")).slice(-1)[0]);
+    await user.click(await screen.findByRole("option", { name: "claude-3-opus" }));
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: "claude-3-opus" }));
   });
@@ -745,8 +798,7 @@ describe("ComplexityRouterConfig default model", () => {
     const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} onChange={onChange} />);
 
-    // eslint-disable-next-line local/no-antd-class-selectors -- antd marks the clear affordance aria-hidden, so no accessible query reaches it
-    await user.click(document.querySelector(".ant-select-clear") as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ default_model: undefined }));
   });
@@ -754,10 +806,7 @@ describe("ComplexityRouterConfig default model", () => {
   it("shows a pinned model as the selection instead of the tier-derived one", () => {
     const pinned: ComplexityRouterConfigValue = { ...defaultValue, default_model: "claude-3-opus" };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinned} />);
-    expect(
-      // eslint-disable-next-line local/no-antd-class-selectors -- the tier selects show the same model as a tag, so the assertion has to scope to this select's root, which antd exposes only as a class
-      within(getDefaultModelSelect().closest(".ant-select") as HTMLElement).getByTitle("claude-3-opus"),
-    ).toBeInTheDocument();
+    expect(getDefaultModelSelect()).toHaveValue("claude-3-opus");
   });
 
   it("unlocks the default model fallback on a pin alone, with no tier to derive from", () => {
@@ -770,7 +819,7 @@ describe("ComplexityRouterConfig default model", () => {
     };
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={pinnedNoTiers} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).not.toHaveAttribute("aria-disabled");
   });
 
   it("names the resolved default on the fallback option, so the destination is not a guess", () => {
@@ -827,9 +876,9 @@ describe("plan-mode override", () => {
       />,
     );
     openPanel();
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Plan-mode minimum tier" }));
-    expect(await screen.findByTitle("Medium")).toBeInTheDocument();
-    expect(screen.queryByTitle("Reasoning")).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("combobox", { name: "Plan-mode minimum tier" }));
+    expect(await screen.findByRole("option", { name: "Medium" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Reasoning" })).not.toBeInTheDocument();
   });
 
   it("disables the toggle until some tier has models", async () => {
@@ -840,6 +889,126 @@ describe("plan-mode override", () => {
       />,
     );
     openPanel();
-    expect(await screen.findByRole("switch", { name: switchName })).toBeDisabled();
+    expect(await screen.findByRole("switch", { name: switchName })).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+describe("ComplexityRouterConfig per-model reasoning effort", () => {
+  it("renders one effort select per selected model, defaulting to Default", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    const select = screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" });
+    expect(select).toHaveTextContent("Default");
+  });
+
+  it("shows the hydrated effort for a model that has one stored", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "high" } } } }}
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" });
+    expect(select).toHaveTextContent("high");
+  });
+
+  it("emits tier_model_params scoped to the tier and model when an effort is picked", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...defaultValue,
+      tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "high" } } },
+    });
+  });
+
+  it("picking Default removes the stored effort", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "high" } } } }}
+        onChange={onChange}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" }));
+    await user.click(await screen.findByRole("option", { name: "Default" }));
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, tier_model_params: undefined });
+  });
+});
+
+describe("ComplexityRouterConfig reasoning effort gating", () => {
+  it("offers no effort select for a model group without reasoning support", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // A stored effort on a model the group info calls non-reasoning must stay visible, or the
+  // operator has no way to clear it.
+  it("keeps the select for a non-reasoning model that already has a stored effort", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { SIMPLE: { "gpt-3.5-turbo": { reasoning_effort: "low" } } } }}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
+    ).toHaveTextContent("low");
+  });
+});
+
+describe("ComplexityRouterConfig per-model effort filtering", () => {
+  it("offers only the efforts the model group supports", async () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" }));
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(options).toEqual(["Default", "medium", "high", "xhigh"]);
+  });
+
+  it("falls back to every effort when the group only reports supports_reasoning", async () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("combobox", { name: "Reasoning effort for claude-3-opus in the Reasoning tier" }),
+    );
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(options).toEqual(["Default", "none", "minimal", "low", "medium", "high", "xhigh"]);
+  });
+
+  // An empty list is the group's own answer that its deployments share no level, which is different
+  // from the field being absent, so the control is dropped rather than falling back to every level.
+  it("offers no effort at all when the group intersects to nothing", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        modelInfo={[
+          ...mockModelInfo.filter((model) => model.model_group !== "claude-3-opus"),
+          { model_group: "claude-3-opus", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: [] },
+        ]}
+      />,
+    );
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for claude-3-opus in the Reasoning tier" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Hand-authored configs can carry a level outside the supported set (e.g. max); it must render
+  // and stay clearable rather than being masked as Default.
+  it("keeps showing a stored effort outside the supported set", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "max" } } } }}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" })).toHaveTextContent(
+      "max",
+    );
   });
 });

@@ -2,7 +2,6 @@ import asyncio
 import copy
 import json
 import os
-import sys
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -11,7 +10,6 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
@@ -30,23 +28,6 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so adaptive-thinking detection reads this
-    branch's ``supports_adaptive_thinking`` flags, which the network-fetched
-    ``main`` copy lacks until merge."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -1406,7 +1387,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
         )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 
@@ -2293,13 +2274,14 @@ def test_bedrock_invoke_transform_hoists_only_leading_system_run(local_model_cos
     ]
 
 
-def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claude(local_model_cost_map):
-    """Regression test for Claude Code 400s on pre-Opus-4.8 Bedrock models:
-    Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet 4.6,
-    Haiku 4.5, etc. ("role 'system' is not supported on this model"), so on
-    models without ``supports_mid_conversation_system`` every system entry must
-    be hoisted into the top-level ``system`` field, mid-conversation ones
-    included."""
+def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
+    """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
+    4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but
+    hoisting a mid-conversation reminder into the top-level ``system`` field
+    mutates the cached prefix and reprocesses the whole history. On models
+    without ``supports_mid_conversation_system`` the reminder is converted to a
+    user turn in place instead: the request stays valid and a cache breakpoint
+    before the reminder still hits."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2324,19 +2306,136 @@ def test_bedrock_invoke_transform_hoists_mid_conversation_system_for_older_claud
 
     assert result["messages"] == [
         {"role": "user", "content": "read the file"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
         {"role": "assistant", "content": "reading"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [
-        {"type": "text", "text": "Base."},
-        {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+    assert result["system"] == [{"type": "text", "text": "Base."}]
+
+
+def test_bedrock_invoke_transform_moves_converted_system_after_tool_result_turn(local_model_cost_map):
+    """A reminder wedged between an assistant ``tool_use`` turn and the user
+    ``tool_result`` turn cannot become a user turn in that position: the API
+    requires the result right after the call ("tool_use ids were found without
+    tool_result blocks immediately after"). The converted turn goes after the
+    tool-result turn instead, where consecutive user turns merge upstream."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    tool_use_turn = {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "read_file", "input": {"path": "big1.txt"}}],
+    }
+    tool_result_turn = {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "first 100 lines"},
+            {"type": "text", "text": "keep going"},
+        ],
+    }
+    messages = [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]"},
+        {"role": "system", "content": "<budget>low</budget>"},
+        tool_result_turn,
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {"role": "user", "content": "read the file"},
+        tool_use_turn,
+        tool_result_turn,
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "<budget>low</budget>"},
+            ],
+        },
     ]
 
 
-def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_model_cost_map):
+def test_bedrock_invoke_transform_converted_system_carries_only_its_content(local_model_cost_map):
+    """Hoisting only ever kept a system entry's content, so the in-place
+    conversion must not forward the entry's other keys either ("messages.2.name:
+    Extra inputs are not permitted")."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [
+        {"role": "user", "content": "read the file"},
+        {"role": "assistant", "content": "reading"},
+        {"role": "system", "content": "[Truncated: PARTIAL view of big1.txt]", "name": "ops"},
+        {"role": "user", "content": "continue"},
+    ]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-opus-4-7",
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["messages"][2] == {
+        "role": "user",
+        "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+            {"type": "text", "text": "[Truncated: PARTIAL view of big1.txt]"},
+        ],
+    }
+
+
+def test_bedrock_invoke_transform_converts_system_for_unmapped_model(local_model_cost_map):
     """A model with no cost-map entry and no fallback-generalization rule gets
-    the hoist-everything behavior: the safe default is a mutated cache prefix,
-    never a provider 400 from forwarding a role the model may not accept."""
+    the unsupported-model treatment: the safe default converts the reminder to
+    a user turn in place, never a provider 400 from forwarding a role the model
+    may not accept, and never a mutated cache prefix."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -2357,10 +2456,23 @@ def test_bedrock_invoke_transform_hoists_all_system_for_unmapped_model(local_mod
 
     assert result["messages"] == [
         {"role": "user", "content": "hi"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Operator note (not from the user): the following was "
+                        "originally a mid-conversation system-role reminder."
+                    ),
+                },
+                {"type": "text", "text": "mid-conversation reminder"},
+            ],
+        },
         {"role": "assistant", "content": "hello"},
         {"role": "user", "content": "continue"},
     ]
-    assert result["system"] == [{"type": "text", "text": "mid-conversation reminder"}]
+    assert "system" not in result
 
 
 def test_bedrock_invoke_transform_keeps_system_in_place_for_unmapped_future_claude(local_model_cost_map):
@@ -2823,7 +2935,7 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)
@@ -2948,3 +3060,38 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_web_search"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
+    """
+    Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
+    mid-stream (what the proxy does on a client disconnect) must close the
+    inner async_sse_wrapper deterministically so the partial-stream logging
+    fires. `completion_start_time` is only stamped on the logging object by
+    that dispatch, so it observing a value proves the whole chain ran.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _hanging_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        await asyncio.Event().wait()
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
+        function_id="test_bedrock_sse_wrapper_disconnect_logging",
+    )
+    wrapped = cfg.bedrock_sse_wrapper(_hanging_stream(), litellm_logging_obj=logging_obj, request_body={})
+    await wrapped.__anext__()
+    await wrapped.__anext__()
+    assert logging_obj.completion_start_time is None
+
+    await wrapped.aclose()
+
+    assert logging_obj.completion_start_time is not None

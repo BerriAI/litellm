@@ -64,10 +64,6 @@ const savedConfig = () => {
   return payload?.litellm_params?.complexity_router_config;
 };
 
-const selectedValueIn = (combobox: HTMLElement): string | null =>
-  // eslint-disable-next-line local/no-antd-class-selectors -- antd keeps the rendered selection in a sibling of the combobox, reachable only through these classes; the tier selects show the same models, so an unscoped title query is ambiguous
-  combobox.closest(".ant-select")?.querySelector(".ant-select-selection-item")?.getAttribute("title") ?? null;
-
 describe("EditAutoRouterModal keyword matching", () => {
   beforeEach(() => {
     modelPatchUpdateCall.mockClear();
@@ -201,8 +197,9 @@ describe("EditAutoRouterModal keyword matching", () => {
 
     await user.type(
       within(screen.getByText("Keywords 2").closest("div") as HTMLElement).getByRole("combobox"),
-      "chargeback{enter}",
+      "chargeback",
     );
+    await user.click(await screen.findByText('Create "chargeback"'));
 
     expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
     expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
@@ -248,7 +245,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     await user.click(await screen.findByText("Advanced: Classification Method"));
     await screen.findByText("Context Window Size");
     expect(screen.getByDisplayValue("5")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("300")).toBeInTheDocument();
+    expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -271,8 +268,6 @@ describe("EditAutoRouterModal classifier context window", () => {
 
     expect(await screen.findByLabelText("Classifier system prompt")).toBeInTheDocument();
     expect(baseElement.querySelectorAll('[data-slot="dialog-content"]')).toHaveLength(2);
-    // eslint-disable-next-line local/no-antd-class-selectors -- the assertion IS that no antd modal renders; naming the class is the point
-    expect(baseElement.querySelector(".ant-modal")).toBeNull();
   });
 
   it("persists an edited classifier context window size", async () => {
@@ -523,8 +518,7 @@ describe("EditAutoRouterModal custom classifier prompt and fallback", () => {
 
     await user.click(await screen.findByText("Advanced: Classification Method"));
     expect(await screen.findByRole("button", { name: "Edit custom prompt" })).toBeInTheDocument();
-    // eslint-disable-next-line jest-dom/prefer-checked -- antd sets the checked attribute without the DOM property, so toBeChecked reads false
-    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toHaveAttribute("checked");
+    expect(screen.getByRole("radio", { name: /Route to the default model/ })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -623,7 +617,7 @@ describe("EditAutoRouterModal default model", () => {
     renderWithStoredPin("out-of-band-default");
 
     const select = await screen.findByRole("combobox", { name: "Default model" });
-    expect(selectedValueIn(select)).toBe("out-of-band-default");
+    expect(select).toHaveValue("out-of-band-default");
   });
 
   // The pin is recorded in the config rather than inferred by comparing the stored default to a
@@ -633,7 +627,7 @@ describe("EditAutoRouterModal default model", () => {
     renderWithStoredPin(STORED_CONFIG.tiers.MEDIUM[0]);
 
     const select = await screen.findByRole("combobox", { name: "Default model" });
-    expect(selectedValueIn(select)).toBe(STORED_CONFIG.tiers.MEDIUM[0]);
+    expect(select).toHaveValue(STORED_CONFIG.tiers.MEDIUM[0]);
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
@@ -649,7 +643,7 @@ describe("EditAutoRouterModal default model", () => {
     renderWithLitellmParamsDefaultOnly(STORED_CONFIG.tiers.MEDIUM[0]);
 
     const select = await screen.findByRole("combobox", { name: "Default model" });
-    expect(selectedValueIn(select)).toBeNull();
+    expect(select).toHaveValue("");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
@@ -666,7 +660,7 @@ describe("EditAutoRouterModal default model", () => {
     renderWithLitellmParamsDefaultOnly("claude-sonnet-4");
 
     const select = await screen.findByRole("combobox", { name: "Default model" });
-    expect(selectedValueIn(select)).toBe("claude-sonnet-4");
+    expect(select).toHaveValue("claude-sonnet-4");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
@@ -698,7 +692,7 @@ describe("EditAutoRouterModal default model", () => {
     );
 
     const select = await screen.findByRole("combobox", { name: "Default model" });
-    expect(selectedValueIn(select)).toBe("blob-pin");
+    expect(select).toHaveValue("blob-pin");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
@@ -740,7 +734,7 @@ describe("EditAutoRouterModal default model", () => {
     renderWithStoredPin();
 
     const select = await screen.findByRole("combobox", { name: "Default model" });
-    expect(selectedValueIn(select)).toBeNull();
+    expect(select).toHaveValue("");
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());

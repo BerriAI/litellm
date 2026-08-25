@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
@@ -190,7 +190,7 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
 
-      await user.type(screen.getByTestId("datatable-search"), "req-on-another-page");
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "req-on-another-page" } });
 
       await waitFor(() => {
         const call = lastCall();

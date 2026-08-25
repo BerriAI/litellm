@@ -2305,8 +2305,12 @@ async def apply_guardrail(
     litellm_logging_obj = None
     start_time: Final = datetime.now(timezone.utc)
 
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_initialized_guardrail_with_read_through,
+    )
+
     try:
-        active_guardrail: Final[CustomGuardrail | None] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+        active_guardrail: Final[CustomGuardrail | None] = await get_initialized_guardrail_with_read_through(
             guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:

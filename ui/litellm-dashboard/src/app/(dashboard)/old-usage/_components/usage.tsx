@@ -17,7 +17,7 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -55,6 +55,8 @@ interface GlobalActivityData {
   sum_total_tokens: number;
   daily_data: { date: string; api_requests: number; total_tokens: number }[];
 }
+
+const EMPTY_GLOBAL_ACTIVITY: GlobalActivityData = { sum_api_requests: 0, sum_total_tokens: 0, daily_data: [] };
 
 type UsageDateRange = { from?: Date; to?: Date };
 
@@ -105,7 +107,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
   const [uniqueTeamIds, setUniqueTeamIds] = useState<any[]>([]);
   const [totalSpendPerTeam, setTotalSpendPerTeam] = useState<TeamSpendTotal[]>([]);
   const [spendByProvider, setSpendByProvider] = useState<any[]>([]);
-  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>({} as GlobalActivityData);
+  const [globalActivity, setGlobalActivity] = useState<GlobalActivityData>(EMPTY_GLOBAL_ACTIVITY);
   const [globalActivityPerModel, setGlobalActivityPerModel] = useState<any[]>([]);
   const [selectedKeyToken, setSelectedKeyToken] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([ALL_TAGS]);
@@ -560,14 +562,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           )}
         </TabsList>
 
-        <TabsContent value="all-up">
+        <TabsContent value="all-up" keepMounted>
           <Tabs defaultValue="cost">
             <TabsList className="mt-1">
               <TabsTrigger value="cost">Cost</TabsTrigger>
               <TabsTrigger value="activity">Activity</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="cost">
+            <TabsContent value="cost" keepMounted>
               <div className="grid h-screen w-full grid-cols-2 gap-2">
                 <div className="col-span-2">
                   <p className="mt-2 mb-2 text-lg text-muted-foreground">
@@ -671,7 +673,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
               </div>
             </TabsContent>
 
-            <TabsContent value="activity">
+            <TabsContent value="activity" keepMounted>
               <div className="grid h-[75vh] w-full grid-cols-1 gap-2">
                 <Card>
                   <CardHeader>
@@ -751,7 +753,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </Tabs>
         </TabsContent>
 
-        <TabsContent value="team-based-usage">
+        <TabsContent value="team-based-usage" keepMounted>
           <div className="grid h-[75vh] w-full grid-cols-2 gap-2">
             <div className="col-span-2">
               <Card className="mb-2">
@@ -782,7 +784,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </div>
         </TabsContent>
 
-        <TabsContent value="customer-usage">
+        <TabsContent value="customer-usage" keepMounted>
           <p className="mb-2 text-[12px] text-muted-foreground italic">
             Customers of your LLM API calls. Tracked when a `user` param is passed in your LLM calls{" "}
             <a
@@ -860,7 +862,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           </Card>
         </TabsContent>
 
-        <TabsContent value="tag-based-usage">
+        <TabsContent value="tag-based-usage" keepMounted>
           <div className="grid grid-cols-2">
             <div className="col-span-1">
               <AdvancedDatePicker

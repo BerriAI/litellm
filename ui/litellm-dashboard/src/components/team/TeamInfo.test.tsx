@@ -3,7 +3,7 @@ import * as networking from "@/components/networking";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import TeamInfoView from "./TeamInfo";
 
 const authState = vi.hoisted(() => ({ userRole: "Admin" }));
@@ -122,7 +122,9 @@ vi.mock("@/components/common_components/ModelAliasManager", () => ({
     <div>
       <div data-testid="alias-editor-initial">{JSON.stringify(initialModelAliases)}</div>
       <button onClick={() => onAliasUpdate({ "gpt-4o": "gpt-4" })}>Set Alias</button>
-      <button onClick={() => onAliasUpdate({})}>Clear Aliases</button>
+      <button type="button" onClick={() => onAliasUpdate({})}>
+        Clear Aliases
+      </button>
     </div>
   )),
 }));
@@ -315,6 +317,34 @@ describe("TeamInfoView", () => {
       });
       expect(screen.getByText("$250.50")).toBeInTheDocument();
       expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
+    });
+
+    it("renders a tpm/rpm/budget limit of 0 as 0 in the overview and settings tabs, never as Unlimited or No Limit", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          tpm_limit: 0,
+          rpm_limit: 0,
+          team_member_budget_table: { max_budget: 0, budget_duration: null, tpm_limit: 0, rpm_limit: 0 },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      const overview = await screen.findByRole("tabpanel", { name: "Overview" });
+      expect(within(overview).getByText("TPM: 0")).toBeInTheDocument();
+      expect(within(overview).getByText("RPM: 0")).toBeInTheDocument();
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByText("TPM: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("TPM Limit: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("RPM Limit: 0")).toBeInTheDocument();
+      expect(within(settings).getByText("Max Budget: 0")).toBeInTheDocument();
+      expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
+      expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+      expect(screen.queryByText("TPM Limit: No Limit")).not.toBeInTheDocument();
+      expect(screen.queryByText("RPM Limit: No Limit")).not.toBeInTheDocument();
     });
 
     it("should display guardrails in overview when present", async () => {
@@ -658,7 +688,7 @@ describe("TeamInfoView", () => {
   });
 
   describe("settings and editing", () => {
-    const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "span" });
+    const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "label" });
 
     it("should offer the policies field and load it for a caller with the viewPolicies capability", async () => {
       const user = userEvent.setup({ delay: null });
@@ -991,8 +1021,7 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: "30d" });
 
-      await user.click(resetBudgetSelect);
-      await user.click(await screen.findByText("Never resets"));
+      await chooseSelectOption(user, resetBudgetSelect, "Never resets");
 
       await waitFor(() => {
         expect(resetBudgetSelect).toHaveTextContent("Never resets");
@@ -1026,8 +1055,7 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       const resetBudgetSelect = await openSettingsEditorForTeam(user, { budget_duration: null });
 
-      await user.click(resetBudgetSelect);
-      await user.click(await screen.findByText("weekly"));
+      await chooseSelectOption(user, resetBudgetSelect, "weekly");
 
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1234,7 +1262,7 @@ describe("TeamInfoView", () => {
       expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
 
       await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      await user.type(screen.getAllByPlaceholderText("Value")[0], "CC-NEW");
+      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
@@ -1462,8 +1490,7 @@ describe("TeamInfoView", () => {
       await user.click(screen.getByLabelText(/^Guardrails/));
 
       const listbox = await screen.findByRole("listbox", {}, { timeout: 5000 });
-      // eslint-disable-next-line local/no-antd-class-selectors -- antd renders group headers outside the listbox and its popup container exposes no role or accessible name
-      return listbox.closest(".ant-select-dropdown") as HTMLElement;
+      return listbox.closest('[data-slot="combobox-content"]') as HTMLElement;
     };
 
     beforeEach(() => {
@@ -1658,5 +1685,312 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     const payload = await save(user);
 
     expect(payload.object_permission).toHaveProperty("search_tools");
+  });
+});
+
+describe("TeamInfoView - the exact bytes the update call sends", () => {
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4"],
+    editTeam: false,
+  };
+
+  beforeEach(seedDefaultMocks);
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const storedTeam = () =>
+    createMockTeamData({
+      models: ["gpt-4"],
+      max_budget: 100,
+      budget_duration: "1d",
+      tpm_limit: 1000,
+      rpm_limit: 1000,
+      team_member_budget_table: { max_budget: 42, budget_duration: "30d", tpm_limit: 11, rpm_limit: 22 },
+      default_team_member_models: ["gpt-4"],
+      object_permission: { search_tools: ["tool-a"], vector_stores: ["vs-1"] },
+    });
+
+  const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(storedTeam());
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  const save = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+  };
+
+  const wireBody = (payload: Record<string, unknown>) => JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+
+  const alwaysSent = {
+    team_id: "123",
+    team_alias: "Test Team",
+    models: ["gpt-4"],
+    tpm_limit: 1000,
+    rpm_limit: 1000,
+    model_tpm_limit: {},
+    model_rpm_limit: {},
+    max_budget: 100,
+    soft_budget: null,
+    budget_duration: "1d",
+    metadata: {
+      allowed_passthrough_routes: [],
+      guardrails: [],
+      opted_out_global_guardrails: [],
+      disable_global_guardrails: false,
+      soft_budget_alerting_emails: [],
+    },
+    access_group_ids: [],
+  };
+
+  const mcpPermissions = {
+    mcp_servers: [],
+    mcp_access_groups: [],
+    mcp_tool_permissions: {},
+    mcp_toolsets: [],
+    vector_stores: ["vs-1"],
+  };
+
+  it("leaves every team member key out of the request body for an untouched save with both sections closed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    const payload = await save(user);
+
+    expect(payload).toStrictEqual({
+      ...alwaysSent,
+      team_member_budget_duration: undefined,
+      object_permission: mcpPermissions,
+    });
+    expect(wireBody(payload)).toStrictEqual({
+      ...alwaysSent,
+      object_permission: mcpPermissions,
+    });
+  });
+
+  it("resends every stored value once both sections are opened", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await user.click(screen.getByText("Search Tool Settings"));
+    await screen.findByPlaceholderText("Select search tools (optional, empty = all allowed)");
+
+    const payload = await save(user);
+
+    const expected = {
+      ...alwaysSent,
+      team_member_budget_duration: "30d",
+      team_member_budget: 42,
+      team_member_tpm_limit: 11,
+      team_member_rpm_limit: 22,
+      default_team_member_models: ["gpt-4"],
+      object_permission: { ...mcpPermissions, search_tools: ["tool-a"] },
+    };
+    expect(payload).toStrictEqual(expected);
+    expect(wireBody(payload)).toStrictEqual(expected);
+  });
+
+  it("carries every typed value to the update payload at the type and shape antd sends today", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    const alias = screen.getByLabelText("Team Name");
+    await user.clear(alias);
+    await user.type(alias, "Renamed Team");
+
+    const softBudget = screen.getByLabelText("Soft Budget (USD)");
+    await user.clear(softBudget);
+    await user.type(softBudget, "9.5");
+
+    const emails = screen.getByLabelText(/Soft Budget Alerting Emails/);
+    await user.clear(emails);
+    await user.type(emails, "a@test.com,  b@test.com ");
+
+    const tpm = screen.getByLabelText("Tokens per minute Limit (TPM)");
+    await user.clear(tpm);
+    await user.type(tpm, "555");
+
+    const payload = await save(user);
+
+    expect(payload.team_alias).toBe("Renamed Team");
+    expect(payload.soft_budget).toBe("9.5");
+    expect(payload.tpm_limit).toBe("555");
+    expect((payload.metadata as Record<string, unknown>).soft_budget_alerting_emails).toStrictEqual([
+      "a@test.com",
+      "b@test.com",
+    ]);
+  });
+
+  it("builds model_tpm_limit and model_rpm_limit from the model-specific rate limit rows", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        max_budget: 100,
+        budget_duration: "1d",
+        tpm_limit: 1000,
+        rpm_limit: 1000,
+        object_permission: { vector_stores: ["vs-1"] },
+        metadata: { model_tpm_limit: { "gpt-4": 30 }, model_rpm_limit: { "gpt-4": 40 } },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const payload = await save(user);
+
+    expect(payload.model_tpm_limit).toStrictEqual({ "gpt-4": 30 });
+    expect(payload.model_rpm_limit).toStrictEqual({ "gpt-4": 40 });
+  });
+
+  it("keeps a team member budget edited before the section is collapsed and resends it on reopen", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    const budgetInput = await screen.findByLabelText("Default Budget (USD)");
+    await user.clear(budgetInput);
+    await user.type(budgetInput, "77");
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await waitFor(() => expect(screen.queryByLabelText("Default Budget (USD)")).not.toBeInTheDocument());
+
+    await user.click(screen.getByText("Team Member Settings"));
+    expect(await screen.findByLabelText("Default Budget (USD)")).toHaveValue(77);
+
+    const payload = await save(user);
+    expect(payload.team_member_budget).toBe(77);
+  });
+
+  it("sends no team member key at all when the section is collapsed again after an edit", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    const budgetInput = await screen.findByLabelText("Default Budget (USD)");
+    await user.clear(budgetInput);
+    await user.type(budgetInput, "77");
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await waitFor(() => expect(screen.queryByLabelText("Default Budget (USD)")).not.toBeInTheDocument());
+
+    const payload = await save(user);
+
+    expect(Object.keys(wireBody(payload)).filter((key) => key.startsWith("team_member"))).toEqual([]);
+    expect(wireBody(payload)).not.toHaveProperty("default_team_member_models");
+  });
+
+  it("puts the global guardrails back on the team when the kill switch is turned off again", async () => {
+    const user = userEvent.setup({ delay: null });
+    testQueryClient.clear();
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({
+      guardrails: [
+        { guardrail_name: "always-on", litellm_params: { default_on: true } },
+        { guardrail_name: "opt-in", litellm_params: { default_on: false } },
+      ],
+    });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        metadata: { guardrails: ["opt-in"], disable_global_guardrails: true },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} premiumUser={true} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    expect(screen.queryAllByLabelText("always-on")).toHaveLength(0);
+
+    await user.click(screen.getByRole("switch", { name: /Disable all global guardrails/ }));
+
+    expect(await screen.findAllByLabelText("always-on")).toHaveLength(1);
+
+    const payload = await save(user);
+
+    expect(payload.metadata).toStrictEqual(
+      expect.objectContaining({
+        guardrails: ["opt-in"],
+        opted_out_global_guardrails: [],
+        disable_global_guardrails: false,
+      }),
+    );
+  });
+
+  it("sends a typed model rate limit as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], metadata: { model_tpm_limit: { "gpt-4": 30 } } }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const rpmInput = await screen.findByPlaceholderText("RPM Limit");
+    await user.clear(rpmInput);
+    await user.type(rpmInput, "45");
+
+    const payload = await save(user);
+
+    expect(payload.model_rpm_limit).toStrictEqual({ "gpt-4": 45 });
+    expect(payload.model_tpm_limit).toStrictEqual({ "gpt-4": 30 });
+  });
+
+  it("leaves stored policies out of the update body for a caller without the viewPolicies capability", async () => {
+    const user = userEvent.setup({ delay: null });
+    can.mockReturnValue(false);
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"], policies: ["pci"] }));
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+
+    const payload = await save(user);
+
+    expect(payload).toHaveProperty("team_alias");
+    expect(wireBody(payload)).not.toHaveProperty("policies");
+  });
+
+  it("blocks the save on an empty team name and names the rule", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.clear(screen.getByLabelText("Team Name"));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(await screen.findByText("Please input a team name")).toBeInTheDocument();
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
   });
 });

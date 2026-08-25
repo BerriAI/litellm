@@ -52,7 +52,7 @@ class ResourceManager:
     """
 
     client: ResourceClient
-    _cleanups: List[Callable[[], None]] = field(
+    _cleanups: List[Callable[[], object]] = field(
         default_factory=list
     )  # mutable-ok: append-only teardown registry
 
@@ -60,8 +60,11 @@ class ResourceManager:
         """No global setup needed today; present for lifecycle symmetry."""
         return None
 
-    def defer(self, cleanup: Callable[[], None]) -> None:
-        """Register a teardown action for any resource the test just created."""
+    def defer(self, cleanup: Callable[[], object]) -> None:
+        """Register a teardown action for any resource the test just created.
+
+        Whatever the action returns is discarded, so a delete that answers with a
+        response model can be deferred directly."""
         self._cleanups.append(cleanup)
 
     def key(self, models: list[str] | None = None, user_id: str | None = "e2e-test-user") -> str:

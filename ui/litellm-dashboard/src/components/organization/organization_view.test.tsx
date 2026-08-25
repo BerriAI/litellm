@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, test, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -282,11 +282,45 @@ test("should keep unsaved settings edits when switching tabs and back", async ()
 
   const alias = await screen.findByLabelText(/Organization Name/i);
   await user.clear(alias);
-  await user.type(alias, "Renamed Org");
+  fireEvent.change(alias, { target: { value: "Renamed Org" } });
   expect(alias).toHaveValue("Renamed Org");
 
   await user.click(screen.getByRole("tab", { name: "Overview" }));
   await user.click(screen.getByRole("tab", { name: "Settings" }));
 
   expect(screen.getByLabelText(/Organization Name/i)).toHaveValue("Renamed Org");
+});
+
+test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never as Unlimited", async () => {
+  const zeroLimitOrg = {
+    ...mockOrg,
+    litellm_budget_table: { ...mockOrg.litellm_budget_table, tpm_limit: 0, rpm_limit: 0 },
+  };
+  mockUseOrganization.mockReturnValue({ data: zeroLimitOrg, isLoading: false } as unknown as ReturnType<
+    typeof useOrganization
+  >);
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={true}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  const overview = await screen.findByRole("tabpanel", { name: "Overview" });
+  expect(within(overview).getByText("TPM: 0")).toBeInTheDocument();
+  expect(within(overview).getByText("RPM: 0")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("tab", { name: "Settings" }));
+  const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+  expect(within(settings).getByText("TPM: 0")).toBeInTheDocument();
+  expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
+  expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
+  expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
 });

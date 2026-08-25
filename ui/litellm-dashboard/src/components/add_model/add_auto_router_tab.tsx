@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
-import { Card, Select as AntdSelect, Modal } from "antd";
 import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -57,6 +58,7 @@ import {
   PresetPrefill,
   AutoRouterPreset,
 } from "@/lib/autorouter_presets";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -288,6 +290,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     [presetAvailability],
   );
 
+  const templateItems = React.useMemo(
+    () => [
+      ...sortedPresetOptions.map(({ preset }) => ({ value: preset.key, label: preset.label })),
+      { value: "custom", label: "Custom Configuration" },
+    ],
+    [sortedPresetOptions],
+  );
+
   const applyPrefill = (prefill: PresetPrefill) => {
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
@@ -342,7 +352,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
-    classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
+    classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
     classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
@@ -358,9 +368,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
     adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
     returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
+    tierModelParams: complexityRouterConfig.tier_model_params,
     tierBoundaries: complexityRouterConfig.tier_boundaries,
     tokenThresholds: complexityRouterConfig.token_thresholds,
     dimensionWeights: complexityRouterConfig.dimension_weights,
+    reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
   };
 
   const submitRecommendedRouter = async (name: string) => {
@@ -472,260 +484,270 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   return (
     <TooltipProvider>
       <Card>
-        <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
-          <FieldGroup>
-            <FormField
-              control={form.control}
-              name="auto_router_name"
-              label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
-            >
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
-            </FormField>
-
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-2">Template</label>
-              <AntdSelect
-                value={selectedPreset}
-                onChange={handlePresetChange}
-                placeholder="Choose a template or select Custom to define your own"
-                className="w-full"
-                optionLabelProp="label"
-                data-testid="template-selector"
+        <CardContent>
+          <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
+            <FieldGroup>
+              <FormField
+                control={form.control}
+                name="auto_router_name"
+                label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
               >
-                {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                  const disabledHint = presetDisabledHint(presetState);
-                  const isDisabled = disabledHint !== null;
-                  const hintClass = isPresetHintAlarming(presetState)
-                    ? "text-red-500 dark:text-red-400"
-                    : "text-muted-foreground";
-                  const matchedHint =
-                    presetState.kind === "available" && presetState.viaDeployments ? "Matches your deployments" : null;
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
+              </FormField>
 
-                  return (
-                    <AntdSelect.Option
-                      key={preset.key}
-                      value={preset.key}
-                      label={preset.label}
-                      disabled={isDisabled}
-                      title={disabledHint ?? preset.description}
-                    >
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">Template</label>
+                <Select
+                  items={templateItems}
+                  value={selectedPreset ?? null}
+                  onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+                >
+                  <SelectTrigger data-testid="template-selector" className="w-full">
+                    <SelectValue placeholder="Choose a template or select Custom to define your own" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                      const disabledHint = presetDisabledHint(presetState);
+                      const hintClass = isPresetHintAlarming(presetState)
+                        ? "text-destructive"
+                        : "text-muted-foreground";
+                      const matchedHint =
+                        presetState.kind === "available" && presetState.viaDeployments
+                          ? "Matches your deployments"
+                          : null;
+
+                      return (
+                        <SelectItem
+                          key={preset.key}
+                          value={preset.key}
+                          label={preset.label}
+                          disabled={disabledHint !== null}
+                          title={disabledHint ?? preset.description}
+                        >
+                          <div>
+                            <div className="font-medium">{preset.label}</div>
+                            <div className="text-xs text-muted-foreground">{preset.description}</div>
+                            {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                            {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
+                    <SelectItem value="custom" label="Custom Configuration">
                       <div>
-                        <div className="font-medium">{preset.label}</div>
-                        <div className="text-xs text-muted-foreground">{preset.description}</div>
-                        {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
-                        {matchedHint && (
-                          <div className="text-xs mt-1 text-green-600 dark:text-green-400">{matchedHint}</div>
-                        )}
+                        <div className="font-medium">Custom Configuration</div>
+                        <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
                       </div>
-                    </AntdSelect.Option>
-                  );
-                })}
-                <AntdSelect.Option value="custom" label="Custom Configuration">
-                  <div>
-                    <div className="font-medium">Custom Configuration</div>
-                    <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {modelsUnverifiable && (
+                  <div className="text-xs mt-1 text-destructive">
+                    Could not load available models.{" "}
+                    <button type="button" className="underline" onClick={() => refetchModels()}>
+                      Retry
+                    </button>
                   </div>
-                </AntdSelect.Option>
-              </AntdSelect>
-              {modelsUnverifiable && (
-                <div className="text-xs mt-1 text-red-500 dark:text-red-400">
-                  Could not load available models.{" "}
-                  <button type="button" className="underline" onClick={() => refetchModels()}>
-                    Retry
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {requiresTeamScope && (
-              <FormField
-                control={form.control}
-                name="team_id"
-                label={labelWithHint(
-                  "Select Team",
-                  "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
                 )}
-              >
-                {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
-              </FormField>
-            )}
+              </div>
 
-            <div className="border border-border rounded-lg">
-              <button
-                type="button"
-                onClick={() => setDetailsExpanded((expanded) => !expanded)}
-                className="w-full flex flex-col gap-1 px-4 py-3 text-left hover:bg-muted"
-                data-testid="detailed-configuration-toggle"
-              >
-                <span className="flex items-center gap-2 font-medium text-foreground">
-                  {detailsExpanded ? (
-                    <ChevronDown className="size-3 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="size-3 text-muted-foreground" />
+              {requiresTeamScope && (
+                <FormField
+                  control={form.control}
+                  name="team_id"
+                  label={labelWithHint(
+                    "Select Team",
+                    "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
                   )}
-                  Detailed Configuration
-                </span>
-                {!detailsExpanded && (
-                  <span className="text-xs text-muted-foreground line-clamp-2">
-                    {tierConfigSummary(complexityRouterConfig.tiers)}
-                  </span>
-                )}
-              </button>
-              {detailsExpanded && (
-                <div className="px-4 pb-4">
-                  <ComplexityRouterConfig
-                    modelInfo={modelInfo}
-                    value={complexityRouterConfig}
-                    onChange={setComplexityRouterConfig}
-                    customTechnicalKeywords={customTechnicalKeywords}
-                    onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
-                    keywordTierRules={keywordTierRules}
-                    onKeywordTierRulesChange={setKeywordTierRules}
-                    semanticMatchingEnabled={semanticMatchingEnabled}
-                    onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
-                    embeddingModel={embeddingModel}
-                    onEmbeddingModelChange={setEmbeddingModel}
-                    matchThreshold={matchThreshold}
-                    onMatchThresholdChange={setMatchThreshold}
-                    escalationKeywords={escalationKeywords}
-                    onEscalationKeywordsChange={setEscalationKeywords}
-                    showValidationErrors={showValidationErrors}
-                  />
-                </div>
+                >
+                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+                </FormField>
               )}
-            </div>
 
-            {isAdmin && (
-              <FormField
-                control={form.control}
-                name="model_access_group"
-                label={labelWithHint(
-                  "Model Access Group",
-                  "Use model access groups to control who can access this auto router",
+              <div className="border border-border rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setDetailsExpanded((expanded) => !expanded)}
+                  className="w-full flex flex-col gap-1 px-4 py-3 text-left hover:bg-muted"
+                  data-testid="detailed-configuration-toggle"
+                >
+                  <span className="flex items-center gap-2 font-medium text-foreground">
+                    {detailsExpanded ? (
+                      <ChevronDown className="size-3 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="size-3 text-muted-foreground" />
+                    )}
+                    Detailed Configuration
+                  </span>
+                  {!detailsExpanded && (
+                    <span className="text-xs text-muted-foreground line-clamp-2">
+                      {tierConfigSummary(complexityRouterConfig.tiers)}
+                    </span>
+                  )}
+                </button>
+                {detailsExpanded && (
+                  <div className="px-4 pb-4">
+                    <ComplexityRouterConfig
+                      modelInfo={modelInfo}
+                      value={complexityRouterConfig}
+                      onChange={setComplexityRouterConfig}
+                      customTechnicalKeywords={customTechnicalKeywords}
+                      onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+                      keywordTierRules={keywordTierRules}
+                      onKeywordTierRulesChange={setKeywordTierRules}
+                      semanticMatchingEnabled={semanticMatchingEnabled}
+                      onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+                      embeddingModel={embeddingModel}
+                      onEmbeddingModelChange={setEmbeddingModel}
+                      matchThreshold={matchThreshold}
+                      onMatchThresholdChange={setMatchThreshold}
+                      escalationKeywords={escalationKeywords}
+                      onEscalationKeywordsChange={setEscalationKeywords}
+                      showValidationErrors={showValidationErrors}
+                    />
+                  </div>
                 )}
-              >
-                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                  <AccessGroupTagsCombobox
-                    id={id}
-                    value={value}
-                    onChange={onChange}
-                    options={modelAccessGroups}
-                    ariaInvalid={ariaInvalid}
-                    ariaDescribedBy={ariaDescribedBy}
+              </div>
+
+              {isAdmin && (
+                <FormField
+                  control={form.control}
+                  name="model_access_group"
+                  label={labelWithHint(
+                    "Model Access Group",
+                    "Use model access groups to control who can access this auto router",
+                  )}
+                >
+                  {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                    <AccessGroupTagsCombobox
+                      id={id}
+                      value={value}
+                      onChange={onChange}
+                      options={modelAccessGroups}
+                      ariaInvalid={ariaInvalid}
+                      ariaDescribedBy={ariaDescribedBy}
+                    />
+                  )}
+                </FormField>
+              )}
+
+              <div className="flex justify-between items-center">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <a
+                        href="https://github.com/BerriAI/litellm/issues"
+                        className="text-sm text-primary underline-offset-4 hover:underline"
+                      >
+                        Need Help?
+                      </a>
+                    }
                   />
-                )}
-              </FormField>
-            )}
-
-            <div className="flex justify-between items-center">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <a
-                      href="https://github.com/BerriAI/litellm/issues"
-                      className="text-sm text-primary underline-offset-4 hover:underline"
+                  <TooltipContent>Get help on our github</TooltipContent>
+                </Tooltip>
+                <div className="flex gap-2">
+                  <BlockedReasonTooltip reason={submitBlockedReason}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      data-testid="auto-router-test-routing-btn"
+                      disabled={submitBlockedReason !== null}
+                      onClick={() => setIsRoutingTestVisible(true)}
                     >
-                      Need Help?
-                    </a>
-                  }
-                />
-                <TooltipContent>Get help on our github</TooltipContent>
-              </Tooltip>
-              <div className="flex gap-2">
-                <BlockedReasonTooltip reason={submitBlockedReason}>
+                      Test Routing
+                    </Button>
+                  </BlockedReasonTooltip>
                   <Button
                     type="button"
                     variant="outline"
-                    data-testid="auto-router-test-routing-btn"
-                    disabled={submitBlockedReason !== null}
-                    onClick={() => setIsRoutingTestVisible(true)}
+                    data-testid="auto-router-test-connect-btn"
+                    onClick={handleTestConnection}
+                    disabled={isTestingConnection}
                   >
-                    Test Routing
+                    {isTestingConnection && <UiLoadingSpinner className="size-4" />}
+                    Test Connection
                   </Button>
-                </BlockedReasonTooltip>
-                <Button
-                  type="button"
-                  variant="outline"
-                  data-testid="auto-router-test-connect-btn"
-                  onClick={handleTestConnection}
-                  disabled={isTestingConnection}
-                >
-                  {isTestingConnection && <UiLoadingSpinner className="size-4" />}
-                  Test Connection
-                </Button>
-                <BlockedReasonTooltip reason={submitBlockedReason}>
-                  <Button
-                    type="button"
-                    disabled={submitBlockedReason !== null}
-                    onClick={() => {
-                      void handleAutoRouterSubmit();
-                    }}
-                  >
-                    Add Auto Router
-                  </Button>
-                </BlockedReasonTooltip>
+                  <BlockedReasonTooltip reason={submitBlockedReason}>
+                    <Button
+                      type="button"
+                      disabled={submitBlockedReason !== null}
+                      onClick={() => {
+                        void handleAutoRouterSubmit();
+                      }}
+                    >
+                      Add Auto Router
+                    </Button>
+                  </BlockedReasonTooltip>
+                </div>
               </div>
-            </div>
-          </FieldGroup>
-        </form>
+            </FieldGroup>
+          </form>
+        </CardContent>
       </Card>
 
-      <Modal
-        title="Test Routing"
-        open={isRoutingTestVisible}
-        destroyOnHidden
-        onCancel={() => setIsRoutingTestVisible(false)}
-        footer={[
-          <Button key="close" variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
-            Close
-          </Button>,
-        ]}
-        width={760}
-      >
-        {isRoutingTestVisible && (
-          <AutoRouterRoutingTest
-            accessToken={accessToken}
-            config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-            defaultModel={resolveComplexityDefaultModel(
-              complexityRouterConfig.tiers,
-              complexityRouterConfig.default_model,
-            )}
-            routerName={watchedName}
-            teamId={requiresTeamScope ? watchedTeamId : undefined}
-          />
-        )}
-      </Modal>
+      <Dialog open={isRoutingTestVisible} onOpenChange={(open) => !open && setIsRoutingTestVisible(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[760px]">
+          <DialogHeader>
+            <DialogTitle>Test Routing</DialogTitle>
+          </DialogHeader>
+          {isRoutingTestVisible && (
+            <AutoRouterRoutingTest
+              accessToken={accessToken}
+              config={buildComplexityRouterConfig(complexityRouterConfigParams)}
+              defaultModel={resolveComplexityDefaultModel(
+                complexityRouterConfig.tiers,
+                complexityRouterConfig.default_model,
+              )}
+              routerName={watchedName}
+              teamId={requiresTeamScope ? watchedTeamId : undefined}
+            />
+          )}
+          <DialogFooter>
+            {" "}
+            <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
+              Close
+            </Button>
+            , ]
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title="Connection Test Results"
+      <Dialog
         open={isTestModalVisible}
-        onCancel={() => {
-          setIsTestModalVisible(false);
-          setIsTestingConnection(false);
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsTestModalVisible(false);
+            setIsTestingConnection(false);
+          }
         }}
-        footer={[
-          <Button
-            key="close"
-            variant="outline"
-            onClick={() => {
-              setIsTestModalVisible(false);
-              setIsTestingConnection(false);
-            }}
-          >
-            Close
-          </Button>,
-        ]}
-        width={700}
       >
-        {isTestModalVisible && (
-          <AutoRouterConnectionTest
-            key={connectionTestId}
-            accessToken={accessToken}
-            targets={testTargets}
-            onTestComplete={() => setIsTestingConnection(false)}
-          />
-        )}
-      </Modal>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Connection Test Results</DialogTitle>
+          </DialogHeader>
+          {isTestModalVisible && (
+            <AutoRouterConnectionTest
+              key={connectionTestId}
+              accessToken={accessToken}
+              targets={testTargets}
+              onTestComplete={() => setIsTestingConnection(false)}
+            />
+          )}
+          <DialogFooter>
+            {" "}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsTestModalVisible(false);
+                setIsTestingConnection(false);
+              }}
+            >
+              Close
+            </Button>
+            , ]
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </TooltipProvider>
   );
 };

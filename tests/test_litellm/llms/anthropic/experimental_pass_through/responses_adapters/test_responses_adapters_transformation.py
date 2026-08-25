@@ -5,13 +5,11 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -488,8 +486,8 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
 
-    def test_assistant_thinking_block_becomes_output_text(self):
-        """Assistant thinking block text is included as output_text."""
+    def test_assistant_thinking_block_becomes_reasoning_item(self):
+        """Assistant thinking block becomes a reasoning item, never visible assistant prose."""
         messages = [
             {
                 "role": "assistant",
@@ -497,7 +495,77 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [{"type": "output_text", "text": "Let me reason step by step."}]
+        assert result == [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Let me reason step by step."}],
+            }
+        ]
+
+    def test_reasoning_item_carries_no_id(self):
+        """A fabricated reasoning id 404s upstream, so the item must go out without one."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "Private reasoning.", "signature": "rs_abc123"}],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert "id" not in result[0]
+
+    def test_consecutive_thinking_blocks_become_one_reasoning_item(self):
+        """Summary parts of one upstream reasoning item are regrouped into that item."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "First part."},
+                    {"type": "thinking", "thinking": "Second part."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "First part."},
+                    {"type": "summary_text", "text": "Second part."},
+                ],
+            }
+        ]
+
+    def test_a_tool_call_splits_the_reasoning_items_around_it(self):
+        """Thinking on either side of a tool call belongs to two different reasoning items."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Before the call."},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Denver"}},
+                    {"type": "thinking", "thinking": "After the call."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert [item["type"] for item in result] == ["reasoning", "function_call", "reasoning"]
+        assert result[0]["summary"] == [{"type": "summary_text", "text": "Before the call."}]
+        assert result[2]["summary"] == [{"type": "summary_text", "text": "After the call."}]
+
+    def test_thinking_and_text_stay_separate(self):
+        """The visible answer stays the only thing in the assistant message."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "The user wants Denver."},
+                    {"type": "text", "text": "Denver is the best pick."},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert [item["type"] for item in result] == ["reasoning", "message"]
+        assert result[1]["content"] == [{"type": "output_text", "text": "Denver is the best pick."}]
 
     def test_assistant_empty_thinking_block_skipped(self):
         """Assistant thinking block with empty thinking text is skipped."""
@@ -845,14 +913,14 @@ class TestTranslateThinkingToReasoning:
         finally:
             litellm.reasoning_auto_summary = original
 
-    def test_summary_added_when_env_var_set(self):
+    def test_summary_added_when_env_var_set(self, monkeypatch):
         """When LITELLM_REASONING_AUTO_SUMMARY env var is true, summary is included."""
         import litellm
 
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = False
-            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
             result = _ADAPTER.translate_thinking_to_reasoning(
                 {
                     "type": "enabled",
@@ -992,6 +1060,29 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["user"]) == 64
 
+    def test_metadata_user_id_mapped_to_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": "user-42"})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["prompt_cache_key"] == "user-42"
+
+    def test_metadata_user_id_prompt_cache_key_truncated_to_first_64_chars(self):
+        long_id = "".join(str(i % 10) for i in range(100))
+        req = _make_request(metadata={"user_id": long_id})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["prompt_cache_key"] == long_id[:64]
+        assert len(kwargs["prompt_cache_key"]) == 64
+
+    def test_metadata_empty_user_id_sets_no_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": ""})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["user"] == ""
+        assert "prompt_cache_key" not in kwargs
+
+    def test_metadata_null_user_id_sets_no_prompt_cache_key(self):
+        req = _make_request(metadata={"user_id": None})
+        kwargs = _ADAPTER.translate_request(req)
+        assert "prompt_cache_key" not in kwargs
+
     def test_no_optional_fields_does_not_add_spurious_keys(self):
         req = _make_request()
         kwargs = _ADAPTER.translate_request(req)
@@ -1005,6 +1096,7 @@ class TestTranslateRequestBroaderCoverage:
             "text",
             "context_management",
             "user",
+            "prompt_cache_key",
         ):
             assert key not in kwargs, f"unexpected key: {key}"
 
@@ -1072,7 +1164,7 @@ def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMo
     return item
 
 
-def _make_reasoning_item(summaries: List[str]) -> MagicMock:
+def _make_reasoning_item(summaries: List[str], item_id: str = "rs_test_1") -> MagicMock:
     """Build a mock ResponseReasoningItem."""
     from openai.types.responses import ResponseReasoningItem  # type: ignore[import]
 
@@ -1083,6 +1175,7 @@ def _make_reasoning_item(summaries: List[str]) -> MagicMock:
         summary_mocks.append(s)
 
     item = MagicMock(spec=ResponseReasoningItem)
+    item.id = item_id
     item.summary = summary_mocks
     return item
 
@@ -1155,6 +1248,53 @@ class TestTranslateResponse:
         response = _make_mock_response(output=[reasoning])
         result: Any = _ADAPTER.translate_response(response)
         assert result["content"] == []
+
+    def test_null_summary_text_skipped_rather_than_stringified(self):
+        """A summary part whose text is null must not reach the client as the word "None"."""
+        response = _make_mock_response(
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_null_1",
+                    "summary": [{"type": "summary_text", "text": None}],
+                }
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == []
+
+    def test_reasoning_item_id_never_becomes_a_thinking_signature(self):
+        """Only Anthropic can sign a thinking block, so a stand-in signature is never invented."""
+        reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")
+        response = _make_mock_response(output=[reasoning])
+        result: Any = _ADAPTER.translate_response(response)
+        assert [block["signature"] for block in result["content"]] == [None, None]
+
+    def test_dict_reasoning_item_becomes_thinking_block(self):
+        """A reasoning item arriving as a plain dict is kept, not dropped."""
+        response = _make_mock_response(
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_dict_1",
+                    "summary": [{"type": "summary_text", "text": "Weighing the options."}],
+                }
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == [
+            {"type": "thinking", "thinking": "Weighing the options.", "signature": None}
+        ]
+
+    def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self):
+        """Replaying this turn to an Anthropic model must not send a signature it cannot verify."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _drop_unsignable_thinking_blocks,
+        )
+
+        response = _make_mock_response(output=[_make_reasoning_item(["Part one."], item_id="rs_abc123")])
+        result: Any = _ADAPTER.translate_response(response)
+        assert _drop_unsignable_thinking_blocks(result["content"]) == []
 
     def test_usage_mapped_correctly(self):
         """Input/output tokens from ResponseAPIUsage are mapped to AnthropicUsage."""
@@ -1413,3 +1553,155 @@ class TestToolResultImages:
         outputs = [item for item in items if item.get("type") == "function_call_output"]
         assert outputs[0]["output"] == "screenshot saved"
         assert self._input_images(items) == []
+
+
+def _contains_key(value, key) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_contains_key(v, key) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_key(v, key) for v in value)
+    return False
+
+
+class TestPromptCacheBreakpointToResponses:
+    """OpenAI `prompt_cache_breakpoint` markers ride through the /v1/messages -> Responses bridge (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def test_system_with_breakpoint_becomes_leading_developer_message(self):
+        request = _make_request(
+            model="openai/gpt-5.6",
+            system=[
+                {"type": "text", "text": "Be concise."},
+                {"type": "text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
+            ],
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert "instructions" not in kwargs
+        assert kwargs["input"] == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be concise."},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": self.EXPLICIT},
+                ],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+        ]
+
+    def test_system_without_breakpoint_still_becomes_instructions(self):
+        request = _make_request(system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}])
+        kwargs = _ADAPTER.translate_request(request)
+        assert kwargs["instructions"] == "Be concise.\nBe helpful."
+        assert kwargs["input"] == [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+        ]
+
+    def test_system_string_still_becomes_instructions(self):
+        kwargs = _ADAPTER.translate_request(_make_request(system="Be concise."))
+        assert kwargs["instructions"] == "Be concise."
+        assert kwargs["input"][0]["role"] == "user"
+
+    def test_system_with_breakpoint_skips_non_text_blocks(self):
+        request = _make_request(
+            system=[
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                {"type": "text", "text": "only", "prompt_cache_breakpoint": self.EXPLICIT},
+            ]
+        )
+        kwargs = _ADAPTER.translate_request(request)
+        assert kwargs["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "only", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
+
+    def test_user_text_and_image_blocks_carry_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look", "prompt_cache_breakpoint": self.EXPLICIT},
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/a.png"},
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        },
+                    ],
+                }
+            ]
+        )
+        assert items == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "look", "prompt_cache_breakpoint": self.EXPLICIT},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/a.png",
+                        "prompt_cache_breakpoint": self.EXPLICIT,
+                    },
+                ],
+            }
+        ]
+
+    def test_user_blocks_without_breakpoint_are_unchanged(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "user", "content": [{"type": "text", "text": "look"}]}]
+        )
+        assert items == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "look"}]}]
+
+    def test_midturn_system_block_carries_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}]}]
+        )
+        assert items == [
+            {
+                "type": "message",
+                "role": "system",
+                "content": [{"type": "input_text", "text": "fix", "prompt_cache_breakpoint": self.EXPLICIT}],
+            }
+        ]
+
+    def test_assistant_and_tool_result_blocks_drop_breakpoint(self):
+        items = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT},
+                        {"type": "tool_use", "id": "toolu_01", "name": "t", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "content": "r",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        }
+                    ],
+                },
+            ]
+        )
+        assert len(items) == 4
+        assert not _contains_key(items, "prompt_cache_breakpoint")
+
+    def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _build_responses_kwargs,
+        )
+
+        kwargs = _build_responses_kwargs(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="openai/gpt-5.6",
+            extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
+        )
+        assert kwargs["prompt_cache_options"] == {"mode": "explicit"}

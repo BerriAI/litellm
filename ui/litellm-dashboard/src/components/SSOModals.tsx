@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
-import { Modal } from "antd";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { Button } from "@/components/ui/button";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import {
   GroupClaimField,
   MappingToggleField,
@@ -18,6 +17,7 @@ import {
   submitMountedSSOValues,
   type SSOSettingsFormValues,
 } from "./Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
@@ -247,85 +247,80 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   // Helper function to render provider fields
   return (
     <>
-      <Modal
-        title={ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
-        open={isAddSSOModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleAddSSOOk}
-        onCancel={handleAddSSOCancel}
-      >
-        <FormProvider {...form}>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              submitMountedSSOValues(form, "admin-panel", handleFormSubmit)();
-            }}
-          >
-            <FieldGroup>
-              <SSOProviderSelectField />
-              {provider ? renderProviderFields(provider) : null}
-              <ProxyAdminEmailField />
-              <ProxyBaseUrlField />
-              {showRoleMappingToggle && <MappingToggleField name="use_role_mappings" label="Use Role Mappings" />}
-              {useRoleMappings && (
-                <>
-                  <GroupClaimField />
-                  <RoleMappingTeamFields />
-                </>
-              )}
-            </FieldGroup>
-            <div className="mt-4 flex items-center justify-end gap-2">
-              {ssoConfigured && (
-                <Button type="button" variant="secondary" onClick={() => setIsClearConfirmModalVisible(true)}>
-                  Clear
-                </Button>
-              )}
-              <Button type="submit">Save</Button>
-            </div>
-          </form>
-        </FormProvider>
-      </Modal>
+      <Dialog open={isAddSSOModalVisible} onOpenChange={(open) => !open && handleAddSSOCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>{ssoConfigured ? "Edit SSO Settings" : "Add SSO"}</DialogTitle>
+          </DialogHeader>
+          <FormProvider {...form}>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitMountedSSOValues(form, "admin-panel", handleFormSubmit)();
+              }}
+            >
+              <FieldGroup>
+                <SSOProviderSelectField />
+                {provider ? renderProviderFields(provider) : null}
+                <ProxyAdminEmailField />
+                <ProxyBaseUrlField />
+                {showRoleMappingToggle && <MappingToggleField name="use_role_mappings" label="Use Role Mappings" />}
+                {useRoleMappings && (
+                  <>
+                    <GroupClaimField />
+                    <RoleMappingTeamFields />
+                  </>
+                )}
+              </FieldGroup>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                {ssoConfigured && (
+                  <Button type="button" variant="secondary" onClick={() => setIsClearConfirmModalVisible(true)}>
+                    Clear
+                  </Button>
+                )}
+                <Button type="submit">Save</Button>
+              </div>
+            </form>
+          </FormProvider>
+        </DialogContent>
+      </Dialog>
 
       {/* Clear Confirmation Modal */}
-      <Modal
-        title="Confirm Clear SSO Settings"
-        open={isClearConfirmModalVisible}
-        onOk={handleClearSSO}
-        onCancel={() => setIsClearConfirmModalVisible(false)}
-        okText="Yes, Clear"
-        cancelText="Cancel"
-        okButtonProps={{
-          danger: true,
-          style: {
-            backgroundColor: "#dc2626",
-            borderColor: "#dc2626",
-          },
-        }}
-      >
-        <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
-        <p>Users will no longer be able to login using SSO after this change.</p>
-      </Modal>
+      <Dialog open={isClearConfirmModalVisible} onOpenChange={(open) => !open && setIsClearConfirmModalVisible(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Confirm Clear SSO Settings</DialogTitle>
+          </DialogHeader>
+          <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
+          <p>Users will no longer be able to login using SSO after this change.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsClearConfirmModalVisible(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleClearSSO} variant="destructive">
+              Yes, Clear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title="SSO Setup Instructions"
-        open={isInstructionsModalVisible}
-        width={800}
-        footer={null}
-        onOk={handleInstructionsOk}
-        onCancel={handleInstructionsCancel}
-      >
-        <p>Follow these steps to complete the SSO setup:</p>
-        <p className="text-sm mt-2">1. DO NOT Exit this TAB</p>
-        <p className="text-sm mt-2">2. Open a new tab, visit your proxy base url</p>
-        <p className="text-sm mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</p>
-        <p className="text-sm mt-2">4. If Step 3 is successful, you can close this tab</p>
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button type="button" onClick={handleInstructionsOk}>
-            Done
-          </Button>
-        </div>
-      </Modal>
+      <Dialog open={isInstructionsModalVisible} onOpenChange={(open) => !open && handleInstructionsCancel()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>SSO Setup Instructions</DialogTitle>
+          </DialogHeader>
+          <p>Follow these steps to complete the SSO setup:</p>
+          <p className="text-sm mt-2">1. DO NOT Exit this TAB</p>
+          <p className="text-sm mt-2">2. Open a new tab, visit your proxy base url</p>
+          <p className="text-sm mt-2">3. Confirm your SSO is configured correctly and you can login on the new Tab</p>
+          <p className="text-sm mt-2">4. If Step 3 is successful, you can close this tab</p>
+          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Button type="button" onClick={handleInstructionsOk}>
+              Done
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };

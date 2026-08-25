@@ -15,6 +15,17 @@ export interface ToolArgumentsFormValues {
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+export const resolveSchemaProperty = (prop: InputSchemaProperty): InputSchemaProperty => {
+  if (prop.type !== undefined) return prop;
+  const members = (prop.anyOf ?? prop.oneOf ?? []).filter((member) => member.type !== "null");
+  if (members.length !== 1 || members[0].type === undefined) return prop;
+  return {
+    ...members[0],
+    description: prop.description ?? members[0].description,
+    default: prop.default !== undefined ? prop.default : members[0].default,
+  };
+};
+
 const isJsonField = (prop: InputSchemaProperty): boolean => prop.type === "object" || prop.type === "array";
 
 export const toolArgumentFields = (schema: InputSchema): readonly ToolArgumentField[] =>
@@ -38,27 +49,29 @@ const parseJson = (raw: unknown): ParsedJson => {
 const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
 
 export const validateToolArgument = (field: ToolArgumentField, value: unknown): string | undefined => {
+  const prop = resolveSchemaProperty(field.prop);
   const normalized = typeof value === "string" ? value.trim() : value;
   if (field.required && isBlank(normalized)) {
     return `Please enter ${field.key}`;
   }
-  if (!isJsonField(field.prop) || (isBlank(value) && !field.required)) {
+  if (!isJsonField(prop) || (isBlank(value) && !field.required)) {
     return undefined;
   }
   const parsed = parseJson(value);
   if (parsed.kind === "invalid") {
     return "Invalid JSON";
   }
-  if (field.prop.type === "object" && !isPlainObject(parsed.value)) {
+  if (prop.type === "object" && !isPlainObject(parsed.value)) {
     return "Please enter a JSON object";
   }
-  if (field.prop.type === "array" && !Array.isArray(parsed.value)) {
+  if (prop.type === "array" && !Array.isArray(parsed.value)) {
     return "Please enter a JSON array";
   }
   return undefined;
 };
 
-const coerceArgument = (prop: InputSchemaProperty, value: unknown): unknown => {
+const coerceArgument = (declared: InputSchemaProperty, value: unknown): unknown => {
+  const prop = resolveSchemaProperty(declared);
   const normalized = typeof value === "string" ? value.trim() : value;
   switch (prop.type) {
     case "boolean":
@@ -162,9 +175,11 @@ function buildArrayDefault(prop: InputSchemaProperty, effectiveDefault: unknown)
   return buildArrayItems(prop.items);
 }
 
-function buildDefaultValue(prop: InputSchemaProperty | undefined, overrideDefault?: unknown): unknown {
-  if (!prop) return undefined;
+function buildDefaultValue(declared: InputSchemaProperty | undefined, overrideDefault?: unknown): unknown {
+  if (!declared) return undefined;
+  const prop = resolveSchemaProperty(declared);
   const effectiveDefault: unknown = overrideDefault !== undefined ? overrideDefault : prop.default;
+  if (effectiveDefault === null) return null;
 
   if (prop.type === "object") return buildObjectDefault(prop, effectiveDefault);
   if (prop.type === "array") return buildArrayDefault(prop, effectiveDefault);
@@ -183,9 +198,10 @@ function buildDefaultValue(prop: InputSchemaProperty | undefined, overrideDefaul
 
 export const initialArgumentValues = (fields: readonly ToolArgumentField[]): unknown[] =>
   fields.map(({ prop }) => {
-    const defaultValue = buildDefaultValue(prop);
-    if (isJsonField(prop)) {
-      return JSON.stringify(defaultValue ?? (prop.type === "array" ? [] : {}), null, 2);
+    const resolved = resolveSchemaProperty(prop);
+    const defaultValue = buildDefaultValue(resolved);
+    if (isJsonField(resolved)) {
+      return isBlank(defaultValue) ? "" : JSON.stringify(defaultValue, null, 2);
     }
     return defaultValue;
   });

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -189,7 +189,7 @@ describe("Settings", () => {
     });
 
     await user.clear(screen.getByLabelText("Host"));
-    await user.type(screen.getByLabelText("Host"), "https://edited.langfuse.com");
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "https://edited.langfuse.com" } });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -227,7 +227,7 @@ describe("Settings", () => {
 
     const webhookInput = document.querySelector('input[name="llm_exceptions"]') as HTMLInputElement;
     expect(webhookInput).not.toBeNull();
-    await user.type(webhookInput, "https://hooks.example.com/llm-exceptions");
+    fireEvent.change(webhookInput, { target: { value: "https://hooks.example.com/llm-exceptions" } });
 
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 

@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -387,5 +387,87 @@ describe("ToolTestPanel schema changes under a stable tool name", () => {
     rerender(renderWith(schema(), onSubmit));
 
     expect(screen.getByLabelText("message")).toHaveValue("typed by hand");
+  });
+});
+
+describe("ToolTestPanel optional union-typed parameters", () => {
+  const qaEchoSchema: InputSchema = {
+    type: "object",
+    properties: {
+      message: { type: "string" },
+      repeat: { type: "integer", default: 1 },
+      loud: { type: "boolean", default: false },
+      tags: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }], default: null },
+    },
+    required: ["message"],
+  };
+
+  const runPanel = async (drive: () => void) => {
+    const onSubmit = vi.fn();
+    render(
+      <ToolTestPanel
+        tool={buildTool(qaEchoSchema)}
+        onSubmit={onSubmit}
+        isLoading={false}
+        result={null}
+        error={null}
+        onClose={vi.fn()}
+      />,
+    );
+    drive();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Call Tool" }));
+    return onSubmit;
+  };
+
+  it("renders the JSON textarea for an optional array parameter, not a plain text input", () => {
+    renderPanel(qaEchoSchema);
+
+    const tags = screen.getByTestId("textarea-tags");
+    expect(tags.tagName).toBe("TEXTAREA");
+    expect(tags).toHaveValue("");
+    expect(screen.getByPlaceholderText("Enter JSON array for tags")).toBe(tags);
+    expect(screen.queryByPlaceholderText("Enter tags")).not.toBeInTheDocument();
+  });
+
+  it("renders the JSON textarea for an optional object parameter, not a plain text input", () => {
+    renderPanel({
+      type: "object",
+      properties: {
+        payload: { anyOf: [{ type: "object", properties: { id: { type: "string" } } }, { type: "null" }] },
+      },
+    });
+
+    const payload = screen.getByTestId("textarea-payload");
+    expect(payload).toHaveValue(JSON.stringify({ id: "" }, null, 2));
+    expect(screen.getByPlaceholderText("Enter JSON object for payload")).toBe(payload);
+    expect(screen.queryByPlaceholderText("Enter payload")).not.toBeInTheDocument();
+  });
+
+  it("sends an optional array parameter as a real array", async () => {
+    const onSubmit = await runPanel(() => {
+      fireEvent.change(screen.getByPlaceholderText("Enter message"), { target: { value: "hi" } });
+      fireEvent.change(screen.getByTestId("textarea-tags"), { target: { value: '["a","b"]' } });
+    });
+
+    const expected = { message: "hi", repeat: 1, loud: false, tags: ["a", "b"] };
+    expect(onSubmit).toHaveBeenCalledWith(expected);
+  });
+
+  it("omits an optional array parameter the user never filled in", async () => {
+    const onSubmit = await runPanel(() => {
+      fireEvent.change(screen.getByPlaceholderText("Enter message"), { target: { value: "hi" } });
+    });
+
+    expect(onSubmit).toHaveBeenCalledWith({ message: "hi", repeat: 1, loud: false });
+  });
+
+  it("blocks the call instead of sending comma-separated text as a raw string", async () => {
+    const onSubmit = await runPanel(() => {
+      fireEvent.change(screen.getByPlaceholderText("Enter message"), { target: { value: "hi" } });
+      fireEvent.change(screen.getByTestId("textarea-tags"), { target: { value: "a,b" } });
+    });
+
+    expect(await screen.findByText("Invalid JSON")).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

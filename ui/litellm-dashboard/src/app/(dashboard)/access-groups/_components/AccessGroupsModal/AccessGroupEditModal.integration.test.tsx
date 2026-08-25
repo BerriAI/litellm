@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
 import { AccessGroupEditModal } from "./AccessGroupEditModal";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
@@ -117,7 +117,7 @@ describe("AccessGroupEditModal submit payload", () => {
     const nameInput = await screen.findByDisplayValue("Engineering");
 
     await user.clear(nameInput);
-    await user.type(nameInput, "  Padded  ");
+    fireEvent.change(nameInput, { target: { value: "  Padded  " } });
     await save(user);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());

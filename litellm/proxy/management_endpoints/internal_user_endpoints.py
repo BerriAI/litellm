@@ -32,6 +32,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
     user_object_permission_id_cache_key,
 )
+from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
@@ -817,6 +818,7 @@ def _build_user_info_response(
     keys: list[LiteLLM_VerificationToken] | None,
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
+    model_max_budget_usage: dict[str, dict[str, object]] | None = None,
 ) -> UserInfoResponse:
     """Create UserInfoResponse while filtering sensitive fields."""
     if user_info is None and keys is not None:
@@ -830,6 +832,8 @@ def _build_user_info_response(
     if isinstance(_user_info, dict):
         _user_info.pop("password", None)
         _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
+        if model_max_budget_usage is not None:
+            _user_info["model_max_budget_usage"] = model_max_budget_usage
 
     return UserInfoResponse(
         user_id=user_id,
@@ -864,7 +868,7 @@ async def user_info(
     --header 'Authorization: Bearer sk-1234'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
 
     try:
         user_id = _normalize_user_info_user_id(request=request, user_id=user_id)
@@ -910,6 +914,12 @@ async def user_info(
             keys=keys,
             team_list=team_list,
             teams_1=teams_1,
+            model_max_budget_usage=await build_model_max_budget_usage(
+                entity_type=Litellm_EntityType.USER,
+                entity_id=user_id,
+                model_max_budget=getattr(user_info, "model_max_budget", None),
+                cache=model_max_budget_limiter.dual_cache,
+            ),
         )
 
         return response_data
@@ -1007,7 +1017,7 @@ async def user_info_v2(
     --header 'Authorization: Bearer sk-1234'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
 
     try:
         if prisma_client is None:
@@ -1062,6 +1072,13 @@ async def user_info_v2(
             sso_user_id=user_data.get("sso_user_id"),
             teams=user_data.get("teams") or [],
             object_permission=user_data.get("object_permission"),
+            model_max_budget=user_data.get("model_max_budget"),
+            model_max_budget_usage=await build_model_max_budget_usage(
+                entity_type=Litellm_EntityType.USER,
+                entity_id=user_data.get("user_id", user_id),
+                model_max_budget=user_data.get("model_max_budget"),
+                cache=model_max_budget_limiter.dual_cache,
+            ),
         )
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.user_info_v2(): Exception occured - %s", e)
@@ -2221,6 +2238,7 @@ async def delete_user(
     )
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -2299,9 +2317,8 @@ async def delete_user(
                     },
                 )
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-        if litellm.store_audit_logs is True:
+        if is_audit_logging_enabled():
             # make an audit log for each team deleted
             _user_row = user_row.json(exclude_none=True)
 
@@ -2791,6 +2808,13 @@ async def get_user_daily_activity_aggregated(
         description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
         "Matches JavaScript's Date.getTimezoneOffset() convention.",
     ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -2838,6 +2862,7 @@ async def get_user_daily_activity_aggregated(
             model=model,
             api_key=api_key,
             timezone_offset_minutes=timezone,
+            include_current_utc_day=include_current_utc_day,
         )
 
     except HTTPException:

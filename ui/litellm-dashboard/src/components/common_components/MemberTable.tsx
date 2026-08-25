@@ -48,7 +48,7 @@ export default function MemberTable({
 }: MemberTableProps) {
   return (
     <div className="flex w-full flex-col gap-2">
-      <span className="inline-flex text-sm text-gray-700">
+      <span className="inline-flex text-sm text-foreground">
         {members.length} Member{members.length !== 1 ? "s" : ""}
       </span>
       <Table>

@@ -2,18 +2,13 @@ import asyncio
 import collections
 import datetime
 import json
-import os
 import re
-import sys
 from datetime import timezone
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -468,6 +463,7 @@ ignored_keys = [
     "metadata.additional_usage_values.iterations",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.autorouter_savings",
     "metadata.user_api_key",
     "metadata.user_api_key_alias",
     "metadata.user_api_key_team_id",
@@ -2659,7 +2655,7 @@ class TestSpendLogsPayload:
                 payload, expected_payload, ignore_keys=ignored_keys
             )
             if differences:
-                assert False, f"Dictionary mismatch: {differences}"
+                pytest.fail(f"Dictionary mismatch: {differences}")
 
     def mock_anthropic_response(*args, **kwargs):
         mock_response = MagicMock()
@@ -2755,7 +2751,7 @@ class TestSpendLogsPayload:
                 payload, expected_payload, ignore_keys=ignored_keys
             )
             if differences:
-                assert False, f"Dictionary mismatch: {differences}"
+                pytest.fail(f"Dictionary mismatch: {differences}")
 
     @pytest.mark.asyncio
     async def test_spend_logs_payload_success_log_with_router(self, monkeypatch):
@@ -2849,7 +2845,7 @@ class TestSpendLogsPayload:
                 payload, expected_payload, ignore_keys=ignored_keys
             )
             if differences:
-                assert False, f"Dictionary mismatch: {differences}"
+                pytest.fail(f"Dictionary mismatch: {differences}")
 
 
 def _compare_nested_dicts(
@@ -3263,7 +3259,7 @@ async def test_provider_budget_over(disable_budget_sync):
         model_list=MODEL_LIST,
     )
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='No deployments available - crossed budget: Exceeded budget') as e:
         await router.acompletion(
             model="azure-gpt-4o",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -5096,7 +5092,7 @@ def test_resolve_spend_report_scope_missing_caller_value_400():
 
 @pytest.mark.parametrize("bad_column", ["metadata", "end_user", "evil; DROP TABLE", ""])
 def test_scoped_spend_report_sql_rejects_unknown_column(bad_column):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Unsupported spend report scope column'):
         spend_management_endpoints._scoped_spend_report_sql(scope_column=bad_column)
 
 

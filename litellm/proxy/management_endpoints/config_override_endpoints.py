@@ -100,15 +100,14 @@ async def _emit_hashicorp_vault_audit_log(
     ``LiteLLM_ConfigOverrides`` so the row co-locates with the table it
     mutates.
     """
-    import litellm
-
-    if litellm.store_audit_logs is not True:
-        return
-
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(

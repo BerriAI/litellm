@@ -14,7 +14,6 @@ from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
@@ -6213,6 +6212,32 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
 
         self.assertTrue(entry.owns_exporter)
         self.assertIsNotNone(entry.provider._atexit_handler)
+
+    def test_dynamic_providers_share_one_resource(self):
+        """Building the Resource scans every installed distribution's entry points, and the
+        dynamic providers reach it from the async logging path, so one logger builds it once."""
+        logger = self._logger(cap=8)
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        entries = list(logger._tracer_provider_cache.values())
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(len({id(entry.provider.resource) for entry in entries}), 1)
+        self.assertIs(entries[0].provider.resource, logger._litellm_resource())
+
+    def test_resource_is_memoized_per_logger_not_shared(self):
+        """Two loggers must not share a Resource; the second's service.name would be wrong."""
+        first = self._logger()
+        second = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", skip_set_global=True, service_name="svc-second")
+        )
+        self.addCleanup(second._tracer_provider.shutdown)
+
+        self.assertIsNot(first._litellm_resource(), second._litellm_resource())
+        self.assertEqual(second._litellm_resource().attributes.get("service.name"), "svc-second")
+
+
 class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
     """A Postgres service span must name the PostgreSQL server it reached.
 

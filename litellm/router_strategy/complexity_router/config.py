@@ -5,10 +5,12 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Final, Literal
+from types import MappingProxyType
+from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
 
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
@@ -23,11 +25,12 @@ class ComplexityTier(str, Enum):
 
 
 class ClassificationRubric(str, Enum):
-    """Which calibration examples the built-in classifier rubric carries."""
+    """Which calibration examples, and for BUSINESS which tier criteria, the built-in classifier rubric carries."""
 
     LEGACY = "legacy"
     AGENTIC = "agentic"
     CHAT = "chat"
+    BUSINESS = "business"
 
 
 # Unset means LEGACY, so upgrading never moves an existing router's tier decisions or its bill. A
@@ -46,7 +49,7 @@ TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
 DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3
-DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS: Final[int] = 200
+DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS: Final[int] = 8000
 
 
 class KeywordTierRule(BaseModel):
@@ -157,6 +160,44 @@ class ReminderMarkerPair(BaseModel):
         self.open = open_marker
         self.close = close_marker
         return self
+
+
+class ComplexityTierModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_name: str
+    litellm_params: Annotated[Mapping[str, object], SkipValidation()] = Field(
+        default_factory=lambda: MappingProxyType({})
+    )
+
+    @field_validator("litellm_params", mode="before")
+    @classmethod
+    def _freeze_litellm_params(cls, value: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType(dict(value))
+
+    @field_serializer("litellm_params")
+    def _serialize_litellm_params(self, value: Mapping[str, object]) -> Mapping[str, object]:
+        return dict(value)  # mutable-ok: Pydantic JSON serialization requires a concrete mapping
+
+
+def _normalize_tier_entries(
+    raw_value: object,
+    tier: str,
+) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
+    raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+    entries: Final = tuple(
+        ComplexityTierModel(model_name=entry) if isinstance(entry, str) else ComplexityTierModel.model_validate(entry)
+        for entry in raw_entries
+    )
+    model_names: Final = tuple(entry.model_name for entry in entries)
+    if len(model_names) != len(frozenset(model_names)):
+        raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
+    normalized: Final = (
+        entries[0].model_name
+        if not isinstance(raw_value, (list, tuple))
+        else list(model_names)  # mutable-ok: config.tiers must preserve its existing list contract
+    )
+    return normalized, entries
 
 
 # ─── Default Keyword Lists ───
@@ -366,8 +407,11 @@ class ClassifierLLMConfig(BaseModel):
             "multi-file edits, and standard debugging at MEDIUM, so ordinary engineering does not route to the "
             "most expensive tier; it suits agent, terminal, and coding-assistant traffic as well as mixed "
             "traffic. 'chat' omits those engineering anchors, for a deployment serving only conversational "
-            "traffic. Every preset shares the same tier criteria, so this moves where the boundary sits without "
-            "changing the taxonomy. Leave unset for 'legacy', the rubric as it shipped before calibration examples "
+            "traffic. 'business' carries business/sales anchors and business-flavored tier criteria that keep "
+            "routine drafting and summarizing off the expensive tiers and reserve the top tier for committing to "
+            "decisions under tradeoffs; it suits sales, support, and go-to-market traffic. Every preset keeps the "
+            "same four tiers, so this moves where the boundary sits without changing the taxonomy. Leave unset "
+            "for 'legacy', the rubric as it shipped before calibration examples "
             "existed, so an existing router's tier decisions and spend do not move on upgrade. Mutually exclusive "
             "with system_prompt, which replaces the rubric this would select. Only applies when classifier_type "
             "is 'llm'."
@@ -425,6 +469,9 @@ class ComplexityRouterConfig(BaseModel):
             "A list is randomly picked from when adaptive=False, and used as a soft-floor home pool when adaptive=True"
         ),
     )
+    tier_model_configs: Mapping[str, tuple[ComplexityTierModel, ...]] = Field(
+        default_factory=dict,
+    )
 
     tier_definitions: tuple[TierDefinition, ...] | None = Field(
         default=None,
@@ -478,6 +525,15 @@ class ComplexityRouterConfig(BaseModel):
             "Score boundaries between tiers. These keys (simple_medium, medium_complex, complex_reasoning) "
             "name the gaps between the default tier names and are not renameable by tier_labels; they are "
             "scorer knobs persisted by name on every routing decision"
+        ),
+    )
+
+    reasoning_override_min_score: float | None = Field(
+        default=None,
+        description=(
+            "Minimum weighted score a request must reach before 2+ reasoning markers may promote it to the "
+            "reasoning tier. Unset tracks tier_boundaries.simple_medium, so the override never rescues a "
+            "request the scorer placed in the cheapest tier; 0 restores the unconditional override"
         ),
     )
 
@@ -589,12 +645,30 @@ class ComplexityRouterConfig(BaseModel):
             "classifier_type is 'llm'."
         ),
     )
-    classifier_context_per_turn_chars: int = Field(
-        default=DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+    classifier_context_budget_chars: int = Field(
+        default=DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
+        ge=0,
+        description=(
+            "Maximum characters of prior-turn text quoted to the LLM classifier, across the whole "
+            "context window, per classification call. Turns are taken newest first and quoted whole "
+            "while they fit, so a conversation small enough to quote entirely is never cut; once the "
+            "budget runs out the older turns are dropped whole and only the turn straddling the "
+            "boundary is truncated, into whatever space is left. The current ask and the caller's "
+            "system prompt sit outside this budget and are always sent in full, as does the numbering "
+            "each quoted turn carries. A budget under 120 leaves no room to quote a turn and "
+            "suppresses the block; set classifier_context_window_size to 0 to turn context off "
+            "deliberately. Only applies when classifier_type is 'llm'."
+        ),
+    )
+    classifier_context_per_turn_chars: int | None = Field(
+        default=None,
         gt=0,
         description=(
-            "Maximum character length for each prior turn's text in the classifier context window. "
-            "Turns exceeding this are truncated. Only applies when classifier_type is 'llm'."
+            "Optional cap on each individual prior turn's text, applied before "
+            "classifier_context_budget_chars bounds the block. Unset by default, so one long turn may "
+            "spend the whole budget, which is usually what a follow-up needs; set it when no single "
+            "turn should dominate the context the classifier sees. A capped turn keeps its opening "
+            "and its ending with the middle elided. Only applies when classifier_type is 'llm'."
         ),
     )
     classifier_context_include_assistant_turns: bool = Field(
@@ -606,9 +680,9 @@ class ComplexityRouterConfig(BaseModel):
             "word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the "
             "conversation across both roles rather than the last N user turns, and assistant text is "
             "sent to the classifier model, which may be a different deployment or provider than the "
-            "routed completion model. Assistant replies share classifier_context_per_turn_chars with "
-            "user turns, so raise it if replies are truncated before the part that carries the "
-            "difficulty. Off by default because enabling it shifts tier decisions, and therefore "
+            "routed completion model. Assistant replies spend classifier_context_budget_chars "
+            "alongside user turns, so raise it if the oldest turns stop being quoted once replies "
+            "join the window. Off by default because enabling it shifts tier decisions, and therefore "
             "spend, for an already-deployed router. Only applies when classifier_type is 'llm'."
         ),
     )
@@ -767,6 +841,55 @@ class ComplexityRouterConfig(BaseModel):
             else:
                 coerced[key] = item
         return coerced
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_tier_model_configs(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw_tiers: Final = value.get("tiers")
+        if not isinstance(raw_tiers, dict):
+            return value
+        existing_configs: Final = value.get("tier_model_configs")
+        normalized_entries: Final = MappingProxyType(
+            {tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()}
+        )
+        normalized_tiers: Final = MappingProxyType(
+            {tier: normalized for tier, (normalized, _) in normalized_entries.items()}
+        )
+        incoming_params: Final = (
+            MappingProxyType(
+                {
+                    (tier, entry.model_name): entry.litellm_params
+                    for tier, entries in existing_configs.items()
+                    for entry in (ComplexityTierModel.model_validate(item) for item in entries)
+                }
+            )
+            if isinstance(existing_configs, dict)
+            else MappingProxyType({})
+        )
+        tier_model_configs: Final = MappingProxyType(
+            {
+                tier: tuple(
+                    entry.model_copy(
+                        update=MappingProxyType(
+                            {
+                                "litellm_params": incoming_params.get((tier, entry.model_name), entry.litellm_params),
+                            }
+                        )
+                    )
+                    for entry in entries
+                )
+                for tier, (_, entries) in normalized_entries.items()
+                if any(entry.litellm_params for entry in entries)
+                or (isinstance(existing_configs, dict) and tier in existing_configs)
+            }
+        )
+        return {  # mutable-ok: Pydantic before-validator requires a concrete mapping
+            **value,
+            "tiers": normalized_tiers,
+            "tier_model_configs": tier_model_configs,
+        }
 
     @field_validator("escalation_keywords")
     @classmethod

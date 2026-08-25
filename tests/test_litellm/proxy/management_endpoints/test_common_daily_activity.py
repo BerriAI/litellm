@@ -1,6 +1,4 @@
-import os
-import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -9,7 +7,6 @@ import pytest
 
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
@@ -927,6 +924,33 @@ class TestBuildAggregatedSqlQuery:
         assert params[1] == "2026-05-29"
         assert "date >= $1" in sql
         assert "date <= $2" in sql
+
+    @pytest.mark.parametrize("build", [_build_aggregated_sql_query, _build_entity_rollup_sql_query])
+    def test_include_current_utc_day_extends_live_end_bound(self, build):
+        """
+        An offset larger than 24h keeps the caller's local date behind UTC at any
+        wall-clock hour, so the live-end extension is deterministic: a range ending
+        on the caller's local today must reach today's UTC bucket (LIT-5818, guards
+        the #36051 behavior on the aggregated path).
+        """
+        offset_minutes: Final = 1500
+        caller_local_today: Final = (datetime.now(timezone.utc) - timedelta(minutes=offset_minutes)).date().isoformat()
+        utc_today: Final = datetime.now(timezone.utc).date().isoformat()
+
+        _sql, params = build(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-01",
+            end_date=caller_local_today,
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=offset_minutes,
+            include_current_utc_day=True,
+        )
+
+        assert params[0] == "2026-05-01"
+        assert params[1] == utc_today
 
     def test_optional_filters_appear_in_params_in_order(self):
         sql, params = _build_aggregated_sql_query(

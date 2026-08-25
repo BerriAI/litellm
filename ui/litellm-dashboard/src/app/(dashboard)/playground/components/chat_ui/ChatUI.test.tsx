@@ -651,7 +651,7 @@ describe("ChatUI", () => {
     await user.click(await screen.findByRole("option", { name: "Virtual Key" }));
 
     const keyField = await screen.findByPlaceholderText("Enter custom Virtual Key");
-    await user.type(keyField, "sk-test");
+    fireEvent.change(keyField, { target: { value: "sk-test" } });
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText("Loading models...")).toBeInTheDocument();

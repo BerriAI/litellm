@@ -39,6 +39,7 @@ from litellm.llms.anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
 )
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -1090,7 +1091,10 @@ class AmazonConverseConfig(BaseConfig):
         is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
         is_max_tokens_in_request: Final = self.is_max_tokens_in_request(non_default_params)
         if is_thinking_enabled and not is_max_tokens_in_request:
-            thinking_token_budget: Final = cast(dict, optional_params["thinking"]).get("budget_tokens", None)
+            thinking_value: Final = optional_params.get("thinking")
+            thinking_token_budget: Final = (
+                thinking_value.get("budget_tokens") if isinstance(thinking_value, dict) else None
+            )
             if thinking_token_budget is not None:
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
 
@@ -1568,6 +1572,12 @@ class AmazonConverseConfig(BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
+        AnthropicModelInfo.maybe_drop_disabled_thinking(
+            model=model,
+            optional_params=optional_params,
+            custom_llm_provider="bedrock",
+        )
+
         # Prepare and separate parameters
         (
             inference_params,
@@ -1607,6 +1617,8 @@ class AmazonConverseConfig(BaseConfig):
         }
         if additional_request_params:
             data["additionalModelRequestFields"] = additional_request_params
+            if "thinking" in additional_request_params:
+                data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks
 
@@ -1792,6 +1804,17 @@ class AmazonConverseConfig(BaseConfig):
         return thinking_blocks_list
 
     @staticmethod
+    def thinking_tokens_from_additional_fields(additional_fields: object) -> int | None:
+        """Converse omits thinking tokens from its usage block; they only arrive under
+        ``additionalModelResponseFields`` when ``/usage/output_tokens_details`` is requested."""
+        if not isinstance(additional_fields, Mapping):
+            return None
+        usage: Final = additional_fields.get("usage")
+        if not isinstance(usage, Mapping):
+            return None
+        return AnthropicConfig.thinking_tokens_from_usage(usage)
+
+    @staticmethod
     def is_converse_usage_shape(usage_object: Mapping[str, object]) -> bool:
         """Converse-family models report camelCase token counts, not Anthropic's snake_case."""
         return "inputTokens" in usage_object or "outputTokens" in usage_object
@@ -1831,6 +1854,8 @@ class AmazonConverseConfig(BaseConfig):
         self,
         usage: ConverseTokenUsageBlock,
         reasoning_content: str | None = None,
+        thinking_ran: bool = False,
+        provider_reasoning_tokens: int | None = None,
     ) -> Usage:
         input_tokens = usage["inputTokens"]
         output_tokens: Final = usage["outputTokens"]
@@ -1851,10 +1876,24 @@ class AmazonConverseConfig(BaseConfig):
             cache_creation_tokens=cache_creation_input_tokens,
             text_tokens=raw_input_tokens,
         )
-        reasoning_tokens = token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
-        completion_tokens_details: Final = CompletionTokensDetailsWrapper(
-            reasoning_tokens=reasoning_tokens,
-            text_tokens=(output_tokens - reasoning_tokens if reasoning_tokens > 0 else output_tokens),
+        estimated_reasoning_tokens: Final = (
+            token_counter(text=reasoning_content, count_response_tokens=True) if reasoning_content else 0
+        )
+        reasoning_tokens: Final = (
+            min(max(0, provider_reasoning_tokens), output_tokens)
+            if provider_reasoning_tokens is not None
+            else estimated_reasoning_tokens
+        )
+        completion_tokens_details: Final = (
+            CompletionTokensDetailsWrapper(
+                reasoning_tokens=reasoning_tokens,
+                text_tokens=output_tokens - reasoning_tokens,
+            )
+            if reasoning_tokens > 0
+            else CompletionTokensDetailsWrapper(
+                reasoning_tokens=None if thinking_ran else 0,
+                text_tokens=None if thinking_ran else output_tokens,
+            )
         )
         openai_usage: Final = Usage(
             prompt_tokens=input_tokens,
@@ -2251,6 +2290,10 @@ class AmazonConverseConfig(BaseConfig):
         usage: Final = self.transform_usage(
             completion_response["usage"],
             reasoning_content=chat_completion_message.get("reasoning_content"),
+            thinking_ran=reasoningContentBlocks is not None,
+            provider_reasoning_tokens=self.thinking_tokens_from_additional_fields(
+                completion_response.get("additionalModelResponseFields")
+            ),
         )
 
         ## HANDLE TOOL CALLS

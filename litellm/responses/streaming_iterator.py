@@ -79,6 +79,11 @@ def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verif
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
 
 
+def _load_json_object(payload: str | bytes) -> dict[str, object]:
+    """Parse a JSON payload that the caller consumes as an object."""
+    return json.loads(payload)
+
+
 def _model_id_from_metadata(litellm_metadata: dict[str, object] | None) -> str | None:
     model_info: Final = litellm_metadata.get("model_info") if litellm_metadata else None
     model_id: Final = model_info.get("id") if _is_json_object(model_info) else None
@@ -1474,7 +1479,7 @@ class ResponsesWebSocketStreaming:
             event = event.decode("utf-8")
         if isinstance(event, str):
             try:
-                event_obj = json.loads(event)
+                event_obj = _load_json_object(event)
             except (json.JSONDecodeError, TypeError):
                 return
         else:
@@ -1487,7 +1492,7 @@ class ResponsesWebSocketStreaming:
         """Extract user input content from response.create for logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
+                msg_obj = _load_json_object(message)
             elif _is_json_object(message):
                 msg_obj = message
             else:
@@ -1557,7 +1562,7 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_payload: Mapping[str, object] = json.loads(response_str)
+                        _evt_payload: Mapping[str, object] = _load_json_object(response_str)
                         _evt_type = _evt_payload.get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
@@ -1622,7 +1627,7 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final[dict[str, object]] = json.loads(message)
+            msg_obj: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -1751,7 +1756,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final[dict[str, object]] = json.loads(response_str)
+            evt_obj: Final = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1807,7 +1812,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final[Mapping[str, object]] = json.loads(response_str)
+            evt_obj: Final[Mapping[str, object]] = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -2141,7 +2146,7 @@ class ManagedResponsesWebSocketHandler:
     async def _parse_message(self, raw_message: str) -> dict[str, object] | None:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
-            msg_obj: Final[dict[str, object]] = json.loads(raw_message)
+            msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
             await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
@@ -2345,7 +2350,7 @@ class ManagedResponsesWebSocketHandler:
                 continue
             if chunk_type == "response.completed" and completed_event is None:
                 try:
-                    completed_event = json.loads(serialized)
+                    completed_event = _load_json_object(serialized)
                 except Exception:
                     pass
             try:

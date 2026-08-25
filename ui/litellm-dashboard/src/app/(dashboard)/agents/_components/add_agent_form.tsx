@@ -1,19 +1,21 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Select, Steps, Tag } from "antd";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined } from "@ant-design/icons";
+import { Bot, Check, CircleCheck, Key, LayoutGrid } from "lucide-react";
 import CreatedKeyDisplay from "@/components/shared/CreatedKeyDisplay";
+import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import {
   createAgentCall,
@@ -49,10 +51,62 @@ import {
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
-
-const { Step } = Steps;
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const CUSTOM_AGENT_TYPE = "custom";
+
+const STEP_TITLES = ["Configure", "Entitlements", "Governance", "Agent Management", "Ready"] as const;
+
+const stepMarkerClass = (index: number, current: number): string => {
+  if (index < current) return "border-primary text-primary";
+  if (index === current) return "border-primary bg-primary text-primary-foreground";
+  return "border-border text-muted-foreground";
+};
+
+const stepTitleClass = (index: number, current: number): string => {
+  if (index === current) return "font-medium text-foreground";
+  if (index < current) return "text-foreground";
+  return "text-muted-foreground";
+};
+
+const AgentTypeLabel: React.FC<{ agentType: string; info: AgentCreateInfo | undefined }> = ({ agentType, info }) => {
+  if (agentType === CUSTOM_AGENT_TYPE) {
+    return (
+      <span className="flex items-center gap-2">
+        <LayoutGrid className="size-4 text-warning" />
+        <span>Custom / Other</span>
+      </span>
+    );
+  }
+  if (!info) return <>{agentType}</>;
+  return (
+    <span className="flex items-center gap-2">
+      <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-4 w-4 object-contain" />
+      <span>{info.agent_type_display_name}</span>
+    </span>
+  );
+};
+
+const StepProgress: React.FC<{ current: number }> = ({ current }) => (
+  <ol aria-label="Agent creation steps" className="mb-8 flex items-center">
+    {STEP_TITLES.map((title, index) => (
+      <li
+        key={title}
+        aria-current={index === current ? "step" : undefined}
+        className="flex flex-1 items-center gap-2 last:flex-none"
+      >
+        <span
+          aria-hidden="true"
+          className={`flex size-6 shrink-0 items-center justify-center rounded-full border text-xs ${stepMarkerClass(index, current)}`}
+        >
+          {index < current ? <Check className="size-3.5" /> : index + 1}
+        </span>
+        <span className={`text-xs whitespace-nowrap ${stepTitleClass(index, current)}`}>{title}</span>
+        {index < STEP_TITLES.length - 1 && <span aria-hidden="true" className="mx-2 h-px flex-1 bg-border" />}
+      </li>
+    ))}
+  </ol>
+);
 
 const SHARED_INITIAL_VALUES: AgentFormValues = {
   allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
@@ -535,7 +589,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         <h4 className="mb-3 text-sm font-medium text-foreground">Budgets &amp; Rate Limits</h4>
         <div className="space-y-4">
           {!requireTraceIdOutbound && (
-            <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-300">
+            <div className="rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
               Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure budgets and
               rate limits.
             </div>
@@ -683,66 +737,43 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         <FieldLabel htmlFor="agent-type">
           {labelWithHint("Agent Type", "Select the type of agent you want to create")}
         </FieldLabel>
-        <Select
-          id="agent-type"
-          value={agentType}
-          onChange={handleAgentTypeChange}
-          size="large"
-          style={{ width: "100%" }}
-          optionLabelProp="label"
-          dropdownRender={(menu) => (
-            <>
-              {menu}
-              <Separator className="my-1" />
-              <div className="px-2 py-1">
-                <div className="mb-1 px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                  Not listed?
-                </div>
-                <div
-                  className={`flex cursor-pointer items-center gap-3 rounded px-2 py-2 transition-colors ${
-                    agentType === CUSTOM_AGENT_TYPE
-                      ? "bg-amber-50 dark:bg-amber-950"
-                      : "hover:bg-amber-50 dark:hover:bg-amber-950"
-                  }`}
-                  onClick={() => handleAgentTypeChange(CUSTOM_AGENT_TYPE)}
-                >
-                  <AppstoreOutlined className="text-lg text-amber-600 dark:text-amber-400" />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-amber-700 dark:text-amber-400">Custom / Other</span>
-                      <Tag color="orange" style={{ fontSize: 10, padding: "0 4px" }}>
-                        GENERIC
-                      </Tag>
-                    </div>
-                    <div className="text-xs text-amber-600 dark:text-amber-400">
-                      For agents that don&apos;t follow a standard protocol, just needs a virtual key
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-        >
-          {agentTypeMetadata.map((info) => (
-            <Select.Option
-              key={info.agent_type}
-              value={info.agent_type}
-              label={
-                <div className="flex items-center gap-2">
-                  <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-4 w-4 object-contain" />
-                  <span>{info.agent_type_display_name}</span>
-                </div>
-              }
-            >
-              <div className="flex items-center gap-3 py-1">
-                <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-5 w-5 object-contain" />
-                <div>
-                  <div className="font-medium">{info.agent_type_display_name}</div>
-                  {info.description && <div className="text-xs text-muted-foreground">{info.description}</div>}
-                </div>
-              </div>
-            </Select.Option>
-          ))}
+        <Select value={agentType} onValueChange={(value) => value !== null && handleAgentTypeChange(value)}>
+          <SelectTrigger id="agent-type" className="h-10 w-full">
+            <SelectValue>{() => <AgentTypeLabel agentType={agentType} info={selectedAgentTypeInfo} />}</SelectValue>
+          </SelectTrigger>
+          <SelectContent className="p-1">
+            {agentTypeMetadata.map((info) => (
+              <SelectItem key={info.agent_type} value={info.agent_type}>
+                <span className="flex items-center gap-3 py-1">
+                  <Logo src={info.logo_url} label={info.agent_type_display_name} className="h-5 w-5 object-contain" />
+                  <span className="block">
+                    <span className="block font-medium">{info.agent_type_display_name}</span>
+                    {info.description && (
+                      <span className="block text-xs text-muted-foreground">{info.description}</span>
+                    )}
+                  </span>
+                </span>
+              </SelectItem>
+            ))}
+            <SelectSeparator />
+            <div className="mb-1 px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Not listed?
+            </div>
+            <SelectItem value={CUSTOM_AGENT_TYPE} className="focus:bg-warning/10">
+              <span className="flex items-center gap-3">
+                <LayoutGrid className="size-4.5 shrink-0 text-warning" />
+                <span className="block">
+                  <span className="flex items-center gap-2">
+                    <span className="font-medium text-warning">Custom / Other</span>
+                    <StatusBadge tone="warning" label="GENERIC" className="h-4 px-1 text-[10px]" />
+                  </span>
+                  <span className="block text-xs whitespace-normal text-warning">
+                    For agents that don&apos;t follow a standard protocol, just needs a virtual key
+                  </span>
+                </span>
+              </span>
+            </SelectItem>
+          </SelectContent>
         </Select>
       </Field>
 
@@ -845,9 +876,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       <div>
         {/* Agent name chip */}
         <div className="mb-6 flex justify-center">
-          <Tag icon={<RobotOutlined />} color="purple" className="px-3 py-1 text-sm">
+          <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700 dark:bg-purple-950 dark:text-purple-300">
+            <Bot className="size-3.5" />
             {agentName}
-          </Tag>
+          </Badge>
         </div>
 
         <AgentFormField
@@ -873,7 +905,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "create_new"
-                ? "border-indigo-600 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-950"
+                ? "border-info bg-info/10"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("create_new")}
@@ -883,7 +915,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                 <RadioGroupItem value="create_new" aria-label="Create a new key for this agent" />
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <KeyOutlined className="text-indigo-600 dark:text-indigo-400" />
+                    <Key className="size-4 text-info" />
                     <span className="font-medium text-foreground">Create a new key for this agent</span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">A dedicated key scoped to this agent.</p>
@@ -902,7 +934,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                   )}
                 </div>
               </div>
-              <Tag color="green">Recommended</Tag>
+              <StatusBadge tone="success" label="Recommended" />
             </div>
           </div>
 
@@ -910,7 +942,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           <div
             className={`cursor-pointer rounded-lg border-2 p-4 transition-colors ${
               keyAssignOption === "existing_key"
-                ? "border-indigo-600 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-950"
+                ? "border-info bg-info/10"
                 : "border-border bg-background hover:border-muted-foreground/40"
             }`}
             onClick={() => setKeyAssignOption("existing_key")}
@@ -919,7 +951,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
               <RadioGroupItem value="existing_key" aria-label="Assign an existing key" />
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <KeyOutlined className="text-muted-foreground" />
+                  <Key className="size-4 text-muted-foreground" />
                   <span className="font-medium text-foreground">Assign an existing key</span>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">Re-assign a key you already have to this agent.</p>
@@ -957,12 +989,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const renderReadyStep = () => (
     <div className="py-6 text-center">
-      <CheckCircleFilled className="mb-4 text-5xl text-green-500" style={{ fontSize: 48 }} />
+      <CircleCheck className="mb-4 size-12 text-success" />
       <h3 className="mb-2 text-xl font-semibold text-foreground">Agent Created!</h3>
       <div className="mb-4 flex justify-center">
-        <Tag icon={<RobotOutlined />} color="purple" className="px-3 py-1 text-sm">
+        <Badge className="h-auto gap-1.5 bg-purple-100 px-3 py-1 text-sm text-purple-700 dark:bg-purple-950 dark:text-purple-300">
+          <Bot className="size-3.5" />
           {createdAgentName}
-        </Tag>
+        </Badge>
       </div>
       {createdKeyValue && (
         <div className="mx-auto mt-4 max-w-md text-left">
@@ -983,72 +1016,58 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
   );
 
   return (
-    <Modal
-      title={
-        <div className="flex items-center space-x-3 border-b border-border pb-4">
-          {selectedLogo && currentStep < 1 && (
-            <Logo src={selectedLogo} label="Agent" className="h-6 w-6 object-contain" />
-          )}
-          <h2 className="text-xl font-semibold text-foreground">Add New Agent</h2>
-        </div>
-      }
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={900}
-      className="top-8"
-      styles={{
-        body: { padding: "24px" },
-        header: { padding: "24px 24px 0 24px", border: "none" },
-      }}
-    >
-      <TooltipProvider>
-        <div className="mt-4">
-          <Steps current={currentStep} size="small" className="mb-8">
-            <Step title="Configure" />
-            <Step title="Entitlements" />
-            <Step title="Governance" />
-            <Step title="Agent Management" />
-            <Step title="Ready" />
-          </Steps>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[900px]">
+        <DialogHeader>
+          <div className="flex items-center space-x-3 border-b border-border pb-4">
+            {selectedLogo && currentStep < 1 && (
+              <Logo src={selectedLogo} label="Agent" className="h-6 w-6 object-contain" />
+            )}
+            <DialogTitle className="text-xl font-semibold text-foreground">Add New Agent</DialogTitle>
+          </div>
+        </DialogHeader>
+        <TooltipProvider>
+          <div className="mt-4">
+            <StepProgress current={currentStep} />
 
-          <FormProvider {...form}>
-            <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
-              {currentStep === 0 && renderConfigureStep()}
-              {currentStep === 1 && renderEntitlementsStep()}
-              {currentStep === 2 && renderObservabilityStep()}
-              {currentStep === 3 && renderAssignKeyStep()}
-              {currentStep === 4 && renderReadyStep()}
-            </form>
-          </FormProvider>
+            <FormProvider {...form}>
+              <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
+                {currentStep === 0 && renderConfigureStep()}
+                {currentStep === 1 && renderEntitlementsStep()}
+                {currentStep === 2 && renderObservabilityStep()}
+                {currentStep === 3 && renderAssignKeyStep()}
+                {currentStep === 4 && renderReadyStep()}
+              </form>
+            </FormProvider>
 
-          <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
-            <div>
-              {currentStep > 0 && currentStep < 4 && (
-                <Button type="button" variant="outline" onClick={handleBack}>
-                  ← Back
-                </Button>
-              )}
-            </div>
-            <div className="flex gap-3">
-              {currentStep < 4 && (
-                <Button variant="secondary" onClick={handleClose}>
-                  Cancel
-                </Button>
-              )}
-              {currentStep < 3 && <Button onClick={handleNext}>Next →</Button>}
-              {currentStep === 3 && (
-                <Button disabled={isSubmitting} aria-busy={isSubmitting} onClick={handleCreateAgent}>
-                  {isSubmitting && <UiLoadingSpinner className="size-4" />}
-                  {isSubmitting ? "Creating..." : "Create Agent →"}
-                </Button>
-              )}
-              {currentStep === 4 && <Button onClick={handleClose}>Done</Button>}
+            <div className="mt-6 flex items-center justify-between border-t border-border pt-6">
+              <div>
+                {currentStep > 0 && currentStep < 4 && (
+                  <Button type="button" variant="outline" onClick={handleBack}>
+                    ← Back
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-3">
+                {currentStep < 4 && (
+                  <Button variant="secondary" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                )}
+                {currentStep < 3 && <Button onClick={handleNext}>Next →</Button>}
+                {currentStep === 3 && (
+                  <Button disabled={isSubmitting} aria-busy={isSubmitting} onClick={handleCreateAgent}>
+                    {isSubmitting && <UiLoadingSpinner className="size-4" />}
+                    {isSubmitting ? "Creating..." : "Create Agent →"}
+                  </Button>
+                )}
+                {currentStep === 4 && <Button onClick={handleClose}>Done</Button>}
+              </div>
             </div>
           </div>
-        </div>
-      </TooltipProvider>
-    </Modal>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

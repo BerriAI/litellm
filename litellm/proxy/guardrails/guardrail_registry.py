@@ -1,13 +1,14 @@
 # litellm/proxy/guardrails/guardrail_registry.py
 
+import asyncio
 import importlib
 import os
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
-from typing import Any, Final, Literal, Optional, Protocol, cast
+from typing import Final, Literal, Optional, Protocol, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm import Router
@@ -65,6 +66,19 @@ class _GuardrailRowLike(Protocol):
     @property
     def guardrail_id(self) -> str: ...
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+class _GuardrailTableActions(Protocol):
+    async def create(self, *, data: Mapping[str, object]) -> _GuardrailRowLike: ...
+    async def delete(self, *, where: Mapping[str, str]) -> object: ...
+    async def update(self, *, where: Mapping[str, str], data: Mapping[str, object]) -> _GuardrailRowLike: ...
+    async def find_many(self, *, where: Mapping[str, str], order: Mapping[str, str]) -> Sequence[BaseModel]: ...
+    async def find_unique(self, *, where: Mapping[str, str]) -> BaseModel | None: ...
+
+
+def _guardrail_table(prisma_client: PrismaClient) -> _GuardrailTableActions:
+    """Typed view of the guardrails table actions exposed by the Prisma repository."""
+    return GuardrailsRepository(prisma_client).table
 
 
 guardrail_initializer_registry: Final = {
@@ -278,7 +292,7 @@ class GuardrailRegistry:
         try:
             guardrail_name: Final = guardrail.get("guardrail_name")
             # Properly serialize LitellmParams Pydantic model to dict
-            litellm_params_obj: Final[Any] = guardrail.get("litellm_params", {})
+            litellm_params_obj: Final = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
@@ -287,7 +301,7 @@ class GuardrailRegistry:
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
-            created_guardrail: Final[_GuardrailRowLike] = await GuardrailsRepository(prisma_client).table.create(
+            created_guardrail: Final[_GuardrailRowLike] = await _guardrail_table(prisma_client).create(
                 data={
                     "guardrail_name": guardrail_name,
                     "litellm_params": litellm_params,
@@ -311,7 +325,7 @@ class GuardrailRegistry:
         """
         try:
             # Delete from DB
-            await GuardrailsRepository(prisma_client).table.delete(where={"guardrail_id": guardrail_id})
+            await _guardrail_table(prisma_client).delete(where={"guardrail_id": guardrail_id})
 
             return {"message": f"Guardrail {guardrail_id} deleted successfully"}
         except Exception as e:
@@ -324,7 +338,7 @@ class GuardrailRegistry:
         try:
             guardrail_name: Final = guardrail.get("guardrail_name")
             # Properly serialize LitellmParams Pydantic model to dict
-            litellm_params_obj: Final[Any] = guardrail.get("litellm_params", {})
+            litellm_params_obj: Final = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
@@ -333,7 +347,7 @@ class GuardrailRegistry:
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
-            updated_guardrail: Final[_GuardrailRowLike] = await GuardrailsRepository(prisma_client).table.update(
+            updated_guardrail: Final[_GuardrailRowLike] = await _guardrail_table(prisma_client).update(
                 where={"guardrail_id": guardrail_id},
                 data={
                     "guardrail_name": guardrail_name,
@@ -357,7 +371,7 @@ class GuardrailRegistry:
         Only rows with status == "active" are returned (pending_review and rejected are excluded).
         """
         try:
-            guardrails_from_db: Final = await GuardrailsRepository(prisma_client).table.find_many(
+            guardrails_from_db: Final = await _guardrail_table(prisma_client).find_many(
                 where={"status": "active"},
                 order={"created_at": "desc"},
             )
@@ -375,9 +389,7 @@ class GuardrailRegistry:
         Get a guardrail by its ID from the database
         """
         try:
-            guardrail: Final = await GuardrailsRepository(prisma_client).table.find_unique(
-                where={"guardrail_id": guardrail_id}
-            )
+            guardrail: Final = await _guardrail_table(prisma_client).find_unique(where={"guardrail_id": guardrail_id})
 
             if not guardrail:
                 return None
@@ -391,7 +403,7 @@ class GuardrailRegistry:
         Get a guardrail by its name from the database
         """
         try:
-            guardrail: Final = await GuardrailsRepository(prisma_client).table.find_unique(
+            guardrail: Final = await _guardrail_table(prisma_client).find_unique(
                 where={"guardrail_name": guardrail_name}
             )
 
@@ -813,4 +825,6 @@ class InMemoryGuardrailHandler:
 # In Memory Guardrail Handler for LiteLLM Proxy
 ########################################################
 IN_MEMORY_GUARDRAIL_HANDLER: Final = InMemoryGuardrailHandler()
+
+GUARDRAIL_RECONCILE_LOCK: Final = asyncio.Lock()
 ########################################################

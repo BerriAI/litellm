@@ -16,15 +16,12 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 
 import json
 import logging
-import os
-import sys
 from types import MappingProxyType
 
 import httpx
 import pytest
 import respx
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.batches.batch_utils as bu
@@ -150,13 +147,13 @@ def test_parse_jsonl_empty_content_is_empty_list():
     assert bu._get_file_content_as_dictionary(b"") == []
 
 
-def test_parse_jsonl_malformed_raises():
-    with pytest.raises(Exception):
-        bu._get_file_content_as_dictionary(b"not valid json")
+def test_parse_jsonl_malformed_lines_skipped():
+    content = b'{"a": 1}\nnot valid json\n{"b": 2}\n'
+    assert bu._get_file_content_as_dictionary(content) == [{"a": 1}, {"b": 2}]
 
 
 # =========================================================================== #
-# _iter_batch_input_lines / _iter_batch_input_entries  (JSONL parsing)
+# _iter_batch_input_lines / _iter_batch_output_entries  (JSONL parsing)
 # =========================================================================== #
 
 
@@ -173,19 +170,22 @@ def test_iter_input_lines_empty():
     assert list(bu._iter_batch_input_lines(b"")) == []
 
 
-def test_iter_input_entries_parses_each_row():
+def test_iter_output_entries_parses_each_row():
     content = b'{"body": {"model": "gpt-4o"}}\n{"body": {"model": "claude-3"}}\n'
-    assert list(bu._iter_batch_input_entries(content)) == [
+    assert list(bu._iter_batch_output_entries(content)) == [
         {"body": {"model": "gpt-4o"}},
         {"body": {"model": "claude-3"}},
     ]
 
 
-def test_iter_input_entries_raises_on_malformed_line():
-    # _iter_batch_input_entries raises on a bad row; callers that must survive
-    # bad rows iterate _iter_batch_input_lines and parse per-row instead.
-    with pytest.raises(Exception):
-        list(bu._iter_batch_input_entries(b'{"ok":1}\nnot-json\n'))
+def test_iter_output_entries_skips_malformed_and_non_object_lines():
+    content = b'{"ok": 1}\nnot-json\n[1, 2]\n{"ok": 2}\n'
+    assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
+
+
+def test_iter_output_entries_skips_undecodable_line():
+    content = b'{"ok": 1}\n{"note": "\xff-bad"}\n{"ok": 2}\n'
+    assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
 
 
 # =========================================================================== #
@@ -469,6 +469,25 @@ def test_cost_from_content_completion_cost_path(monkeypatch):
 
     assert total == 1.0  # 2 successful * 0.5
     assert len(calls) == 2  # failed row not costed
+
+
+def test_empty_body_line_does_not_zero_whole_batch():
+    """A status-200 row with an empty body makes litellm.completion_cost raise;
+    that line must be skipped instead of zeroing the whole batch."""
+    rows = [
+        _success_row(usage=_usage(10, 5)),
+        {
+            "custom_id": "request-poison-empty",
+            "response": {"status_code": 200, "request_id": "inject-empty-body", "body": {}},
+        },
+        _success_row(usage=_usage(20, 10)),
+    ]
+
+    cost, usage, models = bu._aggregate_batch_cost_usage_models(entries=rows, custom_llm_provider="openai")
+
+    assert cost > 0.0
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
+    assert models == ["gpt-4o", "gpt-4o"]
 
 
 def test_cost_from_content_model_info_path(monkeypatch):
@@ -778,6 +797,43 @@ async def test_output_file_content_vertex_unified_file_id_extracts_gcs_uri(monke
     assert captured["custom_llm_provider"] == "vertex_ai"
 
 
+@pytest.mark.asyncio
+async def test_output_file_content_model_encoded_file_id_decoded_to_provider_id(monkeypatch):
+    import litellm.files.main as files_main
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b'{"a": 1}'})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    encoded_id = encode_file_id_with_model("file-Y3FHrMpi7uCkDpY6fgWGeR", "my-batch-model")
+
+    await bu._fetch_batch_output_file_content(_batch(encoded_id), custom_llm_provider="openai")
+
+    assert captured["file_id"] == "file-Y3FHrMpi7uCkDpY6fgWGeR"
+    assert captured["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_output_file_content_raw_openai_file_id_passes_through(monkeypatch):
+    import litellm.files.main as files_main
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b'{"a": 1}'})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+
+    await bu._fetch_batch_output_file_content(_batch("file-abc123"), custom_llm_provider="openai")
+
+    assert captured["file_id"] == "file-abc123"
+
+
 def _vertex_predictions_row(custom_id, prompt_tokens, completion_tokens):
     return {
         "request": {
@@ -890,8 +946,14 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
         litellm_params={"vertex_project": "proj-1", "vertex_location": "us-central1"},
     )
 
+    pricing = litellm.model_cost["vertex_ai/gemini-3.6-flash"]
+    batch_input = pricing["input_cost_per_token_batches"]
+    batch_output = pricing["output_cost_per_token_batches"]
+
+    assert batch_input < pricing["input_cost_per_token"]
+    assert batch_output < pricing["output_cost_per_token"]
     assert cost > 0
-    assert cost == pytest.approx(30 * 7.5e-07 + 15 * 3.75e-06)
+    assert cost == pytest.approx(30 * batch_input + 15 * batch_output)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
     assert models == ["gemini-3.6-flash", "gemini-3.6-flash"]
 

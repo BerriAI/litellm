@@ -45,7 +45,7 @@ describe("SpendBudgetCell", () => {
 
   it("switches to the warning tone at 80% usage", () => {
     const { container } = render(<SpendBudgetCell spend={80} maxBudget={100} />);
-    expect(indicator(container)?.className).toContain("bg-amber-500");
+    expect(indicator(container)?.className).toContain("bg-warning");
   });
 
   it("switches to the over tone above 100% usage", () => {

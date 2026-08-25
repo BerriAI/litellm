@@ -1,7 +1,6 @@
 import contextlib
 import json
 import os
-import sys
 import traceback
 from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
@@ -13,10 +12,8 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
+from starlette.datastructures import FormData
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -39,7 +36,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -557,10 +554,9 @@ class TestVertexAIPassThroughHandler:
     @pytest.mark.asyncio
     async def test_vertex_passthrough_with_no_default_credentials(self, monkeypatch):
         """
-        Test that when no default credentials are set, the request fails
-        """
-        """
-        Test that when passthrough credentials are set, they are correctly used in the request
+        With no Vertex credential matching the request, the only Authorization present
+        is the caller's own virtual key. It must not be forwarded to Google; the
+        request fails with a clean 401 instead (LIT-5997).
         """
         from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
@@ -623,31 +619,25 @@ class TestVertexAIPassThroughHandler:
             mock_get_token.return_value = (test_token, "")
             mock_auth.return_value = MagicMock()
 
-            # Call the route
-            try:
+            with pytest.raises(HTTPException) as exc_info:
                 await vertex_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
                 )
-            except Exception as e:
-                traceback.print_exc()
-                print(f"Error: {e}")
 
-            # Verify create_pass_through_route was called with correct arguments
-            mock_create_route.assert_called_once_with(
-                endpoint=endpoint,
-                target=f"https://{test_location}-aiplatform.googleapis.com/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent",
-                custom_headers={"authorization": f"Bearer {test_token}"},
-                is_streaming_request=False,
-            )
+            assert exc_info.value.status_code == 401
+            mock_create_route.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_async_vertex_proxy_route_api_key_auth(self):
         """
         Critical
 
-        This is how Vertex AI JS SDK will Auth to Litellm Proxy
+        This is how Vertex AI JS SDK will Auth to Litellm Proxy: the virtual key
+        arrives in x-litellm-api-key and must reach user_api_key_auth. With no Vertex
+        credential configured, that virtual key must not be forwarded to Google, so
+        the request fails with a clean 401 (LIT-5997).
         """
         # Mock dependencies
         mock_request = Mock()
@@ -667,14 +657,15 @@ class TestVertexAIPassThroughHandler:
                     return_value={"status": "success"}
                 )
 
-                # Call the function
-                result = await vertex_proxy_route(
-                    endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
-                    request=mock_request,
-                    fastapi_response=mock_response,
-                )
+                with pytest.raises(HTTPException) as exc_info:
+                    await vertex_proxy_route(
+                        endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+                        request=mock_request,
+                        fastapi_response=mock_response,
+                    )
 
-                # Verify user_api_key_auth was called with the correct Bearer token
+                assert exc_info.value.status_code == 401
+                mock_pass_through.assert_not_called()
                 mock_auth.assert_called_once()
                 call_args = mock_auth.call_args[1]
                 assert call_args["api_key"] == "Bearer test-key-123"
@@ -719,6 +710,7 @@ class TestVertexAIPassThroughHandler:
 
         # Create mock logging object
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-123"
         mock_logging_obj.model_call_details = {}
 
@@ -895,6 +887,7 @@ class TestVertexAIPassThroughHandler:
 
         # Create mock logging object
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-123"
         mock_logging_obj.model_call_details = {}
 
@@ -965,6 +958,7 @@ class TestVertexAIPassThroughHandler:
         mock_httpx_response.status_code = 200
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-embed"
         mock_logging_obj.model_call_details = {}
 
@@ -1023,6 +1017,7 @@ class TestVertexAIPassThroughHandler:
         mock_httpx_response.status_code = 200
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-batch"
         mock_logging_obj.model_call_details = {}
 
@@ -1079,6 +1074,7 @@ class TestVertexAIPassThroughHandler:
         mock_httpx_response.status_code = 200
 
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.optional_params = {}
         mock_logging_obj.litellm_call_id = "test-call-id-gemini-studio"
         mock_logging_obj.model_call_details = {}
 
@@ -1108,6 +1104,117 @@ class TestVertexAIPassThroughHandler:
         ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_vertex_passthrough_handler_prices_regional_endpoint_with_uplift(self, monkeypatch, streaming):
+        """
+        Both cost computations for a passthrough call must price on the URL's serving location:
+        the handler-computed cost, and the async success recompute, which re-resolves the
+        location from the logging object and previously fell through empty optional_params to
+        the us-central1 default, billing the regional uplift on global traffic too (#34393).
+        """
+        import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                **litellm.get_model_cost_map(url=""),
+                "vertex_ai/gemini-fake-regional": {
+                    "litellm_provider": "vertex_ai",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "regional_endpoint_uplift_multiplier": 1.1,
+                },
+            },
+        )
+
+        response_body: Final = {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "hello"}], "role": "model"},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 20,
+                "totalTokenCount": 30,
+            },
+        }
+
+        def costs_for(location: str) -> tuple[float, float]:
+            url_route: Final = (
+                f"https://{location}-aiplatform.googleapis.com/v1/projects/p/locations/{location}"
+                "/publishers/google/models/gemini-fake-regional:"
+                f"{'streamGenerateContent' if streaming else 'generateContent'}"
+            )
+            start_time: Final = datetime.datetime.now()
+            end_time: Final = datetime.datetime.now()
+            logging_obj: Final = Logging(
+                model="gemini-fake-regional",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=streaming,
+                call_type="pass_through_endpoint",
+                start_time=start_time,
+                litellm_call_id="call-id",
+                function_id="fn-id",
+            )
+            logging_obj.update_environment_variables(
+                model="gemini-fake-regional",
+                user="unknown",
+                optional_params={},
+                litellm_params={},
+                call_type="pass_through_endpoint",
+            )
+            if streaming:
+                result = VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+                    litellm_logging_obj=logging_obj,
+                    passthrough_success_handler_obj=Mock(),
+                    url_route=url_route,
+                    request_body={},
+                    endpoint_type="vertex_ai",
+                    start_time=start_time,
+                    all_chunks=[json.dumps(response_body)],
+                    model=None,
+                    end_time=end_time,
+                )
+            else:
+                mock_httpx_response: Final = Mock()
+                mock_httpx_response.json.return_value = response_body
+                mock_httpx_response.headers = {}
+                mock_httpx_response.status_code = 200
+                result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                    httpx_response=mock_httpx_response,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result="test-result",
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=False,
+                )
+            recomputed: Final = logging_obj._response_cost_calculator(result=result["result"])
+            return result["kwargs"]["response_cost"], recomputed
+
+        global_handler_cost, global_recomputed_cost = costs_for("global")
+        regional_handler_cost, regional_recomputed_cost = costs_for("us-east5")
+
+        plain_cost: Final = 10 * 1e-06 + 20 * 2e-06
+        assert global_handler_cost == pytest.approx(plain_cost, rel=1e-9)
+        assert regional_handler_cost == pytest.approx(plain_cost * 1.10, rel=1e-9), (
+            "regional Vertex passthrough traffic must bill at 1.1x the global rate"
+        )
+        assert global_recomputed_cost == pytest.approx(plain_cost, rel=1e-9), (
+            "the logging recompute must not price global passthrough traffic as regional"
+        )
+        assert regional_recomputed_cost == pytest.approx(plain_cost * 1.10, rel=1e-9)
 
 
 class TestVertexAIDiscoveryPassThroughHandler:
@@ -1226,7 +1333,9 @@ class TestVertexAIDiscoveryPassThroughHandler:
     @pytest.mark.asyncio
     async def test_vertex_discovery_proxy_route_api_key_auth(self):
         """
-        Test that the route correctly handles API key authentication
+        The virtual key arrives in x-litellm-api-key and must reach user_api_key_auth.
+        With no Vertex credential configured, that virtual key must not be forwarded to
+        Google, so the request fails with a clean 401 (LIT-5997).
         """
         # Mock dependencies
         mock_request = Mock()
@@ -1246,14 +1355,15 @@ class TestVertexAIDiscoveryPassThroughHandler:
                     return_value={"status": "success"}
                 )
 
-                # Call the function
-                result = await vertex_discovery_proxy_route(
-                    endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
-                    request=mock_request,
-                    fastapi_response=mock_response,
-                )
+                with pytest.raises(HTTPException) as exc_info:
+                    await vertex_discovery_proxy_route(
+                        endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
+                        request=mock_request,
+                        fastapi_response=mock_response,
+                    )
 
-                # Verify user_api_key_auth was called with the correct Bearer token
+                assert exc_info.value.status_code == 401
+                mock_pass_through.assert_not_called()
                 mock_auth.assert_called_once()
                 call_args = mock_auth.call_args[1]
                 assert call_args["api_key"] == "Bearer test-key-123"
@@ -1268,7 +1378,7 @@ async def test_is_streaming_request_fn():
     mock_request = Mock()
     mock_request.method = "POST"
     mock_request.headers = {"content-type": "multipart/form-data"}
-    mock_request.form = AsyncMock(return_value={"stream": "true"})
+    mock_request.form = AsyncMock(return_value=FormData({"stream": "true"}))
     assert await is_streaming_request_fn(mock_request) is True
 
 
@@ -2289,9 +2399,6 @@ class TestMilvusProxyRoute:
         """
         Test successful Milvus proxy route with valid managed vector store index
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "dall-e-6"
         vector_store_name = "milvus-store-1"
@@ -2402,9 +2509,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2439,9 +2543,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2471,9 +2572,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
 
@@ -2513,9 +2611,6 @@ class TestMilvusProxyRoute:
         """
         from fastapi import HTTPException
 
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "unmanaged-collection"
 
@@ -2556,9 +2651,6 @@ class TestMilvusProxyRoute:
         """
         Test that missing vector store raises Exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "missing-store"
@@ -2598,7 +2690,7 @@ class TestMilvusProxyRoute:
                 None
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Vector store not found for missing-store') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2615,9 +2707,6 @@ class TestMilvusProxyRoute:
         """
         Test that missing api_base raises Exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "milvus-store-1"
@@ -2663,7 +2752,7 @@ class TestMilvusProxyRoute:
                 mock_vector_store
             )
 
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='api_base not found in vector store configuration for') as exc_info:
                 await milvus_proxy_route(
                     endpoint="vectors/search",
                     request=mock_request,
@@ -2681,9 +2770,6 @@ class TestMilvusProxyRoute:
         """
         Test that endpoint without leading slash is handled correctly
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            milvus_proxy_route,
-        )
 
         collection_name = "test-collection"
         vector_store_name = "milvus-store-1"
@@ -2761,9 +2847,6 @@ class TestOpenAIPassthroughRoute:
         This verifies the fix for issue #18865 where /openai/v1/responses was being
         routed to LiteLLM's native implementation instead of passthrough
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         # Mock request for Responses API
         mock_request = MagicMock(spec=Request)
@@ -2815,9 +2898,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that /openai_passthrough works for chat completions
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
@@ -2860,9 +2940,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that missing OPENAI_API_KEY raises an exception
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_response = MagicMock(spec=Response)
@@ -2872,7 +2949,7 @@ class TestOpenAIPassthroughRoute:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
             return_value=None,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="Required 'OPENAI_API_KEY' in environment to make") as exc_info:
                 await openai_proxy_route(
                     endpoint="v1/chat/completions",
                     request=mock_request,
@@ -2887,9 +2964,6 @@ class TestOpenAIPassthroughRoute:
         """
         Test that /openai_passthrough works for Assistants API endpoints
         """
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-            openai_proxy_route,
-        )
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
@@ -3061,7 +3135,7 @@ class TestCursorProxyRoute:
                 [],
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Cursor API key not found\\. Add Cursor credentials via') as exc_info:
                 await cursor_proxy_route(
                     endpoint="v0/agents",
                     request=mock_request,
@@ -3236,7 +3310,11 @@ class TestVertexRawPredictStreamingClassification:
                 "type": "http",
                 "method": "POST",
                 "path": f"/vertex_ai/{endpoint}",
-                "headers": [(b"content-type", b"application/json")],
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"x-litellm-api-key", b"test-key"),
+                    (b"authorization", b"Bearer ya29.byo-google-oauth"),
+                ],
                 "query_string": b"",
             },
             receive=receive,
@@ -3367,6 +3445,327 @@ def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_bo
     )
 
     assert is_passthrough_request_streaming(request_body) is expected
+
+
+class TestVertexCredentiallessPassthroughVirtualKeyLeak:
+    """Regression coverage for LIT-5997.
+
+    With no Vertex credential configured, the passthrough took the
+    bring-your-own-credentials branch and forwarded the whole incoming header set
+    to Google, including whichever header carried the caller's LiteLLM virtual key.
+    LiteLLM accepts that key from several headers (``Authorization``,
+    ``x-litellm-api-key``, ``x-goog-api-key``, ``api-key``, ``x-api-key``), and
+    ``x-goog-api-key`` doubles as a genuine Google credential, so any of them could
+    leak the proxy's own secret to an upstream provider.
+
+    A credential-less request that carries no upstream Google credential must now
+    fail with a clean 401 and never reach ``create_pass_through_route``. The
+    proxy-only auth headers Google never consumes (``x-litellm-api-key``,
+    ``api-key``, ``x-api-key``) are dropped by name, and the virtual key is dropped
+    by value from ``Authorization`` / ``x-goog-api-key``, which may instead carry a
+    genuine bring-your-own Google credential that must still pass through. The
+    by-value strip also covers a virtual key sent in the operator-configured
+    ``general_settings.litellm_key_header_name``, whatever that header is named.
+    """
+
+    VKEY = "sk-litellm-victim-key"
+    ENDPOINT = (
+        "v1/projects/my-proj/locations/us-central1/publishers/google/models/"
+        "gemini-2.5-flash:generateContent"
+    )
+
+    async def _run(
+        self, monkeypatch, headers: list[tuple[bytes, bytes]]
+    ) -> tuple[HTTPException | None, dict | None]:
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/vertex_ai/{self.ENDPOINT}",
+                "headers": headers,
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        mock_handler = Mock()
+        mock_handler.get_default_base_target_url.return_value = "https://us-central1-aiplatform.googleapis.com/"
+
+        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        monkeypatch.setattr(f"{module}.passthrough_endpoint_router", PassthroughEndpointRouter())
+        raised: HTTPException | None = None
+        with (
+            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(token="hashed"))),
+            mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
+        ):
+            try:
+                await vertex_proxy_route(
+                    endpoint=self.ENDPOINT,
+                    request=request,
+                    fastapi_response=Response(),
+                    user_api_key_dict=UserAPIKeyAuth(token="hashed"),
+                )
+            except HTTPException as exc:
+                raised = exc
+
+        return raised, (captured.get("custom_headers") if captured else None)
+
+    @pytest.mark.asyncio
+    async def test_authorization_bearer_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", f"Bearer {self.VKEY}".encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_x_litellm_api_key_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-litellm-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_x_goog_api_key_carrying_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-goog-api-key", self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, "the virtual key in x-goog-api-key must not satisfy the gate nor be forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_authenticated_solely_via_x_goog_api_key_is_rejected(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-goog-api-key", self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, "a virtual key that authenticated via x-goog-api-key must be stripped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_byo_google_oauth_token_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", b"Bearer ya29.google-oauth-token"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer ya29.google-oauth-token"
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scheme", ["Bearer", "bearer", "Basic"])
+    async def test_virtual_key_echoed_in_authorization_with_any_scheme_is_stripped(self, monkeypatch, scheme):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", f"{scheme} {self.VKEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, f"a virtual key echoed as '{scheme} <key>' in Authorization must be stripped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_byo_x_goog_api_key_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-goog-api-key", b"AIza-google-api-key"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-google-api-key"
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_alternate_proxy_auth_headers_are_never_forwarded_to_google(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", b"Bearer ya29.google-oauth-token"),
+                (b"api-key", b"azure-style-caller-secret"),
+                (b"x-api-key", b"anthropic-style-caller-secret"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer ya29.google-oauth-token"
+        assert "api-key" not in forwarded
+        assert "x-api-key" not in forwarded
+        assert "x-litellm-api-key" not in forwarded
+        forwarded_blob = " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        assert self.VKEY not in forwarded_blob
+        assert "azure-style-caller-secret" not in forwarded_blob
+        assert "anthropic-style-caller-secret" not in forwarded_blob
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "credential_header",
+        sorted(
+            SpecialHeaders.litellm_credential_header_names()
+            - {"authorization", "x-goog-api-key", "x-litellm-api-key"}
+        ),
+    )
+    async def test_every_non_google_credential_header_is_dropped_by_name(self, monkeypatch, credential_header):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                (credential_header.encode(), b"some-distinct-caller-secret-value"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert credential_header not in forwarded
+        assert "x-litellm-api-key" not in forwarded
+        forwarded_blob = " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        assert self.VKEY not in forwarded_blob
+        assert "some-distinct-caller-secret-value" not in forwarded_blob
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_operator_configured_header_is_stripped(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for litellm_key_header_name; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert "x-company-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_operator_configured_header_alone_is_rejected(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for litellm_key_header_name; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert forwarded is None, "a virtual key in the custom auth header must not satisfy the gate nor be forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_pass_through_configured_header_is_dropped_and_rejected(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for pass_through_endpoints; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"pass_through_endpoints": [{"headers": {"litellm_user_api_key": "x-company-key"}}]},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert forwarded is None, "a virtual key in the pass-through key header must be dropped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_authenticated_authorization_is_stripped_over_a_lower_precedence_pass_through_header(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for pass_through_endpoints; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"pass_through_endpoints": [{"headers": {"litellm_user_api_key": "x-company-key"}}]},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"authorization", f"Bearer {self.VKEY}".encode()),
+                    (b"x-company-key", b"sk-decoy-lower-precedence-value"),
+                    (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert "authorization" not in forwarded, "Authorization authenticated (higher precedence) so its key must be stripped"
+        assert "x-company-key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_mapped_route_litellm_user_api_key_header_is_stripped(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"litellm_user_api_key", self.VKEY.encode()),
+                (b"authorization", b"Bearer ya29.byo-google-oauth"),
+                (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert forwarded.get("authorization") == "Bearer ya29.byo-google-oauth"
+        assert "litellm_user_api_key" not in forwarded
+        assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_mapped_route_litellm_user_api_key_header_alone_is_rejected(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"litellm_user_api_key", self.VKEY.encode()),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert forwarded is None, "a virtual key in the mapped-route litellm_user_api_key header must be dropped, not forwarded"
+        assert raised is not None and raised.status_code == 401
 
 
 class TestGetAzureAISearchIndexFromEndpoint:
@@ -3771,3 +4170,303 @@ class TestComprehendMedicalProxyRoute:
                 user_api_key_dict=Mock(),
             )
         assert exc_info.value.status_code == 400
+
+
+LIVE_RESOURCE_PATH = "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+
+
+class TestVertexAILiveWebsocketPassthrough:
+    def _websocket(self):
+        from starlette.websockets import WebSocketState
+
+        websocket = MagicMock()
+        websocket.accept = AsyncMock()
+        websocket.close = AsyncMock()
+        websocket.headers = {}
+        websocket.client_state = WebSocketState.CONNECTED
+        return websocket
+
+    def _clear_vertex_env(self, monkeypatch):
+        monkeypatch.delenv("DEFAULT_VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("DEFAULT_VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("DEFAULT_GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_uses_db_deployment_credentials_without_query_params(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "service_account"}',
+            project_id="proj-db",
+            custom_llm_provider="vertex_ai_beta",
+        )
+        passthrough_kwargs = ws_passthrough.await_args.kwargs
+        assert passthrough_kwargs["target"] == (
+            "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+        )
+        assert passthrough_kwargs["custom_headers"]["Authorization"] == "Bearer token-abc"
+        rewriter = passthrough_kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
+        )
+        websocket.close.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "setup_model, expected",
+        [
+            ("gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("models/gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("vertex_ai/gemini-live-2.5-flash", LIVE_RESOURCE_PATH),
+            ("gemini-live", LIVE_RESOURCE_PATH),
+            ("models/gemini-live", LIVE_RESOURCE_PATH),
+            (
+                "publishers/meta/models/llama-3.3-70b-instruct-maas",
+                "projects/proj-db/locations/global/publishers/meta/models/llama-3.3-70b-instruct-maas",
+            ),
+            (
+                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+                "projects/other/locations/us-central1/publishers/google/models/gemini-2.0-flash",
+            ),
+        ],
+    )
+    def test_setup_model_rewriter_normalises_the_forms_clients_send(self, setup_model, expected):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                    },
+                }
+            ]
+        )
+
+        rewriter = passthrough_module._build_vertex_live_setup_model_rewriter(
+            vertex_project="proj-db",
+            vertex_location="global",
+            llm_router=llm_router,
+        )
+
+        assert rewriter is not None
+        assert rewriter(setup_model) == expected
+
+    @pytest.mark.asyncio
+    async def test_default_vertex_config_outranks_db_deployment(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+        from litellm.types.passthrough_endpoints.vertex_ai import (
+            VertexPassThroughCredentials,
+        )
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "db_account"}',
+                    },
+                }
+            ]
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router,
+            "default_vertex_config",
+            VertexPassThroughCredentials(
+                vertex_project="proj-env",
+                vertex_location="global",
+                vertex_credentials='{"type": "env_account"}',
+            ),
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-env"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                model="gemini-live",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        ensure_token.assert_awaited_once_with(
+            credentials='{"type": "env_account"}',
+            project_id="proj-env",
+            custom_llm_provider="vertex_ai_beta",
+        )
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            "projects/proj-env/locations/global/publishers/google/models/gemini-live-2.5-flash"
+        )
+
+    @pytest.mark.asyncio
+    async def test_credential_failure_close_names_configuration_options(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        monkeypatch.setattr(
+            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
+        )
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        ):
+            mock_proxy_logging.post_call_failure_hook = AsyncMock()
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1011
+        assert "use_in_pass_through" in close_kwargs["reason"]
+        assert "default_vertex_config" in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+
+class TestPassthroughRouterModelBudgetReservation:
+    """
+    Router-model passthrough on /vllm and /azure must thread the calling key's
+    metadata into ``allm_passthrough_route``. Without ``user_api_key`` the spend
+    is attributed to nobody, and without ``user_api_key_budget_reservation`` the
+    pre-call reservation is never released, so the shared spend counter drifts up
+    until the key falsely trips a 429 BudgetExceededError (LIT-5470).
+    """
+
+    def _key_with_reservation(self) -> UserAPIKeyAuth:
+        reservation = {
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
+        }
+        return UserAPIKeyAuth(
+            api_key="hashed-token",
+            user_id="u1",
+            team_id="t1",
+            budget_reservation=reservation,
+            agent_id="agent-xyz",
+            end_user_max_budget=42.0,
+        )
+
+    def _request(self) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+        return request
+
+    def _install_recording_router(self, monkeypatch, body: dict) -> list[dict]:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        captured: list[dict] = []
+
+        class RecordingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                captured.append(kwargs)
+                return httpx.Response(200, json={"ok": True})
+
+        async def fake_get_request_body(_request):
+            return body
+
+        monkeypatch.setattr(proxy_server, "llm_router", RecordingRouter())
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        return captured
+
+    def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
+        assert len(captured) == 1, "the router-model branch must dispatch exactly once"
+        assert captured[0].get("metadata") is None, (
+            "attribution must ride the litellm_metadata bucket the router canonicalizes on; "
+            "the plain metadata bucket is dropped for every non-user_api_key field"
+        )
+        litellm_metadata = captured[0]["litellm_metadata"]
+        assert litellm_metadata["user_api_key"] == user_api_key_dict.api_key
+        assert litellm_metadata["user_api_key_budget_reservation"] is user_api_key_dict.budget_reservation
+        assert litellm_metadata["user_api_key_user_id"] == user_api_key_dict.user_id
+        assert litellm_metadata["user_api_key_team_id"] == user_api_key_dict.team_id
+        assert litellm_metadata["agent_id"] == user_api_key_dict.agent_id
+        assert litellm_metadata["user_api_end_user_max_budget"] == user_api_key_dict.end_user_max_budget
+
+    @pytest.mark.asyncio
+    async def test_vllm_router_model_threads_key_metadata(self, monkeypatch):
+        user_api_key_dict = self._key_with_reservation()
+        captured = self._install_recording_router(monkeypatch, {"model": "router-model", "stream": False})
+
+        await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        self._assert_metadata_carries_attribution(captured, user_api_key_dict)
+
+    @pytest.mark.asyncio
+    async def test_azure_router_model_threads_key_metadata(self, monkeypatch):
+        user_api_key_dict = self._key_with_reservation()
+        captured = self._install_recording_router(monkeypatch, {"model": "gpt-5", "stream": False})
+
+        await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        self._assert_metadata_carries_attribution(captured, user_api_key_dict)

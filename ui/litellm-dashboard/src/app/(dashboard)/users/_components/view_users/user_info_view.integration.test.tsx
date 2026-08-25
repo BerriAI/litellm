@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import UserInfoView from "./user_info_view";
@@ -122,6 +122,48 @@ describe("UserInfoView add-to-team form", () => {
     await user.click(teamField());
     await user.click(await screen.findByTitle(alias));
   };
+
+  // handleUserUpdate refreshes the local copy field by field rather than refetching,
+  // so a field it forgets reads back stale the next time the form is opened and the
+  // operator sees the save they just made apparently undone.
+  describe("per-model budgets survive a save", () => {
+    // Edit Settings lives on the details tab and is gated on write access.
+    const budgetProps = {
+      ...defaultProps,
+      userRole: "Admin",
+      initialTab: 1,
+    };
+
+    const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      return screen.findByPlaceholderText("Max spend ($)");
+    };
+
+    beforeEach(() => {
+      mockUserGetInfoV2.mockResolvedValue({
+        ...MOCK_USER_DATA,
+        model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "30d" } },
+      });
+      mockUserUpdateUserCall.mockResolvedValue({});
+    });
+
+    it("shows the saved cap, not the pre-save one, when the form is reopened", async () => {
+      const user = setup();
+      render(<UserInfoView {...budgetProps} />);
+
+      fireEvent.change(await openEditor(user), { target: { value: "42" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(mockUserUpdateUserCall).toHaveBeenCalled();
+      });
+      expect(mockUserUpdateUserCall.mock.calls[0][1].model_max_budget).toEqual({
+        "gpt-4": { budget_limit: 42, time_period: "30d" },
+      });
+
+      expect(await openEditor(user)).toHaveValue(42);
+    });
+  });
 
   it("offers only the teams the user is not already a member of", async () => {
     const user = setup();

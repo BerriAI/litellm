@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
@@ -504,6 +504,15 @@ describe("Teams - team detail deep link (?team=)", () => {
     expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
+
+  it("should preserve the legacy inset for the team detail view", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      searchParams: "?team=team-from-url",
+    });
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    expect(screen.getByRole("main")).toHaveClass("px-12", "py-6");
+  });
 });
 
 describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
@@ -512,21 +521,19 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("renders the Create Team button inside the tab bar, ahead of the tabs", () => {
+  it("should render the Create Team button inside the tab bar, ahead of the tabs", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
-    const createButton = screen.getByTestId("create-team-button");
-    const tabBar = screen.getByRole("tablist").parentElement!;
+    const tabNav = screen.getByRole("tablist");
+    const createButton = within(tabNav).getByTestId("create-team-button");
+    const firstTab = within(tabNav).getByRole("tab", { name: "Your Teams" });
 
-    // The CTA lives in the tab bar's left slot, not the standalone page header.
-    expect(tabBar.contains(createButton)).toBe(true);
-
-    // It reads as the left end of the cluster: it precedes the first tab in DOM order.
-    const firstTab = screen.getByRole("tab", { name: "Your Teams" });
+    expect(screen.getByRole("main")).toHaveClass("p-8");
+    expect(within(tabNav).getByRole("separator")).toBeInTheDocument();
     expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("omits the Create Team CTA for a role that cannot manage teams", () => {
+  it("should omit the Create Team CTA for a role that cannot manage teams", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
     expect(screen.queryByTestId("create-team-button")).not.toBeInTheDocument();
   });
@@ -1221,5 +1228,263 @@ describe("Teams - which fields reach the create payload depends on the open sect
     const payload = await submit();
 
     expect(payload.team_id).toBe("tid-kept");
+  });
+});
+
+describe("Teams - the exact bytes the create call sends", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    can.mockReturnValue(true);
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(getPoliciesList).mockResolvedValue({ policies: [] });
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: {} });
+    vi.mocked(teamCreateCall).mockResolvedValue({ team_id: "new-team-1" });
+    vi.mocked(useTeamMetadataSchema).mockReturnValue({ data: [], isLoading: false } as any);
+    mockUseOrganizations.mockReturnValue({ data: null });
+  });
+
+  const openCreateModal = async (options?: { premiumUser?: boolean }) => {
+    renderWithQueryClient(
+      <Teams accessToken="test-token" userID="user-123" userRole="Admin" premiumUser={options?.premiumUser ?? false} />,
+    );
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Byte Contract Team" } });
+  };
+
+  const submit = async () => {
+    const buttons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalled();
+    });
+    return vi.mocked(teamCreateCall).mock.calls[0][1] as Record<string, unknown>;
+  };
+
+  const wireBody = (payload: Record<string, unknown>) => JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+
+  const openSection = async (title: string, mountedProbe: RegExp | string) => {
+    fireEvent.click(screen.getByText(title));
+    await waitFor(() => {
+      expect(screen.getAllByText(mountedProbe).length).toBeGreaterThan(0);
+    });
+  };
+
+  it("sends three keys and nothing else when every section is left closed", async () => {
+    await openCreateModal();
+
+    const payload = await submit();
+
+    expect(payload).toStrictEqual({
+      team_alias: "Byte Contract Team",
+      organization_id: null,
+      models: ["no-default-models"],
+      max_budget: undefined,
+      budget_duration: undefined,
+      tpm_limit: undefined,
+      rpm_limit: undefined,
+      metadata: undefined,
+    });
+    expect(wireBody(payload)).toStrictEqual({
+      team_alias: "Byte Contract Team",
+      organization_id: null,
+      models: ["no-default-models"],
+    });
+  });
+
+  it("keeps every newly mounted but untouched field out of the request body", async () => {
+    await openCreateModal();
+
+    await openSection("Additional Settings", /Team Member Key Duration/);
+    await openSection("MCP Settings", /Allowed MCP Servers/);
+    await openSection("Agent Settings", /Allowed Agents/);
+    await openSection("Search Tool Settings", /Allowed Search Tools/);
+
+    const payload = await submit();
+
+    expect(payload).toStrictEqual({
+      team_alias: "Byte Contract Team",
+      organization_id: null,
+      models: ["no-default-models"],
+      max_budget: undefined,
+      budget_duration: undefined,
+      tpm_limit: undefined,
+      rpm_limit: undefined,
+      metadata: undefined,
+      team_id: undefined,
+      team_member_budget: undefined,
+      team_member_key_duration: undefined,
+      team_member_rpm_limit: undefined,
+      team_member_tpm_limit: undefined,
+      secret_manager_settings: undefined,
+      guardrails: undefined,
+      disable_global_guardrails: undefined,
+      policies: undefined,
+      access_group_ids: undefined,
+      allowed_vector_store_ids: undefined,
+      allowed_passthrough_routes: undefined,
+      allowed_mcp_servers_and_groups: undefined,
+      mcp_tool_permissions: {},
+      allowed_agents_and_groups: undefined,
+      object_permission_search_tools: undefined,
+    });
+    expect(wireBody(payload)).toStrictEqual({
+      team_alias: "Byte Contract Team",
+      organization_id: null,
+      models: ["no-default-models"],
+      mcp_tool_permissions: {},
+    });
+  });
+
+  it.each([
+    ["MCP Settings", /Allowed MCP Servers/, ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"]],
+    ["Agent Settings", /Allowed Agents/, ["allowed_agents_and_groups"]],
+    ["Search Tool Settings", /Allowed Search Tools/, ["object_permission_search_tools"]],
+  ])("registers %s fields only while that one section is open", async (title, probe, keys) => {
+    await openCreateModal();
+
+    const closedPayload = await submit();
+    for (const key of keys as string[]) {
+      expect(closedPayload).not.toHaveProperty(key);
+    }
+  });
+
+  it("carries every typed value to the payload at the type antd sends today", async () => {
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "150.75" } });
+    fireEvent.change(screen.getByLabelText("Tokens per minute Limit (TPM)"), { target: { value: "900" } });
+    fireEvent.change(screen.getByLabelText("Requests per minute Limit (RPM)"), { target: { value: "800" } });
+
+    await openSection("Additional Settings", /Team Member Key Duration/);
+
+    fireEvent.change(screen.getByLabelText("Team ID"), { target: { value: "tid-1" } });
+    fireEvent.change(screen.getByLabelText("Team Member Budget (USD)"), { target: { value: "12.5" } });
+    fireEvent.change(screen.getByLabelText(/Team Member Key Duration/), { target: { value: "30d" } });
+    fireEvent.change(screen.getByLabelText("Team Member RPM Limit"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("Team Member TPM Limit"), { target: { value: "8" } });
+    fireEvent.change(screen.getByLabelText("Secret Manager Settings"), {
+      target: { value: '{"namespace":"admin"}' },
+    });
+
+    const payload = await submit();
+
+    expect(payload.max_budget).toBe("150.75");
+    expect(payload.tpm_limit).toBe("900");
+    expect(payload.rpm_limit).toBe("800");
+    expect(payload.team_id).toBe("tid-1");
+    expect(payload.team_member_budget).toBe(12.5);
+    expect(payload.team_member_key_duration).toBe("30d");
+    expect(payload.team_member_rpm_limit).toBe("7");
+    expect(payload.team_member_tpm_limit).toBe("8");
+    expect(payload.secret_manager_settings).toStrictEqual({ namespace: "admin" });
+  });
+
+  it("blocks the create on an invalid secret manager config, with the rule message suppressed by help", async () => {
+    await openCreateModal();
+    await openSection("Additional Settings", /Team Member Key Duration/);
+
+    fireEvent.change(screen.getByLabelText("Secret Manager Settings"), { target: { value: "   " } });
+
+    const buttons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Secret Manager Settings")).toHaveAttribute("aria-invalid", "true");
+    });
+    expect(teamCreateCall).not.toHaveBeenCalled();
+    expect(screen.queryByText("Please enter valid JSON")).not.toBeInTheDocument();
+  });
+
+  it("turns the disable-global-guardrails switch into a boolean for a premium user", async () => {
+    await openCreateModal({ premiumUser: true });
+    await openSection("Additional Settings", /Team Member Key Duration/);
+
+    const switches = screen.getAllByRole("switch");
+    fireEvent.click(switches[switches.length - 1]);
+
+    const payload = await submit();
+
+    expect(payload.disable_global_guardrails).toBe(true);
+  });
+
+  it("leaves the disable-global-guardrails switch inert for a non-premium user", async () => {
+    await openCreateModal();
+    await openSection("Additional Settings", /Team Member Key Duration/);
+
+    const switches = screen.getAllByRole("switch");
+    fireEvent.click(switches[switches.length - 1]);
+
+    const payload = await submit();
+
+    expect(payload.disable_global_guardrails).toBeUndefined();
+  });
+
+  it.each([
+    ["MCP Settings", /Allowed MCP Servers/, ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"]],
+    ["Agent Settings", /Allowed Agents/, ["allowed_agents_and_groups"]],
+    ["Search Tool Settings", /Allowed Search Tools/, ["object_permission_search_tools"]],
+  ])("adds the %s keys as soon as that one section is opened", async (title, probe, keys) => {
+    await openCreateModal();
+
+    await openSection(title as string, probe as RegExp);
+    const payload = await submit();
+
+    for (const key of keys as string[]) {
+      expect(payload).toHaveProperty(key);
+    }
+  });
+
+  it("leaves policies out of the request body for a caller without the viewPolicies capability", async () => {
+    can.mockReturnValue(false);
+
+    await openCreateModal();
+    await openSection("Additional Settings", /Team Member Key Duration/);
+
+    const payload = await submit();
+
+    expect(payload).toStrictEqual({
+      team_alias: "Byte Contract Team",
+      organization_id: null,
+      models: ["no-default-models"],
+      max_budget: undefined,
+      budget_duration: undefined,
+      tpm_limit: undefined,
+      rpm_limit: undefined,
+      metadata: undefined,
+      team_id: undefined,
+      team_member_budget: undefined,
+      team_member_key_duration: undefined,
+      team_member_rpm_limit: undefined,
+      team_member_tpm_limit: undefined,
+      secret_manager_settings: undefined,
+      guardrails: undefined,
+      disable_global_guardrails: undefined,
+      access_group_ids: undefined,
+      allowed_vector_store_ids: undefined,
+      allowed_passthrough_routes: undefined,
+    });
+  });
+
+  it("blocks the create on an empty team name and names the rule", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    const buttons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+
+    expect(await screen.findByText("Please input a team name")).toBeInTheDocument();
+    expect(teamCreateCall).not.toHaveBeenCalled();
   });
 });

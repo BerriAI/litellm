@@ -1,4 +1,4 @@
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../../tests/test-utils";
@@ -75,7 +75,7 @@ describe("AddPolicyForm", () => {
     renderWithProviders(<AddPolicyForm {...defaultProps} />);
     await enterSimpleForm(user);
 
-    await user.type(await screen.findByLabelText("Policy Name"), "brand-new-policy");
+    fireEvent.change(await screen.findByLabelText("Policy Name"), { target: { value: "brand-new-policy" } });
     await user.click(screen.getByRole("button", { name: "Create Policy" }));
 
     await waitFor(() => {
@@ -106,9 +106,9 @@ describe("AddPolicyForm", () => {
     await enterSimpleForm(user);
 
     const description = await screen.findByLabelText("Description");
-    await user.type(description, "x");
+    fireEvent.change(description, { target: { value: "x" } });
     await user.clear(description);
-    await user.type(await screen.findByLabelText("Policy Name"), "blank-description");
+    fireEvent.change(await screen.findByLabelText("Policy Name"), { target: { value: "blank-description" } });
     await user.click(screen.getByRole("button", { name: "Create Policy" }));
 
     await waitFor(() => {
@@ -162,7 +162,7 @@ describe("AddPolicyForm", () => {
     renderWithProviders(<AddPolicyForm {...defaultProps} />);
     await enterSimpleForm(user);
 
-    await user.type(await screen.findByLabelText("Policy Name"), "not a valid name!");
+    fireEvent.change(await screen.findByLabelText("Policy Name"), { target: { value: "not a valid name!" } });
     await user.click(screen.getByRole("button", { name: "Create Policy" }));
 
     expect(

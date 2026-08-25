@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import EmailSettings from "./email_settings";
@@ -72,7 +72,7 @@ describe("EmailSettings", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
     await user.clear(inputNamed("SMTP_HOST"));
-    await user.type(inputNamed("SMTP_HOST"), "smtp.changed.com");
+    fireEvent.change(inputNamed("SMTP_HOST"), { target: { value: "smtp.changed.com" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {

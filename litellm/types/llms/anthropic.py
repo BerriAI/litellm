@@ -9,6 +9,7 @@ from .openai import (
     ChatCompletionCachedContent,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
+    PromptCacheBreakpoint,
 )
 
 
@@ -201,6 +202,7 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     type: Required[Literal["text"]]
     text: Required[str]
     cache_control: dict | ChatCompletionCachedContent | None
+    prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
 class AnthropicMessagesToolUseParam(TypedDict, total=False):
@@ -261,6 +263,7 @@ class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
     source: Required[AnthropicContentParamSource | AnthropicContentParamSourceFileId | AnthropicContentParamSourceUrl]
     cache_control: dict | ChatCompletionCachedContent | None
+    prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
 class CitationsObject(TypedDict):
@@ -347,6 +350,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
     type: str
     text: str
     cache_control: dict | ChatCompletionCachedContent | None
+    prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
 class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
@@ -620,6 +624,12 @@ class AnthropicResponseUsageBlock(BaseModel):
     output_tokens: int
 
 
+class AnthropicOutputTokensDetails(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    thinking_tokens: int | None = None
+
+
 AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
 
 
@@ -673,8 +683,9 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 
 
 class AnthropicThinkingParam(TypedDict, total=False):
-    type: Literal["enabled", "adaptive"]
+    type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
     budget_tokens: int
+    display: ReadOnly[Literal["summarized", "omitted"]]
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):

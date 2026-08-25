@@ -1,13 +1,8 @@
-import os
-import sys
 import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import httpx
 import pytest
@@ -904,6 +899,62 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_authorizes_on_params_after_health_check_params_merge():
+    """
+    Regression guard for the ordering fix: health_check_params from the request
+    body are merged into the probe params BEFORE the authorization check, so a
+    caller cannot smuggle a field past auth via health_check_params. Auth is
+    stubbed to reject, which halts the endpoint right after it records the
+    params it was handed, so the outbound probe is never reached. If the merge
+    is moved back to after can_user_make_model_call, the marker is absent from
+    those params and this test fails.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.types.router import Deployment
+
+    marker = "sentinel-from-health-check-params"
+    mock_can_user_make_model_call = AsyncMock(
+        side_effect=HTTPException(status_code=403, detail="denied")
+    )
+
+    with (
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.llm_router", None
+        ),
+        patch.object(  # test-quality-ok: capturing the params handed to auth is the assertion
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            mock_can_user_make_model_call,
+        ),
+        pytest.raises(HTTPException),
+    ):
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"health_check_params": {"probe_marker": marker}},
+            user_api_key_dict=UserAPIKeyAuth(
+                token="requester-token",
+                user_id="admin-user",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
+        )
+
+    assert mock_can_user_make_model_call.called
+    passed_model_params = mock_can_user_make_model_call.call_args.kwargs["model_params"]
+    assert isinstance(passed_model_params, Deployment)
+    authorized_params = passed_model_params.litellm_params.model_dump()
+    assert authorized_params.get("probe_marker") == marker
+
+
+@pytest.mark.asyncio
 async def test_test_model_connection_authorized_team_admin_passes_real_auth():
     """
     Positive-path companion to the deny tests above. When the caller is a
@@ -1321,7 +1372,6 @@ def test_get_callback_identifier_string_and_object_with_callback_name():
     - Object with callback_name attribute
     - Object with empty/None callback_name (should fall through to other checks)
     """
-    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
 
     # Test 1: String callback should be returned as-is
     assert get_callback_identifier("datadog") == "datadog"
@@ -1353,7 +1403,6 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     - Object with callback_name that matches registry entry
     - Fallback to callback_name() helper function
     """
-    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     # Test 1: Object registered in CustomLoggerRegistry (without callback_name attribute)
@@ -2467,61 +2516,140 @@ class TestNoRedisWarning:
     def _router(redis_cache):
         return SimpleNamespace(cache=SimpleNamespace(redis_cache=redis_cache))
 
-    def test_warns_when_no_redis_is_configured(self, monkeypatch):
+    @staticmethod
+    def _prisma_with_workers(live_workers=None, error=None):
+        prisma = MagicMock()
+        if error is not None:
+            prisma.db.query_raw = AsyncMock(side_effect=error)
+        else:
+            prisma.db.query_raw = AsyncMock(return_value=[{"live_workers": live_workers}])
+        return prisma
+
+    @pytest.mark.asyncio
+    async def test_warns_when_no_redis_and_no_db_to_count_workers(self, monkeypatch):
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
             patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
         ):
-            assert _show_no_redis_warning() is True
+            assert await _show_no_redis_warning() is True
 
-    def test_warns_when_there_is_no_router_at_all(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_warns_when_there_is_no_router_at_all(self, monkeypatch):
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
             patch("litellm.proxy.proxy_server.llm_router", None),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
         ):
-            assert _show_no_redis_warning() is True
+            assert await _show_no_redis_warning() is True
 
-    def test_stays_quiet_when_a_coordination_redis_is_configured(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_stays_quiet_for_a_confirmed_single_worker(self, monkeypatch):
+        """One live worker needs no cross-worker coordination, so no env var is needed."""
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(1)),
+        ):
+            assert await _show_no_redis_warning() is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("live_workers", [2, 5])
+    async def test_warns_when_multiple_workers_share_the_db(self, monkeypatch, live_workers):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(live_workers)),
+        ):
+            assert await _show_no_redis_warning() is True
+
+    @pytest.mark.asyncio
+    async def test_warns_when_the_worker_census_is_empty(self, monkeypatch):
+        """Zero rows means the census cannot CONFIRM a single worker, so warn."""
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(0)),
+        ):
+            assert await _show_no_redis_warning() is True
+
+    @pytest.mark.asyncio
+    async def test_warns_when_the_worker_census_query_fails(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                self._prisma_with_workers(error=RuntimeError("db down")),
+            ),
+        ):
+            assert await _show_no_redis_warning() is True
+
+    @pytest.mark.asyncio
+    async def test_stays_quiet_when_a_coordination_redis_is_configured(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
+        prisma = self._prisma_with_workers(5)
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", MagicMock()),
             patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
         ):
-            assert _show_no_redis_warning() is False
+            assert await _show_no_redis_warning() is False
+        prisma.db.query_raw.assert_not_called()
 
-    def test_stays_quiet_when_only_the_router_has_redis(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_stays_quiet_when_only_the_router_has_redis(self, monkeypatch):
         """router_settings.redis_host alone backs cooldowns and usage-based routing."""
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
             patch("litellm.proxy.proxy_server.llm_router", self._router(MagicMock())),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(5)),
         ):
-            assert _show_no_redis_warning() is False
+            assert await _show_no_redis_warning() is False
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("value", ["true", "True"])
-    def test_env_var_suppresses_the_warning(self, monkeypatch, value):
+    async def test_env_var_suppresses_the_warning_despite_multiple_workers(self, monkeypatch, value):
         monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", value)
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
             patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(5)),
         ):
-            assert _show_no_redis_warning() is False
+            assert await _show_no_redis_warning() is False
 
-    def test_env_var_set_false_keeps_the_warning(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_env_var_set_false_keeps_the_warning_for_multiple_workers(self, monkeypatch):
         monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", "false")
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
             patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(2)),
         ):
-            assert _show_no_redis_warning() is True
+            assert await _show_no_redis_warning() is True
+
+    @pytest.mark.asyncio
+    async def test_env_var_set_false_does_not_force_the_warning_for_a_single_worker(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_DISABLE_NO_REDIS_WARNING", "false")
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(None)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(1)),
+        ):
+            assert await _show_no_redis_warning() is False
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("has_prisma_client", [True, False])
     async def test_readiness_details_carries_the_flag(self, monkeypatch, has_prisma_client):
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
-        prisma_client = MagicMock() if has_prisma_client else None
+        prisma_client = self._prisma_with_workers(2) if has_prisma_client else None
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),

@@ -1,24 +1,55 @@
-import React, { useEffect, useState } from "react";
-import { Form, Table } from "antd";
+import React, { useEffect, useMemo } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { useFormContext, useWatch } from "react-hook-form";
+import { DataTable } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import { validatorRules } from "../common_components/formRules";
+import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
 
-const ConditionalPublicModelName: React.FC = () => {
-  const form = Form.useFormInstance();
-  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
+interface ModelMapping {
+  public_name: string;
+  litellm_model: string;
+}
 
-  // Watch the 'model' field for changes and ensure it's always an array
-  const modelValue = Form.useWatch("model", form) || [];
-  const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
-  const customModelName = Form.useWatch("custom_model_name", form);
+const sameMappings = (left: readonly ModelMapping[], right: readonly ModelMapping[]): boolean =>
+  left.length === right.length &&
+  left.every(
+    (mapping, index) =>
+      mapping.public_name === right[index].public_name && mapping.litellm_model === right[index].litellm_model,
+  );
+
+const modelMappingsRule = {
+  validator: async (_: unknown, value: unknown) => {
+    if (!value || (value as ModelMapping[]).length === 0) {
+      throw new Error("At least one model mapping is required");
+    }
+    const invalidMappings = (value as ModelMapping[]).filter(
+      (mapping) => !mapping.public_name || mapping.public_name.trim() === "",
+    );
+    if (invalidMappings.length > 0) {
+      throw new Error("All model mappings must have valid public names");
+    }
+  },
+};
+
+const tooltipCodeClassName = "rounded-sm bg-background/20 px-1 py-0.5 font-mono text-xs";
+
+const ConditionalPublicModelName: React.FC = () => {
+  const form = useFormContext<MountedFormValues>();
+
+  const modelValue = useWatch({ control: form.control, name: "model" }) || [];
+  const selectionKey = JSON.stringify(Array.isArray(modelValue) ? modelValue : [modelValue]);
+  const selectedModels = useMemo(() => JSON.parse(selectionKey) as string[], [selectionKey]);
+  const customModelName = useWatch({ control: form.control, name: "custom_model_name" }) as string | undefined;
   const showPublicModelName = !selectedModels.includes("all-wildcard");
-  const selectedProvider = Form.useWatch("custom_llm_provider", form);
-  // Force table to re-render when custom model name changes
+  const selectedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
+
   useEffect(() => {
     if (customModelName && selectedModels.includes("custom")) {
-      const currentMappings = form.getFieldValue("model_mappings") || [];
-      const updatedMappings = currentMappings.map((mapping: any) => {
+      const currentMappings = (form.getValues("model_mappings") as ModelMapping[]) || [];
+      const updatedMappings = currentMappings.map((mapping) => {
         if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
           if (selectedProvider === Providers.Azure) {
             return {
@@ -33,8 +64,9 @@ const ConditionalPublicModelName: React.FC = () => {
         }
         return mapping;
       });
-      form.setFieldValue("model_mappings", updatedMappings);
-      setTableKey((prev) => prev + 1); // Force table re-render
+      if (!sameMappings(currentMappings, updatedMappings)) {
+        form.setValue("model_mappings", updatedMappings);
+      }
     }
   }, [customModelName, selectedModels, selectedProvider, form]);
 
@@ -42,13 +74,13 @@ const ConditionalPublicModelName: React.FC = () => {
   useEffect(() => {
     if (selectedModels.length > 0 && !selectedModels.includes("all-wildcard")) {
       // Check if we already have mappings that match the selected models
-      const currentMappings = form.getFieldValue("model_mappings") || [];
+      const currentMappings = (form.getValues("model_mappings") as ModelMapping[]) || [];
 
       // Only update if the mappings don't exist or don't match the selected models
       const shouldUpdateMappings =
         currentMappings.length !== selectedModels.length ||
         !selectedModels.every((model) =>
-          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => {
+          currentMappings.some((mapping) => {
             if (model === "custom") {
               return mapping.litellm_model === "custom" || mapping.litellm_model === customModelName;
             }
@@ -85,8 +117,7 @@ const ConditionalPublicModelName: React.FC = () => {
           };
         });
 
-        form.setFieldValue("model_mappings", mappings);
-        setTableKey((prev) => prev + 1); // Force table re-render
+        form.setValue("model_mappings", mappings);
       }
     }
   }, [selectedModels, customModelName, selectedProvider, form]);
@@ -94,48 +125,48 @@ const ConditionalPublicModelName: React.FC = () => {
   if (!showPublicModelName) return null;
 
   const publicNameTooltipContent = (
-    <>
-      <div className="mb-2 font-normal">The name you specify in your API calls to LiteLLM Proxy</div>
-      <div className="mb-2 font-normal">
+    <div className="flex flex-col gap-2 text-left font-normal">
+      <div>The name you specify in your API calls to LiteLLM Proxy</div>
+      <div>
         <strong>Example:</strong> If you name your public model{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">example-name</code>, and choose{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">openai/qwen-plus-latest</code> as the LiteLLM model
+        <code className={tooltipCodeClassName}>example-name</code>, and choose{" "}
+        <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
       </div>
-      <div className="mb-2 font-normal">
+      <div>
         <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">model = &quot;example-name&quot;</code>
+        <code className={tooltipCodeClassName}>model = &quot;example-name&quot;</code>
       </div>
-      <div className="font-normal">
-        <strong>Result:</strong> LiteLLM sends{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded-sm text-xs">qwen-plus-latest</code> to the provider
+      <div>
+        <strong>Result:</strong> LiteLLM sends <code className={tooltipCodeClassName}>qwen-plus-latest</code> to the
+        provider
       </div>
-    </>
+    </div>
   );
 
   const liteLLMModelTooltipContent = <div>The model name LiteLLM will send to the LLM API</div>;
 
-  const columns = [
+  const columns: ColumnDef<ModelMapping>[] = [
     {
-      title: (
+      id: "public_name",
+      accessorKey: "public_name",
+      header: () => (
         <span className="flex items-center">
           Public Model Name
           <SimpleTooltip content={publicNameTooltipContent} width="500px" />
         </span>
       ),
-      dataIndex: "public_name",
-      key: "public_name",
-      render: (text: string, record: any, index: number) => {
+      cell: ({ row }) => {
         return (
           <Input
-            value={text}
+            value={row.original.public_name}
             onChange={(e) => {
               const newValue = e.target.value;
-              const newMappings = [...form.getFieldValue("model_mappings")];
+              const newMappings = [...((form.getValues("model_mappings") as ModelMapping[]) ?? [])];
 
               // Check conditions for Anthropic -1m suffix handling
               const isAnthropic = selectedProvider === Providers.Anthropic;
               const endsWith1m = newValue.endsWith("-1m");
-              const litellmParams = form.getFieldValue("litellm_extra_params");
+              const litellmParams = form.getValues("litellm_extra_params") as string | undefined;
               const isLitellmParamsEmpty = !litellmParams || litellmParams.trim() === "";
 
               let finalPublicName = newValue;
@@ -147,67 +178,53 @@ const ConditionalPublicModelName: React.FC = () => {
                   null,
                   2,
                 );
-                form.setFieldValue("litellm_extra_params", litellmParamsValue);
+                form.setValue("litellm_extra_params", litellmParamsValue);
 
                 // Remove -1m suffix from public_name
                 finalPublicName = newValue.slice(0, -3); // Remove "-1m" (3 characters)
               }
 
-              newMappings[index].public_name = finalPublicName;
-              form.setFieldValue("model_mappings", newMappings);
+              newMappings[row.index].public_name = finalPublicName;
+              form.setValue("model_mappings", newMappings);
             }}
           />
         );
       },
     },
     {
-      title: (
+      id: "litellm_model",
+      accessorKey: "litellm_model",
+      header: () => (
         <span className="flex items-center">
           LiteLLM Model Name
           <SimpleTooltip content={liteLLMModelTooltipContent} width="360px" />
         </span>
       ),
-      dataIndex: "litellm_model",
-      key: "litellm_model",
     },
   ];
 
   return (
-    <>
-      <Form.Item
-        label="Model Mappings"
-        name="model_mappings"
-        tooltip="Map public model names to LiteLLM model names for load balancing"
-        labelCol={{ span: 10 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-        rules={[
-          {
-            required: true,
-            validator: async (_, value) => {
-              if (!value || value.length === 0) {
-                throw new Error("At least one model mapping is required");
-              }
-              // Check if all mappings have valid public names
-              const invalidMappings = value.filter(
-                (mapping: any) => !mapping.public_name || mapping.public_name.trim() === "",
-              );
-              if (invalidMappings.length > 0) {
-                throw new Error("All model mappings must have valid public names");
-              }
-            },
-          },
-        ]}
-      >
-        <Table
-          key={tableKey} // Add key to force re-render
-          dataSource={form.getFieldValue("model_mappings")}
+    <MountedFormField
+      name="model_mappings"
+      label={
+        <span className="flex items-center">
+          Model Mappings
+          <SimpleTooltip content="Map public model names to LiteLLM model names for load balancing" />
+        </span>
+      }
+      required
+      rules={{ validate: validatorRules(modelMappingsRule) }}
+      className="mb-4"
+    >
+      {(control) => (
+        <DataTable
+          data={(control.value as ModelMapping[] | undefined) ?? []}
           columns={columns}
-          pagination={false}
-          size="small"
+          getRowId={(row) => row.litellm_model}
+          size="compact"
         />
-      </Form.Item>
-    </>
+      )}
+    </MountedFormField>
   );
 };
 

@@ -15,14 +15,14 @@ const HOST = "(?:(?:[a-z\\u00a1-\\uffff0-9][-_]*)*[a-z\\u00a1-\\uffff0-9]+)";
 const DOMAIN = "(?:\\.(?:[a-z\\u00a1-\\uffff0-9]-*)*[a-z\\u00a1-\\uffff0-9]+)*";
 const TLD = "(?:\\.(?:[a-z\\u00a1-\\uffff]{2,}))";
 
-const ANTD_URL_RULE_PATTERN = new RegExp(
+const URL_RULE_PATTERN = new RegExp(
   `(?:^(?:(?:(?:[a-z]+:)?//)|www\\.)(?:\\S+(?::\\S*)?@)?` +
     `(?:localhost|${IPV4}|${IPV6}|${HOST}${DOMAIN}${TLD})` +
     `(?::\\d{2,5})?(?:[/?#][^\\s"]*)?$)`,
   "i",
 );
 
-const isUrl = (value: string): boolean => value.length <= 2048 && ANTD_URL_RULE_PATTERN.test(value);
+const isUrl = (value: string): boolean => value.length <= 2048 && URL_RULE_PATTERN.test(value);
 
 const pluginShape = {
   name: z.string().min(1, "Required"),

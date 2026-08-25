@@ -4,12 +4,7 @@ Tests for Azure AI Anthropic CountTokens transformation.
 Verifies that the CountTokens API uses the correct authentication headers.
 """
 
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (

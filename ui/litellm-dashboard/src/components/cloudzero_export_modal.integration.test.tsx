@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import CloudZeroExportModal from "./cloudzero_export_modal";
@@ -44,8 +44,8 @@ describe("CloudZeroExportModal", () => {
     const user = userEvent.setup();
     open();
 
-    await user.type(await screen.findByLabelText("CloudZero API Key"), "cz-key-123");
-    await user.type(screen.getByLabelText("Connection ID"), "conn-abc");
+    fireEvent.change(await screen.findByLabelText("CloudZero API Key"), { target: { value: "cz-key-123" } });
+    fireEvent.change(screen.getByLabelText("Connection ID"), { target: { value: "conn-abc" } });
     await user.click(screen.getByRole("button", { name: "Export to CloudZero" }));
 
     await waitFor(() => expect(callsTo(fetchMock, "/cloudzero/init")).toHaveLength(1));
@@ -63,8 +63,8 @@ describe("CloudZeroExportModal", () => {
     const user = userEvent.setup();
     open();
 
-    await user.type(await screen.findByLabelText("CloudZero API Key"), "cz-key-123");
-    await user.type(screen.getByLabelText("Connection ID"), "conn-abc");
+    fireEvent.change(await screen.findByLabelText("CloudZero API Key"), { target: { value: "cz-key-123" } });
+    fireEvent.change(screen.getByLabelText("Connection ID"), { target: { value: "conn-abc" } });
     await user.click(screen.getByRole("button", { name: "Export to CloudZero" }));
 
     await waitFor(() => expect(callsTo(fetchMock, "/cloudzero/export")).toHaveLength(1));
@@ -78,7 +78,7 @@ describe("CloudZeroExportModal", () => {
     const user = userEvent.setup();
     open();
 
-    await user.type(await screen.findByLabelText("CloudZero API Key"), "cz-key-123");
+    fireEvent.change(await screen.findByLabelText("CloudZero API Key"), { target: { value: "cz-key-123" } });
     await user.click(screen.getByRole("button", { name: "Export to CloudZero" }));
 
     await screen.findByText("Please enter the CloudZero connection ID");
@@ -125,8 +125,8 @@ describe("CloudZeroExportModal", () => {
     const user = userEvent.setup();
     open();
 
-    await user.type(await screen.findByLabelText("CloudZero API Key"), "cz-key-123456789");
-    await user.type(screen.getByLabelText("Connection ID"), "conn-abc");
+    fireEvent.change(await screen.findByLabelText("CloudZero API Key"), { target: { value: "cz-key-123456789" } });
+    fireEvent.change(screen.getByLabelText("Connection ID"), { target: { value: "conn-abc" } });
     await user.click(screen.getByRole("button", { name: "Export to CloudZero" }));
 
     await waitFor(() => expect(callsTo(fetchMock, "/cloudzero/export")).toHaveLength(1));
@@ -139,7 +139,7 @@ describe("CloudZeroExportModal", () => {
 
     await screen.findByLabelText("CloudZero API Key");
     await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Export to CSV"));
+    await user.click(await screen.findByRole("option", { name: "Export to CSV" }));
 
     expect(screen.queryByLabelText("CloudZero API Key")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Export CSV" }));

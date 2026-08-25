@@ -211,6 +211,7 @@ class SingulrGuardrail(CustomGuardrail):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
                 message=f"Blocked by Singulr: {result.blocking_due_to or 'unknown'}",
+                blocked_content=True,
             )
 
         return inputs

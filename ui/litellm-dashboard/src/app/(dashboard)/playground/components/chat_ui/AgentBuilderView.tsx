@@ -109,29 +109,29 @@ function ConnectTabContent({
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <h3 className="text-sm font-semibold text-gray-900 mb-1">Proxy base URL</h3>
-        <p className="text-sm text-gray-600 font-mono bg-gray-50 px-2 py-1.5 rounded-sm border border-gray-200 break-all">
+        <h3 className="text-sm font-semibold text-foreground mb-1">Proxy base URL</h3>
+        <p className="text-sm text-muted-foreground font-mono bg-muted px-2 py-1.5 rounded-sm border border-border break-all">
           {baseUrl}
         </p>
       </div>
       <div>
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Call your agent (cURL)</h3>
+        <h3 className="text-sm font-semibold text-foreground mb-2">Call your agent (cURL)</h3>
         <CodeBlock code={curlExample} language="bash" />
       </div>
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-        <h3 className="text-sm font-semibold text-gray-900 mb-2">Create a key for this agent</h3>
-        <p className="text-sm text-gray-600 mb-3">
+      <div className="rounded-lg border border-border bg-muted p-4">
+        <h3 className="text-sm font-semibold text-foreground mb-2">Create a key for this agent</h3>
+        <p className="text-sm text-muted-foreground mb-3">
           Create a virtual key that can only call this agent. The key will be scoped to you (user_id) and restricted to
-          the model <span className="font-mono text-gray-800">{agentName}</span>.
+          the model <span className="font-mono text-foreground">{agentName}</span>.
         </p>
         <Button onClick={onCreateKey} disabled={creatingKey || disabledPersonalKeyCreation}>
           Create key for this agent
         </Button>
         {disabledPersonalKeyCreation && (
-          <p className="text-xs text-amber-600 mt-2">Key creation is disabled for your account.</p>
+          <p className="text-xs text-warning mt-2">Key creation is disabled for your account.</p>
         )}
         {createdKeyValue && (
-          <p className="text-xs text-green-700 mt-2">
+          <p className="text-xs text-success mt-2">
             Key created. It is shown in the cURL example above — copy the snippet to use it.
           </p>
         )}
@@ -447,30 +447,32 @@ export default function AgentBuilderView({
 
   if (!accessToken || !userID || !userRole) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-gray-500">Sign in to use Agent Builder.</div>
+      <div className="flex h-full items-center justify-center p-8 text-muted-foreground">
+        Sign in to use Agent Builder.
+      </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-col bg-white text-gray-900">
-      <div className="flex shrink-0 flex-col border-b border-gray-200">
+    <div className="flex h-full flex-col bg-card text-foreground">
+      <div className="flex shrink-0 flex-col border-b border-border">
         <div className="flex h-12 items-center justify-between px-4">
-          <span className="text-sm font-medium text-gray-900">Agent Builder</span>
+          <span className="text-sm font-medium text-foreground">Agent Builder</span>
           {isNewAgent ? (
             <Button onClick={handleSaveAgent} disabled={saving || !draftName?.trim() || !draftUnderlyingModel}>
               <Save />
               Save Agent
             </Button>
           ) : (
-            <span className="text-xs text-gray-500">Build Agents that pass your compliance requirements.</span>
+            <span className="text-xs text-muted-foreground">Build Agents that pass your compliance requirements.</span>
           )}
         </div>
-        <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-          <FlaskConical className="size-4 shrink-0 text-amber-600" />
+        <div className="flex items-center gap-2 border-t border-warning/20 bg-warning/10 px-4 py-2 text-xs text-warning">
+          <FlaskConical className="size-4 shrink-0 text-warning" />
           <span>
             Agent Builder is experimental and may change or be removed without notice. We’d love your feedback—email us
             at{" "}
-            <a href="mailto:product@berri.ai" className="font-medium text-amber-900 underline hover:text-amber-700">
+            <a href="mailto:product@berri.ai" className="font-medium text-warning underline hover:text-warning/80">
               product@berri.ai
             </a>
             .
@@ -480,9 +482,9 @@ export default function AgentBuilderView({
 
       <div className="flex flex-1 overflow-hidden">
         {/* Roster */}
-        <div className="w-60 shrink-0 border-r border-gray-200 bg-white flex flex-col">
-          <div className="flex items-center justify-between border-b border-gray-200 p-3">
-            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Agents</span>
+        <div className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
+          <div className="flex items-center justify-between border-b border-border p-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agents</span>
             <Button variant="ghost" size="icon-sm" onClick={handleAddAgent} aria-label="Add agent">
               <Plus />
             </Button>
@@ -490,7 +492,7 @@ export default function AgentBuilderView({
           <div className="flex-1 overflow-y-auto p-2">
             {loadingAgents ? (
               <div className="flex justify-center py-4" aria-busy="true">
-                <UiLoadingSpinner className="size-4 text-gray-400" />
+                <UiLoadingSpinner className="size-4 text-muted-foreground" />
               </div>
             ) : (
               <>
@@ -502,20 +504,18 @@ export default function AgentBuilderView({
                       type="button"
                       onClick={() => setSelectedId(key)}
                       className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
-                        selectedId === key
-                          ? "border-blue-500 bg-blue-50 text-blue-800"
-                          : "border-transparent hover:bg-gray-50"
+                        selectedId === key ? "border-info bg-info/10 text-info" : "border-transparent hover:bg-accent"
                       }`}
                     >
                       <div className="font-medium truncate">{agent.model_name}</div>
-                      <div className="text-[10px] text-gray-500 truncate">litellm_agent</div>
+                      <div className="text-[10px] text-muted-foreground truncate">litellm_agent</div>
                     </button>
                   );
                 })}
                 <button
                   type="button"
                   onClick={handleAddAgent}
-                  className="mb-1 w-full rounded-md border border-dashed border-gray-300 px-3 py-2 text-left text-sm text-gray-500 hover:border-blue-400 hover:bg-blue-50/50 hover:text-gray-700"
+                  className="mb-1 w-full rounded-md border border-dashed border-border px-3 py-2 text-left text-sm text-muted-foreground hover:border-info hover:bg-info/10 hover:text-foreground"
                 >
                   <Plus className="mr-1 inline size-4" /> New agent
                 </button>
@@ -527,7 +527,7 @@ export default function AgentBuilderView({
         {/* Main content */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {selectedId === null && !isNewAgent && agentModels.length === 0 && !loadingAgents && (
-            <div className="flex flex-1 items-center justify-center p-8 text-gray-500">
+            <div className="flex flex-1 items-center justify-center p-8 text-muted-foreground">
               No agents yet. Add an agent to get started.
             </div>
           )}
@@ -566,13 +566,13 @@ export default function AgentBuilderView({
                     {isNewAgent || selectedAgent ? (
                       <div className="mx-auto max-w-xl space-y-4">
                         {!selectedAgentModelId && selectedAgent && (
-                          <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          <div className="rounded-sm border border-warning/20 bg-warning/10 px-3 py-2 text-xs text-warning">
                             This agent cannot be updated or deleted here (missing model id). Manage it from Models &amp;
                             Endpoints.
                           </div>
                         )}
                         <div>
-                          <label className="mb-1 block text-sm font-medium text-gray-700">Agent name</label>
+                          <label className="mb-1 block text-sm font-medium text-foreground">Agent name</label>
                           <Input
                             value={draftName}
                             onChange={(e) => setDraftName(e.target.value)}
@@ -580,7 +580,7 @@ export default function AgentBuilderView({
                           />
                         </div>
                         <div>
-                          <label className="mb-1 block text-sm font-medium text-gray-700">System prompt</label>
+                          <label className="mb-1 block text-sm font-medium text-foreground">System prompt</label>
                           <Textarea
                             value={draftSystemPrompt}
                             onChange={(e) => setDraftSystemPrompt(e.target.value)}
@@ -590,7 +590,7 @@ export default function AgentBuilderView({
                           />
                         </div>
                         <div>
-                          <label className="mb-1 block text-sm font-medium text-gray-700">Underlying LLM</label>
+                          <label className="mb-1 block text-sm font-medium text-foreground">Underlying LLM</label>
                           <Select
                             value={draftUnderlyingModel ?? null}
                             onValueChange={(model: string | null) => setDraftUnderlyingModel(model ?? undefined)}
@@ -609,7 +609,7 @@ export default function AgentBuilderView({
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                           <div>
-                            <label className="mb-1 block text-sm font-medium text-gray-700">Temperature</label>
+                            <label className="mb-1 block text-sm font-medium text-foreground">Temperature</label>
                             <Input
                               type="number"
                               min={0}
@@ -620,7 +620,7 @@ export default function AgentBuilderView({
                             />
                           </div>
                           <div>
-                            <label className="mb-1 block text-sm font-medium text-gray-700">Max tokens</label>
+                            <label className="mb-1 block text-sm font-medium text-foreground">Max tokens</label>
                             <Input
                               type="number"
                               min={1}
@@ -630,7 +630,7 @@ export default function AgentBuilderView({
                           </div>
                         </div>
                         <div>
-                          <label className="mb-1 block text-sm font-medium text-gray-700">MCP servers</label>
+                          <label className="mb-1 block text-sm font-medium text-foreground">MCP servers</label>
                           <MultiSelect
                             placeholder="Select MCP servers to attach (same format as chat completions API)"
                             value={selectedMCPServerIds}
@@ -643,9 +643,9 @@ export default function AgentBuilderView({
                             }))}
                           />
                           {selectedAgent && draftTools.length > 0 && (
-                            <p className="mt-1 text-xs text-gray-500">
+                            <p className="mt-1 text-xs text-muted-foreground">
                               {draftTools.length} MCP server{draftTools.length !== 1 ? "s" : ""} saved. Use the same{" "}
-                              <code className="rounded-sm bg-gray-100 px-1">tools</code> array in chat completions when
+                              <code className="rounded-sm bg-muted px-1">tools</code> array in chat completions when
                               calling this agent.
                             </p>
                           )}
@@ -692,7 +692,7 @@ export default function AgentBuilderView({
                         proxySettings={proxySettings}
                       />
                     ) : (
-                      <div className="flex flex-1 items-center justify-center text-gray-500">
+                      <div className="flex flex-1 items-center justify-center text-muted-foreground">
                         Save an agent first to test in Chat.
                       </div>
                     )}
@@ -709,7 +709,7 @@ export default function AgentBuilderView({
                         proxySettings={proxySettings}
                       />
                     ) : (
-                      <div className="flex flex-1 items-center justify-center text-gray-500">
+                      <div className="flex flex-1 items-center justify-center text-muted-foreground">
                         Select an agent to run batch tests.
                       </div>
                     )}
@@ -730,7 +730,7 @@ export default function AgentBuilderView({
                         onCreateKey={handleCreateKeyForAgent}
                       />
                     ) : (
-                      <div className="flex flex-1 items-center justify-center text-gray-500">
+                      <div className="flex flex-1 items-center justify-center text-muted-foreground">
                         Select an agent to see how to connect.
                       </div>
                     )}

@@ -2,7 +2,7 @@ import { useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConf
 import { useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
@@ -225,7 +225,8 @@ describe("ModelSettingsModal", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(within(saveButton).getByRole("img", { name: "loading" })).toBeInTheDocument();
+    expect(saveButton).toHaveAttribute("aria-busy", "true");
+    expect(saveButton).toBeDisabled();
   });
 
   it("should not render modal when isVisible is false", () => {
@@ -270,9 +271,7 @@ describe("ModelSettingsModal", () => {
     renderWithProviders(<ModelSettingsModal {...defaultProps} />);
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    // eslint-disable-next-line local/no-antd-class-selectors -- antd Skeleton exposes no role, label or aria-busy to query the loading affordance by
-    const skeletons = document.querySelectorAll(".ant-skeleton");
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(screen.getByRole("status", { name: "Loading model settings" })).toBeInTheDocument();
   });
 
   it("should not call onSuccess when it is not provided", async () => {

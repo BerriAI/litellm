@@ -14,7 +14,7 @@ import { getGuardrailsList } from "@/components/networking";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -49,6 +49,13 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
 
   const modelLimits = useFieldArray({ control: form.control, name: "modelLimits" });
   const metadata = useFieldArray({ control: form.control, name: "metadata" });
+  const emptyModelLimit: NonNullable<ProjectFormValues["modelLimits"]>[number] = {
+    model: "",
+    tpm: undefined,
+    rpm: undefined,
+    itpm: undefined,
+    otpm: undefined,
+  };
 
   const teamIdValue = useWatch({ control: form.control, name: "team_id" });
   const isBlocked = useWatch({ control: form.control, name: "isBlocked" });
@@ -262,13 +269,16 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
 
           <p className="mb-3 text-sm font-semibold text-foreground">Model-Specific Limits</p>
           {modelLimits.fields.map((field, index) => (
-            <div key={field.id} className="mb-2 flex items-start gap-2">
-              <FormField control={form.control} name={`modelLimits.${index}.model`}>
+            <div
+              key={field.id}
+              className="mb-2 grid grid-cols-1 items-start gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))_auto]"
+            >
+              <FormField control={form.control} name={`modelLimits.${index}.model`} label="Model">
                 {({ ref, ...control }) => (
                   <Input {...control} value={control.value ?? ""} ref={ref} placeholder="Model name (e.g. gpt-4)" />
                 )}
               </FormField>
-              <FormField control={form.control} name={`modelLimits.${index}.tpm`}>
+              <FormField control={form.control} name={`modelLimits.${index}.tpm`} label="TPM Limit">
                 {({ ref, value, onChange, ...control }) => (
                   <Input
                     {...control}
@@ -281,7 +291,7 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
                   />
                 )}
               </FormField>
-              <FormField control={form.control} name={`modelLimits.${index}.rpm`}>
+              <FormField control={form.control} name={`modelLimits.${index}.rpm`} label="RPM Limit">
                 {({ ref, value, onChange, ...control }) => (
                   <Input
                     {...control}
@@ -289,6 +299,32 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
                     type="number"
                     min={0}
                     placeholder="RPM Limit"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  />
+                )}
+              </FormField>
+              <FormField control={form.control} name={`modelLimits.${index}.itpm`} label="Input TPM Limit">
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    placeholder="Input TPM Limit"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  />
+                )}
+              </FormField>
+              <FormField control={form.control} name={`modelLimits.${index}.otpm`} label="Output TPM Limit">
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    placeholder="Output TPM Limit"
                     value={value ?? ""}
                     onChange={(event) => onChange(toOptionalNumber(event.target.value))}
                   />
@@ -310,7 +346,7 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
             type="button"
             variant="outline"
             className="w-full border-dashed"
-            onClick={() => modelLimits.append({ model: "", tpm: undefined, rpm: undefined })}
+            onClick={() => modelLimits.append(emptyModelLimit)}
           >
             <Plus />
             Add Model Limit

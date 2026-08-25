@@ -1,16 +1,35 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
-import { UploadOutlined } from "@ant-design/icons";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
-import { Button as Button2, Col, Form, Input as AntdInput, Row, Select, Typography, Upload, UploadProps } from "antd";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Upload as UploadIcon } from "lucide-react";
 import React from "react";
+import { useFormContext } from "react-hook-form";
+import { requiredRule } from "../common_components/formRules";
+import {
+  MountedFormField,
+  type MountedFieldControlProps,
+  type MountedFormValues,
+} from "../common_components/MountedFormField";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
-const { Link } = Typography;
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
-  uploadProps?: UploadProps;
 }
+
+const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    if (event.target) {
+      onLoaded(event.target.result as string);
+    }
+  };
+  reader.readAsText(file);
+};
 
 interface ProviderCredentialField {
   key: string;
@@ -98,9 +117,18 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
-  const form = Form.useFormInstance(); // Get form instance from context
+  const form = useFormContext<MountedFormValues>();
+  const credentialsFileRef = React.useRef<HTMLInputElement>(null);
+  const pickCredentialsFile =
+    (onLoaded: (contents: string) => void) => (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (file?.type === "application/json") {
+        readTextFile(file, onLoaded);
+      }
+    };
 
   const { data: providerMetadata, isLoading, error: loadError } = useProviderFields();
 
@@ -185,145 +213,146 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       const apiVersion = getApiVersionFromApiBase(event.target.value);
       if (apiVersion) {
         lastInferredApiVersionRef.current = apiVersion;
-        form.setFieldsValue({ api_version: apiVersion });
+        form.setValue("api_version", apiVersion);
         return;
       }
 
-      if (form.getFieldValue("api_version") === lastInferredApiVersionRef.current) {
-        form.setFieldsValue({ api_version: "" });
+      if (form.getValues("api_version") === lastInferredApiVersionRef.current) {
+        form.setValue("api_version", "");
       }
       lastInferredApiVersionRef.current = null;
     },
     [form, hasApiVersionField],
   );
 
-  const handleUpload = {
-    name: "file",
-    accept: ".json",
-    beforeUpload: (file: any) => {
-      if (file.type === "application/json") {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          if (e.target) {
-            const jsonStr = e.target.result as string;
-            form.setFieldsValue({ vertex_credentials: jsonStr });
-          }
-        };
-        reader.readAsText(file);
-      }
-      // Prevent upload
-      return false;
-    },
-  };
-
-  const renderFieldControl = (field: ProviderCredentialField) => {
+  const renderFieldControl = (field: ProviderCredentialField, control: MountedFieldControlProps) => {
     if (field.type === "select") {
       return (
-        <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
-          {field.options?.map((option) => (
-            <Select.Option key={option} value={option}>
-              {option}
-            </Select.Option>
-          ))}
+        <Select
+          items={(field.options ?? []).map((option) => ({ value: option, label: option }))}
+          value={(control.value as string | undefined) ?? field.defaultValue ?? null}
+          onValueChange={control.onChange}
+        >
+          <SelectTrigger id={control.id} onBlur={control.onBlur} className="w-full">
+            <SelectValue placeholder={field.placeholder} />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options?.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       );
     }
 
     if (field.type === "upload") {
       return (
-        <Upload
-          {...handleUpload}
-          onChange={(info) => {
-            if (uploadProps?.onChange) {
-              uploadProps.onChange(info);
-            }
-          }}
-        >
-          <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
-        </Upload>
+        <>
+          <Button type="button" variant="outline" className="w-fit" onClick={() => credentialsFileRef.current?.click()}>
+            <UploadIcon />
+            Click to Upload
+          </Button>
+          <input
+            ref={credentialsFileRef}
+            id={control.id}
+            type="file"
+            accept=".json"
+            className="sr-only"
+            onBlur={control.onBlur}
+            onChange={pickCredentialsFile(control.onChange)}
+          />
+        </>
       );
     }
 
     if (field.type === "textarea") {
       return (
-        <AntdInput.TextArea
+        <Textarea
+          id={control.id}
+          value={control.value as string | undefined}
+          onChange={control.onChange}
+          onBlur={control.onBlur}
           placeholder={field.placeholder}
           defaultValue={field.defaultValue}
           rows={6}
-          style={{ fontFamily: "monospace", fontSize: "12px" }}
+          className="font-mono text-xs"
         />
       );
     }
 
     if (field.type === "password") {
-      return <AntdInput.Password placeholder={field.placeholder} defaultValue={field.defaultValue} />;
+      return (
+        <PasswordInput
+          id={control.id}
+          value={control.value as string | undefined}
+          onChange={control.onChange}
+          onBlur={control.onBlur}
+          placeholder={field.placeholder}
+          defaultValue={field.defaultValue}
+        />
+      );
     }
 
     return (
       <Input
+        id={control.id}
+        value={(control.value as string | undefined) ?? undefined}
+        onBlur={control.onBlur}
         placeholder={field.placeholder}
         type="text"
         defaultValue={field.defaultValue}
-        onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
+        onChange={(event) => {
+          control.onChange(event);
+          if (field.key === "api_base") {
+            handleApiBaseChange(event);
+          }
+        }}
       />
     );
   };
 
   return (
     <>
-      {isLoading && allFields.length === 0 && (
-        <Row>
-          <Col span={24}>
-            <p className="text-sm mb-2">Loading provider fields...</p>
-          </Col>
-        </Row>
-      )}
+      {isLoading && allFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
       {loadError && allFields.length === 0 && (
-        <Row>
-          <Col span={24}>
-            <p className="text-sm mb-2 text-red-500">
-              {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
-            </p>
-          </Col>
-        </Row>
+        <p className="text-sm mb-2 text-destructive">
+          {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
+        </p>
       )}
       {allFields.map((field) => (
         <React.Fragment key={field.key}>
-          <Form.Item
-            label={field.label}
+          <MountedFormField
+            label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
             name={field.key}
-            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
-            tooltip={field.tooltip}
-            className={field.key === "vertex_credentials" ? "mb-0" : undefined}
+            required={field.required}
+            rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
+            className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
           >
-            {renderFieldControl(field)}
-          </Form.Item>
+            {(control) => renderFieldControl(field, control)}
+          </MountedFormField>
 
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
-            <Row>
-              <Col>
-                <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
-              </Col>
-            </Row>
+            <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
           )}
 
           {/* Special case for Azure Base Model help text */}
           {field.key === "base_model" && (
-            <Row>
-              <Col span={10}></Col>
-              <Col span={10}>
-                <p className="text-sm mb-2">
-                  The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
-                  <Link
-                    href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                    target="_blank"
-                  >
-                    here
-                  </Link>
-                </p>
-              </Col>
-            </Row>
+            <div className="grid grid-cols-24">
+              <p className="col-start-11 col-span-10 text-sm mb-2">
+                The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
+                <a
+                  href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  here
+                </a>
+              </p>
+            </div>
           )}
         </React.Fragment>
       ))}
