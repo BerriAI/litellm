@@ -1,4 +1,6 @@
 
+from typing import Final
+
 import pytest
 
 
@@ -3781,3 +3783,52 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     )
 
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "model",
+    tuple(
+        f"azure/{region}gpt-5.6{variant}"
+        for region in ("", "eu/", "us/")
+        for variant in ("", "-sol", "-terra", "-luna")
+    ),
+)
+@pytest.mark.parametrize("tier", ("", "_above_272k_tokens", "_priority"))
+def test_azure_gpt_5_6_cache_write_rate_matches_openai_ratio(_local_model_cost_map, model: str, tier: str):
+    """Regression for #37631: the azure/* gpt-5.6 entries carried no
+    cache_creation_input_token_cost at all, so cache writes fell back to $0. Azure
+    charges 1.25x the input rate for them, matching the OpenAI-hosted twins."""
+    info: Final = litellm.model_cost[model]
+    twin: Final = litellm.model_cost[model.split("/")[-1]]
+    twin_ratio: Final = twin[f"cache_creation_input_token_cost{tier}"] / twin[f"input_cost_per_token{tier}"]
+
+    assert twin_ratio == pytest.approx(1.25, rel=1e-12)
+    assert info[f"cache_creation_input_token_cost{tier}"] == pytest.approx(
+        twin_ratio * info[f"input_cost_per_token{tier}"], rel=1e-12
+    )
+
+
+def test_azure_gpt_5_6_bills_cache_write_tokens_at_cache_creation_rate(_local_model_cost_map):
+    """Regression for #37631: Azure reports cache writes as
+    prompt_tokens_details.cache_write_tokens, which LiteLLM classifies as cache-creation
+    tokens. Without a cache-creation rate on the azure/* entries the lookup yielded $0,
+    under-billing a write-heavy prompt by ~98%."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+
+    def _input_cost(model: str) -> float:
+        usage: Final = Usage(
+            completion_tokens=0,
+            prompt_tokens=10_000,
+            total_tokens=10_000,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0, text_tokens=0, cache_write_tokens=10_000
+            ),
+        )
+        return generic_cost_per_token(model=model, usage=usage, custom_llm_provider="azure")[0]
+
+    global_cost: Final = _input_cost("azure/gpt-5.6-sol")
+    eu_cost: Final = _input_cost("azure/eu/gpt-5.6-sol")
+
+    assert global_cost == pytest.approx(10_000 * 6.25e-06, rel=1e-9)
+    assert global_cost > 10_000 * litellm.model_cost["azure/gpt-5.6-sol"]["input_cost_per_token"]
+    assert eu_cost == pytest.approx(1.1 * global_cost, rel=1e-9)
