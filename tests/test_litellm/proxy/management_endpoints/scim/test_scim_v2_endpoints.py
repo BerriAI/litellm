@@ -753,6 +753,63 @@ async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocke
 
 
 @pytest.mark.asyncio
+async def test_handle_existing_user_by_email_without_teams_preserves_memberships(mocker):
+    """Adoption via POST /Users without ``groups`` must keep the user's existing teams.
+
+    Regression: Entra manages membership exclusively through /Groups and never sends
+    ``groups`` on POST /Users, so the empty team list was treated as the desired
+    state and the adopted user was removed from every team roster and had ``teams``
+    overwritten with [].
+    """
+    existing_user = mocker.MagicMock()
+    existing_user.user_id = "adopted-id"
+    existing_user.user_email = "member@example.com"
+    existing_user.user_alias = "Member"
+    existing_user.teams = ["team-a", "team-b"]
+    existing_user.metadata = {}
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+
+    mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=None),
+    )
+    mock_team_member_add = mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(),
+    )
+    mock_team_member_delete = mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(),
+    )
+
+    new_user_request = NewUserRequest(
+        user_id="entra-object-id",
+        user_email="member@example.com",
+        user_alias="Member",
+        teams=[],
+        metadata={},
+        auto_create_key=False,
+    )
+
+    await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client, new_user_request=new_user_request
+    )
+
+    mock_team_member_add.assert_not_awaited()
+    mock_team_member_delete.assert_not_awaited()
+
+    update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
+    assert len(update_calls) == 1
+    assert update_calls[0].kwargs["where"] == {"user_id": "adopted-id"}
+    assert update_calls[0].kwargs["data"]["teams"] == ["team-a", "team-b"]
+
+
+@pytest.mark.asyncio
 async def test_handle_existing_user_by_email_roster_add_failure_blocks_teams_write(mocker):
     """A genuine roster add failure must propagate and must not persist the teams array.
 
@@ -872,11 +929,16 @@ async def test_handle_existing_user_by_email_roster_remove_failure_blocks_teams_
         AsyncMock(side_effect=HTTPException(status_code=500, detail={"error": "No db connected"})),
     )
 
+    mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(),
+    )
+
     new_user_request = NewUserRequest(
         user_id="uid",
         user_email="member@example.com",
         user_alias="Member",
-        teams=[],
+        teams=["replacement-team"],
         metadata={},
         auto_create_key=False,
     )
@@ -917,11 +979,16 @@ async def test_handle_existing_user_by_email_roster_remove_already_absent_is_noo
         AsyncMock(return_value=None),
     )
 
+    mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
+        AsyncMock(),
+    )
+
     new_user_request = NewUserRequest(
         user_id="uid",
         user_email="member@example.com",
         user_alias="Member",
-        teams=[],
+        teams=["replacement-team"],
         metadata={},
         auto_create_key=False,
     )
@@ -933,7 +1000,7 @@ async def test_handle_existing_user_by_email_roster_remove_already_absent_is_noo
     mock_team_member_delete.assert_awaited_once()
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
-    assert update_calls[0].kwargs["data"]["teams"] == []
+    assert update_calls[0].kwargs["data"]["teams"] == ["replacement-team"]
 
 
 @pytest.mark.asyncio
