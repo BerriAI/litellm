@@ -33,8 +33,8 @@ def signoz_preset(
     base: Final = config_overrides or OpenTelemetryV2Config()
     key: Final = settings.ingestion_key
     return base.model_copy(
-        update={
-            "exporters": [
+        update={  # mutable-ok: model_copy takes a dict of field updates
+            "exporters": [  # mutable-ok: matches the config's exporters list
                 *base.exporters,
                 ExporterSpec(
                     kind="otlp_http",
@@ -51,7 +51,7 @@ def signoz_preset(
     )
 
 
-def signoz_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
+def signoz_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:  # mutable-ok: registry type
     """Per-request SigNoz OTLP headers from team/key dynamic params."""
-    ingestion_key: Final = params.get("signoz_ingestion_key")
-    return {header: value for header, value in (("signoz-ingestion-key", ingestion_key),) if value}
+    key: Final = params.get("signoz_ingestion_key")
+    return {header: value for header, value in (("signoz-ingestion-key", key),) if value}  # mutable-ok: registry type
