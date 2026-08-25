@@ -95,7 +95,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             headers,
         )
         request["input"] = self._normalized_responses_input(
-            request_input=request.get("input", []),
+            request_input=request.get("input", []),  # mutable-ok: fallback is an empty Responses input list
         )
         base_instructions: Final = get_chatgpt_default_instructions()
         existing_instructions: Final = request.get("instructions")

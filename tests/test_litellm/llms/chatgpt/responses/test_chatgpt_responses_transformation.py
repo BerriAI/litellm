@@ -101,8 +101,37 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert request["stream"] is True
+        assert request["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ]
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_normalizes_string_input_with_tools(self):
+        config = ChatGPTResponsesAPIConfig()
+        tools = [{"type": "function", "name": "echo", "parameters": {}}]
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="Call echo with ping.",
+            response_api_optional_request_params={
+                "tools": tools,
+                "tool_choice": "required",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Call echo with ping."}],
+            }
+        ]
+        assert request["tools"] == tools
+        assert request["tool_choice"] == "required"
 
     @pytest.mark.parametrize(
         "model_name",
