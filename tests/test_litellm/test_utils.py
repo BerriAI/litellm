@@ -5483,3 +5483,30 @@ async def test_wrapper_async_failure_hook_latency_does_not_inflate_reported_dura
 
     assert len(reported_durations) == 1
     assert reported_durations[0] < 0.5
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_failure_hook_exception_snapshot_preserves_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the exception snapshot handed to failure-hook callbacks (see
+    test_..._exception_mutation_does_not_change_raised_exception above) must still carry
+    __traceback__/__cause__/__context__, not just __dict__/args - a callback formatting or
+    inspecting the failure chain needs the real traceback, not an empty one."""
+    received: list[Exception] = []
+
+    class TracebackCapturingLogger(CustomLogger):
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+            received.append(exception)
+
+    monkeypatch.setattr(litellm, "callbacks", [TracebackCapturingLogger()])
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
+        )
+
+    assert len(received) == 1
+    assert received[0].__traceback__ is not None
