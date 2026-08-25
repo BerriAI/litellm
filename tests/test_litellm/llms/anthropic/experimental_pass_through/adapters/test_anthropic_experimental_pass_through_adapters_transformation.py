@@ -6,6 +6,7 @@ import litellm
 
 
 
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
 )
@@ -3926,3 +3927,320 @@ def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_ca
     assert result == [
         {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
     ]
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_with_tool_reference():
+    """Regression test for LIT-6103: a tool_result whose content is a single unknown
+    block type (e.g. tool_reference from Claude Code's ENABLE_TOOL_SEARCH) must still
+    emit a role:"tool" message instead of being silently dropped."""
+
+    tool_reference_block = {"type": "tool_reference", "tool_name": "WebFetch"}
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Load the WebFetch tool"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01PV7TQswAGFPMWK6Cbfkxtn",
+                    "name": "tool_search",
+                    "input": {"query": "select:WebFetch"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01PV7TQswAGFPMWK6Cbfkxtn",
+                    "content": [tool_reference_block],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 1, "Tool message was dropped for tool_reference content"
+    assert tool_messages[0]["tool_call_id"] == "toolu_01PV7TQswAGFPMWK6Cbfkxtn"
+    assert tool_messages[0]["content"] == safe_dumps({"type": "tool_reference", "tool_name": "WebFetch"})
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_tool_reference_with_sibling_text():
+    """Regression test for LIT-6103: with a sibling text part next to the tool_result,
+    dropping the tool_result leaves an assistant tool_use answered only by a user text
+    message, which Anthropic rejects with a 400. The tool message must be emitted and
+    placed before the user message."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Load the WebFetch tool"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01PV7TQswAGFPMWK6Cbfkxtn",
+                    "name": "tool_search",
+                    "input": {"query": "select:WebFetch"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01PV7TQswAGFPMWK6Cbfkxtn",
+                    "content": [{"type": "tool_reference", "tool_name": "WebFetch"}],
+                },
+                {"type": "text", "text": "Now fetch the page"},
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_message_idx = None
+    user_message_idx = None
+    for i, msg in enumerate(result):
+        if isinstance(msg, dict) and msg.get("role") == "tool":
+            tool_message_idx = i
+        elif (
+            isinstance(msg, dict) and msg.get("role") == "user" and "Now fetch the page" in str(msg.get("content", ""))
+        ):
+            user_message_idx = i
+
+    assert tool_message_idx is not None, "Tool message was dropped, orphaning the tool_use"
+    assert user_message_idx is not None, "Sibling text user message not found"
+    assert tool_message_idx < user_message_idx, "Tool message must precede the user message"
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_mixed_unknown_and_text():
+    """Regression test for LIT-6103: unknown block types mixed with text in a multi-item
+    tool_result content list must be JSON-serialized into text parts, not dropped."""
+
+    tool_reference_block = {"type": "tool_reference", "tool_name": "WebFetch"}
+    search_result_block = {"type": "search_result", "title": "docs", "source": "https://example.com"}
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Search and load tools"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_mixed01",
+                    "name": "tool_search",
+                    "input": {"query": "web"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_mixed01",
+                    "content": [
+                        {"type": "text", "text": "Found 2 tools"},
+                        tool_reference_block,
+                        search_result_block,
+                    ],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 1, "Exactly one tool message expected for one tool_use_id"
+    content = tool_messages[0]["content"]
+    assert isinstance(content, list)
+    assert len(content) == 3, "Unknown block types must not be dropped from the content list"
+    assert content[0] == {"type": "text", "text": "Found 2 tools"}
+    assert content[1] == {"type": "text", "text": safe_dumps({"type": "tool_reference", "tool_name": "WebFetch"})}
+    assert content[2] == {
+        "type": "text",
+        "text": safe_dumps({"type": "search_result", "title": "docs", "source": "https://example.com"}),
+    }
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_empty_content_list():
+    """Regression test for LIT-6103: a tool_result with an empty content list must still
+    emit a role:"tool" message so the tool_use stays answered."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_empty01",
+                    "name": "noop_tool",
+                    "input": {},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_empty01",
+                    "content": [],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 1, "Tool message was dropped for empty content list"
+    assert tool_messages[0]["tool_call_id"] == "toolu_empty01"
+    assert tool_messages[0]["content"] == ""
+
+
+@pytest.mark.parametrize(
+    ("tool_result_content", "expected_tool_content"),
+    [
+        ([42], safe_dumps(42)),
+        (None, ""),
+        ({"type": "text", "text": "bare dict"}, safe_dumps({"type": "text", "text": "bare dict"})),
+    ],
+)
+def test_translate_anthropic_messages_to_openai_tool_result_odd_content_shapes(
+    tool_result_content, expected_tool_content
+):
+    """Regression test for LIT-6103: tool_result content that is a non-str non-dict item,
+    an explicit null, or a bare dict must still emit a role:"tool" message."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "toolu_odd01", "name": "odd_tool", "input": {}}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "tool_result", "tool_use_id": "toolu_odd01", "content": tool_result_content}],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 1, f"Tool message was dropped for content {tool_result_content!r}"
+    assert tool_messages[0]["tool_call_id"] == "toolu_odd01"
+    assert tool_messages[0]["content"] == expected_tool_content
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_multi_item_non_dict_items():
+    """Regression test for LIT-6103: non-str non-dict items in a multi-item tool_result
+    content list must be JSON-serialized into text parts, not silently discarded."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "toolu_odd02", "name": "odd_tool", "input": {}}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_odd02",
+                    "content": [{"type": "text", "text": "a"}, None, 42],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    content = tool_messages[0]["content"]
+    assert isinstance(content, list)
+    assert len(content) == 3, "Non-dict items must not be discarded from the content list"
+    assert content[0] == {"type": "text", "text": "a"}
+    assert content[1] == {"type": "text", "text": safe_dumps(None)}
+    assert content[2] == {"type": "text", "text": safe_dumps(42)}
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_null_content_preserves_cache_control():
+    """Regression test for LIT-6103: the fallthrough emit sites must carry cache_control
+    through for Claude models the same way the pre-existing branches do."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Run the tool"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "toolu_cc01", "name": "odd_tool", "input": {}}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_cc01",
+                    "content": None,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model="claude-sonnet-5"
+    )
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == ""
+    assert tool_messages[0].get("cache_control") == {"type": "ephemeral"}
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_all_image_parts_unconvertible():
+    """Regression test for LIT-6103: a multi-item tool_result whose parts all fail to
+    convert must still emit the tool message with empty content, never drop it."""
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(role="user", content=[{"type": "text", "text": "Screenshot twice"}]),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "tool_use", "id": "toolu_img01", "name": "shot_tool", "input": {}}],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_img01",
+                    "content": [
+                        {"type": "image", "source": {"type": "weird"}},
+                        {"type": "image", "source": None},
+                    ],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"]
+    assert len(tool_messages) == 1, "Tool message must be emitted even when no parts convert"
+    assert tool_messages[0]["tool_call_id"] == "toolu_img01"
+    assert tool_messages[0]["content"] == ""
