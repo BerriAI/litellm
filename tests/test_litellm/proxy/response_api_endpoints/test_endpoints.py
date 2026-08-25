@@ -1353,6 +1353,8 @@ class TestParseCursorModelVariant:
             ("claude-opus-5-fast", "claude-opus-5", None),
             ("gpt-5.6-sol", "gpt-5.6-sol", None),
             ("foo-thinking-ultra-fast", "foo-thinking-ultra", None),
+            ("gpt-5.6-thinking-max", "gpt-5.6", "max"),
+            ("foo-thinking-mega-fast", "foo-thinking-mega", None),
             ("-thinking-high", "-thinking-high", None),
         ],
     )
