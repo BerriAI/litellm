@@ -11,7 +11,10 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse, completion
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.common_utils import (
+    VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM,
+    VertexAIError,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -335,6 +338,44 @@ def test_vertex_ai_response_json_schema_for_gemini_2():
     assert (
         transformed_request["response_json_schema"].get("additionalProperties") == False
     )
+
+
+def test_vertex_ai_response_json_schema_opt_out_uses_native_schema(monkeypatch):
+    """
+    litellm.vertex_ai_use_response_json_schema=False sends Gemini 2.x the natively converted
+    responseSchema, so nullable unions are flattened, constraints survive the flattening and
+    propertyOrdering is set. The client schema is kept verbatim for a per request opt in.
+    """
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", False)
+    client_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "total": {"type": "number"},
+            "barcode": {"anyOf": [{"type": "string", "maxLength": 10}, {"type": "null"}]},
+        },
+        "required": ["total", "barcode"],
+    }
+
+    transformed_request = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "invoice", "schema": deepcopy(client_schema)},
+            },
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert "response_json_schema" not in transformed_request
+    assert transformed_request["response_schema"]["propertyOrdering"] == ["total", "barcode"]
+    assert transformed_request["response_schema"]["properties"]["barcode"]["anyOf"] == [
+        {"type": "string", "maxLength": 10, "nullable": True}
+    ]
+    assert "additionalProperties" not in transformed_request["response_schema"]
+    assert transformed_request[VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM] == client_schema
 
 
 def test_vertex_ai_response_schema_for_old_models():

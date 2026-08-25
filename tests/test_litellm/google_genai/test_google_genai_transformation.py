@@ -6,6 +6,7 @@ Test to verify the Google GenAI transformation logic for generateContent paramet
 
 import pytest
 
+import litellm
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -443,6 +444,42 @@ def test_transform_generate_content_request_passes_through_response_json_schema(
     gen_config = result["generationConfig"]
     assert gen_config["responseJsonSchema"] == schema
     assert "responseSchema" not in gen_config
+
+
+@pytest.mark.parametrize(
+    "json_schema_key, expected_schema_key",
+    [("responseJsonSchema", "responseSchema"), ("response_json_schema", "response_schema")],
+)
+def test_transform_generate_content_request_opt_out_converts_response_json_schema(
+    monkeypatch, json_schema_key, expected_schema_key
+):
+    """
+    litellm.vertex_ai_use_response_json_schema=False also reaches generateContent requests that
+    only carry a JSON Schema, which the caller's key style decides where to land
+    """
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", False)
+    config = GoogleGenAIConfig()
+
+    schema = {
+        "type": "object",
+        "properties": {"barcode": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+        "required": ["barcode"],
+    }
+
+    result = config.transform_generate_content_request(
+        model="gemini-2.5-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        tools=None,
+        generate_content_config_dict={json_schema_key: schema},
+        system_instruction=None,
+    )
+
+    gen_config = result["generationConfig"]
+    assert json_schema_key not in gen_config
+    assert gen_config[expected_schema_key]["propertyOrdering"] == ["barcode"]
+    assert gen_config[expected_schema_key]["properties"]["barcode"]["anyOf"] == [
+        {"type": "string", "nullable": True}
+    ]
 
 
 def test_transform_generate_content_request_preserves_response_json_schema_when_response_schema_co_present():

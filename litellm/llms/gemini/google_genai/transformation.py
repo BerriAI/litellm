@@ -14,7 +14,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     _build_vertex_schema,
-    supports_response_json_schema,
+    should_use_response_json_schema,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.router import GenericLiteLLMParams
@@ -310,26 +310,34 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             None,
         )
 
-        if schema_key is None:
+        source_key: Final = schema_key if schema_key is not None else json_schema_key
+        if source_key is None:
             return
 
-        value: Final = generate_content_config_dict[schema_key]
+        value: Final = generate_content_config_dict[source_key]
         if not isinstance(value, dict):
             return
 
-        if supports_response_json_schema(model):
+        if should_use_response_json_schema(model):
             if json_schema_key is not None:
-                generate_content_config_dict.pop(schema_key)
+                if schema_key is not None:
+                    generate_content_config_dict.pop(schema_key)
                 return
-            generate_content_config_dict.pop(schema_key)
-            new_json_schema_key = "response_json_schema" if schema_key == "response_schema" else "responseJsonSchema"
-            generate_content_config_dict[new_json_schema_key] = value
-        else:
-            if json_schema_key is not None:
-                generate_content_config_dict.pop(json_schema_key)
-            generate_content_config_dict[schema_key] = _build_vertex_schema(
-                parameters=deepcopy(value), add_property_ordering=True
-            )
+            generate_content_config_dict.pop(source_key)
+            json_target_key: Final = "response_json_schema" if source_key == "response_schema" else "responseJsonSchema"
+            generate_content_config_dict[json_target_key] = value
+            return
+
+        if json_schema_key is not None:
+            generate_content_config_dict.pop(json_schema_key)
+        native_target_key: Final = (
+            source_key
+            if schema_key is not None
+            else ("response_schema" if source_key == "response_json_schema" else "responseSchema")
+        )
+        generate_content_config_dict[native_target_key] = _build_vertex_schema(
+            parameters=deepcopy(value), add_property_ordering=True
+        )
 
     def transform_generate_content_request(
         self,

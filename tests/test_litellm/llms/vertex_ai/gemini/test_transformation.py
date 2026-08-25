@@ -1,6 +1,9 @@
 
+import json
+
 import pytest
 
+import litellm
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -338,3 +341,93 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+
+RESPONSE_SCHEMA_CHANNEL_CLIENT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "total": {"type": "number"},
+        "barcode": {"anyOf": [{"type": "string", "maxLength": 10}, {"type": "null"}]},
+    },
+    "required": ["total", "barcode"],
+}
+
+
+def _gemini_request_body(model: str, litellm_params: dict, **completion_kwargs) -> RequestBody:
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "invoice",
+                "schema": json.loads(json.dumps(RESPONSE_SCHEMA_CHANNEL_CLIENT_SCHEMA)),
+            },
+        },
+        **completion_kwargs,
+    )
+    return transformation._transform_request_body(
+        messages=[{"role": "user", "content": "extract it"}],
+        model=model,
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+
+def test__transform_request_body_per_request_response_json_schema_opt_out():
+    """
+    vertex_ai_use_response_json_schema=False on the request puts the schema on Vertex's native
+    responseSchema channel, and the knob itself never reaches the provider body
+    """
+    body = _gemini_request_body(
+        "gemini-2.5-flash", {}, vertex_ai_use_response_json_schema=False
+    )
+
+    generation_config = body["generationConfig"]
+    assert "response_json_schema" not in generation_config
+    assert generation_config["response_schema"]["propertyOrdering"] == ["total", "barcode"]
+    assert generation_config["response_schema"]["properties"]["barcode"]["anyOf"] == [
+        {"type": "string", "maxLength": 10, "nullable": True}
+    ]
+    assert "vertex_ai_use_response_json_schema" not in json.dumps(body)
+    assert "litellm_param" not in json.dumps(body)
+
+
+def test__transform_request_body_deployment_response_json_schema_opt_out():
+    """A deployment's litellm_params opts every request routed to it out of responseJsonSchema"""
+    body = _gemini_request_body(
+        "gemini-2.5-flash", {"vertex_ai_use_response_json_schema": False}
+    )
+
+    generation_config = body["generationConfig"]
+    assert "response_json_schema" not in generation_config
+    assert generation_config["response_schema"]["propertyOrdering"] == ["total", "barcode"]
+
+
+def test__transform_request_body_per_request_opt_in_beats_global_opt_out(monkeypatch):
+    """
+    With the global opted out, vertex_ai_use_response_json_schema=True on the request sends the
+    client schema verbatim again, additionalProperties included
+    """
+    monkeypatch.setattr(litellm, "vertex_ai_use_response_json_schema", False)
+
+    body = _gemini_request_body(
+        "gemini-2.5-flash", {}, vertex_ai_use_response_json_schema=True
+    )
+
+    generation_config = body["generationConfig"]
+    assert "response_schema" not in generation_config
+    assert generation_config["response_json_schema"] == RESPONSE_SCHEMA_CHANNEL_CLIENT_SCHEMA
+    assert "litellm_param" not in json.dumps(body)
+
+
+def test__transform_request_body_keeps_response_json_schema_by_default():
+    """Without any override, Gemini 2.x keeps sending the verbatim responseJsonSchema"""
+    body = _gemini_request_body("gemini-2.5-flash", {})
+
+    generation_config = body["generationConfig"]
+    assert "response_schema" not in generation_config
+    assert generation_config["response_json_schema"] == RESPONSE_SCHEMA_CHANNEL_CLIENT_SCHEMA

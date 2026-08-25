@@ -28,7 +28,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     response_schema_prompt,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.llms.vertex_ai.common_utils import (
+    VERTEX_AI_USE_RESPONSE_JSON_SCHEMA_PARAM,
+    pop_vertex_request_labels,
+    resolve_response_schema_channel,
+)
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -1178,7 +1182,14 @@ def _transform_request_body(
             litellm_params.update({k: v})
             remove_keys.append(k)
 
-    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
+    resolved_params: Final = resolve_response_schema_channel(
+        optional_params=optional_params, litellm_params=litellm_params, model=model
+    )
+    optional_params = {
+        k: v
+        for k, v in resolved_params.items()
+        if k not in remove_keys and k != VERTEX_AI_USE_RESPONSE_JSON_SCHEMA_PARAM
+    }
 
     try:
         if custom_llm_provider == "gemini":

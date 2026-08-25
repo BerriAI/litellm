@@ -82,9 +82,11 @@ from litellm.utils import (
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ..common_utils import (
+    VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM,
     VertexAIError,
     _build_json_schema,
     _build_vertex_schema,
+    should_use_response_json_schema,
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
@@ -754,14 +756,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # remove 'strict' from json schema (not supported by Gemini)
         new_value = _remove_strict_from_schema(new_value)
 
-        # Automatically use responseJsonSchema for Gemini 2.0+ models
-        # responseJsonSchema uses standard JSON Schema format and supports additionalProperties
-        # For older models (Gemini 1.5), fall back to responseSchema (OpenAPI format)
-        use_json_schema: Final = supports_response_json_schema(model)
-
-        if not use_json_schema:
-            # For responseSchema, remove 'additionalProperties' (not supported)
-            new_value = _remove_additional_properties(new_value)
+        use_json_schema: Final = should_use_response_json_schema(model)
 
         # Handle response type
         if new_value.get("type") == "json_object":
@@ -791,7 +786,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = self._map_response_schema(value=schema)
+                if supports_response_json_schema(model):
+                    optional_params[VERTEX_AI_VERBATIM_RESPONSE_SCHEMA_PARAM] = deepcopy(schema)
+                optional_params["response_schema"] = self._map_response_schema(
+                    value=_remove_additional_properties(schema)
+                )
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
