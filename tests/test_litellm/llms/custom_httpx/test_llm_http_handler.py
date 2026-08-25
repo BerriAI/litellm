@@ -26,6 +26,8 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
 )
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
+from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TranscriptionResponse
@@ -2555,3 +2557,132 @@ async def test_async_rerank_records_llm_api_duration():
 
     assert response._hidden_params["litellm_overhead_time_ms"] is not None
     assert response._hidden_params["_response_ms"] >= response._hidden_params["litellm_overhead_time_ms"]
+
+
+class _JSONBodyVideoConfig(OpenAIVideoConfig):
+    def use_multipart_form_data(self) -> bool:
+        return False
+
+
+def _video_create_call_kwargs(config, **optional_params):
+    return {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "video_generation_provider_config": config,
+        "video_generation_optional_request_params": {"seconds": "4", **optional_params},
+        "custom_llm_provider": "openai",
+        "litellm_params": GenericLiteLLMParams(api_key="sk-test", api_base="https://video.example/v1"),
+        "logging_obj": Mock(),
+        "timeout": 10.0,
+    }
+
+
+def _capture_video_create_request(captured):
+    def respond(request):
+        captured["content_type"] = request.headers.get("content-type")
+        captured["body"] = request.content
+        return httpx.Response(
+            200,
+            json={"id": "video_123", "object": "video", "status": "queued", "created_at": 1712697600, "model": "sora-2"},
+        )
+
+    return respond
+
+
+def _multipart_text_fields(content_type: str, body: bytes) -> dict:
+    boundary = content_type.split("boundary=")[1].encode()
+    return {
+        part.split(b'name="')[1].split(b'"')[0].decode(): part.partition(b"\r\n\r\n")[2].rstrip(b"\r\n-").decode()
+        for part in body.split(b"--" + boundary)
+        if b'name="' in part and b"filename=" not in part
+    }
+
+
+def test_video_generation_without_file_sends_multipart_form_data():
+    """Regression for #36493: the OpenAI SDK always sends /videos requests as
+    multipart/form-data, so OpenAI-compatible backends (SGLang Diffusion,
+    vLLM-Omni) reject the JSON body LiteLLM used to send when no
+    input_reference file was attached."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(OpenAIVideoConfig()))
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_async_video_generation_without_file_sends_multipart_form_data():
+    captured = {}
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture_video_create_request(captured)))
+
+    result = await BaseLLMHTTPHandler().async_video_generation_handler(
+        client=client, **_video_create_call_kwargs(OpenAIVideoConfig())
+    )
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"
+
+
+def test_azure_video_generation_without_file_sends_multipart_form_data():
+    """AzureVideoConfig subclasses OpenAIVideoConfig, so it inherits the
+    file-less multipart behavior. Azure's /openai/v1/videos surface is
+    OpenAI-SDK-compatible (the SDK sends multipart there too), so this is
+    intentional; lock it so the inherited flip can't silently regress to JSON."""
+    assert AzureVideoConfig().use_multipart_form_data() is True
+
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(AzureVideoConfig()))
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"
+
+
+def test_video_generation_json_provider_keeps_json_body():
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig()))
+
+    assert captured["content_type"] == "application/json"
+    assert json.loads(captured["body"]) == {"model": "sora-2", "prompt": "a cat surfing", "seconds": "4"}
+    assert result.status == "queued"
+
+
+def test_video_generation_with_input_reference_keeps_file_multipart():
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client,
+        **_video_create_call_kwargs(OpenAIVideoConfig(), input_reference=b"\x89PNG\r\n\x1a\nfakepng"),
+    )
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert b'name="input_reference"' in captured["body"]
+    assert b'filename="input_reference.png"' in captured["body"]
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"

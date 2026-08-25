@@ -113,18 +113,30 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
     expect(result.classifier_context_per_turn_chars).toBe(300);
   });
 
-  it("persists an edited classifier context window size and per-turn char limit", () => {
+  it("persists an edited classifier context window size", () => {
     const formValue = {
       tiers: STORED_LLM.tiers,
       classifier_type: "llm" as const,
       classifier_llm_config: STORED_LLM.classifier_llm_config,
       classifier_context_window_size: 10,
-      classifier_context_per_turn_chars: 500,
     };
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBe(10);
-    expect(result.classifier_context_per_turn_chars).toBe(500);
+  });
+
+  it("carries a stored per-turn cap through untouched now that no control sets it", () => {
+    // The modal stopped rendering a per-turn control, so the key left MANAGED_COMPLEXITY_ROUTER_KEYS.
+    // Had it stayed managed, every open-and-save would have silently dropped an operator's cap.
+    const formValue = {
+      tiers: STORED_LLM.tiers,
+      classifier_type: "llm" as const,
+      classifier_llm_config: STORED_LLM.classifier_llm_config,
+      classifier_context_window_size: 10,
+    };
+    const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(result.classifier_context_per_turn_chars).toBe(300);
   });
 
   it("omits classifier context fields when classifier_type is heuristic even if values linger in state", () => {
@@ -132,12 +144,12 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
       tiers: STORED_LLM.tiers,
       classifier_type: "heuristic" as const,
       classifier_context_window_size: 5,
-      classifier_context_per_turn_chars: 300,
+      classifier_context_budget_chars: 4000,
     };
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBeUndefined();
-    expect(result.classifier_context_per_turn_chars).toBeUndefined();
+    expect(result.classifier_context_budget_chars).toBeUndefined();
   });
 
   it("does not resurrect a stale stored classifier_context_window_size once the form's own value is unset", () => {
@@ -151,7 +163,6 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBeUndefined();
-    expect(result.classifier_context_per_turn_chars).toBeUndefined();
   });
 });
 

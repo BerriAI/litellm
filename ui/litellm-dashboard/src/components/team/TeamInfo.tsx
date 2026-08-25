@@ -31,7 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -971,8 +971,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           <Card className="block p-6">
             <p>Rate Limits</p>
             <div className="mt-2">
-              <p>TPM: {info.tpm_limit || "Unlimited"}</p>
-              <p>RPM: {info.rpm_limit || "Unlimited"}</p>
+              <p>TPM: {info.tpm_limit ?? "Unlimited"}</p>
+              <p>RPM: {info.rpm_limit ?? "Unlimited"}</p>
               {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
               {(() => {
                 const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
@@ -1760,8 +1760,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </div>
               <div>
                 <p className="font-medium">Rate Limits</p>
-                <div>TPM: {info.tpm_limit || "Unlimited"}</div>
-                <div>RPM: {info.rpm_limit || "Unlimited"}</div>
+                <div>TPM: {info.tpm_limit ?? "Unlimited"}</div>
+                <div>RPM: {info.rpm_limit ?? "Unlimited"}</div>
                 {(() => {
                   const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                   const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
@@ -1811,11 +1811,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </p>
-                <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
+                <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
-                <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
-                <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
+                <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>
+                <div>RPM Limit: {info.team_member_budget_table?.rpm_limit ?? "No Limit"}</div>
               </div>
               <div>
                 <p className="font-medium">Router Settings</p>
