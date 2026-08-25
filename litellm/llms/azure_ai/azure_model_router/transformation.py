@@ -99,7 +99,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         if selected_model:
             # Rebuilt rather than mutated in place: ModelResponseBase declares _hidden_params as a
             # class-level dict, so an in-place write can bleed into unrelated responses.
-            transformed_response._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
+            transformed_response._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter  # mutable-ok: ModelResponse requires _hidden_params to be a plain dict
                 **get_hidden_params_dict(transformed_response),
                 AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model,
             }
