@@ -17,9 +17,10 @@ lint.external = [
     # Enforced by the strict-rule gate (scripts/ruff_strict_gate.py + ruff-strict.toml).
     # Family entries whose every strict rule graduated into extend-select above (FURB), and
     # standalone graduated codes (I001, RUF010, RUF022, RUF023, RUF051), are dropped so this
-    # config's RUF100 polices their directives itself.
+    # config's RUF100 polices their directives itself. PL is split into PLC/PLR/PLW for the
+    # same reason: no PLE rule is enforced elsewhere, so PLE0302's directives belong to us.
     "ANN", "ASYNC230", "B", "C", "D419", "DTZ", "EXE", "LOG015", "N999", "PERF",
-    "PIE", "PL", "PYI", "RET", "RUF012", "RUF015", "RUF019",
+    "PIE", "PLC", "PLR", "PLW", "PYI", "RET", "RUF012", "RUF015", "RUF019",
     "RUF046", "RUF059", "S110", "S112", "SIM", "TC", "TID251", "TRY", "UP",
     # Enforced by upstream litellm's ruff config, but not run in this repo's CI
     "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
