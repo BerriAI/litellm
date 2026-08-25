@@ -36,17 +36,16 @@ how its bucket is shared:
   track whichever model actually ends up serving a request needs
   `model_info.tag_rate_limits` instead; but
   (2) if this hook's own admission *rejects* the request,
-  `common_request_processing.py` catches that rejection and retries the
-  whole pre-call pipeline (this hook included) against
-  `litellm_settings.fallbacks`/`router_settings.fallbacks` configured for
-  the original model, with `data["model"]` mutated to the fallback target --
-  a fresh, correct evaluation of `apply_to_models` against that new model.
-  If that fallback model is NOT also in `apply_to_models`, this is a real
-  escape hatch: the rejected request is transparently admitted anyway.
-  List every model that should share the cap (the whole chain, not just its
-  primary member) in `apply_to_models` to close this -- a fallback target
-  that's also listed re-hits the same, already-exhausted shared bucket and
-  is correctly rejected too.
+  `common_request_processing.py` would otherwise catch that rejection and
+  retry the whole pre-call pipeline against
+  `litellm_settings.fallbacks`/`router_settings.fallbacks`, with
+  `data["model"]` mutated to the fallback target -- silently admitting the
+  request via a model outside `apply_to_models`, defeating the cap. A
+  rejection from an `apply_to_models`-scoped entry carries
+  `detail["cross_model_scope"] = True` for exactly this reason:
+  `_pre_call_with_fallbacks` checks that marker and re-raises immediately
+  instead of trying any fallback, so this bypass is closed regardless of
+  whether the fallback chain is also listed in `apply_to_models`.
 - `scope_by_key_hash` (already exists on `TagRateLimitEntry`): whether the
   keys an entry applies to share one bucket, or each gets its own.
 
