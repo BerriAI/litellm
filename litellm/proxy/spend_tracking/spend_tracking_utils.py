@@ -444,7 +444,9 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         or None
     )
     raw_model: Final = cast(str, kwargs.get("model") or "")
-    model_name: Final = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    model_name: Final = (
+        standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: Final[SpendLogsPayload] = SpendLogsPayload(
