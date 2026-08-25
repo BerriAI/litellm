@@ -1592,7 +1592,7 @@ async def test_cleared_m2m_row_can_no_longer_mint_a_replacement_token():
     )
     token_endpoint = AsyncMock()
 
-    with patch(
+    with patch(  # test-quality-ok: fakes the token-endpoint HTTP client to prove no mint request leaves the process
         "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
         return_value=token_endpoint,
     ):

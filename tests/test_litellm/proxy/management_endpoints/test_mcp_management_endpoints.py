@@ -6783,19 +6783,19 @@ def _patched_clear_oauth_token_endpoint(clear_mock, purge_mock, manager, revoke_
     actually emptied rather than only what it returned."""
     manager.revoke_upstream_m2m_tokens = revoke_mock
     with (
-        patch(
+        patch(  # test-quality-ok: stands in for the prisma-backed store; no live DB in this unit test
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=_make_prisma_client(),
         ),
-        patch(
+        patch(  # test-quality-ok: records the DB clear so the test can assert which stores the endpoint emptied
             "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
             new=clear_mock,
         ),
-        patch(
+        patch(  # test-quality-ok: records the per-user purge so the test can assert which stores the endpoint emptied
             "litellm.proxy.management_endpoints.mcp_management_endpoints.purge_user_oauth_credentials_for_server",
             new=purge_mock,
         ),
-        patch(
+        patch(  # test-quality-ok: injects a recording manager for the module-global singleton
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
             manager,
         ),
@@ -6916,19 +6916,19 @@ async def test_clear_mcp_server_oauth_token_endpoint_drives_a_real_purge_for_the
     manager.revoke_upstream_m2m_tokens = AsyncMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: stands in for the prisma-backed store; no live DB in this unit test
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=prisma,
         ),
-        patch(
+        patch(  # test-quality-ok: stubs the DB clear; the per-user purge path is what this test pins
             "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
             new=AsyncMock(return_value=ClearedMCPServerOAuthToken(server=server, had_token=False, cleared_client_credentials=False)),
         ),
-        patch(
+        patch(  # test-quality-ok: injects a recording manager for the module-global singleton
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
             manager,
         ),
-        patch(
+        patch(  # test-quality-ok: injects the same recording manager where the purge helper resolves the singleton
             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
             manager,
         ),
@@ -7066,11 +7066,11 @@ async def test_clear_mcp_server_oauth_token_endpoint_rejects_non_admin():
     clear_mock = AsyncMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: stands in for the prisma-backed store; no live DB in this unit test
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=_make_prisma_client(),
         ),
-        patch(
+        patch(  # test-quality-ok: records the DB clear to prove the admin check rejects before any clearing
             "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
             new=clear_mock,
         ),
@@ -7095,11 +7095,11 @@ async def test_clear_mcp_server_oauth_token_endpoint_404s_for_unknown_server():
     )
 
     with (
-        patch(
+        patch(  # test-quality-ok: stands in for the prisma-backed store; no live DB in this unit test
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=_make_prisma_client(),
         ),
-        patch(
+        patch(  # test-quality-ok: stubs the DB clear returning no row, the unknown-server shape this test pins
             "litellm.proxy.management_endpoints.mcp_management_endpoints.clear_mcp_server_oauth_token",
             new=AsyncMock(return_value=None),
         ),

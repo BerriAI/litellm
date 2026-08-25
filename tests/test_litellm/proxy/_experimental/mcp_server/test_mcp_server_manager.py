@@ -5250,12 +5250,12 @@ class TestMCPServerManager:
         invalidated: list[str] = []
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: records which server ids the broadcast handler routes to the process-wide manager singleton
                 global_mcp_server_manager,
                 "invalidate_local_upstream_m2m_tokens",
                 new=AsyncMock(side_effect=lambda server_id: invalidated.append(server_id)),
             ),
-            patch.object(global_mcp_server_manager, "refresh_local_server_from_db", new=AsyncMock()),
+            patch.object(global_mcp_server_manager, "refresh_local_server_from_db", new=AsyncMock()),  # test-quality-ok: keeps the process-wide manager singleton from touching the DB in this routing test
         ):
             await apply_mcp_upstream_m2m_invalidation("mcp:per_user_token:alice:srv-1")
             assert invalidated == []
@@ -5289,14 +5289,14 @@ class TestMCPServerManager:
         applied: list[LiteLLM_MCPServerTable] = []
 
         with (
-            patch.object(global_mcp_server_manager, "invalidate_local_upstream_m2m_tokens", new=AsyncMock()),
-            patch.object(
+            patch.object(global_mcp_server_manager, "invalidate_local_upstream_m2m_tokens", new=AsyncMock()),  # test-quality-ok: quiets the process-wide manager singleton's cache drop; the DB re-read is what this test pins
+            patch.object(  # test-quality-ok: records the registry refresh applied to the process-wide manager singleton
                 global_mcp_server_manager,
                 "update_server",
                 new=AsyncMock(side_effect=lambda server: applied.append(server)),
             ),
-            patch.object(mcp_db, "get_mcp_server", new=AsyncMock(return_value=revoked_row)),
-            patch("litellm.proxy.proxy_server.prisma_client", new=MagicMock()),
+            patch.object(mcp_db, "get_mcp_server", new=AsyncMock(return_value=revoked_row)),  # test-quality-ok: stands in for the DB row read; no live prisma in this unit test
+            patch("litellm.proxy.proxy_server.prisma_client", new=MagicMock()),  # test-quality-ok: satisfies the prisma-configured guard; no live DB in this unit test
         ):
             await apply_mcp_upstream_m2m_invalidation(mcp_oauth2_mint_invalidation_key("srv-1"))
 
