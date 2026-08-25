@@ -131,6 +131,9 @@ jobs:
       - name: check_e2e_no_raw_requests
         run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
 
+      - name: check_migrations_no_data_rewrites
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
+
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
 

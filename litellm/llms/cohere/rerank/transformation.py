@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -81,6 +82,7 @@ class CohereRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("COHERE_API_KEY") or get_secret_str("CO_API_KEY") or litellm.cohere_key
