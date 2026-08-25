@@ -65,9 +65,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
 
         domains: Final = tool.get("filters") or tool
-        filters: Final = {
-            key: domains[key] for key in ("allowed_domains", "excluded_domains") if key in domains
-        }
+        filters: Final = {key: domains[key] for key in ("allowed_domains", "excluded_domains") if key in domains}
 
         if filters:
             xai_tool["filters"] = filters
