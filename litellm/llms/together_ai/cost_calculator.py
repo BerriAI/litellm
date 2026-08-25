@@ -3,6 +3,7 @@ Handles calculating cost for together ai models
 """
 
 import re
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.constants import (
@@ -16,6 +17,11 @@ from litellm.constants import (
     TOGETHER_AI_EMBEDDING_350_M,
 )
 from litellm.types.utils import CallTypes
+
+
+def has_together_registry_entry(model: str, cost_map: Mapping[str, object]) -> bool:
+    stripped: Final = model.removeprefix("together_ai/")
+    return f"together_ai/{stripped}" in cost_map
 
 
 # Extract the number of billion parameters from the model name
