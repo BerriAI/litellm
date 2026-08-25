@@ -2361,6 +2361,14 @@ async def test_concurrency_slot_released_by_post_call_failure_hook_on_the_final_
     proxy gives up and returns an error to the caller, regardless of how
     many hops ran or whether the completion-level callback was suppressed --
     it must release whatever reservation is still pending at that point.
+
+    request_data here is a distinct dict object from admission's own
+    request_kwargs, with no litellm_logging_obj at all: proxy/utils.py's
+    post_call_failure_hook pops that key off request_data before invoking
+    any callback ("Remove before callbacks iterate — not serialisable"),
+    and confirmed live, request_data is a third, unrelated object from
+    every hop's own request_kwargs by the time this fires. litellm_call_id
+    is the only identifier stable across all of them.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=1)
@@ -2370,13 +2378,13 @@ async def test_concurrency_slot_released_by_post_call_failure_hook_on_the_final_
     # This hop's admission reserves the slot; its own failure is the chain's
     # final one, so async_log_failure_event never fires for it (simulating
     # litellm's has_logged_async_failure dedup blocking the callback here).
-    request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
+    request_kwargs = {"metadata": {"tags": ["end_user_id:u1"]}, "litellm_call_id": "call-final"}
     await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
 
     await limiter.async_post_call_failure_hook(
-        request_data=request_kwargs,
+        request_data={"litellm_call_id": "call-final"},
         original_exception=Exception("all deployments failed"),
         user_api_key_dict=UserAPIKeyAuth(api_key="hash"),
     )
@@ -3397,11 +3405,12 @@ def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
 
 
 @pytest.mark.asyncio
-async def test_release_in_a_forked_task_is_visible_to_the_parent_context():
+async def test_release_in_a_forked_task_is_visible_to_the_parent_context(time_controller):
+    limiter = _make_limiter(time_controller)
     model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
 
     async def detached_release():
-        return _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
+        return await limiter._pop_pending_concurrency_keys(model_call_details)
 
     released = await asyncio.create_task(detached_release())
     assert released == ("key1",)
@@ -3411,11 +3420,12 @@ async def test_release_in_a_forked_task_is_visible_to_the_parent_context():
 
 
 @pytest.mark.asyncio
-async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot():
+async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot(time_controller):
+    limiter = _make_limiter(time_controller)
     model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
 
     async def detached_release_then_sibling_admits():
-        released = _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
+        released = await limiter._pop_pending_concurrency_keys(model_call_details)
         # A sibling hop's admission, appending to the same shared dict,
         # interleaved right after this release's snapshot was taken.
         model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD].append("key2")
@@ -3428,10 +3438,11 @@ async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_release_is_not_repeated_for_the_same_snapshot():
+async def test_release_is_not_repeated_for_the_same_snapshot(time_controller):
+    limiter = _make_limiter(time_controller)
     model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
-    first = _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
-    second = _PROXY_ModelBasedTagRateLimitsHook._pop_pending_concurrency_keys(model_call_details)
+    first = await limiter._pop_pending_concurrency_keys(model_call_details)
+    second = await limiter._pop_pending_concurrency_keys(model_call_details)
     assert first == ("key1",)
     assert second == ()
 
