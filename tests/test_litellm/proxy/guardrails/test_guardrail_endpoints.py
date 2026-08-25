@@ -36,10 +36,10 @@ from litellm.proxy.guardrails.guardrail_registry import (
 )
 from litellm.types.guardrails import (
     ApplyGuardrailRequest,
-    BaseLitellmParams,
     Guardrail,
     GuardrailInfoResponse,
     LitellmParams,
+    Mode,
 )
 
 # Mock data for testing
@@ -149,7 +149,7 @@ async def test_list_guardrails_v2_with_db_and_config(
     )
     assert db_guardrail.guardrail_name == "Test DB Guardrail"
     assert db_guardrail.guardrail_definition_location == "db"
-    assert isinstance(db_guardrail.litellm_params, BaseLitellmParams)
+    assert isinstance(db_guardrail.litellm_params, LitellmParams)
 
     # Check config guardrail
     config_guardrail = next(
@@ -157,7 +157,7 @@ async def test_list_guardrails_v2_with_db_and_config(
     )
     assert config_guardrail.guardrail_name == "Test Config Guardrail"
     assert config_guardrail.guardrail_definition_location == "config"
-    assert isinstance(config_guardrail.litellm_params, BaseLitellmParams)
+    assert isinstance(config_guardrail.litellm_params, LitellmParams)
 
 
 @pytest.mark.asyncio
@@ -446,8 +446,31 @@ async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
 
     assert response.guardrail_id == "test-db-guardrail"
     assert response.guardrail_name == "Test DB Guardrail"
-    assert isinstance(response.litellm_params, BaseLitellmParams)
+    assert isinstance(response.litellm_params, LitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from DB"}
+
+
+@pytest.mark.asyncio
+async def test_guardrail_info_response_keeps_tag_based_mode(mocker, mock_prisma_client):
+    """The response model must carry `guardrail` and the full `mode` union, tag-based mode included."""
+    tag_mode_guardrail = {
+        **MOCK_DB_GUARDRAIL,
+        "litellm_params": {
+            "guardrail": "bedrock",
+            "mode": {"tags": {"Service-Type: internal-service": "post_call"}, "default": ["pre_call", "post_call"]},
+        },
+    }
+    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=tag_mode_guardrail)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    response = await get_guardrail_info("test-db-guardrail")
+
+    assert isinstance(response.litellm_params, LitellmParams)
+    assert response.litellm_params.guardrail == "bedrock"
+    assert isinstance(response.litellm_params.mode, Mode)
+    assert response.litellm_params.mode.tags == {"Service-Type: internal-service": "post_call"}
+    assert response.litellm_params.mode.default == ["pre_call", "post_call"]
+    assert response.model_dump()["litellm_params"]["mode"] == tag_mode_guardrail["litellm_params"]["mode"]
 
 
 @pytest.mark.asyncio
@@ -470,7 +493,7 @@ async def test_get_guardrail_info_from_config(
 
     assert response.guardrail_id == "test-config-guardrail"
     assert response.guardrail_name == "Test Config Guardrail"
-    assert isinstance(response.litellm_params, BaseLitellmParams)
+    assert isinstance(response.litellm_params, LitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from config"}
 
 

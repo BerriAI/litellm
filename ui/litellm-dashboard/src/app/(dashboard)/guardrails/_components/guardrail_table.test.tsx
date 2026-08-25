@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 
 import GuardrailTable from "./guardrail_table";
-import { Guardrail, GuardrailDefinitionLocation } from "@/components/guardrails/types";
+import { Guardrail, GuardrailDefinitionLocation, GuardrailLitellmParams } from "@/components/guardrails/types";
 
 const baseProps = {
   isLoading: false,
@@ -11,10 +11,19 @@ const baseProps = {
   onGuardrailClick: vi.fn(),
 };
 
-const makeGuardrail = (overrides: Partial<Guardrail> = {}): Guardrail => ({
+type GuardrailOverrides = Partial<Omit<Guardrail, "litellm_params">> & {
+  litellm_params?: Partial<GuardrailLitellmParams>;
+};
+
+const makeGuardrail = ({ litellm_params, ...overrides }: GuardrailOverrides = {}): Guardrail => ({
   guardrail_id: "gr-1",
   guardrail_name: "PII Redaction",
-  litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
+  litellm_params: {
+    guardrail: "presidio",
+    mode: "pre_call",
+    default_on: true,
+    ...litellm_params,
+  } as GuardrailLitellmParams,
   guardrail_info: null,
   created_at: "2021-01-01",
   updated_at: "2021-01-02",

@@ -1076,7 +1076,7 @@ class GUARDRAIL_DEFINITION_LOCATION(str, Enum):
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: str | None = None
     guardrail_name: str
-    litellm_params: BaseLitellmParams | None = None
+    litellm_params: LitellmParams | None = None
     guardrail_info: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

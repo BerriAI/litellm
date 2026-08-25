@@ -34,7 +34,6 @@ from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
     ApplyGuardrailRequest,
     ApplyGuardrailResponse,
-    BaseLitellmParams,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -270,9 +269,7 @@ async def list_guardrails_v2(
                 unmasked_length=4,
                 number_of_asterisks=4,
             )
-            masked_litellm_params = (
-                BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
-            )
+            masked_litellm_params = LitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
             guardrail_configs.append(
                 GuardrailInfoResponse(
                     guardrail_id=guardrail.get("guardrail_id"),
@@ -312,7 +309,7 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_in_memory_litellm_params_typed = (
-                BaseLitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
+                LitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -1328,7 +1325,7 @@ async def get_guardrail_info(guardrail_id: str):
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+        masked_litellm_params = LitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
