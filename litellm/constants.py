@@ -48,6 +48,7 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
+REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 
 MAX_STRING_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", 4096)
 
