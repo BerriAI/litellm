@@ -215,16 +215,11 @@ class TagRateLimitEntry(BaseModel):
     # evict another entry's active counters; setting this gives the entry
     # its own dedicated partition instead.
     max_in_memory_cache_size: int | None = None
-    # Scope this entry to a subset of its own resolved `tag_id` value --
-    # e.g. hand-picking a handful of identities without needing a second
-    # tag at all. `excluded_values` is checked before `included_values`
-    # (deny overrides allow) when both happen to be set on the same entry.
-    included_values: tuple[str, ...] | None = None
-    excluded_values: tuple[str, ...] | None = None
-    # Gate this entry on a SECOND, independent tag rather than its own
-    # `tag_id` -- e.g. `enabled_for: {tag_id: company_id, values: ["1032"]}`
-    # to scope an override to one company's traffic without enumerating
-    # every one of that company's end_user_id values by hand.
+    # Gate this entry on a tag -- often a SECOND, independent tag (e.g.
+    # `enabled_for: {tag_id: company_id, values: ["1032"]}` to scope an
+    # override to one company's traffic), but `tag_id` can equally be set to
+    # this same entry's own `tag_id` to scope by a subset of its own
+    # resolved identity instead, without a second tag at all.
     # `disabled_for` is checked first (deny overrides allow) when both are
     # set. An absent gate tag never satisfies `enabled_for` (an allowlist
     # gate requires an explicit match) but never triggers `disabled_for`
@@ -289,26 +284,18 @@ class TagRateLimitEntry(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_included_and_excluded_values(self) -> "TagRateLimitEntry":
-        if self.included_values is not None and not self.included_values:
-            raise ValueError("included_values must be a non-empty list of strings when set")
-        if self.excluded_values is not None and not self.excluded_values:
-            raise ValueError("excluded_values must be a non-empty list of strings when set")
+    def _validate_apply_to_key_alias(self) -> "TagRateLimitEntry":
         if self.apply_to_key_alias is not None and not self.apply_to_key_alias:
             raise ValueError("apply_to_key_alias must be a non-empty list of strings when set")
         return self
 
     @model_validator(mode="after")
-    def _normalize_included_and_excluded_values(self) -> "TagRateLimitEntry":
+    def _normalize_apply_to_key_alias(self) -> "TagRateLimitEntry":
         # Sorted and deduplicated for the same reason as
         # TagRateLimitScope._normalize_values: only ever used for membership
         # tests, but also folded verbatim into the dedup signature, where an
         # unsorted tuple would make config-order alone decide whether two
         # deployments' entries dedup to one shared bucket.
-        if self.included_values is not None:
-            self.included_values = tuple(sorted(set(self.included_values)))  # mutable-ok: frozen before escaping
-        if self.excluded_values is not None:
-            self.excluded_values = tuple(sorted(set(self.excluded_values)))  # mutable-ok: frozen before escaping
         if self.apply_to_key_alias is not None:
             self.apply_to_key_alias = tuple(sorted(set(self.apply_to_key_alias)))  # mutable-ok: frozen before escaping
         return self

@@ -46,22 +46,20 @@ _LIMIT_UNITS: Final[tuple[_LimitUnit, ...]] = ("tokens", "requests", "dollars", 
 # to fold `enabled_for`/`disabled_for` into `_DedupSignature` below without
 # depending on TagRateLimitScope's own hashability.
 _ScopeSignature: TypeAlias = tuple[str, tuple[str, ...]] | None
-# (tag_id, name, limit, period_seconds, scope_by_key_hash, included_values,
-# excluded_values, enabled_for, disabled_for, apply_to_key_alias) -- the
-# fields that decide whether two deployments' entries are the same rate
-# limit for dedup purposes; see _build_group_limits. Two deployments that
-# agree on the first five but disagree on any scoping field are declaring
-# genuinely different policies (e.g. one excludes a user the other doesn't)
-# and must not be merged into one shared bucket -- the same class of bug
-# this signature already guards against for a plain divergent `limit`.
+# (tag_id, name, limit, period_seconds, scope_by_key_hash, enabled_for,
+# disabled_for, apply_to_key_alias) -- the fields that decide whether two
+# deployments' entries are the same rate limit for dedup purposes; see
+# _build_group_limits. Two deployments that agree on the first five but
+# disagree on any scoping field are declaring genuinely different policies
+# (e.g. one excludes a user the other doesn't) and must not be merged into
+# one shared bucket -- the same class of bug this signature already guards
+# against for a plain divergent `limit`.
 _DedupSignature: TypeAlias = tuple[
     str,
     str,
     float,
     int,
     bool,
-    tuple[str, ...] | None,
-    tuple[str, ...] | None,
     _ScopeSignature,
     _ScopeSignature,
     tuple[str, ...] | None,
@@ -213,23 +211,23 @@ def _scope_signature(scope: TagRateLimitScope | None) -> _ScopeSignature:
     return None if scope is None else (scope.tag_id, scope.values)
 
 
-def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str], key_alias: str | None) -> bool:
+def _entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str | None) -> bool:
     """
-    Applies `entry`'s own scoping fields (`included_values`/`excluded_values`/
-    `enabled_for`/`disabled_for`/`apply_to_key_alias`), evaluated in this
-    order -- deny overrides allow, checked before either allowlist:
+    Applies `entry`'s own scoping fields (`enabled_for`/`disabled_for`/
+    `apply_to_key_alias`), evaluated in this order -- deny overrides allow,
+    checked before either allowlist:
 
-      1. `excluded_values`: `tag_value` is in it -> doesn't apply.
-      2. `included_values`: `tag_value` is NOT in it -> doesn't apply.
-      3. `disabled_for`: the gate tag (a tag OTHER than `entry.tag_id`,
-         resolved via `disabled_for.tag_id`) is present and its value is in
-         `disabled_for.values` -> doesn't apply. Absent gate tag never
-         triggers this -- nothing to match against a denylist.
-      4. `enabled_for`: the gate tag is absent, or present but its value is
+      1. `disabled_for`: the gate tag (often a SECOND, independent tag, but
+         `disabled_for.tag_id` can equally be set to this entry's own
+         `tag_id` to gate on a subset of its own resolved identity) is
+         present and its value is in `disabled_for.values` -> doesn't apply.
+         Absent gate tag never triggers this -- nothing to match against a
+         denylist.
+      2. `enabled_for`: the gate tag is absent, or present but its value is
          NOT in `enabled_for.values` -> doesn't apply. Unlike `disabled_for`,
          absence DOES fail this check -- an allowlist gate requires an
          explicit match, so "not tagged at all" means "not in scope".
-      5. `apply_to_key_alias`: the calling key's own alias is absent, or
+      3. `apply_to_key_alias`: the calling key's own alias is absent, or
          present but not in the list -> doesn't apply. Same allowlist
          semantics as `enabled_for` -- a key with no alias set never
          satisfies this gate.
@@ -237,10 +235,6 @@ def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str]
     An entry with none of these fields set always applies -- this is the
     unscoped behavior every existing entry has today, unchanged.
     """
-    if entry.excluded_values is not None and tag_value in entry.excluded_values:
-        return False
-    if entry.included_values is not None and tag_value not in entry.included_values:
-        return False
     if entry.disabled_for is not None:
         disabled_gate_value: Final = _extract_identity(tags, entry.disabled_for.tag_id)
         if disabled_gate_value is not None and disabled_gate_value in entry.disabled_for.values:
@@ -256,6 +250,26 @@ def _entry_applies(entry: TagRateLimitEntry, tag_value: str, tags: Sequence[str]
 
 def _deployment_id(deployment: Mapping[str, object]) -> str | None:
     return (deployment.get("model_info") or _EMPTY_MAPPING).get("id")
+
+
+def _resolve_success_event_metadata_variable_name(
+    litellm_params_for_metadata: Mapping[str, object],
+) -> Literal["metadata", "litellm_metadata"]:
+    """`get_metadata_variable_name_from_kwargs` only checks key presence, which
+    misresolves at `async_log_success_event` time: `kwargs["litellm_params"]`
+    always carries a `litellm_metadata` key (typically `None`) alongside the
+    real, populated `metadata` dict for a standard (non
+    LITELLM_METADATA_ROUTES) request, so the key-presence check always picks
+    `litellm_metadata` there and silently reads no tags/identity at all.
+    Requiring the value to actually be a populated dict, matching
+    `_get_request_tags`'s own truthiness check in litellm_logging.py, only
+    ever prefers `litellm_metadata` when it is genuinely the field the proxy
+    wrote identity/tags into (LITELLM_METADATA_ROUTES pre-seed it before
+    admission runs, so it is always a populated dict by success time there)."""
+    litellm_metadata: Final = litellm_params_for_metadata.get("litellm_metadata")
+    if isinstance(litellm_metadata, Mapping) and litellm_metadata:
+        return "litellm_metadata"
+    return "metadata"
 
 
 def _extract_team_id(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> str | None:
@@ -378,8 +392,6 @@ def _build_group_limits(deployments: Sequence[Mapping[str, object]], unit: _Limi
                 entry.limit,
                 entry.period_seconds,
                 entry.scope_by_key_hash,
-                entry.included_values,
-                entry.excluded_values,
                 _scope_signature(entry.enabled_for),
                 _scope_signature(entry.disabled_for),
                 entry.apply_to_key_alias,
@@ -494,8 +506,6 @@ class _LimitsIndex:
                     limit.entry.limit,
                     limit.entry.period_seconds,
                     limit.entry.scope_by_key_hash,
-                    limit.entry.included_values,
-                    limit.entry.excluded_values,
                     _scope_signature(limit.entry.enabled_for),
                     _scope_signature(limit.entry.disabled_for),
                     limit.entry.apply_to_key_alias,
@@ -690,20 +700,18 @@ def _fixed_length_identity(tag_value: str) -> str:
 def _policy_fingerprint(entry: TagRateLimitEntry) -> str:
     """
     Two entries can share a `name` and `tag_id` while genuinely disagreeing
-    on `limit`, `period_seconds`, or any of the four scoping fields --
+    on `limit`, `period_seconds`, or any of the scoping fields --
     `_DedupSignature`/`resolve_any` already treat that as two distinct
     policies (see `distinct_signature_count_by_name` in `_build_group_limits`),
     so the Redis/in-memory bucket key must too, or two differently-configured
     entries that happen to share a name check and charge the identical
     counter. Hashed to a fixed-length digest for the same reason
     `_fixed_length_identity` hashes `tag_value`: an operator's own
-    `included_values`/`excluded_values` list has no length bound.
+    `enabled_for`/`disabled_for`/`apply_to_key_alias` list has no length bound.
     """
     fingerprint_source: Final = (
         entry.limit,
         entry.period_seconds,
-        entry.included_values,
-        entry.excluded_values,
         _scope_signature(entry.enabled_for),
         _scope_signature(entry.disabled_for),
         entry.apply_to_key_alias,
@@ -782,7 +790,7 @@ def _classify_check(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
-    if not _entry_applies(configured_limit.entry, tag_value, tags, key_alias):
+    if not _entry_applies(configured_limit.entry, tags, key_alias):
         return None
     key_hash: Final = (
         _extract_key_hash(request_kwargs, metadata_variable_name) if configured_limit.entry.scope_by_key_hash else None
@@ -821,7 +829,7 @@ def _increment_operation_for_limit(
     tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
     if tag_value is None:
         return None
-    if not _entry_applies(configured_limit.entry, tag_value, tags, key_alias):
+    if not _entry_applies(configured_limit.entry, tags, key_alias):
         return None
     if configured_limit.unit not in increment_by_unit:
         return None  # "requests" is accounted atomically at admission, not here
@@ -1476,23 +1484,8 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # top-level here, only nested under kwargs["litellm_params"] (see
         # Logging.update_environment_variables).
         litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(litellm_params_for_metadata)
-        # standard_logging_object.metadata.user_api_key_team_id is built from
-        # whatever litellm_logging.py resolves as "the" metadata dict for the
-        # payload, not necessarily the same metadata_variable_name-authoritative
-        # field admission itself used -- reading straight from kwargs with the
-        # exact same helper admission calls (_extract_team_id) keeps this
-        # bucket identical to the one admission already scoped the check
-        # against, on every route regardless of which field is authoritative.
+        metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
         team_id: Final = _extract_team_id(litellm_params_for_metadata, metadata_variable_name)
-        # standard_logging_object.metadata.user_api_key_hash is only ever
-        # populated when the raw value happens to look like a SHA-256 hash
-        # (see litellm_logging.py's get_standard_logging_metadata), so it
-        # silently drops to None for any key whose hash doesn't pass that
-        # shape check even though admission's own _extract_key_hash reads
-        # the same field unconditionally -- reading straight from kwargs
-        # here instead keeps this bucket identical to the one admission
-        # already scoped the check against.
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
         # model_group is the caller-visible name, which Router deliberately
@@ -1528,12 +1521,6 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         if not configured:
             return
 
-        # Resolving the field name against kwargs itself always picks the
-        # "metadata" default, so on LITELLM_METADATA_ROUTES (/v1/messages,
-        # /responses, ...) this would read the caller's native, tag-less
-        # metadata instead of the real, server-computed litellm_metadata.tags
-        # admission already used -- metadata_variable_name above is already
-        # resolved against litellm_params_for_metadata to avoid that.
         tags: Final = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
         if not tags:
             return

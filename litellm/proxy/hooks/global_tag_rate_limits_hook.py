@@ -77,6 +77,7 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _PartitionKey,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _PartitionOperations,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _policy_fingerprint,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
+    _resolve_success_event_metadata_variable_name,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching model_based_tag_rate_limits_hook's identical import
@@ -347,7 +348,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies(entry, tag_value, tags, key_alias):
+                if not _entry_applies(entry, tags, key_alias):
                     continue
                 effective_key_hash = key_hash if entry.scope_by_key_hash else None
                 if unit == "concurrency":
@@ -545,8 +546,12 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         if standard_logging_object is None:
             return
 
+        # kwargs here is Logging.model_call_details, not the router's flat
+        # request kwargs admission sees: metadata/litellm_metadata are never
+        # top-level here, only nested under kwargs["litellm_params"] (see
+        # Logging.update_environment_variables).
         litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(litellm_params_for_metadata)
+        metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
 
@@ -575,7 +580,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies(entry, tag_value, tags, key_alias):
+                if not _entry_applies(entry, tags, key_alias):
                     continue
                 increment_value = increment_by_unit[unit]
                 if increment_value == 0:

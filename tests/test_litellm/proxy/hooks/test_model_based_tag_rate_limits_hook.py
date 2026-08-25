@@ -18,7 +18,9 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
+    _BACKGROUND_TASKS,
     _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
+    _PENDING_CONCURRENCY_KEYS_FIELD,
     _bucket_key,
     _bucket_ttl_seconds,
     _build_group_limits,
@@ -29,12 +31,9 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _extract_key_hash,
     _extract_team_id,
     _fixed_length_identity,
-    _BACKGROUND_TASKS,
     _inflight_key,
     _partition_key,
-    _PENDING_CONCURRENCY_KEYS_FIELD,
     _PROXY_ModelBasedTagRateLimitsHook,
-    _queue_pending_concurrency_reservations,
 )
 from litellm.types.router import RoutingGroup, TagRateLimitEntry, TagRateLimitScope
 
@@ -105,8 +104,6 @@ def _expected_bucket_key(
     resolved_group: str | None = None,
     key_hash: str | None = None,
     limit: float = 1,
-    included_values: tuple | None = None,
-    excluded_values: tuple | None = None,
     enabled_for: dict | None = None,
     disabled_for: dict | None = None,
 ) -> str:
@@ -116,7 +113,7 @@ def _expected_bucket_key(
     tag value into a literal string -- the internal key format (hashed or
     not) is an implementation detail these tests shouldn't hardcode.
 
-    `limit` and the four scoping fields default to values that produce a
+    `limit` and the scoping fields default to values that produce a
     stable fingerprint for tests that don't care about it, but must be
     passed matching the real entry's own configuration whenever a test's
     router declares a `limit` other than 1 (or any scoping) for the entry
@@ -131,8 +128,6 @@ def _expected_bucket_key(
             tag_id=tag_id,
             limit=limit,
             period_seconds=period_seconds,
-            included_values=included_values,
-            excluded_values=excluded_values,
             enabled_for=enabled_for,
             disabled_for=disabled_for,
         ),
@@ -384,41 +379,41 @@ def test_build_group_limits_empty_when_no_deployment_configures_unit():
 
 
 # ---------------------------------------------------------------------------
-# _entry_applies -- included_values / excluded_values / enabled_for / disabled_for
+# _entry_applies -- enabled_for / disabled_for / apply_to_key_alias
 # ---------------------------------------------------------------------------
 
 
-def test_entry_applies_with_none_of_the_four_fields_set():
+def test_entry_applies_with_none_of_the_scoping_fields_set():
     entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None) is True
 
 
-def test_entry_applies_excludes_a_listed_value():
+def test_entry_applies_disabled_for_on_its_own_tag_id_excludes_a_listed_value():
+    """disabled_for's `tag_id` can be set to the entry's own tag_id, gating on
+    a subset of its own resolved identity rather than a second tag."""
     entry = TagRateLimitEntry(
-        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, excluded_values=("u1",)
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        disabled_for=TagRateLimitScope(tag_id="end_user_id", values=("u1",)),
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u2"], None) is True
 
 
-def test_entry_applies_admits_a_value_not_on_the_exclusion_list():
+def test_entry_applies_enabled_for_on_its_own_tag_id_restricts_to_a_listed_value():
+    """enabled_for's `tag_id` can likewise be set to the entry's own tag_id,
+    admitting only a hand-picked subset of its own resolved identity."""
     entry = TagRateLimitEntry(
-        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, excluded_values=("u1",)
+        name="daily",
+        tag_id="end_user_id",
+        limit=500,
+        period_seconds=86400,
+        enabled_for=TagRateLimitScope(tag_id="end_user_id", values=("u2", "u3")),
     )
-    assert _entry_applies(entry, "u2", ["end_user_id:u2"], None) is True
-
-
-def test_entry_applies_rejects_a_value_missing_from_the_inclusion_list():
-    entry = TagRateLimitEntry(
-        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, included_values=("u2", "u3")
-    )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], None) is False
-
-
-def test_entry_applies_admits_a_value_on_the_inclusion_list():
-    entry = TagRateLimitEntry(
-        name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, included_values=("u2", "u3")
-    )
-    assert _entry_applies(entry, "u2", ["end_user_id:u2", "company_id:1032"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u2"], None) is True
 
 
 def test_entry_applies_matches_an_enabled_for_gate():
@@ -429,7 +424,7 @@ def test_entry_applies_matches_an_enabled_for_gate():
         period_seconds=86400,
         enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1", "company_id:1032"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None) is True
 
 
 def test_entry_applies_skips_when_enabled_for_gate_tag_is_absent():
@@ -444,7 +439,7 @@ def test_entry_applies_skips_when_enabled_for_gate_tag_is_absent():
         period_seconds=86400,
         enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
 
 
 def test_entry_applies_skips_when_disabled_for_gate_matches():
@@ -455,7 +450,7 @@ def test_entry_applies_skips_when_disabled_for_gate_matches():
         period_seconds=86400,
         disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1", "company_id:1032"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None) is False
 
 
 def test_entry_applies_when_disabled_for_gate_tag_is_absent():
@@ -468,41 +463,41 @@ def test_entry_applies_when_disabled_for_gate_tag_is_absent():
         period_seconds=86400,
         disabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None) is True
 
 
-def test_entry_applies_excluded_values_overrides_a_matching_enabled_for_gate():
-    """Deny (identity-level excluded_values) takes effect independently of
-    whether the enabled_for gate itself matched."""
+def test_entry_applies_disabled_for_overrides_a_matching_enabled_for_gate():
+    """Deny (disabled_for) takes effect independently of whether the
+    enabled_for gate itself matched, even when both target the same tag."""
     entry = TagRateLimitEntry(
         name="daily",
         tag_id="end_user_id",
         limit=500,
         period_seconds=86400,
         enabled_for=TagRateLimitScope(tag_id="company_id", values=("1032",)),
-        excluded_values=("u1",),
+        disabled_for=TagRateLimitScope(tag_id="end_user_id", values=("u1",)),
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1", "company_id:1032"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1", "company_id:1032"], None) is False
 
 
 def test_entry_applies_with_apply_to_key_alias_unset_applies_to_every_key():
     entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], "any-key-alias") is True
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], None) is True
+    assert _entry_applies(entry, ["end_user_id:u1"], "any-key-alias") is True
+    assert _entry_applies(entry, ["end_user_id:u1"], None) is True
 
 
 def test_entry_applies_admits_a_key_alias_on_the_allowlist():
     entry = TagRateLimitEntry(
         name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_key_alias=("team-a-key",)
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], "team-a-key") is True
+    assert _entry_applies(entry, ["end_user_id:u1"], "team-a-key") is True
 
 
 def test_entry_applies_rejects_a_key_alias_missing_from_the_allowlist():
     entry = TagRateLimitEntry(
         name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_key_alias=("team-a-key",)
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], "team-b-key") is False
+    assert _entry_applies(entry, ["end_user_id:u1"], "team-b-key") is False
 
 
 def test_entry_applies_rejects_when_key_has_no_alias_but_allowlist_is_set():
@@ -511,22 +506,12 @@ def test_entry_applies_rejects_when_key_has_no_alias_but_allowlist_is_set():
     entry = TagRateLimitEntry(
         name="daily", tag_id="end_user_id", limit=500, period_seconds=86400, apply_to_key_alias=("team-a-key",)
     )
-    assert _entry_applies(entry, "u1", ["end_user_id:u1"], None) is False
+    assert _entry_applies(entry, ["end_user_id:u1"], None) is False
 
 
 # ---------------------------------------------------------------------------
 # TagRateLimitEntry / TagRateLimitScope -- scoping field validation
 # ---------------------------------------------------------------------------
-
-
-def test_tag_rate_limit_entry_rejects_empty_included_values():
-    with pytest.raises(ValidationError, match="included_values must be a non-empty list"):
-        TagRateLimitEntry(name="daily", limit=1, period_seconds=60, included_values=())
-
-
-def test_tag_rate_limit_entry_rejects_empty_excluded_values():
-    with pytest.raises(ValidationError, match="excluded_values must be a non-empty list"):
-        TagRateLimitEntry(name="daily", limit=1, period_seconds=60, excluded_values=())
 
 
 def test_tag_rate_limit_scope_rejects_empty_values():
@@ -537,25 +522,6 @@ def test_tag_rate_limit_scope_rejects_empty_values():
 def test_tag_rate_limit_entry_rejects_enabled_for_missing_values():
     with pytest.raises(ValidationError):
         TagRateLimitEntry(name="daily", limit=1, period_seconds=60, enabled_for={"tag_id": "company_id"})
-
-
-def test_tag_rate_limit_entry_normalizes_included_and_excluded_values_order_and_duplicates():
-    """
-    These fields are only ever used for membership tests (order never
-    matters for behavior) but are folded verbatim into the dedup signature
-    two deployments' entries are compared by -- an unsorted, undeduplicated
-    tuple would make config-order alone, not policy, decide whether two
-    entries dedup to one shared bucket or wrongly split into two.
-    """
-    entry = TagRateLimitEntry(
-        name="daily",
-        limit=1,
-        period_seconds=60,
-        included_values=("b", "a", "a"),
-        excluded_values=("d", "c"),
-    )
-    assert entry.included_values == ("a", "b")
-    assert entry.excluded_values == ("c", "d")
 
 
 def test_tag_rate_limit_scope_normalizes_values_order_and_duplicates():
@@ -609,10 +575,26 @@ def test_bucket_key_differs_for_same_named_entries_with_different_limits():
 def test_bucket_key_differs_for_same_named_entries_with_different_scoping_only():
     now = 0.0
     excluding_u1 = _expected_bucket_key(
-        "grp", "requests", "daily", "end_user_id", "u2", 86400, now, limit=100, excluded_values=("u1",)
+        "grp",
+        "requests",
+        "daily",
+        "end_user_id",
+        "u2",
+        86400,
+        now,
+        limit=100,
+        disabled_for={"tag_id": "end_user_id", "values": ["u1"]},
     )
     excluding_u2 = _expected_bucket_key(
-        "grp", "requests", "daily", "end_user_id", "u2", 86400, now, limit=100, excluded_values=("u2",)
+        "grp",
+        "requests",
+        "daily",
+        "end_user_id",
+        "u2",
+        86400,
+        now,
+        limit=100,
+        disabled_for={"tag_id": "end_user_id", "values": ["u2"]},
     )
     assert excluding_u1 != excluding_u2
 
@@ -622,10 +604,10 @@ def test_bucket_key_differs_for_same_named_entries_with_different_scoping_only()
 # ---------------------------------------------------------------------------
 
 
-def test_build_group_limits_per_deployment_when_excluded_values_diverge():
+def test_build_group_limits_per_deployment_when_disabled_for_diverges():
     """
     Regression test: two deployments agreeing on tag_id/limit/period_seconds
-    but declaring different excluded_values are genuinely different
+    but declaring different disabled_for scopes are genuinely different
     policies and must not be silently merged into one shared bucket -- the
     same class of bug test_build_group_limits_per_deployment_when_values_diverge
     already guards against for a plain divergent limit value.
@@ -637,7 +619,12 @@ def test_build_group_limits_per_deployment_when_excluded_values_diverge():
             {
                 "token_limits": {
                     "limits": [
-                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1"]}
+                        {
+                            "name": "daily",
+                            "limit": 500,
+                            "period_seconds": 86400,
+                            "disabled_for": {"tag_id": "end_user_id", "values": ["u1"]},
+                        }
                     ]
                 }
             },
@@ -648,7 +635,12 @@ def test_build_group_limits_per_deployment_when_excluded_values_diverge():
             {
                 "token_limits": {
                     "limits": [
-                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u2"]}
+                        {
+                            "name": "daily",
+                            "limit": 500,
+                            "period_seconds": 86400,
+                            "disabled_for": {"tag_id": "end_user_id", "values": ["u2"]},
+                        }
                     ]
                 }
             },
@@ -660,7 +652,7 @@ def test_build_group_limits_per_deployment_when_excluded_values_diverge():
     assert scopes == {("dep-1",), ("dep-2",)}
 
 
-def test_build_group_limits_chain_wide_when_excluded_values_agree():
+def test_build_group_limits_chain_wide_when_disabled_for_agrees():
     deployments = [
         _deployment(
             "grp",
@@ -668,7 +660,12 @@ def test_build_group_limits_chain_wide_when_excluded_values_agree():
             {
                 "token_limits": {
                     "limits": [
-                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1"]}
+                        {
+                            "name": "daily",
+                            "limit": 500,
+                            "period_seconds": 86400,
+                            "disabled_for": {"tag_id": "end_user_id", "values": ["u1"]},
+                        }
                     ]
                 }
             },
@@ -679,7 +676,12 @@ def test_build_group_limits_chain_wide_when_excluded_values_agree():
             {
                 "token_limits": {
                     "limits": [
-                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1"]}
+                        {
+                            "name": "daily",
+                            "limit": 500,
+                            "period_seconds": 86400,
+                            "disabled_for": {"tag_id": "end_user_id", "values": ["u1"]},
+                        }
                     ]
                 }
             },
@@ -690,13 +692,13 @@ def test_build_group_limits_chain_wide_when_excluded_values_agree():
     assert configured[0].deployment_scope is None
 
 
-def test_build_group_limits_chain_wide_when_excluded_values_agree_in_different_order():
+def test_build_group_limits_chain_wide_when_disabled_for_agrees_in_different_order():
     """
-    Two deployments declaring the identical excluded_values set, just in a
-    different config order, must dedup to one chain-wide entry -- config
-    order is not a policy difference. Relies on TagRateLimitEntry's own
-    normalization (sorting) of included_values/excluded_values at
-    construction time, not on this dedup path re-sorting them itself.
+    Two deployments declaring the identical disabled_for values set, just in
+    a different config order, must dedup to one chain-wide entry -- config
+    order is not a policy difference. Relies on TagRateLimitScope's own
+    normalization (sorting) of values at construction time, not on this
+    dedup path re-sorting them itself.
     """
     deployments = [
         _deployment(
@@ -705,7 +707,12 @@ def test_build_group_limits_chain_wide_when_excluded_values_agree_in_different_o
             {
                 "token_limits": {
                     "limits": [
-                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u1", "u2"]}
+                        {
+                            "name": "daily",
+                            "limit": 500,
+                            "period_seconds": 86400,
+                            "disabled_for": {"tag_id": "end_user_id", "values": ["u1", "u2"]},
+                        }
                     ]
                 }
             },
@@ -716,7 +723,12 @@ def test_build_group_limits_chain_wide_when_excluded_values_agree_in_different_o
             {
                 "token_limits": {
                     "limits": [
-                        {"name": "daily", "limit": 500, "period_seconds": 86400, "excluded_values": ["u2", "u1"]}
+                        {
+                            "name": "daily",
+                            "limit": 500,
+                            "period_seconds": 86400,
+                            "disabled_for": {"tag_id": "end_user_id", "values": ["u2", "u1"]},
+                        }
                     ]
                 }
             },
@@ -976,28 +988,40 @@ def test_resolve_any_keeps_divergent_signatures_across_member_model_names_separa
     assert {c.entry.limit for c in resolved} == {1, 2}
 
 
-def test_resolve_any_keeps_divergent_excluded_values_across_member_model_names_separate():
+def test_resolve_any_keeps_divergent_disabled_for_across_member_model_names_separate():
     """
-    resolve_any's own dedup key omitted included_values/excluded_values/
-    enabled_for/disabled_for, so two routing-group members agreeing on
-    tag_id/limit/period_seconds but declaring different excluded_values
+    resolve_any's own dedup key omitted enabled_for/disabled_for/
+    apply_to_key_alias, so two routing-group members agreeing on
+    tag_id/limit/period_seconds but declaring different disabled_for scopes
     collapsed to whichever model_name sorted first -- silently applying the
     wrong member's policy (and, for the discarded one, no enforcement or
     accounting at all for callers only that policy covers). This is the same
-    class of bug test_build_group_limits_per_deployment_when_excluded_values_diverge
+    class of bug test_build_group_limits_per_deployment_when_disabled_for_diverges
     already guards against for the sibling load-balanced-group dedup path.
     """
     concurrency_limits_excluding_u1 = {
         "concurrency_limits": {
             "limits": [
-                {"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300, "excluded_values": ["u1"]}
+                {
+                    "name": "inflight",
+                    "tag_id": "end_user_id",
+                    "limit": 1,
+                    "period_seconds": 300,
+                    "disabled_for": {"tag_id": "end_user_id", "values": ["u1"]},
+                }
             ]
         }
     }
     concurrency_limits_excluding_u2 = {
         "concurrency_limits": {
             "limits": [
-                {"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300, "excluded_values": ["u2"]}
+                {
+                    "name": "inflight",
+                    "tag_id": "end_user_id",
+                    "limit": 1,
+                    "period_seconds": 300,
+                    "disabled_for": {"tag_id": "end_user_id", "values": ["u2"]},
+                }
             ]
         }
     }
@@ -1009,7 +1033,7 @@ def test_resolve_any_keeps_divergent_excluded_values_across_member_model_names_s
     )
     resolved = index.resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))
     assert len(resolved) == 2
-    assert {c.entry.excluded_values for c in resolved} == {("u1",), ("u2",)}
+    assert {c.entry.disabled_for.values for c in resolved} == {("u1",), ("u2",)}
 
 
 def test_resolve_any_picks_the_same_resolved_group_regardless_of_hash_seed():
@@ -1118,7 +1142,7 @@ def _company_tiered_cap_router(default_limit: int, override_limit: int) -> "lite
                                 "limit": override_limit,
                                 "period_seconds": 86400,
                                 "enabled_for": {"tag_id": "company_id", "values": ["1032"]},
-                                "excluded_values": ["u1"],
+                                "disabled_for": {"tag_id": "end_user_id", "values": ["u1"]},
                             },
                         ]
                     }
@@ -1133,9 +1157,9 @@ async def test_filter_deployments_scoped_override_skips_for_an_excluded_identity
     """
     Company-tiered-cap example from the plan: a stricter override entry
     gated to one company via enabled_for, with a handful of named users
-    excluded from it via excluded_values. An excluded user must fall
-    through to the unscoped default entry entirely -- the override never
-    enforces or accounts for them.
+    excluded from it via disabled_for on the entry's own tag_id. An excluded
+    user must fall through to the unscoped default entry entirely -- the
+    override never enforces or accounts for them.
     """
     limiter = _make_limiter(time_controller)
     router = _company_tiered_cap_router(default_limit=3, override_limit=1)
@@ -1165,9 +1189,9 @@ async def test_filter_deployments_scoped_override_skips_for_an_excluded_identity
 async def test_filter_deployments_scoped_override_enforces_for_a_non_excluded_identity_in_scope(time_controller):
     """
     The same override applies, and enforces its own stricter limit, for a
-    company-1032 user who is not on excluded_values, proving the two
-    entries are independently enforced rather than one silently replacing
-    the other.
+    company-1032 user who is not disabled_for's excluded identity, proving
+    the two entries are independently enforced rather than one silently
+    replacing the other.
     """
     limiter = _make_limiter(time_controller)
     router = _company_tiered_cap_router(default_limit=3, override_limit=1)
@@ -1396,6 +1420,56 @@ async def test_log_success_event_increments_configured_units(time_controller):
     # not here -- async_log_success_event must not touch its bucket at all.
     request_key = _expected_bucket_key("grp", "requests", "daily", "end_user_id", "u1", 86400, now, limit=100)
     assert await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None) is None
+
+
+@pytest.mark.asyncio
+async def test_log_success_event_accounts_when_litellm_params_carries_a_null_litellm_metadata_key(time_controller):
+    """
+    kwargs at async_log_success_event time is Logging.model_call_details, not
+    the flat dict admission sees -- for a plain (non LITELLM_METADATA_ROUTES)
+    chat completion, kwargs["litellm_params"] carries a "litellm_metadata" key
+    that is always present but set to None, alongside the real, populated
+    "metadata" dict. get_metadata_variable_name_from_kwargs only checks key
+    presence, so it always resolved to "litellm_metadata" here and read no
+    tags/identity at all, silently dropping every token/dollar accounting for
+    this route shape.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+
+    kwargs = {
+        "litellm_params": {
+            "litellm_metadata": None,
+            "metadata": {"tags": ["end_user_id:u1"]},
+        },
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500000)
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
+    )
 
 
 @pytest.mark.asyncio

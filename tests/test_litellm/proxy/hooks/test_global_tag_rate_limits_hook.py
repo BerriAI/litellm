@@ -455,6 +455,53 @@ async def test_dollar_limit_accounts_usage_and_rejects_once_over(time_controller
 
 
 @pytest.mark.asyncio
+async def test_log_success_event_accounts_when_litellm_params_carries_a_null_litellm_metadata_key(
+    time_controller, monkeypatch
+):
+    """
+    kwargs at async_log_success_event time is Logging.model_call_details, not
+    the flat dict admission sees -- for a plain (non LITELLM_METADATA_ROUTES)
+    chat completion, kwargs["litellm_params"] carries a "litellm_metadata" key
+    that is always present but set to None, alongside the real, populated
+    "metadata" dict. get_metadata_variable_name_from_kwargs only checks key
+    presence, so it always resolved to "litellm_metadata" here and read no
+    tags/identity at all, silently dropping every token/dollar/key-hash/alias
+    accounting for this route shape.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "dollar_limits": {
+                "limits": [{"name": "daily_spend", "tag_id": "end_user_id", "limit": 10.0, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data = _data(["end_user_id:u1"], call_id="call-1")
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="completion")
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "litellm_params": {
+            "litellm_metadata": None,
+            "metadata": {"tags": ["end_user_id:u1"], "user_api_key": "hash"},
+        },
+        "standard_logging_object": {"total_tokens": 0, "response_cost": 12.0},
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
 async def test_dollar_limit_respects_apply_to_key_alias_at_accounting_time(time_controller, monkeypatch):
     """The entry only applies to `premium-key`; a non-listed key's spend must
     not be charged against this bucket at all."""

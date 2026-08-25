@@ -36250,10 +36250,6 @@ export interface components {
             apply_to_key_alias?: string[] | null;
             disabled_for?: components["schemas"]["TagRateLimitScope"] | null;
             enabled_for?: components["schemas"]["TagRateLimitScope"] | null;
-            /** Excluded Values */
-            excluded_values?: string[] | null;
-            /** Included Values */
-            included_values?: string[] | null;
             /** Key Ttl Seconds */
             key_ttl_seconds?: number | null;
             /** Limit */
