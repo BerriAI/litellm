@@ -464,6 +464,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Agentic", "Prompt Injection", "Tool Misuse", "MCP", "Skills"],
     providerKey: "Straiker",
   },
+  {
+    id: "agent_365",
+    name: "Microsoft Agent 365",
+    description:
+      "Microsoft Agent 365 tool-call governance: Defender threat evaluation and observability for MCP tool calls, acting on behalf of the signed-in user",
+    category: "partner",
+    logo: guardrailLogoMap["Microsoft Agent 365"],
+    tags: ["Agentic", "MCP", "Tool Misuse", "Observability"],
+    providerKey: "Agent365",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
