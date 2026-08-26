@@ -13163,6 +13163,8 @@ export interface paths {
          * @description [DEPRECATED] This endpoint is not paginated and can cause performance issues.
          *     Please use `/spend/logs/v2` instead for paginated access to spend logs.
          *
+         *     Row results are capped at 10,000 most recent entries per response.
+         *
          *     View all spend logs, if request_id is provided, only logs for that request_id will be returned
          *
          *     When start_date and end_date are provided:
