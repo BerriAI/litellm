@@ -218,7 +218,6 @@ def test_async_url_pool_preserves_credential_provider_identity(clean_redis_envir
 
 
 def test_async_url_pool_strips_userinfo_for_the_provider(clean_redis_environment):
-    """The url allowlist has to carry the provider through, and redis-py rejects it next to userinfo."""
     provider = _StubCredentialProvider()
 
     pool = get_redis_connection_pool(url="rediss://url-user:url-pass@redis-host:6379/3", credential_provider=provider)
@@ -289,7 +288,6 @@ def test_explicit_provider_skips_automatic_auth_and_callback(clean_redis_environ
     ids=["certs-without-service-account", "both-alongside-a-provider"],
 )
 def test_gcp_kwargs_never_survive_client_logic(clean_redis_environment, overrides):
-    """redis.Redis has no gcp_* parameters, so anything left behind raises TypeError on connect."""
     redis_kwargs = _get_redis_client_logic(
         host="redis-host",
         port=6379,
@@ -302,7 +300,6 @@ def test_gcp_kwargs_never_survive_client_logic(clean_redis_environment, override
 
 
 def test_provider_keeps_the_rest_of_the_url_intact(clean_redis_environment):
-    """Stripping the userinfo must not take the database path, query, or scheme with it."""
     provider = _StubCredentialProvider()
 
     redis_kwargs = _get_redis_client_logic(
@@ -322,8 +319,6 @@ def test_provider_free_url_is_left_untouched(clean_redis_environment):
 
 
 def test_async_auth_kwargs_supersedes_credentials_an_explicit_provider_replaces():
-    """The shared seam both async entry points run through: a provider outranks every other
-    credential, and redis-py rejects a provider that arrives next to a username or password."""
     provider = _StubCredentialProvider()
 
     auth_kwargs = _async_auth_kwargs(
@@ -377,8 +372,6 @@ async def test_redis_cluster_cache_test_connection_uses_shared_factory(clean_red
     recorder = MagicMock()
 
     class _StubAsyncCluster:
-        """A real base class, because the production path subclasses this at call time."""
-
         def __init__(self, **kwargs):
             recorder(**kwargs)
 
@@ -449,7 +442,6 @@ def test_redis_cache_key_does_not_serialize_connect_func():
 
 
 def test_redis_cache_key_keys_opaque_kwargs_by_identity():
-    """Any object a caller passes through must key by identity rather than crash the JSON dump."""
 
     class _Opaque:
         pass
