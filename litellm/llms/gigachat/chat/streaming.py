@@ -5,7 +5,7 @@ GigaChat Streaming Response Handler
 import json
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Any, Final
 
 from litellm.llms.gigachat.utils import convert_usage
 from litellm.types.llms.openai import (
@@ -76,7 +76,10 @@ class GigaChatModelResponseIterator:
         if chunk_finish_reason == "stop":
             usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
             if usage_data:
-                usage = convert_usage(cast("Mapping[str, int]", usage_data))  # cast-ok: dict from chunk has int values
+                validated_usage: Final = {
+                    k: int(v) for k, v in dict(usage_data).items()
+                }  # rebind-ok: dict comprehension
+                usage = convert_usage(validated_usage)
                 usage_block = ChatCompletionUsageBlock(
                     prompt_tokens=usage.prompt_tokens,
                     completion_tokens=usage.completion_tokens,
@@ -90,7 +93,7 @@ class GigaChatModelResponseIterator:
                 )
 
         return GenericStreamingChunk(
-            text=cast(str, text),
+            text=str(text),
             tool_use=tool_use,
             is_finished=chunk_finish_reason is not None,
             finish_reason=finish_reason or "",
