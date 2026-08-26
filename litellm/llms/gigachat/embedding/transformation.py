@@ -114,12 +114,12 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         """
         # Normalize input to list
         if isinstance(input, str):
-            input_list: list = [input]
+            input_list: list = [input]  # rebind-ok: locally scoped conversion
         else:
             input_list = input
 
         # Remove gigachat/ prefix from model if present
-        model = model.removeprefix("gigachat/")
+        model = model.removeprefix("gigachat/")  # rebind-ok: parameter reassignment for normalization
 
         return {
             "model": model,

@@ -1448,7 +1448,7 @@ class ProxyBaseLLMRequestProcessing:
 
         Proxy/custom headers win on key collisions.
         """
-        excluded_headers = {  # mutable-ok: set of header names to exclude from forwarding
+        excluded_headers: Final = {  # mutable-ok: set of header names to exclude from forwarding
             "transfer-encoding",
             "content-encoding",
             "set-cookie",
@@ -1461,7 +1461,7 @@ class ProxyBaseLLMRequestProcessing:
             "upgrade",
         }
 
-        merged_headers = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
+        merged_headers: Final = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
             key: value for key, value in dict(response_headers or {}).items() if key.lower() not in excluded_headers
         }
         merged_headers.update(custom_headers)
@@ -2425,9 +2425,9 @@ class ProxyBaseLLMRequestProcessing:
                     logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
 
                 if route_type == "allm_passthrough_route":
-                    streaming_headers = custom_headers
+                    streaming_headers = custom_headers  # rebind-ok: initial assignment before header merge
                     if hasattr(response, "headers"):
-                        streaming_headers = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+                        streaming_headers = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(  # rebind-ok: merge result replaces initial assignment
                             response_headers=getattr(response, "headers", None),
                             custom_headers=custom_headers,
                         )
