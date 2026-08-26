@@ -103,7 +103,6 @@ export const populateGuardrailProviderMap = (providerParamsResponse: Record<stri
   });
 };
 
-// Normalizes a form "mode" value (string, string[], or empty) into a string array
 export const toModeArray = (raw: unknown): string[] => {
   if (Array.isArray(raw)) return raw.filter((m): m is string => typeof m === "string");
   if (typeof raw === "string") return [raw];
@@ -113,7 +112,6 @@ export const toModeArray = (raw: unknown): string[] => {
 export const isTagBasedMode = (raw: unknown): raw is { tags?: Record<string, unknown>; default?: unknown } =>
   raw !== null && typeof raw === "object" && !Array.isArray(raw);
 
-// Every mode a guardrail can run in, with a tag-based mode's per-tag and default modes flattened and deduped
 export const guardrailModeList = (raw: unknown): string[] => {
   if (!isTagBasedMode(raw)) return toModeArray(raw);
   const tagged: string[] = raw.tags && typeof raw.tags === "object" ? Object.values(raw.tags).flatMap(toModeArray) : [];

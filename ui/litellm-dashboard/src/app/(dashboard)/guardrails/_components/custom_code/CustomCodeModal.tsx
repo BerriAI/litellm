@@ -31,7 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import type { GuardrailLitellmParams, GuardrailMode } from "@/components/guardrails/types";
-import { guardrailModeList } from "../guardrail_info_helpers";
+import { guardrailModeList, isTagBasedMode } from "../guardrail_info_helpers";
 
 // Code templates
 const CODE_TEMPLATES = {
@@ -190,6 +190,7 @@ interface CustomCodeModalProps {
 const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onSuccess, accessToken, editData }) => {
   const anchor = useComboboxAnchor();
   const isEditMode = !!editData;
+  const tagBasedMode = isEditMode && isTagBasedMode(editData?.litellm_params?.mode);
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
   const [defaultOn, setDefaultOn] = useState(false);
@@ -519,6 +520,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               items={MODE_OPTIONS}
               value={selectedModeOptions}
               onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
+              disabled={tagBasedMode}
               multiple
             >
               <ComboboxChips render={<div ref={anchor} />} className="w-full">
@@ -540,6 +542,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 </ComboboxList>
               </ComboboxContent>
             </Combobox>
+            {tagBasedMode && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Tag-based mode is managed in config and can&apos;t be edited here
+              </p>
+            )}
           </div>
           <div className="w-[180px]">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>

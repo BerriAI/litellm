@@ -14,6 +14,8 @@ const mockCreate = vi.mocked(createGuardrailCall);
 const mockUpdate = vi.mocked(updateGuardrailCall);
 const mockTest = vi.mocked(testCustomCodeGuardrail);
 
+const TAG_BASED_MODE_HINT = "Tag-based mode is managed in config and can't be edited here";
+
 describe("CustomCodeModal", () => {
   const onClose = vi.fn();
   const onSuccess = vi.fn();
@@ -92,6 +94,39 @@ describe("CustomCodeModal", () => {
     });
     const [, , payload] = mockUpdate.mock.calls[0] as [string, string, { litellm_params: Record<string, unknown> }];
     expect(payload.litellm_params).not.toHaveProperty("mode");
+  });
+
+  it("should lock the mode chips when editing a tag-based mode", async () => {
+    renderModal({
+      editData: {
+        guardrail_id: "g-1",
+        guardrail_name: "tagged-guardrail",
+        litellm_params: {
+          mode: { tags: { "team:internal": "post_call" }, default: ["pre_call"] },
+          default_on: false,
+          custom_code: "def apply_guardrail(): pass",
+        },
+      },
+    });
+
+    expect(await screen.findByLabelText("pre_call (Request)")).toBeInTheDocument();
+    expect(screen.getByLabelText("post_call (Response)")).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")[0]).toBeDisabled();
+    expect(screen.getByText(TAG_BASED_MODE_HINT)).toBeInTheDocument();
+  });
+
+  it("should leave the mode chips editable when editing a plain mode", async () => {
+    renderModal({
+      editData: {
+        guardrail_id: "g-1",
+        guardrail_name: "plain-guardrail",
+        litellm_params: { mode: ["pre_call"], default_on: false, custom_code: "def apply_guardrail(): pass" },
+      },
+    });
+
+    expect(await screen.findByLabelText("pre_call (Request)")).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")[0]).toBeEnabled();
+    expect(screen.queryByText(TAG_BASED_MODE_HINT)).not.toBeInTheDocument();
   });
 
   it("should keep save disabled until a guardrail name is entered", async () => {
