@@ -35,7 +35,7 @@ class SingulrGuardrailPayload(BaseModel):
     guardrail_scope: str | None = None
     messages: Sequence[Any] | None = None
     images: Sequence[str] | None = None
-    tools: Sequence[Any] | None = None  # pyright: ignore[reportExplicitAny]
+    tools: Sequence[Any] | None = None  # pyright: ignore[reportExplicitAny]  # forwards caller-supplied OpenAI tool defs verbatim
     response: Any = None  # pyright: ignore[reportExplicitAny]  # logging_only reports raw litellm callback results (ModelResponse, EmbeddingResponse, etc.)
     metadata: Mapping[str, Any] | None = None
 
