@@ -60,9 +60,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key(access_token=api_key)
+            copilot_api_key: Final = self.authenticator.get_api_key(access_token=api_key)
 
-            if not api_key:
+            if not copilot_api_key:
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
@@ -70,7 +70,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 )
 
             # Get default headers
-            default_headers: Final = get_copilot_default_headers(api_key)
+            default_headers: Final = get_copilot_default_headers(copilot_api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers: Final = {**default_headers, **headers}
