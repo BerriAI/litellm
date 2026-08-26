@@ -38,6 +38,7 @@ class Authenticator:
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
         self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
+        self._session_cache: dict[str, dict[str, Any]] = {}
 
     def get_access_token(self, access_token: str | None = None) -> str:
         """
@@ -96,6 +97,32 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
+        # When an explicit access_token is provided, isolate in memory to prevent sharing a cached key across callers
+        if access_token:
+            cached_info = self._session_cache.get(access_token)
+            if cached_info and cached_info.get("expires_at", 0) > time.time():
+                token = cached_info.get("token")
+                if token:
+                    return token
+
+            try:
+                api_key_info = self._refresh_api_key(access_token)
+                self._session_cache[access_token] = api_key_info
+                token: Final = api_key_info.get("token")
+                if token:
+                    return token
+                else:
+                    raise GetAPIKeyError(
+                        message="API key response missing token",
+                        status_code=401,
+                    )
+            except RefreshAPIKeyError as e:
+                raise GetAPIKeyError(
+                    message=f"Failed to refresh API key: {e}",
+                    status_code=401,
+                )
+
+        # Fallback to single-user local file storage when no explicit token is passed
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info = json.load(f)
@@ -115,7 +142,7 @@ class Authenticator:
             pass  # Already logged in the try block
 
         try:
-            api_key_info = self._refresh_api_key(access_token)
+            api_key_info = self._refresh_api_key()
             try:
                 self._ensure_token_dir()
                 with open(self.api_key_file, "w") as f:
@@ -194,7 +221,7 @@ class Authenticator:
         )
 
     def _ensure_token_dir(self) -> None:
-        """Ensure the token directory exists, falling back to temp directory on permission errors."""
+        """Ensure the token directory exists, falling back to secure user-isolated temp directory on permission errors."""
         try:
             if not os.path.exists(self.token_dir):
                 os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
@@ -204,7 +231,8 @@ class Authenticator:
                 self.token_dir,
                 e,
             )
-            self.token_dir = os.path.join(tempfile.gettempdir(), "litellm", "github_copilot")
+            uid = os.getuid() if hasattr(os, "getuid") else "user"
+            self.token_dir = os.path.join(tempfile.gettempdir(), f"litellm_{uid}", "github_copilot")
             try:
                 os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
             except OSError:

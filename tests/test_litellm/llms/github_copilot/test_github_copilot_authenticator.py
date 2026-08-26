@@ -35,7 +35,6 @@ class TestGitHubCopilotAuthenticator:
             assert os.path.basename(auth.token_dir) == "github_copilot"
             assert os.path.basename(auth.access_token_file) == "access-token"
             assert os.path.basename(auth.api_key_file) == "api-key.json"
-            # Lazy init: directory is NOT created eagerly on __init__
             mock_makedirs.assert_not_called()
 
     def test_ensure_token_dir(self):
@@ -59,6 +58,18 @@ class TestGitHubCopilotAuthenticator:
             auth._ensure_token_dir()
             assert auth.token_dir != original_dir
             assert "litellm" in auth.token_dir
+
+    def test_get_api_key_with_explicit_token_isolation(self, authenticator):
+        """Test that explicit tokens use isolated in-memory caching and do not read stale disk files."""
+        mock_data = {"token": "token-b-session-key", "expires_at": (datetime.now() + timedelta(hours=1)).timestamp()}
+        with (
+            patch.object(authenticator, "_refresh_api_key", return_value=mock_data) as mock_refresh,
+            patch("builtins.open") as mock_file_open,
+        ):
+            api_key = authenticator.get_api_key(access_token="user-b-custom-token")
+            assert api_key == "token-b-session-key"
+            mock_refresh.assert_called_once_with("user-b-custom-token")
+            mock_file_open.assert_not_called()
 
     def test_get_github_headers(self, authenticator):
         """Test that GitHub headers are correctly generated."""
