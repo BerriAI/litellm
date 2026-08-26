@@ -4,10 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from litellm._redis_credential_provider import (
-    ElastiCacheIAMCredentialProvider,
-    _BotocoreCredentials,
-)
+from litellm._redis_credential_provider import ElastiCacheIAMCredentialProvider
 
 
 class _FakeCredentials:
@@ -18,16 +15,6 @@ class _FakeCredentials:
 
     def get_frozen_credentials(self):
         return self
-
-
-class _FakeResolver:
-    def __init__(self, credentials: _BotocoreCredentials | None) -> None:
-        self.credentials = credentials
-        self.calls = 0
-
-    def __call__(self):
-        self.calls += 1
-        return self.credentials
 
 
 class _RotatingFakeCredentials:
@@ -44,6 +31,16 @@ class _RotatingFakeCredentials:
             secret_key="synthetic-secret",
             token="synthetic-session-token",
         )
+
+
+class _FakeResolver:
+    def __init__(self, credentials: _FakeCredentials | _RotatingFakeCredentials | None) -> None:
+        self.credentials = credentials
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        return self.credentials
 
 
 def test_elasticache_provider_signs_expected_query():
