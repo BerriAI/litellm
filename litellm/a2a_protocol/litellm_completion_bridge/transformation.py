@@ -217,6 +217,7 @@ class A2ACompletionBridgeTransformation:
                     "provider_specific_fields",
                     "reasoning_content",
                     "reasoning_items",
+                    "refusal",
                     "thinking_blocks",
                 ):
                     value = message_fields.get(field)

@@ -508,6 +508,26 @@ def test_response_transform_preserves_audio_and_logprobs():
     assert transformed["result"]["logprobs"] == {"content": []}
 
 
+def test_response_transform_preserves_refusal():
+    from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
+        A2ACompletionBridgeTransformation,
+    )
+
+    message = MagicMock()
+    message.model_dump.return_value = {
+        "content": None,
+        "refusal": "I cannot help with that request.",
+    }
+    choice = MagicMock(message=message)
+    choice.model_dump.return_value = {"finish_reason": "stop"}
+    response = MagicMock(choices=[choice], usage=None)
+
+    transformed = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(response)
+
+    assert transformed["result"]["refusal"] == "I cannot help with that request."
+    assert transformed["result"]["parts"] == [{"kind": "text", "text": ""}]
+
+
 @pytest.mark.asyncio
 async def test_handle_streaming_forwards_api_key():
     """Test that handle_streaming forwards api_key from litellm_params to acompletion."""

@@ -4,9 +4,9 @@ Tests for Pydantic AI agents transformation.
 Tests the helper functions and response transformation without making real API calls.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
     PydanticAITransformation,
@@ -94,3 +94,31 @@ class TestPydanticAITransformation:
         assert result["result"]["kind"] == "message"
         assert result["result"]["role"] == "agent"
         assert result["result"]["parts"][0]["text"] == "The answer is 4."
+
+
+@pytest.mark.asyncio
+async def test_poll_for_completion_honors_request_timeout():
+    client = MagicMock()
+    response = MagicMock()
+    response.json.return_value = {
+        "result": {"status": {"state": "working"}, "id": "task-1"}
+    }
+    response.raise_for_status.return_value = None
+    client.post = AsyncMock(return_value=response)
+
+    with patch(
+        "litellm.a2a_protocol.providers.pydantic_ai_agents.transformation.time.monotonic",
+        side_effect=[100.0, 100.0, 100.02],
+    ):
+        with pytest.raises(TimeoutError, match="0.01 seconds"):
+            await PydanticAITransformation._poll_for_completion(
+                client=client,
+                endpoint="http://example.test",
+                task_id="task-1",
+                request_id="req-1",
+                poll_interval=1.0,
+                timeout=0.01,
+            )
+
+    client.post.assert_awaited_once()
+    assert client.post.await_args.kwargs["timeout"] == pytest.approx(0.01)

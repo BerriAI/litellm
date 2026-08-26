@@ -6,6 +6,7 @@ This module provides fake streaming by converting non-streaming responses into s
 """
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Final, Protocol, cast, runtime_checkable
 from uuid import uuid4
@@ -101,6 +102,7 @@ class PydanticAITransformation:
         max_attempts: int = 30,
         poll_interval: float = 0.5,
         agent_extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, object]:
         """
         Poll for task completion using tasks/get method.
@@ -112,11 +114,20 @@ class PydanticAITransformation:
             request_id: JSON-RPC request ID
             max_attempts: Maximum polling attempts
             poll_interval: Seconds between poll attempts
+            timeout: Total polling timeout in seconds
 
         Returns:
             Completed task response
         """
+        deadline: Final[float | None] = (
+            time.monotonic() + max(timeout, 0.0) if timeout is not None else None
+        )
         for attempt in range(max_attempts):
+            remaining: float | None = (
+                deadline - time.monotonic() if deadline is not None else None
+            )
+            if remaining is not None and remaining <= 0:
+                break
             poll_request = {
                 "jsonrpc": "2.0",
                 "id": f"{request_id}-poll-{attempt}",
@@ -131,6 +142,7 @@ class PydanticAITransformation:
                     **(agent_extra_headers or {}),
                     "Content-Type": "application/json",
                 },
+                timeout=remaining,
             )
             response.raise_for_status()
             poll_data = _STR_KEY_DICT_ADAPTER.validate_python(response.json())
@@ -146,9 +158,16 @@ class PydanticAITransformation:
             elif state in ("failed", "canceled"):
                 raise Exception(f"Task {task_id} ended with state: {state}")
 
-            await asyncio.sleep(poll_interval)
+            if deadline is None:
+                await asyncio.sleep(poll_interval)
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(poll_interval, remaining))
 
-        raise TimeoutError(f"Task {task_id} did not complete within {max_attempts * poll_interval} seconds")
+        timeout_description = timeout if timeout is not None else max_attempts * poll_interval
+        raise TimeoutError(f"Task {task_id} did not complete within {timeout_description} seconds")
 
     @staticmethod
     async def _send_and_poll_raw(
@@ -203,6 +222,9 @@ class PydanticAITransformation:
             llm_provider=cast(Any, "pydantic_ai_agent"),
             params={"timeout": timeout},
         )
+        deadline: Final[float | None] = (
+            time.monotonic() + max(timeout, 0.0) if timeout is not None else None
+        )
         response: Final = await client.post(
             endpoint,
             json=a2a_request,
@@ -210,6 +232,7 @@ class PydanticAITransformation:
                 **(agent_extra_headers or {}),
                 "Content-Type": "application/json",
             },
+            timeout=timeout,
         )
         response.raise_for_status()
         response_data = _STR_KEY_DICT_ADAPTER.validate_python(response.json())
@@ -230,6 +253,7 @@ class PydanticAITransformation:
                     task_id=task_id,
                     request_id=request_id,
                     agent_extra_headers=agent_extra_headers,
+                    timeout=(max(deadline - time.monotonic(), 0.0) if deadline is not None else None),
                 )
 
         verbose_logger.info("Pydantic AI: Received completed response for request_id=%s", request_id)
