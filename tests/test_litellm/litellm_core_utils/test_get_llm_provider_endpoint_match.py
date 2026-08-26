@@ -10,13 +10,10 @@ server's real provider key to an attacker-controlled host on the
 outbound request.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     _endpoint_matches_api_base,
@@ -136,3 +133,54 @@ class TestGetLlmProviderRejectsAttackerSmuggledApiBase:
 
         assert provider == "groq"
         assert dynamic_api_key == "server-real-groq-key"
+
+
+class TestTogetherApiBaseResolvesProvider:
+    """
+    Regression for the Together host migration: both the current
+    ``api.together.ai`` host and the legacy ``api.together.xyz`` host must
+    resolve to ``together_ai`` when passed as ``api_base``. Before the fix
+    the endpoint list carried the legacy host but the provider-mapping
+    chain had no branch for it, so the match fell through with a None
+    provider and the deployment failed with "LLM Provider NOT provided".
+    """
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://api.together.ai/v1",
+            "https://api.together.xyz/v1",
+        ],
+    )
+    def test_together_api_base_resolves_to_together_ai(self, api_base, monkeypatch):
+        monkeypatch.setenv("TOGETHER_API_KEY", "together-key-from-env")
+
+        model, provider, dynamic_api_key, returned_api_base = get_llm_provider(
+            model="some-model",
+            api_base=api_base,
+        )
+
+        assert provider == "together_ai"
+        assert dynamic_api_key == "together-key-from-env"
+        assert returned_api_base == api_base
+        assert model == "some-model"
+
+    def test_explicit_api_key_beats_together_env_key(self, monkeypatch):
+        monkeypatch.setenv("TOGETHER_API_KEY", "together-key-from-env")
+
+        _, provider, dynamic_api_key, _ = get_llm_provider(
+            model="some-model",
+            api_base="https://api.together.ai/v1",
+            api_key="explicit-caller-key",
+        )
+
+        assert provider == "together_ai"
+        assert dynamic_api_key == "explicit-caller-key"
+
+    def test_together_default_api_base_is_together_ai(self, monkeypatch):
+        monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
+
+        _, provider, _, api_base = get_llm_provider(model="together_ai/some-model")
+
+        assert provider == "together_ai"
+        assert api_base == "https://api.together.ai/v1"

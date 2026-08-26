@@ -1,6 +1,5 @@
 import datetime
 import json
-import os
 import sys
 import types
 import unittest
@@ -13,8 +12,6 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-sys.path.insert(0, os.path.abspath("../.."))
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
@@ -1163,7 +1160,7 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
         # Third client should fail with exception
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Max langfuse clients reached') as exc_info:
             logger3 = LangFuseLogger(
                 langfuse_public_key="test_key_3",
                 langfuse_secret="test_secret_3",

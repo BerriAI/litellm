@@ -6,8 +6,6 @@ Run with:
 """
 
 import asyncio
-import os
-import sys
 import json
 from typing import Optional
 from uuid import uuid4
@@ -18,9 +16,6 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from a2a.types import MessageSendParams, SendMessageRequest
 
 

@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.proxy_server import ProxyStartupEvent

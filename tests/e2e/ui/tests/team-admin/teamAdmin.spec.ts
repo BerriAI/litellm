@@ -61,12 +61,12 @@ test.describe("Team Admin", () => {
     await page.getByRole("tab", { name: "Members" }).click();
     await page.getByRole("button", { name: /Add Member/i }).click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Add Team Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     // Use a dedicated invitee user so this doesn't race with the proxy-admin
     // "Invite a user" test that adds invitable@test.local to the same team.
-    await modal.locator(".ant-select").first().click();
+    await modal.getByRole("combobox").first().click();
     await page.keyboard.type("invitable-team@test.local");
 
     const emailOption = page.getByRole("option", { name: "invitable-team@test.local" }).first();
@@ -136,7 +136,7 @@ test.describe("Team Admin", () => {
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
     const keyName = `e2e-team-admin-key-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
     // Team selector — same locator pattern as the proxy-admin keys test.
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
@@ -144,9 +144,10 @@ test.describe("Team Admin", () => {
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
     await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
 
-    // Models — pick "All Team Models"
-    await page.locator(".ant-select-selection-overflow").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Team Models").click();
+    // Models — pick "All Team Models". The popup is portaled to the body, so
+    // scope the option lookup to the page.
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "All Team Models", exact: true }).click();
     await page.keyboard.press("Escape");
 
     const generate = await captureRequestBody(page, { method: "POST", urlIncludes: "/key/generate" }, async () => {

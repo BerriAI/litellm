@@ -134,9 +134,9 @@ const isEntrySuccess = (entry: GuardrailInformation): boolean => {
 };
 
 const getRiskColor = (score: number): string => {
-  if (score <= 3) return "text-green-600 bg-green-50 border-green-200";
-  if (score <= 6) return "text-amber-600 bg-amber-50 border-amber-200";
-  return "text-red-600 bg-red-50 border-red-200";
+  if (score <= 3) return "text-success bg-success/10 border-success/20";
+  if (score <= 6) return "text-warning bg-warning/10 border-warning/20";
+  return "text-destructive bg-destructive/10 border-destructive/20";
 };
 
 const getRiskScore = (entry: GuardrailInformation): number | null => {
@@ -242,11 +242,11 @@ const MatchDetailsTable = ({ matchDetails }: { matchDetails: MatchDetail[] }) =>
 
   return (
     <div className="mt-3">
-      <h5 className="text-sm font-medium mb-2 text-gray-700">Match Details ({matchDetails.length})</h5>
+      <h5 className="text-sm font-medium mb-2 text-foreground">Match Details ({matchDetails.length})</h5>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b text-left text-gray-500">
+            <tr className="border-b text-left text-muted-foreground">
               <th className="pb-2 pr-4 font-medium">Type</th>
               <th className="pb-2 pr-4 font-medium">Method</th>
               <th className="pb-2 pr-4 font-medium">Action</th>
@@ -255,23 +255,23 @@ const MatchDetailsTable = ({ matchDetails }: { matchDetails: MatchDetail[] }) =>
           </thead>
           <tbody>
             {matchDetails.map((match, idx) => (
-              <tr key={idx} className="border-b border-gray-100">
+              <tr key={idx} className="border-b border-border">
                 <td className="py-2 pr-4">{match.type}</td>
                 <td className="py-2 pr-4">
-                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-sm text-xs">
+                  <span className="px-2 py-0.5 bg-muted text-foreground rounded-sm text-xs">
                     {match.detection_method ?? "-"}
                   </span>
                 </td>
                 <td className="py-2 pr-4">
                   <span
                     className={`px-2 py-0.5 rounded text-xs font-medium ${
-                      match.action_taken === "BLOCK" ? "bg-red-100 text-red-800" : "bg-blue-50 text-blue-700"
+                      match.action_taken === "BLOCK" ? "bg-destructive/15 text-destructive" : "bg-info/10 text-info"
                     }`}
                   >
                     {match.action_taken ?? "-"}
                   </span>
                 </td>
-                <td className="py-2 font-mono text-xs text-gray-600 break-all">
+                <td className="py-2 font-mono text-xs text-muted-foreground break-all">
                   {match.category ? `[${match.category}] ` : ""}
                   {match.snippet ?? "-"}
                 </td>
@@ -290,7 +290,7 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
     <div className="mt-3">
       <div className="border rounded-lg overflow-hidden">
         <div
-          className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+          className="flex items-center justify-between p-3 bg-muted cursor-pointer hover:bg-accent"
           onClick={() => setShowRaw(!showRaw)}
         >
           <div className="flex items-center">
@@ -299,8 +299,8 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
           </div>
         </div>
         {showRaw && (
-          <div className="p-3 border-t bg-white">
-            <pre className="bg-gray-50 rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
+          <div className="p-3 border-t bg-card">
+            <pre className="bg-muted rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
           </div>
         )}
       </div>
@@ -395,7 +395,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
 
   return (
     <div>
-      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Request Lifecycle</h4>
+      <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">Request Lifecycle</h4>
       <div className="relative">
         {timeline.map((item, idx) => (
           <div key={idx} className="flex items-start gap-3 relative">
@@ -412,25 +412,25 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                   <FailCircleIcon />
                 )}
               </div>
-              {idx < timeline.length - 1 && <div className="w-0.5 bg-gray-200 grow" style={{ minHeight: "24px" }} />}
+              {idx < timeline.length - 1 && <div className="w-0.5 bg-border grow" style={{ minHeight: "24px" }} />}
             </div>
 
             {/* Content */}
             <div className="pb-4 flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className={`text-sm ${item.type === "llm" ? "text-blue-600 font-medium" : "text-gray-900"}`}>
+                <span className={`text-sm ${item.type === "llm" ? "text-info font-medium" : "text-foreground"}`}>
                   {item.label}
                 </span>
                 {item.status && (
                   <span
                     className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      item.isSuccess ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                      item.isSuccess ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
                     }`}
                   >
                     {item.status}
                   </span>
                 )}
-                <span className="text-xs text-gray-400 font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
+                <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
               </div>
             </div>
           </div>
@@ -471,10 +471,10 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
         : null;
 
   return (
-    <div className="border border-gray-200 rounded-lg bg-white">
+    <div className="border border-border rounded-lg bg-card">
       {/* Collapsed header row */}
       <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors"
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-accent transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         {/* Status icon */}
@@ -482,17 +482,17 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
         {/* Name + badges */}
         <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
-          <span className="font-semibold text-gray-900 text-sm truncate">{displayName}</span>
+          <span className="font-semibold text-foreground text-sm truncate">{displayName}</span>
 
-          <span className="px-2 py-0.5 border border-blue-200 bg-blue-50 text-blue-700 rounded-sm text-[11px] font-semibold uppercase shrink-0">
+          <span className="px-2 py-0.5 border border-info/20 bg-info/10 text-info rounded-sm text-[11px] font-semibold uppercase shrink-0">
             {modeStr}
           </span>
 
           <span
             className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${
               success
-                ? "bg-green-100 text-green-700 border border-green-200"
-                : "bg-red-100 text-red-700 border border-red-200"
+                ? "bg-success/15 text-success border border-success/20"
+                : "bg-destructive/15 text-destructive border border-destructive/20"
             }`}
           >
             {success ? "PASSED" : "FAILED"}
@@ -502,8 +502,8 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
             <span
               className={`px-2 py-0.5 rounded text-[11px] font-medium shrink-0 ${
                 totalMasked === 0
-                  ? "bg-green-50 text-green-700 border border-green-200"
-                  : "bg-amber-50 text-amber-700 border border-amber-200"
+                  ? "bg-success/10 text-success border border-success/20"
+                  : "bg-warning/10 text-warning border border-warning/20"
               }`}
             >
               {matchCountStr}
@@ -511,7 +511,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           )}
 
           {entry.confidence_score != null && (
-            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded-sm text-[11px] font-medium shrink-0">
+            <span className="px-2 py-0.5 bg-muted text-muted-foreground border border-border rounded-sm text-[11px] font-medium shrink-0">
               {(entry.confidence_score * 100).toFixed(0)}% conf
             </span>
           )}
@@ -536,9 +536,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
         {/* Right side: duration + method + chevron */}
         <div className="flex items-center gap-3 shrink-0">
-          <span className="text-sm text-gray-500 font-mono">{durationStr}</span>
+          <span className="text-sm text-muted-foreground font-mono">{durationStr}</span>
           {entry.detection_method && (
-            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 border border-gray-200 rounded-sm text-[11px] font-medium">
+            <span className="px-2 py-0.5 bg-muted text-muted-foreground border border-border rounded-sm text-[11px] font-medium">
               {entry.detection_method.split(",")[0].trim()}
             </span>
           )}
@@ -548,32 +548,32 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
       {/* Expanded details */}
       {expanded && (
-        <div className="border-t border-gray-100 px-4 py-3">
+        <div className="border-t border-border px-4 py-3">
           {/* Classification details for llm-judge */}
           {entry.classification && (
-            <div className="mb-3 bg-gray-50 rounded-lg p-3 space-y-1">
-              <h5 className="text-sm font-medium text-gray-700 mb-2">Classification</h5>
+            <div className="mb-3 bg-muted rounded-lg p-3 space-y-1">
+              <h5 className="text-sm font-medium text-foreground mb-2">Classification</h5>
               {entry.classification.category && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-gray-500">Category:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">Category:</span>
                   <span>{entry.classification.category}</span>
                 </div>
               )}
               {entry.classification.article_reference && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-gray-500">Reference:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">Reference:</span>
                   <span className="font-mono">{entry.classification.article_reference}</span>
                 </div>
               )}
               {entry.classification.confidence != null && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-gray-500">Confidence:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">Confidence:</span>
                   <span>{(entry.classification.confidence * 100).toFixed(0)}%</span>
                 </div>
               )}
               {entry.classification.reason && (
                 <div className="flex text-sm">
-                  <span className="font-medium w-1/3 text-gray-500">Reason:</span>
+                  <span className="font-medium w-1/3 text-muted-foreground">Reason:</span>
                   <span>{entry.classification.reason}</span>
                 </div>
               )}
@@ -588,10 +588,10 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           {/* Masked entity summary */}
           {totalMasked > 0 && (
             <div className="mt-3">
-              <h5 className="text-sm font-medium text-gray-700 mb-2">Masked Entities</h5>
+              <h5 className="text-sm font-medium text-foreground mb-2">Masked Entities</h5>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(entry.masked_entity_count || {}).map(([entityType, count]) => (
-                  <span key={entityType} className="px-2 py-1 bg-blue-50 text-blue-700 rounded-sm text-xs font-medium">
+                  <span key={entityType} className="px-2 py-1 bg-info/10 text-info rounded-sm text-xs font-medium">
                     {entityType}: {count}
                   </span>
                 ))}
@@ -659,23 +659,23 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-xs w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-xl border border-border shadow-xs w-full max-w-full overflow-hidden mb-6">
       {/* ── Header ─────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <div className="flex items-center gap-4">
           <ShieldIcon />
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Guardrails &amp; Policy Compliance</h3>
+            <h3 className="text-lg font-semibold text-foreground">Guardrails &amp; Policy Compliance</h3>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-sm text-gray-500">
+              <span className="text-sm text-muted-foreground">
                 {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
               </span>
-              <span className="text-gray-300">|</span>
+              <span className="text-muted-foreground">|</span>
               <span
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
                   allPassed
-                    ? "bg-green-50 text-green-700 border border-green-200"
-                    : "bg-red-50 text-red-700 border border-red-200"
+                    ? "bg-success/10 text-success border border-success/20"
+                    : "bg-destructive/10 text-destructive border border-destructive/20"
                 }`}
               >
                 {allPassed ? (
@@ -697,12 +697,12 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <div className="text-sm font-medium text-gray-900">Total: {totalOverheadMs}ms overhead</div>
+            <div className="text-sm font-medium text-foreground">Total: {totalOverheadMs}ms overhead</div>
           </div>
 
           <button
             onClick={handleExport}
-            className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground bg-card hover:bg-accent transition-colors"
           >
             <DownloadIcon />
             Export Compliance Log
@@ -712,7 +712,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
       {/* ── Compliance Panel ──────────────────────────────────── */}
       {accessToken && logEntry && (
-        <div className="px-6 py-4 border-b border-gray-100">
+        <div className="px-6 py-4 border-b border-border">
           <CompliancePanel accessToken={accessToken} logEntry={logEntry} />
         </div>
       )}
@@ -720,13 +720,15 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
       {/* ── Body: stacked ──────────────────────────────────────── */}
       <div className="flex flex-col">
         {/* Request Lifecycle */}
-        <div className="border-b border-gray-100 px-6 py-5">
+        <div className="border-b border-border px-6 py-5">
           <RequestLifecycle entries={guardrailEntries} />
         </div>
 
         {/* Evaluation Details */}
         <div className="px-6 py-5">
-          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Evaluation Details</h4>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">
+            Evaluation Details
+          </h4>
           <div className="space-y-3">
             {guardrailEntries.map((entry, index) => (
               <EvaluationCard key={`${entry.guardrail_name ?? "guardrail"}-${index}`} entry={entry} />

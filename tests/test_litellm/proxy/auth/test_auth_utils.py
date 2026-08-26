@@ -1588,7 +1588,7 @@ class TestCheckCompleteCredentialsBlocksSSRF:
             "litellm.proxy.auth.auth_utils.validate_url",
             side_effect=SSRFError(f"blocked: {blocked_url}"),
         ):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='is rejected by the SSRF guard') as exc_info:
                 check_complete_credentials(
                     {
                         "model": "gpt-4",
@@ -2144,7 +2144,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         ],
     )
     def test_endpoint_targeting_field_in_request_body_is_rejected(self, field):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: "https://attacker.example"},
                 general_settings={},
@@ -2165,7 +2165,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         # on the blocklist into an SSRF / credential-exfil hole. Verify
         # that supplying an api_key (alongside the banned param) does NOT
         # bypass the gate — it can only be opened by an admin opt-in.
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2219,6 +2219,66 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
                     "aws_bedrock_project_id": "proj_byok000000",
                 },
                 general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+class TestIsRequestBodySafeBlocksRustOptIn:
+    """``rust`` hands the whole call to the Rust core, which signs and sends
+    with its own HTTP client rather than the one the deployment configured, and
+    reports no ``post_call``. The proxy splats the request body straight into
+    the router, and ``rust`` is a litellm param, so it lands in
+    ``litellm_params`` and the gate honours it: without this entry any
+    authenticated caller picks a transport and a callback surface the admin
+    never chose. It stays a deployment decision, liftable only by the same
+    admin opt-in as the rest of the list."""
+
+    def test_rust_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="rust"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "rust": True},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_rust_under_extra_body_is_rejected(self):
+        with pytest.raises(ValueError, match="not allowed in request body"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "extra_body": {"rust": True}},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_api_key_does_not_bypass_the_rust_block(self):
+        with pytest.raises(ValueError, match="rust"):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "api_key": "sk-anything", "rust": True},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_rust(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "rust": True},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_body_without_rust_is_still_allowed(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "temperature": 0.7},
+                general_settings={},
                 llm_router=None,
                 model="gpt-4",
             )
@@ -2653,8 +2713,6 @@ class TestObservabilityCallbackBans:
             "posthog_api_url",
             "braintrust_api_key",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
             "wandb_api_key",
             "weave_project_id",
             "gcs_bucket_name",
@@ -2664,7 +2722,7 @@ class TestObservabilityCallbackBans:
         ],
     )
     def test_observability_field_in_request_body_root_is_rejected(self, field):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: "attacker-value"},
                 general_settings={},
@@ -2685,8 +2743,7 @@ class TestObservabilityCallbackBans:
             "langsmith_api_key",
             "posthog_api_url",
             "braintrust_project",
-            "phoenix_project_name",
-            "phoenix_project_name_override",
+            "user_api_key_auth_metadata",
         ],
     )
     def test_observability_field_in_metadata_dict_is_rejected(
@@ -2695,7 +2752,7 @@ class TestObservabilityCallbackBans:
         # Verifies the metadata walk: a value smuggled inside ``metadata``
         # or ``litellm_metadata`` is just as dangerous as the same field
         # at the body root, and must hit the same gate.
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2707,8 +2764,30 @@ class TestObservabilityCallbackBans:
             )
         assert field in str(exc.value)
 
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    @pytest.mark.parametrize(
+        "field",
+        ["phoenix_project_name", "phoenix_project_name_override"],
+    )
+    def test_phoenix_project_fields_in_metadata_are_accepted(self, metadata_key, field):
+        # The Phoenix integrations only honor the project from
+        # ``user_api_key_auth_metadata`` on the proxy, so the bare metadata
+        # fields are inert and must not 400 SDK-style callers that send them.
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    metadata_key: {field: "client-project"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
     def test_observability_field_in_litellm_params_metadata_is_rejected(self):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request: turn_off_message_logging is not allowed') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2735,7 +2814,7 @@ class TestObservabilityCallbackBans:
         # the ``isinstance(dict)`` guard.
         import json
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request: langfuse_host is not allowed in request') as exc:
             is_request_body_safe(
                 request_body={
                     "model": "gpt-4",
@@ -2808,7 +2887,7 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
         lambda model, param, request_body_value, llm_router: param == "api_base",
     )
 
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError, match='Rejected Request: langfuse_host is not allowed in request') as exc:
         is_request_body_safe(
             request_body={
                 "model": "gpt-4",
@@ -2879,7 +2958,7 @@ class TestPricingInjectionBlocked:
         ],
     )
     def test_pricing_field_rejected_by_default(self, field, value):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Rejected Request') as exc:
             is_request_body_safe(
                 request_body={"model": "gpt-4", field: value},
                 general_settings={},

@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -33,6 +34,10 @@ else:
     LiteLLMLoggingObj = Any
 
 
+class RunwayMLError(BaseLLMException):
+    pass
+
+
 class _RunwayTaskResponse(TypedDict, total=False):
     id: ReadOnly[str]
     status: ReadOnly[str]
@@ -41,7 +46,8 @@ class _RunwayTaskResponse(TypedDict, total=False):
     output: ReadOnly[Sequence[str] | str]
     failureCode: ReadOnly[str]
     failure: ReadOnly[str]
-    progress: ReadOnly[int]
+    progress: ReadOnly[float]
+    estimatedCost: ReadOnly[Mapping[str, float]]
 
 
 class _VideoObjectData(TypedDict, extra_items=object):
@@ -56,12 +62,54 @@ def _parse_runway_task_response(raw_response: httpx.Response) -> _RunwayTaskResp
     return response_data
 
 
+_USD_PER_CREDIT: Final = 0.01
+
+_RESOLUTION_AREA_TIERS: Final[tuple[tuple[int, str], ...]] = (
+    (600_000, "480p"),
+    (1_500_000, "720p"),
+    (4_000_000, "1080p"),
+)
+
+
+def _ratio_to_resolution(ratio: object) -> str | None:
+    if not isinstance(ratio, str) or ":" not in ratio:
+        return None
+    width_str, _, height_str = ratio.partition(":")
+    if not (width_str.isdigit() and height_str.isdigit()):
+        return None
+    area: Final = int(width_str) * int(height_str)
+    return next((label for threshold, label in _RESOLUTION_AREA_TIERS if area < threshold), "4k")
+
+
+def _duration_seconds(seconds: str | None) -> float | None:
+    if not seconds:
+        return None
+    try:
+        return float(seconds)
+    except ValueError:
+        return None
+
+
+def _estimated_cost_usd(response_data: _RunwayTaskResponse) -> float | None:
+    estimated_cost: Final = response_data.get("estimatedCost")
+    if not isinstance(estimated_cost, Mapping):
+        return None
+    credits: Final = estimated_cost.get("credits")
+    if not isinstance(credits, (int, float)):
+        return None
+    return float(credits) * _USD_PER_CREDIT
+
+
+def _progress_percent(progress: float) -> int:
+    return min(100, max(0, round(float(progress) * 100)))
+
+
 class RunwayMLVideoConfig(BaseVideoConfig):
     """
     Configuration class for RunwayML video generation.
 
     RunwayML uses a task-based API where:
-    1. POST /v1/image_to_video creates a task
+    1. POST /v1/text_to_video, /v1/image_to_video, or /v1/video_to_video creates a task
     2. The task returns immediately with a task ID
     3. Client must poll or wait for task completion
     """
@@ -195,31 +243,36 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         """
         Transform the video creation request for RunwayML API.
 
-        RunwayML expects:
-        {
-            "model": "gen4_turbo",
-            "promptImage": "https://... or data:image/...",
-            "promptText": "description",
-            "ratio": "1280:720",
-            "duration": 5
-        }
+        RunwayML has three generation endpoints discriminated by which input is
+        present, and each request body rejects unknown fields:
+        - /text_to_video: promptText only (rejects promptImage)
+        - /image_to_video: promptImage (+ optional promptText)
+        - /video_to_video: promptVideo or videoUri (rejects promptImage)
         """
-        # Build the request data
+        merged_params: Final = MappingProxyType(
+            {
+                "model": model,
+                "promptText": prompt,
+                **video_create_optional_request_params,
+            }
+        )
+
+        endpoint: Final = self._select_generation_endpoint(merged_params)
+
         request_data: Final[dict[str, object]] = {
-            "model": model,
-            "promptText": prompt,
+            key: value for key, value in merged_params.items() if endpoint == "image_to_video" or key != "promptImage"
         }
 
-        # Add mapped parameters
-        request_data.update(video_create_optional_request_params)
-
-        # RunwayML uses JSON body, no files multipart
         files_list: Final[RequestFiles] = []
 
-        # Append the specific endpoint for video generation
-        full_api_base: Final = f"{api_base}/image_to_video"
+        return request_data, files_list, f"{api_base}/{endpoint}"
 
-        return request_data, files_list, full_api_base
+    def _select_generation_endpoint(self, request_data: Mapping[str, object]) -> str:
+        if request_data.get("promptVideo") is not None or request_data.get("videoUri") is not None:
+            return "video_to_video"
+        if request_data.get("promptImage") is not None:
+            return "image_to_video"
+        return "text_to_video"
 
     def transform_video_create_response(
         self,
@@ -285,13 +338,15 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
 
         # Add usage data for cost tracking
-        usage_data: Final = {}
-        if video_obj and hasattr(video_obj, "seconds") and video_obj.seconds:
-            try:
-                usage_data["duration_seconds"] = float(video_obj.seconds)
-            except (ValueError, TypeError):
-                pass
-        video_obj.usage = usage_data
+        video_obj.usage = {
+            key: value
+            for key, value in (
+                ("duration_seconds", _duration_seconds(video_obj.seconds)),
+                ("video_resolution", _ratio_to_resolution(request_data.get("ratio") if request_data else None)),
+                ("provider_reported_cost_usd", _estimated_cost_usd(response_data)),
+            )
+            if value is not None
+        }
 
         return video_obj
 
@@ -581,8 +636,9 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         if "completedAt" in response_data:
             video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
 
-        if "progress" in response_data:
-            video_data["progress"] = response_data["progress"]
+        progress_value: Final = response_data.get("progress")
+        if progress_value is not None:
+            video_data["progress"] = _progress_percent(progress_value)
 
         if "failureCode" in response_data or "failure" in response_data:
             video_data["error"] = {
@@ -616,6 +672,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         api_base,
         litellm_params,
         headers,
+        video_file=None,
         extra_body=None,
         prefetched_source_data=None,
     ):
@@ -646,9 +703,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raise NotImplementedError("video extension is not supported for RunwayML")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        from ...base_llm.chat.transformation import BaseLLMException
-
-        raise BaseLLMException(
+        return RunwayMLError(
             status_code=status_code,
             message=error_message,
             headers=headers,

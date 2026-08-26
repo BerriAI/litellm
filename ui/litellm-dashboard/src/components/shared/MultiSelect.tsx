@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Combobox,
   ComboboxChip,
+  ComboboxClear,
   ComboboxChips,
   ComboboxChipsInput,
   ComboboxContent,
@@ -18,9 +19,11 @@ export interface MultiSelectOption {
   label: string;
   value: string;
   description?: string;
+  disabled?: boolean;
 }
 
 interface MultiSelectProps {
+  id?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -31,6 +34,12 @@ interface MultiSelectProps {
   allowCustomValues?: boolean;
   className?: string;
 }
+
+const splitOnCommas = (raw: string): string[] =>
+  raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
 
 const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
@@ -43,6 +52,7 @@ const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
 };
 
 export function MultiSelect({
+  id,
   options,
   value = [],
   onValueChange,
@@ -75,15 +85,22 @@ export function MultiSelect({
       ? [...safeOptions, { label: `Create "${customOption}"`, value: customOption }]
       : safeOptions;
 
+  const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
+
+  const handleValueChange = (selected: MultiSelectOption[]) => {
+    const next = allowCustomValues
+      ? selected.flatMap((option) => (value.includes(option.value) ? [option.value] : splitOnCommas(option.value)))
+      : selected.map((option) => option.value);
+    onValueChange(Array.from(new Set(next)));
+    setQuery("");
+  };
+
   return (
     <Combobox
       multiple
       items={items}
       value={selectedOptions}
-      onValueChange={(selected: MultiSelectOption[]) => {
-        onValueChange(selected.map((option) => option.value));
-        setQuery("");
-      }}
+      onValueChange={handleValueChange}
       inputValue={query}
       onInputValueChange={setQuery}
       isItemEqualToValue={(option: MultiSelectOption, selected: MultiSelectOption) => option.value === selected.value}
@@ -101,10 +118,12 @@ export function MultiSelect({
                 </ComboboxChip>
               ))}
               <ComboboxChipsInput
+                id={id}
                 placeholder={loading ? "Loading..." : placeholder}
                 className="min-w-24"
-                aria-label={placeholder}
+                aria-label={placeholder || undefined}
               />
+              {canClear(selected) && <ComboboxClear className="ml-auto self-center" aria-label="Clear all" />}
             </>
           )}
         </ComboboxValue>
@@ -113,7 +132,7 @@ export function MultiSelect({
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(option: MultiSelectOption) => (
-            <ComboboxItem key={option.value} value={option}>
+            <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
               <span className="min-w-0">
                 <span className="block truncate">{option.label}</span>
                 {option.description && (

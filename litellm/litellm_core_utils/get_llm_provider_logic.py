@@ -272,6 +272,14 @@ def get_llm_provider(
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
+                    elif endpoint == "api.together.ai/v1" or endpoint == "api.together.xyz/v1":
+                        custom_llm_provider = "together_ai"
+                        dynamic_api_key = api_key or (
+                            get_secret_str("TOGETHER_API_KEY")
+                            or get_secret_str("TOGETHER_AI_API_KEY")
+                            or get_secret_str("TOGETHERAI_API_KEY")
+                            or get_secret_str("TOGETHER_AI_TOKEN")
+                        )
                     elif endpoint == "ollama.com":
                         custom_llm_provider = "ollama"
                         dynamic_api_key = get_secret_str("OLLAMA_API_KEY")
@@ -352,6 +360,9 @@ def get_llm_provider(
                     elif endpoint == litellm.ApodexChatConfig.API_BASE_URL:
                         custom_llm_provider = "apodex"  # rebind-ok: dispatch chain resolves in place
                         dynamic_api_key = litellm.ApodexChatConfig.get_api_key()
+                    elif (json_provider := JSONProviderRegistry.get_by_base_url(endpoint)) is not None:
+                        custom_llm_provider = json_provider.slug
+                        dynamic_api_key = api_key if api_key is not None else get_secret_str(json_provider.api_key_env)
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")
@@ -707,7 +718,7 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.ZAIChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "together_ai":
-        api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.xyz/v1"
+        api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.ai/v1"
         dynamic_api_key = api_key or (
             get_secret_str("TOGETHER_API_KEY")
             or get_secret_str("TOGETHER_AI_API_KEY")

@@ -3,7 +3,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
@@ -56,7 +56,7 @@ export function ProjectsPage() {
   return (
     <div className="p-6 px-12">
       <div className="mb-4">
-        <PageHeader
+        <LegacyPageHeader
           title="Projects"
           subtitle="Manage projects within your teams"
           actions={

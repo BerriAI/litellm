@@ -28,4 +28,25 @@ describe("PromptEditorHeader", () => {
     expect(onBack).toHaveBeenCalledOnce();
     expect(onSave).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["development", "Development"],
+    ["staging", "Staging"],
+    ["production", "Production"],
+  ])("shows the %s environment by its human label", (environment, label) => {
+    render(
+      <PromptEditorHeader
+        promptName="welcome"
+        onNameChange={vi.fn()}
+        onBack={vi.fn()}
+        onSave={vi.fn()}
+        isSaving={false}
+        accessToken="token"
+        environment={environment}
+        onEnvironmentChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveTextContent(label);
+  });
 });

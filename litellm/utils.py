@@ -65,6 +65,7 @@ from litellm.constants import (
     DEFAULT_EMBEDDING_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
     INITIAL_RETRY_DELAY,
@@ -2110,7 +2111,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
 
 def decode(
     model="",
-    tokens: list[int] = [],
+    tokens: Sequence[int] = (),
     custom_tokenizer: dict | None = None,
     skip_special_tokens: bool = True,
 ):
@@ -2132,7 +2133,7 @@ def decode(
     return dec
 
 
-def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: list[int]) -> list[int]:
+def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: Sequence[int]) -> Sequence[int]:
     try:
         added_tokens_decoder: Final = tokenizer.get_added_tokens_decoder()
     except Exception:
@@ -2556,6 +2557,14 @@ def supports_prompt_caching(model: str, custom_llm_provider: str | None = None) 
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_caching",
+    )
+
+
+def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_prompt_cache_breakpoint",
     )
 
 
@@ -3972,6 +3981,8 @@ def get_optional_params(
     thinking: AnthropicThinkingParam | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
     safety_identifier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
     base_model: str | None = None,
     **kwargs,
 ):
@@ -4119,7 +4130,7 @@ def get_optional_params(
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
     elif custom_llm_provider == "together_ai":
-        optional_params = litellm.TogetherAIConfig().map_openai_params(
+        optional_params = litellm.TogetherAIChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -5234,7 +5245,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
     return True
 
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):
@@ -5242,6 +5253,7 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     combined_model_name: str
     stripped_model_name: str
     combined_stripped_model_name: str
+    provider_prefixed_model_name: ReadOnly[str]
     custom_llm_provider: str
 
 
@@ -5269,6 +5281,7 @@ def _get_model_info_from_generalization(
         potential_model_names["split_model"],
         potential_model_names["combined_stripped_model_name"],
         potential_model_names["stripped_model_name"],
+        potential_model_names["provider_prefixed_model_name"],
     )
     if any(_get_model_cost_key(candidate) is not None for candidate in candidates):
         return None
@@ -5293,6 +5306,7 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_model_name = model
         stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = stripped_model_name
+        provider_prefixed_model_name = model
     elif custom_llm_provider and model.startswith(
         custom_llm_provider + "/"
     ):  # handle case where custom_llm_provider is provided and model starts with custom_llm_provider
@@ -5300,11 +5314,13 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_model_name = model
         stripped_model_name = _strip_model_name(model=split_model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
+        provider_prefixed_model_name = f"{custom_llm_provider}/{model}"
     else:
         split_model = model
         combined_model_name = f"{custom_llm_provider}/{model}"
         stripped_model_name = _strip_model_name(model=model, custom_llm_provider=custom_llm_provider)
         combined_stripped_model_name = f"{custom_llm_provider}/{stripped_model_name}"
+        provider_prefixed_model_name = combined_model_name
 
     if custom_llm_provider in ("bedrock", "bedrock_converse"):
         from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
@@ -5316,6 +5332,7 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         combined_model_name=combined_model_name,
         stripped_model_name=stripped_model_name,
         combined_stripped_model_name=combined_stripped_model_name,
+        provider_prefixed_model_name=provider_prefixed_model_name,
         custom_llm_provider=cast(str, custom_llm_provider),
     )
 
@@ -5424,6 +5441,7 @@ def _get_model_info_helper(
         combined_model_name: Final = potential_model_names["combined_model_name"]
         stripped_model_name: Final = potential_model_names["stripped_model_name"]
         combined_stripped_model_name: Final = potential_model_names["combined_stripped_model_name"]
+        provider_prefixed_model_name: Final = potential_model_names["provider_prefixed_model_name"]
         split_model: Final = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         model_cost_custom_llm_provider: Final = custom_llm_provider
@@ -5470,6 +5488,7 @@ def _get_model_info_helper(
                 supports_tool_choice=None,
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
+                supports_prompt_cache_breakpoint=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
             )
@@ -5481,6 +5500,10 @@ def _get_model_info_helper(
             3. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-opus-4-8" in litellm.model_cost if model="bedrock/au.anthropic.claude-opus-4-8"
             4. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
             5. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
+            6. 'provider_prefixed_model_name' in litellm.model_cost, for providers whose own model ids repeat the
+               litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
+               custom_llm_provider="perplexity", where 1-5 all read the leading "perplexity/" as the litellm prefix
+               and strip it. Tried last so no model that already resolves through 1-5 can change.
             """
 
             _model_info: dict[str, Any] | None = None
@@ -5536,6 +5559,16 @@ def _get_model_info_helper(
                         custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(provider_prefixed_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
 
             if _model_info is None:
                 generalization: Final = _get_model_info_from_generalization(
@@ -5578,6 +5611,7 @@ def _get_model_info_helper(
                 input_cost_per_token=_input_cost_per_token,
                 input_cost_per_token_flex=_model_info.get("input_cost_per_token_flex", None),
                 input_cost_per_token_priority=_model_info.get("input_cost_per_token_priority", None),
+                input_cost_per_token_ultrafast=_model_info.get("input_cost_per_token_ultrafast", None),
                 cache_creation_input_token_cost=_model_info.get("cache_creation_input_token_cost", None),
                 cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_creation_input_token_cost_above_200k_tokens", None
@@ -5594,6 +5628,9 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
                 cache_creation_input_token_cost_priority=_model_info.get(
                     "cache_creation_input_token_cost_priority", None
+                ),
+                cache_creation_input_token_cost_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_ultrafast", None
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
@@ -5617,6 +5654,7 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
                 cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
+                cache_read_input_token_cost_ultrafast=_model_info.get("cache_read_input_token_cost_ultrafast", None),
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
@@ -5647,12 +5685,14 @@ def _get_model_info_helper(
                 output_cost_per_token=_output_cost_per_token,
                 output_cost_per_token_flex=_model_info.get("output_cost_per_token_flex", None),
                 output_cost_per_token_priority=_model_info.get("output_cost_per_token_priority", None),
+                output_cost_per_token_ultrafast=_model_info.get("output_cost_per_token_ultrafast", None),
                 regional_processing_uplift_multiplier_eu=_model_info.get(
                     "regional_processing_uplift_multiplier_eu", None
                 ),
                 regional_processing_uplift_multiplier_us=_model_info.get(
                     "regional_processing_uplift_multiplier_us", None
                 ),
+                regional_endpoint_uplift_multiplier=_model_info.get("regional_endpoint_uplift_multiplier", None),
                 output_cost_per_audio_token=_model_info.get("output_cost_per_audio_token", None),
                 output_cost_per_character=_model_info.get("output_cost_per_character", None),
                 output_cost_per_reasoning_token=_model_info.get("output_cost_per_reasoning_token", None),
@@ -5686,6 +5726,8 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
+                output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
+                output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
@@ -5702,6 +5744,7 @@ def _get_model_info_helper(
                 supports_tool_choice=_model_info.get("supports_tool_choice", None),
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
+                supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
@@ -5712,6 +5755,8 @@ def _get_model_info_helper(
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_adaptive_thinking=_model_info.get("supports_adaptive_thinking", None),
+                supports_legacy_thinking=_model_info.get("supports_legacy_thinking", None),
+                thinking_always_on=_model_info.get("thinking_always_on", None),
                 supports_tool_search=_model_info.get("supports_tool_search", None),
                 supports_mid_conversation_system=_model_info.get("supports_mid_conversation_system", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
@@ -5836,6 +5881,7 @@ def get_model_info(
             supports_function_calling: Optional[bool]
             supports_tool_choice: Optional[bool]
             supports_prompt_caching: Optional[bool]
+            supports_prompt_cache_breakpoint: Optional[bool]
             supports_audio_input: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
@@ -6480,24 +6526,6 @@ def validate_environment(
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
     return litellm.acompletion(*args, **kwargs)
-
-
-def prompt_token_calculator(model, messages):
-    # use tiktoken or anthropic's tokenizer depending on the model
-    text: Final = " ".join(message["content"] for message in messages)
-    num_tokens = 0
-    if "claude" in model:
-        try:
-            import anthropic
-        except Exception:
-            Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
-
-        anthropic_obj: Final = Anthropic()
-        num_tokens = anthropic_obj.count_tokens(text)
-    else:
-        num_tokens = len(_get_default_encoding().encode(text))
-    return num_tokens
 
 
 def valid_model(model):
@@ -7630,12 +7658,20 @@ def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
 
 
 def validate_and_fix_thinking_param(
-    thinking: AnthropicThinkingParam | None,
+    thinking: AnthropicThinkingParam | bool | None,
 ) -> AnthropicThinkingParam | None:
     """
-    Normalizes camelCase keys in the thinking param to snake_case.
+    Coerces bool thinking values (True becomes enabled with the default medium budget, False becomes None)
+    and normalizes camelCase keys in the thinking param to snake_case.
     Handles clients that send budgetTokens instead of budget_tokens.
     """
+    if thinking is True:
+        return cast(
+            "AnthropicThinkingParam",
+            {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET},
+        )
+    if thinking is False:
+        return None
     if thinking is None or not isinstance(thinking, dict):
         return thinking
     normalized: Final = dict(thinking)
@@ -7705,17 +7741,12 @@ def validate_chat_completion_tool_choice(
 
     Prevents user errors like: https://github.com/BerriAI/litellm/issues/7483
     """
-    from litellm.types.llms.openai import (
-        ChatCompletionToolChoiceObjectParam,
-        ChatCompletionToolChoiceStringValues,
-    )
-
     if tool_choice is None or isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
-        # Handle Cursor IDE format: {"type": "auto"} -> return as-is
-        if tool_choice.get("type") in ["auto", "none", "required"] and "function" not in tool_choice:
-            return tool_choice
+        tool_choice_type = tool_choice.get("type")
+        if tool_choice_type in ("auto", "none", "required") and "function" not in tool_choice:
+            return tool_choice_type
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
@@ -7867,7 +7898,7 @@ class ProviderConfigManager:
             LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
             LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
-            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
+            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIChatConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
@@ -8593,6 +8624,12 @@ class ProviderConfigManager:
             )
 
             return BedrockPassthroughConfig()
+        elif LlmProviders.BEDROCK_MANTLE == provider:
+            from litellm.llms.bedrock_mantle.passthrough.transformation import (
+                BedrockMantlePassthroughConfig,
+            )
+
+            return BedrockMantlePassthroughConfig()
         elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.passthrough.transformation import (
                 VLLMPassthroughConfig,
@@ -8751,6 +8788,12 @@ class ProviderConfigManager:
             )
 
             return S3VectorsVectorStoreConfig()
+        elif litellm.LlmProviders.VALKEY == provider:
+            from litellm.llms.valkey.vector_stores.transformation import (
+                ValkeyVectorStoreConfig,
+            )
+
+            return ValkeyVectorStoreConfig()
         return None
 
     @staticmethod
@@ -9073,6 +9116,8 @@ class ProviderConfigManager:
         from litellm.llms.apiserpent.search.transformation import (
             APISerpentSearchConfig,
         )
+        from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
+        from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
@@ -9111,7 +9156,9 @@ class ProviderConfigManager:
             SearchProviders.YOU_COM: YouComSearchConfig,
             SearchProviders.APISERPENT: APISerpentSearchConfig,
             SearchProviders.TINYFISH: TinyfishSearchConfig,
+            SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
+            SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

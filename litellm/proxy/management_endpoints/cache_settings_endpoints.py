@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._redis import _redis_kwargs_from_environment
 from litellm._uuid import uuid
@@ -44,7 +43,8 @@ router: Final = APIRouter()
 
 
 class _CacheConfigRow(Protocol):
-    cache_settings: str | Mapping[str, object] | None
+    @property
+    def cache_settings(self) -> str | Mapping[str, object] | None: ...
 
 
 class _CacheConfigTable(Protocol):
@@ -299,13 +299,14 @@ async def _emit_cache_settings_audit_log(
     exception.  Captured under ``LiteLLM_CacheConfig`` so the row
     co-locates with the table it mutates.
     """
-    if litellm.store_audit_logs is not True:
-        return
-
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(

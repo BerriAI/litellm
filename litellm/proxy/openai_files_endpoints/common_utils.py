@@ -4,12 +4,23 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
+    get_args,
+    runtime_checkable,
+)
 
+from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
 )
+from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
@@ -20,6 +31,50 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
+
+
+MAX_FILE_LIST_LIMIT: Final = 10000
+
+FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
+
+
+def validate_file_list_limit(limit: int | None) -> None:
+    """Reject a ``limit`` outside the range OpenAI documents for GET /v1/files."""
+    if limit is None or 1 <= limit <= MAX_FILE_LIST_LIMIT:
+        return
+    bound, expected, openai_code = (
+        ("below minimum", ">= 1", "integer_below_min_value")
+        if limit < 1
+        else ("above maximum", f"<= {MAX_FILE_LIST_LIMIT}", "integer_above_max_value")
+    )
+    raise ProxyException(
+        message=f"Invalid 'limit': integer {bound} value. Expected a value {expected}, but got {limit} instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code=openai_code,
+    )
+
+
+def validate_file_list_purpose(purpose: str | None) -> None:
+    """Reject a ``purpose`` filter no upload to this proxy could have stored.
+
+    An unknown purpose matches no file, so filtering on it would report an
+    empty page for what is really a bad request. Rejecting it keeps a managed
+    listing consistent with the upload route, which refuses the same values
+    against this same set. The provider-backed listings do not: they pass
+    ``purpose`` upstream, so a purpose OpenAI accepts before it is added here
+    is rejected on the managed path while still working on those.
+    """
+    valid_purposes: Final = get_args(OpenAIFilesPurpose)
+    if purpose is None or purpose in valid_purposes:
+        return
+    raise ProxyException(
+        message=f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+        type="invalid_request_error",
+        param="purpose",
+        code=400,
+    )
 
 
 @runtime_checkable
@@ -1137,7 +1192,7 @@ async def ensure_batch_response_managed_file_ids(
     prisma_client,
     verbose_proxy_logger,
     user_api_key_dict=None,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     unified_batch_id: str | Literal[False] | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
@@ -1224,11 +1279,10 @@ async def get_batch_from_database(
             return None, None
 
         # Parse the batch object from database
-        batch_data: Final = (
-            json.loads(db_batch_object.file_object)
-            if isinstance(db_batch_object.file_object, str)
-            else db_batch_object.file_object
+        file_object: Final = cast(  # cast-ok: prisma types the Json column as str; reads return the decoded value
+            "Mapping[str, object] | str", db_batch_object.file_object
         )
+        batch_data: Final = json.loads(file_object) if isinstance(file_object, str) else file_object
         response: Final = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
@@ -1288,6 +1342,25 @@ def batch_cost_poller_is_active() -> bool:
         return False
 
 
+def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
+    """Whether a "completed" batch may be retired from cost recovery.
+
+    ``batch_processed=True`` is the sole re-pickup gate for CheckBatchCost's
+    cost-recovery poller, so setting it retires the batch permanently. A batch can
+    reach ``status="completed"`` while ``output_file_id`` is still ``None`` (the
+    provider response briefly lags before the output id populates). Retiring in that
+    window loses the spend record forever. Retire only once we can prove there is
+    nothing left to recover: the output file has actually arrived, or the provider
+    reports no successful request lines. When counts are unknown, stay eligible so
+    the next poller pass revisits it. (#37713)
+    """
+    if getattr(response, "output_file_id", None) is not None:
+        return True
+    request_counts = getattr(response, "request_counts", None)
+    completed = getattr(request_counts, "completed", None)
+    return completed == 0
+
+
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
@@ -1295,7 +1368,7 @@ async def update_batch_in_database(
     managed_files_obj,
     prisma_client,
     verbose_proxy_logger,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     operation: str = "update",
     user_api_key_dict=None,
     poller_owns_accounting: bool | None = None,
@@ -1362,14 +1435,14 @@ async def update_batch_in_database(
         # Normalize status for database storage
         db_status: Final = response.status if response.status != "completed" else "complete"
 
-        update_data: Final[dict] = {
+        update_data: Final[dict[str, object]] = {
             "status": db_status,
             "file_object": response.model_dump_json(),
             "updated_at": litellm.utils.get_utc_datetime(),
         }
 
         poller_owns: Final = batch_cost_poller_is_active() if poller_owns_accounting is None else poller_owns_accounting
-        if db_status == "complete" and not poller_owns:
+        if db_status == "complete" and not poller_owns and _completed_batch_safe_to_retire(response):
             update_data["batch_processed"] = True
 
         try:

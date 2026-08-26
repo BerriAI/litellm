@@ -163,11 +163,6 @@ class AnthropicResponsesStreamWrapper:
                         "input": {},
                     },
                 )
-            elif item_type == "reasoning":
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._start_block(block_idx, "thinking", {"type": "thinking", "thinking": ""})
             return
 
         # ---- text delta ----
@@ -192,10 +187,12 @@ class AnthropicResponsesStreamWrapper:
         if event_type == "response.reasoning_summary_text.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
+            if not delta:
+                return
             thinking_block_idx: Final = self._get_or_start_block(
                 item_id=item_id,
                 block_type="thinking",
-                content_block={"type": "thinking", "thinking": ""},
+                content_block={"type": "thinking", "thinking": "", "signature": ""},
             )
             self._chunk_queue.append(
                 {
@@ -230,11 +227,9 @@ class AnthropicResponsesStreamWrapper:
             item_id = (
                 getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None) if item else None
             )
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
-            )
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+            if block_idx < 0:
+                return
             if block_idx == self._open_block_index:
                 self._close_open_block()
             return
