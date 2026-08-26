@@ -1,16 +1,20 @@
 rules:
   - id: no-claude-directory-committed
     message: >
-      .claude/ directory must not be committed to the repository.
-      It contains local Claude Code settings (permissions, worktree paths) that are
-      developer-machine-specific and may expose internal paths or credentials.
-      Add .claude/ to .gitignore instead.
+      .claude/ files must not be committed to the repository, except the curated
+      shared config: settings.json, hooks/, and skills/. Everything else (local
+      settings, permissions, worktree paths) is developer-machine-specific and may
+      expose internal paths or credentials, and stays gitignored.
     severity: ERROR
     languages: [generic]
     paths:
       include:
         - "/.claude/**"
         - "/.claude/*"
+      exclude:
+        - "/.claude/settings.json"
+        - "/.claude/hooks/**"
+        - "/.claude/skills/**"
     pattern-regex: '[\s\S]+'
     metadata:
       category: security
