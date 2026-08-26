@@ -592,6 +592,7 @@ def cost_per_token(
                 completion_characters=completion_characters,
                 usage=usage_block,
                 vertex_location=vertex_location,
+                service_tier=service_tier,
             )
         elif cost_router == "cost_per_token":
             return google_cost_per_token(
