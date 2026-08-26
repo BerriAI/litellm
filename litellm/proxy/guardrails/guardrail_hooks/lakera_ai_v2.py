@@ -175,17 +175,28 @@ def _has_combined_messages_and_input(data: Mapping[str, object]) -> bool:
     return isinstance(data.get("messages"), list) and data.get("input") is not None
 
 
-def _has_responses_instructions(data: Mapping[str, object]) -> bool:
-    """True if ``data`` carries a Responses-API ``instructions`` field.
-    _build_lakera_inspection_messages includes ``instructions`` as a
-    synthetic system message so Lakera can inspect it, but
-    apply_redacted_messages_back has no path to rewrite
+def _has_responses_instructions(guardrail: "LakeraAIGuardrail", data: Mapping[str, object]) -> bool:
+    """True if ``data`` carries a Responses-API ``instructions`` field that
+    Lakera actually inspected. _build_lakera_inspection_messages includes
+    ``instructions`` as a synthetic system message so Lakera can inspect it,
+    but apply_redacted_messages_back has no path to rewrite
     ``data["instructions"]`` -- masking here would either leave unredacted
     content in the real instructions field the model reads, or write a
     redacted duplicate into data["messages"] instead, which the Responses
-    API never consumes."""
-    instructions = data.get("instructions")
-    return isinstance(instructions, str) and bool(instructions)
+    API never consumes.
+
+    When skip_system_message_in_guardrail excludes that synthetic system
+    message before it ever reaches Lakera, none of this applies: Lakera never
+    saw ``instructions``, so it can't have flagged anything there, and
+    forcing a hard block anyway would defeat the whole point of the skip
+    flag for a response that only carries PII in the (maskable) non-system
+    content."""
+    instructions: Final = data.get("instructions")
+    return (
+        isinstance(instructions, str)
+        and bool(instructions)
+        and not effective_skip_system_message_for_guardrail(guardrail)
+    )
 
 
 def _breakdown_has_pii_violation(lakera_response: LakeraAIResponse | None) -> bool:
@@ -196,7 +207,7 @@ def _breakdown_has_pii_violation(lakera_response: LakeraAIResponse | None) -> bo
     even relevant at all before advisory mode's own logic runs."""
     if not lakera_response:
         return False
-    breakdown = lakera_response.get("breakdown") or ()
+    breakdown: Final = lakera_response.get("breakdown") or ()
     return any(
         item.get("detected", False) and (item.get("detector_type") or "").startswith("pii/") for item in breakdown
     )
@@ -542,7 +553,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         # scope-index merge, which never touches a message outside the scope
         # it actually redacted instead of reconstructing the list from scratch.
         is_multimodal_input: Final = (
-            has_non_string_content(data) or _has_combined_messages_and_input(data) or _has_responses_instructions(data)
+            has_non_string_content(data)
+            or _has_combined_messages_and_input(data)
+            or _has_responses_instructions(self, data)
         )
 
         #########################################################
@@ -660,7 +673,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         # messages, extra chat fields) is handled safely by
         # _apply_redacted_messages_back_preserving_fields's scope-index merge.
         is_multimodal_input: Final = (
-            has_non_string_content(data) or _has_combined_messages_and_input(data) or _has_responses_instructions(data)
+            has_non_string_content(data)
+            or _has_combined_messages_and_input(data)
+            or _has_responses_instructions(self, data)
         )
 
         #########################################################
@@ -742,10 +757,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return response
 
-        original_messages: list[AllMessageValues] | None = data.get("messages", [])
-        if original_messages is None:
-            original_messages = []
-        original_messages, _ = self._filter_skipped_messages(original_messages)
+        messages_or_none: Final[list[AllMessageValues] | None] = data.get("messages")
+        original_messages, _ = self._filter_skipped_messages(messages_or_none or [])
 
         # Extract assistant messages from the response, keeping only role/content.
         # Track choice indices so we write masked content back to the correct choice
