@@ -6,13 +6,14 @@ completion_start_time = end_time."""
 import json
 from datetime import datetime
 from typing import Optional
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
@@ -235,3 +236,110 @@ def test_sync_transport_error_before_completed_event_raises():
     with pytest.raises(httpx.ReadError):
         for _ in iterator:
             pass
+
+
+def test_sync_stream_recovers_empty_completed_output():
+    output_item = {
+        "type": "message",
+        "id": "msg_streaming",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+            {
+                "type": "output_text",
+                "text": "Recovered streaming output",
+                "annotations": [],
+            }
+        ],
+    }
+    completed_response = {
+        "id": "resp_streaming",
+        "created_at": 1700000000,
+        "object": "response",
+        "status": "completed",
+        "model": "gpt-5.4",
+        "output": [],
+    }
+    response = httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=b"".join(
+            [
+                _sse_event(
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": output_item,
+                    }
+                ),
+                _sse_event(
+                    {
+                        "type": "response.completed",
+                        "response": completed_response,
+                    }
+                ),
+            ]
+        ),
+    )
+    iterator = SyncResponsesAPIStreamingIterator(
+        response=response,
+        model="gpt-5.4",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+
+    with patch.object(iterator, "_handle_logging_completed_response"):
+        events = list(iterator)
+
+    completed_event = events[-1]
+    assert completed_event.response.output[0]["content"][0]["text"] == "Recovered streaming output"
+
+
+@pytest.mark.asyncio
+async def test_async_stream_recovers_output_text_done_when_completed_output_is_empty():
+    response = httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=b"".join(
+            [
+                _sse_event(
+                    {
+                        "type": "response.output_text.done",
+                        "item_id": "msg_streaming",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "text": "Recovered text-only output",
+                    }
+                ),
+                _sse_event(
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_streaming",
+                            "created_at": 1700000000,
+                            "object": "response",
+                            "status": "completed",
+                            "model": "gpt-5.4",
+                            "output": [],
+                        },
+                    }
+                ),
+            ]
+        ),
+    )
+    iterator = ResponsesAPIStreamingIterator(
+        response=response,
+        model="gpt-5.4",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+
+    with patch.object(iterator, "_handle_logging_completed_response"):
+        events = [event async for event in iterator]
+
+    completed_event = events[-1]
+    assert completed_event.response.output[0]["content"][0]["text"] == "Recovered text-only output"

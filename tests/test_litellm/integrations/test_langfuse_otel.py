@@ -6,7 +6,7 @@ import pytest
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetryConfig
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 
 
 class TestLangfuseOtelIntegration:
@@ -870,6 +870,51 @@ class TestLangfuseOtelResponsesAPI:
                 output_data[1]["content"]
                 == "The weather in San Francisco is sunny, 20°C."
             )
+
+    def test_streaming_responses_api_with_output(self):
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        response_obj = ResponsesAPIResponse(
+            id="response-streaming",
+            created_at=1625247600,
+            output=[
+                ResponseOutputMessage(
+                    id="msg-streaming",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[
+                        ResponseOutputText(
+                            annotations=[],
+                            text="Streaming output is visible.",
+                            type="output_text",
+                        )
+                    ],
+                )
+            ],
+        )
+        completed_event = ResponseCompletedEvent(
+            type="response.completed",
+            response=response_obj,
+        )
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), {"call_type": "responses"}, completed_event
+            )
+
+        output_call = next(
+            call
+            for call in mock_safe_set_attribute.call_args_list
+            if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+        )
+        assert json.loads(output_call.args[2]) == [
+            {"role": "assistant", "content": "Streaming output is visible."}
+        ]
 
     def test_responses_api_with_function_calls(self):
         """Test Langfuse OTEL logger with Responses API function_call output."""

@@ -30,6 +30,10 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.sse_output_recovery import (
+    record_output_item_chunk,
+    record_output_text_chunk,
+)
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
@@ -209,6 +213,8 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: bool | None = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._streamed_output_items: dict[int, dict[str, object]] = {}  # mutable-ok: accumulated across SSE events
+        self._streamed_text_only_items: dict[int, dict[str, object]] = {}  # mutable-ok: accumulated across SSE events
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -363,6 +369,24 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
+                    terminal_response_obj: Final[ResponsesAPIResponse | None] = getattr(
+                        openai_responses_api_chunk, "response", None
+                    )
+                    recovered_items: Final = {
+                        **self._streamed_text_only_items,
+                        **self._streamed_output_items,
+                    }
+                    if (
+                        terminal_response_obj is not None
+                        and _chunk_type
+                        in (
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                        )
+                        and not getattr(terminal_response_obj, "output", None)
+                        and recovered_items
+                    ):
+                        terminal_response_obj.output = [item for _, item in sorted(recovered_items.items())]
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
                     if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
@@ -600,6 +624,18 @@ class BaseResponsesAPIStreamingIterator:
 
         self._completed_response_cached = True
 
+    def _accumulate_streamed_output(self, chunk: ResponsesAPIStreamingResponse) -> None:
+        chunk_data: Final = chunk.model_dump()
+        event_type: Final = chunk_data.get("type")
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            record_output_item_chunk(chunk_data, self._streamed_output_items)
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            record_output_text_chunk(
+                chunk_data,
+                self._streamed_output_items,
+                self._streamed_text_only_items,
+            )
+
     async def _call_post_streaming_deployment_hook(
         self, chunk: ResponsesAPIStreamingResponse
     ) -> ResponsesAPIStreamingResponse:
@@ -811,6 +847,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     result = await self._call_post_streaming_deployment_hook(
                         chunk=result,
                     )
+                    self._accumulate_streamed_output(result)
                     self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk
@@ -893,6 +930,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         async_function=self._call_post_streaming_deployment_hook,
                         chunk=result,
                     )
+                    self._accumulate_streamed_output(result)
                     self._yielded_first_chunk = True
                     return result
                 # If result is None, continue the loop to get the next chunk

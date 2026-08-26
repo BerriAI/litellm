@@ -134,7 +134,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         if not response_obj or not hasattr(response_obj, "get"):
             return
 
-        choices: Final = response_obj.get("choices", [])
+        observation_response: Final = response_obj.get("response") or response_obj
+
+        choices: Final = observation_response.get("choices", [])
         if choices:
             first_choice: Final = choices[0]
             message: Final = first_choice.get("message", {})
@@ -149,7 +151,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                     except json.JSONDecodeError:
                         arguments_obj = {}
                     langfuse_tool_call = {
-                        "id": response_obj.get("id", ""),
+                        "id": observation_response.get("id", ""),
                         "name": function.get("name", ""),
                         "call_id": tool_call.get("id", ""),
                         "type": "function_call",
@@ -174,7 +176,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                         safe_dumps(output_data),
                     )
 
-        output: Final = response_obj.get("output", [])
+        output: Final = observation_response.get("output", [])
         if output:
             output_items_data: Final[list[dict]] = []
             for item in output:
