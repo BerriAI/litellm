@@ -119,13 +119,9 @@ class PydanticAITransformation:
         Returns:
             Completed task response
         """
-        deadline: Final[float | None] = (
-            time.monotonic() + max(timeout, 0.0) if timeout is not None else None
-        )
+        deadline: Final[float | None] = time.monotonic() + max(timeout, 0.0) if timeout is not None else None
         for attempt in range(max_attempts):
-            remaining: float | None = (
-                deadline - time.monotonic() if deadline is not None else None
-            )
+            remaining: float | None = deadline - time.monotonic() if deadline is not None else None
             if remaining is not None and remaining <= 0:
                 break
             poll_request = {
@@ -222,9 +218,7 @@ class PydanticAITransformation:
             llm_provider=cast(Any, "pydantic_ai_agent"),
             params={"timeout": timeout},
         )
-        deadline: Final[float | None] = (
-            time.monotonic() + max(timeout, 0.0) if timeout is not None else None
-        )
+        deadline: Final[float | None] = time.monotonic() + max(timeout, 0.0) if timeout is not None else None
         response: Final = await client.post(
             endpoint,
             json=a2a_request,
