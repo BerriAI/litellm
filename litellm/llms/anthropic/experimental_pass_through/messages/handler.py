@@ -22,6 +22,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
@@ -388,7 +389,7 @@ async def anthropic_messages(
         if asyncio.iscoroutine(init_response):
             return await init_response
         return init_response
-    except Exception as e:  # noqa: BLE001  # the mapping boundary must see every provider-layer failure, like acompletion
+    except BaseLLMException as e:
         raise exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
