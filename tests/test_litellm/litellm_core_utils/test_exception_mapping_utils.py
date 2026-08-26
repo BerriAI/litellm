@@ -790,7 +790,10 @@ UPSTREAM_STATUS_DISCARDED = (litellm.APIConnectionError, 500)
 PROVIDERS_THAT_DISCARD_THE_UPSTREAM_STATUS = ("cloudflare", "ollama", "vllm")
 
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
-    "anthropic": {403: UPSTREAM_STATUS_DISCARDED, 422: UPSTREAM_STATUS_DISCARDED},
+    "anthropic": {
+        403: (litellm.PermissionDeniedError, 403),
+        422: UPSTREAM_STATUS_DISCARDED,
+    },
     "azure": {500: (litellm.APIError, 500)},
     "bedrock": {
         403: UPSTREAM_STATUS_DISCARDED,
