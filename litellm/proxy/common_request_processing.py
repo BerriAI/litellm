@@ -2103,7 +2103,19 @@ class ProxyBaseLLMRequestProcessing:
                             route_type=route_type,
                             llm_router=llm_router,
                         )
-                    except ProxyRateLimitError:
+                    except ProxyRateLimitError as fallback_exc:
+                        # A fallback attempt's own rejection can carry the
+                        # identical cross_model_scope marker (this fallback
+                        # model is itself covered by the same apply_to_models
+                        # chain-wide cap) -- continuing to the next fallback
+                        # would silently serve the request through a model
+                        # outside that cap, defeating it just as much as not
+                        # checking the original exception would.
+                        if (
+                            isinstance(fallback_exc.detail, Mapping)
+                            and fallback_exc.detail.get("cross_model_scope") is True
+                        ):
+                            raise
                         continue
             except BaseException:
                 self.data["model"] = original_model

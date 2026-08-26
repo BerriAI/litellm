@@ -103,6 +103,9 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     fixed_length_identity as _fixed_length_identity,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
+    order_tags_for_identity_resolution as _order_tags_for_identity_resolution,
+)
+from litellm.proxy.hooks.tag_rate_limits_shared import (
     partition_key as _partition_key,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
@@ -392,6 +395,16 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 )
 
     @staticmethod
+    def _record_admitted_model(stash: _GlobalTagRateLimitStash, model: str | None, renewal_allowed: bool) -> None:
+        """Only called once this admission attempt has cleared every check
+        without raising -- a rejected attempt's model must never join
+        admitted_models, or a later successful attempt's accounting could
+        wrongly credit an apply_to_models entry that never actually admitted
+        this request under that model."""
+        if renewal_allowed and model is not None:
+            stash.admitted_models = stash.admitted_models | frozenset((model,))
+
+    @staticmethod
     def _ttl_for(unit: _LimitUnit, entry: TagRateLimitEntry) -> int:
         if unit == "concurrency":
             requested_ttl: Final = entry.key_ttl_seconds if entry.key_ttl_seconds is not None else entry.period_seconds
@@ -525,7 +538,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         stash: Final = _claim_stash_for_data(data)
 
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(data)
-        tags: Final = _get_tags_from_request_kwargs(data, metadata_variable_name=metadata_variable_name)
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(data, metadata_variable_name=metadata_variable_name),
+            data,
+            metadata_variable_name,
+        )
         key_alias: Final = user_api_key_dict.key_alias
         key_hash: Final = user_api_key_dict.api_key
         model: Final = data.get("model") if isinstance(data.get("model"), str) else None
@@ -538,10 +555,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
         now: Final = self._time_provider().timestamp()
         stash.admission_time = now
-        if renewal_allowed and model is not None:
-            stash.admitted_models = stash.admitted_models | frozenset((model,))
         classified: Final = self._classify(config, tags, key_alias, key_hash, now, model)
         if not classified:
+            self._record_admitted_model(stash, model, renewal_allowed)
             return data
 
         read_only_checks: Final = tuple(c for c in classified if not c.is_atomic)
@@ -613,6 +629,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if request_keys:
                 stash.charged_request_keys.extend(request_keys)  # mutable-ok: see field's own docstring
 
+        self._record_admitted_model(stash, model, renewal_allowed)
         return data
 
     async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
@@ -662,7 +679,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
 
-        tags: Final = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
+            kwargs,
+            metadata_variable_name,
+        )
         if not tags:
             return
 

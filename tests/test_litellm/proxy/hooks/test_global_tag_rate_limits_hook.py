@@ -590,6 +590,101 @@ async def test_apply_to_models_accounts_when_a_fallback_retry_re_admits_with_a_d
         )
 
 
+@pytest.mark.asyncio
+async def test_a_rejected_admission_attempts_model_does_not_drive_later_accounting(time_controller, monkeypatch):
+    """
+    A fallback retry's FIRST attempt can itself be rejected (by this same
+    entry, or a different hook) before it ever admits. That rejected
+    attempt's model must not join the stash's admitted-models history: a
+    later, successful attempt against a different (out-of-scope) model must
+    not have its accounting wrongly credited to an apply_to_models entry
+    that never actually admitted this request.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [
+                    {
+                        "name": "conc-a",
+                        "tag_id": "end_user_id",
+                        "limit": 1,
+                        "period_seconds": 60,
+                        "apply_to_models": ["model-a"],
+                    }
+                ]
+            },
+            "dollar_limits": {
+                "limits": [
+                    {
+                        "name": "chain_spend",
+                        "tag_id": "end_user_id",
+                        "limit": 10.0,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["model-a"],
+                    }
+                ]
+            },
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    # Occupy model-a's only concurrency slot with an unrelated call.
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="occupier"), "model": "model-a"},
+        call_type="completion",
+    )
+
+    # call-1 attempt #1: model-a, rejected (slot taken) -- never truly admitted.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "model-a"},
+            call_type="completion",
+        )
+    # call-1 attempt #2 (fallback retry): model-b, not in apply_to_models=[model-a], admits.
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "model-b"},
+        call_type="completion",
+    )
+
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "model": "model-b",
+        "standard_logging_object": {"total_tokens": 0, "response_cost": 50.0, "model": "model-b", "model_group": "model-b"},
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # Release the occupier's concurrency slot so the final check below is
+    # gated only by chain_spend (dollars), not by conc-a still being full.
+    await hook.async_log_success_event(
+        kwargs={"litellm_call_id": "occupier", "metadata": {"tags": ["end_user_id:u1"]}},
+        response_obj=None,
+        start_time=0,
+        end_time=0,
+    )
+    await asyncio.sleep(0)
+
+    # chain_spend (apply_to_models=[model-a]) must still be empty: model-a's
+    # own admission attempt was rejected, never admitted, so a fresh
+    # model-a request is still allowed under the $100 limit.
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "model-a"},
+        call_type="completion",
+    )
+    assert result is not None
+
+
 # ---------------------------------------------------------------------------
 # _pre_call_with_fallbacks reruns admission for the same logical request:
 # a repeat call_id must renew, not double-charge -- veria-ai finding on
@@ -1114,5 +1209,96 @@ async def test_config_reload_takes_effect_on_next_request(time_controller, monke
             user_api_key_dict=_key(),
             cache=DualCache(),
             data=_data(["end_user_id:u1"], call_id="call-3"),
+            call_type="completion",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Identity resolution: policy-backed tags must win over caller-supplied ones
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_caller_supplied_tag_cannot_shadow_the_policy_backed_identity_tag(time_controller, monkeypatch):
+    """
+    _merge_tags (litellm_pre_call_utils.py) keeps caller-supplied tags first
+    in the merged tags list, appending key/team/project-contributed tags only
+    if not already present. Since extract_identity/entry_applies resolve a
+    tag_id by first-match-by-prefix, an authenticated caller could otherwise
+    submit e.g. company_id:attacker-chosen ahead of the key's real
+    company_id:real-company (surfaced via metadata.inherited_tags) and have
+    every company_id-scoped entry resolve to the forged value instead of the
+    real one -- letting the caller dodge the limit entirely by rotating
+    fabricated identities, or evade being charged against their own real
+    bucket. The hook must order tags so inherited_tags wins.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [{"name": "per-company", "tag_id": "company_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+    key = _key()
+
+    poisoned_data = {
+        "litellm_call_id": "attack-1",
+        "metadata": {
+            "tags": ["company_id:attacker-chosen", "company_id:real-company"],
+            "inherited_tags": ["company_id:real-company"],
+        },
+    }
+    await hook.async_pre_call_hook(user_api_key_dict=key, cache=DualCache(), data=poisoned_data, call_type="completion")
+
+    # The real company's own bucket must have been charged by the attack
+    # request, not a bucket keyed to the attacker's forged value -- so a
+    # second, genuine company_id:real-company request is now rejected.
+    victim_data = {
+        "litellm_call_id": "victim-1",
+        "metadata": {"tags": ["company_id:real-company"], "inherited_tags": ["company_id:real-company"]},
+    }
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(user_api_key_dict=key, cache=DualCache(), data=victim_data, call_type="completion")
+
+
+@pytest.mark.asyncio
+async def test_success_accounting_also_resolves_identity_from_the_policy_backed_tag(time_controller, monkeypatch):
+    """Same forged-tag scenario as the admission-time test above, but for
+    async_log_success_event's own identity resolution (tokens/dollars)."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "dollar_limits": {
+                "limits": [{"name": "per-company-spend", "tag_id": "company_id", "limit": 10.0, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    kwargs = {
+        "litellm_call_id": "attack-1",
+        "metadata": {
+            "tags": ["company_id:attacker-chosen", "company_id:real-company"],
+            "inherited_tags": ["company_id:real-company"],
+        },
+        "standard_logging_object": {"total_tokens": 0, "response_cost": 20.0},
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # The $20 spend must have landed against company_id:real-company, so a
+    # fresh request under the genuine identity is now over the $10 limit.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={
+                "litellm_call_id": "victim-1",
+                "metadata": {"tags": ["company_id:real-company"], "inherited_tags": ["company_id:real-company"]},
+            },
             call_type="completion",
         )

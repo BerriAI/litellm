@@ -5866,6 +5866,70 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert processor.data["model"] == primary_model
 
     @pytest.mark.asyncio
+    async def test_cross_model_scoped_rejection_mid_chain_stops_further_fallback_attempts(self):
+        """
+        Bugbot finding: the original exception is checked for
+        cross_model_scope before the fallback loop starts, but a LATER
+        fallback attempt's own rejection was never checked the same way --
+        the loop's `except ProxyRateLimitError: continue` swallowed it and
+        moved on to the next fallback model. If a chain-wide apply_to_models
+        cap covers both the primary model and the first fallback, and a
+        second fallback model isn't covered, this let the second fallback
+        silently serve the request the cap was meant to block. The original
+        (non-scoped) rejection enters the loop normally; the FIRST fallback's
+        own rejection carries cross_model_scope=True and must stop the loop
+        immediately, never reaching the second fallback.
+        """
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        primary_model = "opus-chain"
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        attempted_models: list[str] = []
+
+        async def mock_pre_call_logic(**kwargs):
+            attempted_models.append(processor.data["model"])
+            if processor.data["model"] == primary_model:
+                # Original attempt: a plain, non-scoped rejection (e.g. a
+                # per-deployment limit), not the chain-wide cap itself.
+                raise ProxyRateLimitError(detail={"error": "tag_rate_limit_exceeded"}, headers={"retry-after": "30"})
+            if processor.data["model"] == "sonnet-chain":
+                # First fallback: rejected by the SAME chain-wide cap.
+                raise ProxyRateLimitError(
+                    detail={"error": "tag_rate_limit_exceeded", "cross_model_scope": True},
+                    headers={"retry-after": "30"},
+                )
+            raise AssertionError(f"must not attempt a second fallback model: {processor.data['model']}")
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"opus-chain": ["sonnet-chain", "haiku-chain"]}]
+
+        with patch.object(processor, "common_processing_pre_call_logic", side_effect=mock_pre_call_logic):
+            with pytest.raises(ProxyRateLimitError) as exc_info:
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model=primary_model,
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        assert attempted_models == [primary_model, "sonnet-chain"]
+        assert exc_info.value.detail.get("cross_model_scope") is True
+        assert processor.data["model"] == primary_model
+
+    @pytest.mark.asyncio
     async def test_real_parallel_request_limiter_model_tpm_limit_triggers_fallback(self):
         """
         Customer-reported scenario from LIT-3890 / GH #8822.
