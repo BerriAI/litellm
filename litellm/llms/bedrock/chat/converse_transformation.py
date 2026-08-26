@@ -426,8 +426,8 @@ class AmazonConverseConfig(BaseConfig):
         if "gpt-oss" in model:
             optional_params["reasoning_effort"] = reasoning_effort
         elif "openai.gpt-5" in model:
-            optional_params.pop("thinking", None)
-            optional_params["reasoning"] = {"effort": reasoning_effort}
+            reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
+            optional_params["reasoning"] = reasoning
         elif self._is_nova_2_model(model):
             reasoning_config: Final = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
