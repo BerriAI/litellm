@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-
-
 from starlette.datastructures import Headers
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -5135,6 +5133,8 @@ class TestMCPDcrBridgeDelegateAdmission:
         minted_at=None,
         master_key=None,
     ):
+        from pydantic import SecretStr
+
         from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
             envelope_keys_from_master_key,
         )
@@ -5145,7 +5145,6 @@ class TestMCPDcrBridgeDelegateAdmission:
             mint_envelope,
             user_identity,
         )
-        from pydantic import SecretStr
 
         identity = (
             user_identity(server_id=server_id, user_id=user_id)
@@ -5278,7 +5277,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             server.server_name = "bridge_delegate_server"
             server.alias = None
 
-            with patch(
+            with patch(  # test-quality-ok: isolate the MCP registry when testing target selection
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_mgr:
                 mock_mgr.get_mcp_server_by_name.return_value = server
@@ -5300,11 +5299,13 @@ class TestMCPDcrBridgeDelegateAdmission:
         }
 
         with (
-            patch(
+            patch(  # test-quality-ok: observe the auth boundary while testing admission orchestration
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
             ) as mock_auth,
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch(  # test-quality-ok: isolate the MCP registry used by request admission
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             (
@@ -5337,12 +5338,14 @@ class TestMCPDcrBridgeDelegateAdmission:
         }
 
         with (
-            patch(
+            patch(  # test-quality-ok: force credential rejection through request admission
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
                 side_effect=HTTPException(status_code=401, detail="Invalid key"),
             ) as mock_auth,
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch(  # test-quality-ok: isolate the MCP registry used by request admission
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
@@ -6117,13 +6120,17 @@ class TestMCPDcrBridgeDelegateAdmission:
         admitted = UserAPIKeyAuth(api_key="hashed-key", user_id="litellm-key-user")
 
         with (
-            patch(
+            patch(  # test-quality-ok: supply standard key admission through the auth boundary
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
                 return_value=admitted,
             ) as mock_auth,
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
-            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(  # test-quality-ok: isolate the MCP registry used by request admission
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(  # test-quality-ok: configure key classification for the orchestration test
+                "litellm.proxy.proxy_server.master_key", self._MASTER_KEY
+            ),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             (
@@ -6148,13 +6155,17 @@ class TestMCPDcrBridgeDelegateAdmission:
         }
 
         with (
-            patch(
+            patch(  # test-quality-ok: force a non-401 auth result through request admission
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
                 side_effect=HTTPException(status_code=403, detail="Key blocked"),
             ),
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
-            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(  # test-quality-ok: isolate the MCP registry used by request admission
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(  # test-quality-ok: configure key classification for the orchestration test
+                "litellm.proxy.proxy_server.master_key", self._MASTER_KEY
+            ),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             with pytest.raises(HTTPException) as exc_info:
@@ -6644,8 +6655,8 @@ class TestGatewaySessionAdmission:
         )
         from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
             SessionPrincipal,
-            mint_session_token,
             mint_session_refresh_token,
+            mint_session_token,
         )
 
         keys = session_keys_from_master_key(self._MASTER_KEY)
@@ -7111,8 +7122,8 @@ class TestUserSubjectTeamUnion:
 
     def _manager_with(self, server_ids, allow_all=()):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
         from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         manager = MCPServerManager()
         for sid in server_ids:
