@@ -1,4 +1,7 @@
 
+import json
+from pathlib import Path
+
 import pytest
 
 
@@ -14,7 +17,13 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelInfo, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    ModelInfo,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import TranscriptionResponse
 
 
@@ -3584,6 +3593,104 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
 
 
+def test_completion_cost_bills_interactions_api_response():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-2.5-flash", custom_llm_provider="gemini")
+    response = InteractionsAPIResponse(
+        id="interactions/abc123",
+        model="gemini-2.5-flash",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 175,
+            "total_input_tokens": 100,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 100}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 50,
+            "output_tokens_by_modality": [{"modality": "text", "tokens": 50}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 25,
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    reasoning_rate = model_info.get("output_cost_per_reasoning_token") or model_info["output_cost_per_token"]
+    expected = (
+        100 * model_info["input_cost_per_token"]
+        + 50 * model_info["output_cost_per_token"]
+        + 25 * reasoning_rate
+    )
+    assert cost == pytest.approx(expected)
+    assert cost > 0
+
+
+def test_completion_cost_bills_interactions_google_search_per_query():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-3-flash-preview", custom_llm_provider="gemini")
+    response = InteractionsAPIResponse(
+        id="interactions/search123",
+        model="gemini-3-flash-preview",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 680,
+            "total_input_tokens": 103,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 103}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": 226,
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 351,
+            "grounding_tool_count": [{"type": "google_search", "count": 3}],
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    per_query_cost = model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    reasoning_rate = model_info.get("output_cost_per_reasoning_token") or model_info["output_cost_per_token"]
+    expected = (
+        103 * model_info["input_cost_per_token"]
+        + 226 * model_info["output_cost_per_token"]
+        + 351 * reasoning_rate
+        + 3 * per_query_cost
+    )
+    assert model_info.get("web_search_billing_unit") == "per_query"
+    assert cost == pytest.approx(expected)
+    assert cost > 3 * per_query_cost
+
+
+def test_completion_cost_bills_interactions_video_output_at_video_rate():
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    model_info = litellm.get_model_info(model="gemini-omni-flash-preview", custom_llm_provider="gemini")
+    video_tokens = 5792 * 8
+    response = InteractionsAPIResponse(
+        id="interactions/video123",
+        model="gemini-omni-flash-preview",
+        status="completed",
+        steps=[],
+        usage={
+            "total_tokens": 10 + video_tokens,
+            "total_input_tokens": 10,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 10}],
+            "total_cached_tokens": 0,
+            "total_output_tokens": video_tokens,
+            "output_tokens_by_modality": [{"modality": "video", "tokens": video_tokens}],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 0,
+        },
+    )
+
+    cost = completion_cost(completion_response=response, custom_llm_provider="gemini")
+
+    expected = 10 * model_info["input_cost_per_token"] + video_tokens * model_info["output_cost_per_video_token"]
+    assert model_info["output_cost_per_video_token"] != model_info["output_cost_per_token"]
+    assert cost == pytest.approx(expected)
+
+
 @pytest.mark.parametrize(
     "batch_rate,expected_prompt,expected_completion",
     [
@@ -3683,3 +3790,51 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     )
 
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_1hr_rate"),
+    [("claude-3-haiku-20240307", 5e-07), ("claude-3-opus-20240229", 3e-05)],
+)
+def test_claude_3_one_hour_cache_writes_bill_at_double_input(
+    _local_model_cost_map, model: str, expected_1hr_rate: float
+):
+    """Regression: both models carried the Sonnet 1h cache-write rate (6e-06) instead of
+    2x their own input price, overbilling haiku 12x and underbilling opus 5x."""
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=1000,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1000
+            ),
+        ),
+    )
+
+    prompt_cost, _ = cost_per_token(model=model, usage_object=usage, custom_llm_provider="anthropic")
+
+    assert prompt_cost == pytest.approx(1000 * expected_1hr_rate, rel=1e-9)
+
+
+def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
+    """Guard against pasting one model's 1h cache-write price onto another: every provider
+    LiteLLM tracks (Anthropic, Bedrock, Vertex, Azure) publishes the 1h write at 2x input."""
+
+    cost_map = json.loads(
+        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
+    )
+    one_hour_prefix = "cache_creation_input_token_cost_above_1hr"
+    deviations = {
+        (name, key): (entry["input_cost_per_token" + key[len(one_hour_prefix) :]], entry[key])
+        for name, entry in cost_map.items()
+        if isinstance(entry, dict)
+        for key in entry
+        if key.startswith(one_hour_prefix)
+        and entry[key] != pytest.approx(2 * entry["input_cost_per_token" + key[len(one_hour_prefix) :]], rel=1e-9)
+    }
+
+    assert deviations == {}

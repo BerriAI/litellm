@@ -3,7 +3,10 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx
 from httpx._types import RequestFiles
 
-from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+from litellm.llms.azure_ai.common_utils import (
+    AzureFoundryModelInfo,
+    get_azure_ai_auth_headers,
+)
 from litellm.llms.azure_ai.image_generation.mai_transformation import (
     AzureFoundryMAIImageGenerationConfig,
 )
@@ -91,15 +94,13 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
-
-        if not api_key:
-            raise ValueError(
-                f"Azure AI API key is required for model {model}. "
-                "Set AZURE_AI_API_KEY environment variable or pass api_key parameter."
+        headers.update(
+            get_azure_ai_auth_headers(
+                api_key=AzureFoundryModelInfo.get_api_key(api_key),
+                litellm_params=litellm_params,
+                api_key_header="api-key",
             )
-
-        headers.update({"api-key": api_key})
+        )
         return headers
 
     def get_complete_url(

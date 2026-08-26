@@ -411,7 +411,7 @@ def llm_passthrough_route(
         api_key=api_key,
     )
 
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(api_key=api_key, api_base=api_base, **kwargs)
 
     if client is None:
         from litellm.llms.custom_httpx.http_handler import (

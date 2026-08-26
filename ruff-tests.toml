@@ -40,6 +40,21 @@
 #         later binding makes the name local for the whole body, so the read raises
 #         UnboundLocalError, and in an autouse fixture that takes every test in the
 #         directory down with it
+# F601    the same key literal twice in one dict. Python keeps the last value, so the
+#         first is dropped before the test ever runs, and a fixture that looks like it
+#         covers two cases covers one
+# B023    a closure over a loop variable. Every closure sees the last iteration's value,
+#         so a per-case callback built in a loop checks the last case N times. Bind the
+#         value as a parameter instead
+# B025    an `except` for a type an earlier `except` already catches. The second handler
+#         is unreachable, so the recovery or skip written there never happens
+# F632    `is` against a literal. It compares identity, so it passes only where CPython
+#         happens to intern the value and stops meaning what it says the moment the
+#         value is built at runtime
+# B003    `os.environ = {...}` rebinds the mapping instead of mutating it, so `putenv`
+#         never fires and a subprocess still reads the real keys the test believes it
+#         cleared. The manual restore underneath is skipped whenever the body raises,
+#         so every later test in that worker inherits a plain dict for an environment
 #
 # No target-version here on purpose: it resolves from requires-python (>=3.10), so
 # 3.11-only builtins like BaseExceptionGroup are correctly flagged in a tree that
@@ -63,4 +78,9 @@ lint.select = [
     "PLW0127",
     "RUF043",
     "F823",
+    "F601",
+    "B023",
+    "B025",
+    "F632",
+    "B003",
 ]

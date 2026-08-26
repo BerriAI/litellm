@@ -36,6 +36,7 @@ AnthropicInputSchema = TypedDict(
 class AnthropicOutputSchema(TypedDict, total=False):
     type: Required[Literal["json_schema"]]
     schema: Required[dict]
+    strict: ReadOnly[bool]
 
 
 class AnthropicOutputConfig(TypedDict, total=False):
@@ -685,6 +686,7 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 class AnthropicThinkingParam(TypedDict, total=False):
     type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
     budget_tokens: int
+    display: ReadOnly[Literal["summarized", "omitted"]]
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):

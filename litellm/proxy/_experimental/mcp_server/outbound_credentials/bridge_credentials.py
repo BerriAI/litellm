@@ -92,7 +92,7 @@ def build_bridge_token_response(
 
     The producer mirror of :func:`resolve_bridge_envelope`: a thin, pure wrapper over
     :func:`mint_envelope` that returns the sealed envelope, or the mint error as a value
-    (an oversized grant) for the caller to map onto an OAuth error response.
+    for the caller to map onto an OAuth error response.
     """
     return mint_envelope(identity, grant, keys, now)
 
