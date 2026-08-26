@@ -254,6 +254,16 @@ async def test_azure_health_check_stays_on_ga_when_deployment_registration_overw
     assert connect.url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?intent=transcription"
 
 
+def test_transcription_only_detection_falls_back_to_mode(local_model_cost_map):
+    """azure/whisper-1 declares mode audio_transcription but no supported_endpoints,
+    so only the mode signal can classify it as transcription-only."""
+    assert realtime_main._is_transcription_only_realtime_model("whisper-1", "azure") is True
+
+
+def test_transcription_only_detection_rejects_speech_model(local_model_cost_map):
+    assert realtime_main._is_transcription_only_realtime_model("gpt-realtime-mini", "azure") is False
+
+
 @pytest.mark.asyncio
 async def test_azure_health_check_keeps_beta_path_for_speech_model():
     connect = _CapturingConnect()
