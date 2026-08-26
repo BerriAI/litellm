@@ -124,10 +124,10 @@ def _is_text_delta_event(event: str) -> bool:
 
 
 def _text_delta_frame(text: str, index: object) -> bytes:
-    payload: Final = {
+    payload: Final = {  # mutable-ok: json.dumps serializes a dict
         "type": "content_block_delta",
         "index": index if isinstance(index, int) else 0,
-        "delta": {"type": "text_delta", "text": text},
+        "delta": {"type": "text_delta", "text": text},  # mutable-ok: json.dumps serializes a dict
     }
     return f"event: content_block_delta\ndata: {json.dumps(payload)}\n\n".encode()
 

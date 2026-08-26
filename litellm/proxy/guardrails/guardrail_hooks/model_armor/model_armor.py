@@ -1,10 +1,11 @@
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 import httpx
 from fastapi import HTTPException
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 import json
@@ -15,6 +16,7 @@ from litellm.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    ModifyResponseException,
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -37,6 +39,7 @@ from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
     Choices,
+    GenericGuardrailAPIInputs,
     GuardrailStatus,
     ModelResponse,
     ModelResponseStream,
@@ -82,6 +85,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     - Post-call sanitization (sanitizeModelResponse)
     """
 
+    # apply_guardrail only exists to scan streamed chunks: file scanning, masking and the MCP
+    # hooks need the native lifecycle hooks, so they must not be routed to the shared runner
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
@@ -123,6 +130,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self.credentials = credentials
         self.api_endpoint = api_endpoint
         self.sanitize_error_detail = sanitize_error_detail is not False
+        self.streaming_buffer_until_moderated = kwargs.get("streaming_buffer_until_moderated") is not False
+        self.streaming_sampling_rate = kwargs.get("streaming_sampling_rate") or 5
 
         # Store optional params
         self.optional_params = kwargs
@@ -188,6 +197,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         super().update_in_memory_litellm_params(litellm_params)
         self.sanitize_error_detail = self.sanitize_error_detail is not False
+        self.streaming_buffer_until_moderated = self.streaming_buffer_until_moderated is not False
+        self.streaming_sampling_rate = self.streaming_sampling_rate or 5
 
     def _log_request_debug(
         self,
@@ -831,6 +842,60 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         return response
 
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail signature
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        """Scan bare texts, which lets the shared runner drive Model Armor over a live stream."""
+        texts: Final = inputs.get("texts") or ()
+        scanned: Final = [  # mutable-ok: GenericGuardrailAPIInputs.texts is a list
+            await self._scan_text(text, input_type=input_type, request_data=request_data) if text else text
+            for text in texts
+        ]
+        return {**inputs, "texts": scanned}  # mutable-ok: GenericGuardrailAPIInputs is a plain TypedDict
+
+    async def _scan_text(
+        self,
+        text: str,
+        input_type: Literal["request", "response"],
+        request_data: dict,  # mutable-ok: forwarded to make_model_armor_request
+    ) -> str:
+        masking_enabled: Final = self.mask_request_content if input_type == "request" else self.mask_response_content
+        try:
+            armor_response: Final = await self.make_model_armor_request(
+                content=text,
+                source="user_prompt" if input_type == "request" else "model_response",
+                request_data=request_data,
+            )
+        except ModelArmorAPIError as e:
+            self._raise_if_fail_closed(e)
+            return text
+
+        if self._should_block_content(armor_response, allow_sanitization=masking_enabled):
+            message: Final = f"{input_type.capitalize()} blocked by Model Armor"
+            if input_type == "request":
+                raise HTTPException(
+                    status_code=400,
+                    detail=self._build_block_error_detail(message, armor_response),
+                )
+            raise ModifyResponseException(
+                message=message,
+                model=request_data.get("model") or "unknown",
+                request_data=request_data,
+                guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
+                original_response=request_data.get("response"),
+            )
+
+        sanitized: Final = self._get_sanitized_content(armor_response) if masking_enabled else None
+        return sanitized or text
+
+    def _streams_incrementally(self) -> bool:
+        """Sanitization needs the whole response, so only allow/block configs can scan mid-stream."""
+        return not self.streaming_buffer_until_moderated and not self.mask_response_content
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -838,6 +903,21 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks."""
+
+        if self._streams_incrementally():
+            from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+                UnifiedLLMGuardrails,
+            )
+
+            async for streamed_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+                guardrail_to_apply=self,
+                buffer_until_moderated_default=False,
+            ):
+                yield streamed_chunk
+            return
 
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder

@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
@@ -7,6 +9,8 @@ from .model_armor import ModelArmorGuardrail
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
+_NO_EXTRAS: Final[Mapping[str, object]] = MappingProxyType({})  # mutable-ok: MappingProxyType needs a dict
+
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
@@ -14,6 +18,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         ModelArmorGuardrail,
     )
 
+    streaming_params: Final[Mapping[str, object]] = litellm_params.model_extra or _NO_EXTRAS
     _model_armor_callback: Final = ModelArmorGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
@@ -28,6 +33,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         fail_on_error=litellm_params.fail_on_error,
         skip_unscannable_attachments=litellm_params.skip_unscannable_attachments,
         sanitize_error_detail=litellm_params.sanitize_error_detail,
+        streaming_buffer_until_moderated=streaming_params.get("streaming_buffer_until_moderated"),
+        streaming_sampling_rate=streaming_params.get("streaming_sampling_rate"),
     )
     litellm.logging_callback_manager.add_litellm_callback(_model_armor_callback)
 

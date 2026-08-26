@@ -790,6 +790,211 @@ async def test_streaming_hook_passes_through_responses_api_events():
     assert tuple(delivered) == events
 
 
+async def _iter_chunks(chunks: tuple[object, ...]):
+    for chunk in chunks:
+        yield chunk
+
+
+async def _chunks_produced_before_first_delivery(guardrail: ModelArmorGuardrail) -> int:
+    """How much of the upstream stream is consumed before the client sees anything.
+
+    1 means the guardrail streams as it scans; the full chunk count means it buffers the
+    whole response first, which is what makes time to first token equal generation time.
+    """
+    produced: list[object] = []
+
+    async def _stream():
+        for chunk in _ANTHROPIC_SSE_CHUNKS:
+            produced.append(chunk)
+            yield chunk
+
+    delivered = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(request_route="/v1/messages"),
+        response=_stream(),
+        request_data={
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "what is my ssn"}],
+            "metadata": {"guardrails": ["model-armor-test"]},
+        },
+    )
+    try:
+        await delivered.__anext__()
+    finally:
+        await delivered.aclose()
+    return len(produced)
+
+
+def test_config_disables_streaming_buffer():
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    guardrail = initialize_guardrail(
+        LitellmParams(
+            guardrail="model_armor",
+            mode="post_call",
+            template_id="test-template",
+            project_id="test-project",
+            streaming_buffer_until_moderated=False,
+            streaming_sampling_rate=2,
+        ),
+        {"guardrail_name": "model-armor-test"},
+    )
+
+    assert guardrail._streams_incrementally() is True
+    assert guardrail.streaming_sampling_rate == 2
+
+
+def test_default_config_buffers_streams():
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    guardrail = initialize_guardrail(
+        LitellmParams(
+            guardrail="model_armor",
+            mode="post_call",
+            template_id="test-template",
+            project_id="test-project",
+        ),
+        {"guardrail_name": "model-armor-default"},
+    )
+
+    assert guardrail._streams_incrementally() is False
+    assert guardrail.streaming_sampling_rate == 5
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_buffers_whole_response_by_default():
+    guardrail = _sse_armor_guardrail()
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_api_response({"filterMatchState": "NO_MATCH_FOUND"})),
+    ):
+        produced = await _chunks_produced_before_first_delivery(guardrail)
+
+    assert produced == len(_ANTHROPIC_SSE_CHUNKS)
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_streams_while_scanning_when_buffering_disabled():
+    guardrail = _sse_armor_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_sampling_rate=1,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_api_response({"filterMatchState": "NO_MATCH_FOUND"})),
+    ):
+        produced = await _chunks_produced_before_first_delivery(guardrail)
+
+    assert produced == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_keeps_buffering_when_masking_responses():
+    """Sanitization needs the assembled response, so masking configs cannot stream as they scan."""
+    guardrail = _sse_armor_guardrail(
+        mask_response_content=True,
+        streaming_buffer_until_moderated=False,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_api_response({"filterMatchState": "NO_MATCH_FOUND"})),
+    ):
+        produced = await _chunks_produced_before_first_delivery(guardrail)
+
+    assert produced == len(_ANTHROPIC_SSE_CHUNKS)
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_streams_while_scanning_when_buffering_disabled():
+    guardrail = _sse_armor_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_sampling_rate=1,
+    )
+    produced: list[object] = []
+
+    async def _stream():
+        for text in ("hello ", "world"):
+            chunk = litellm.ModelResponseStream(
+                choices=[
+                    litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content=text))
+                ]
+            )
+            produced.append(chunk)
+            yield chunk
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(return_value=_armor_api_response({"filterMatchState": "NO_MATCH_FOUND"})),
+    ):
+        delivered = guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response=_stream(),
+            request_data={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"guardrails": ["model-armor-test"]},
+            },
+        )
+        first = await delivered.__anext__()
+        assert len(produced) == 1
+        assert first.choices[0].delta.content == "hello "
+        await delivered.aclose()
+
+
+@pytest.mark.asyncio
+async def test_incremental_streaming_blocks_before_flagged_text_is_delivered():
+    guardrail = _sse_armor_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_sampling_rate=1,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(
+            return_value=_armor_api_response(
+                {
+                    "filterMatchState": "MATCH_FOUND",
+                    "filterResults": {
+                        "sdp": {
+                            "sdpFilterResult": {
+                                "inspectResult": {
+                                    "matchState": "MATCH_FOUND",
+                                    "findings": [{"infoType": "US_SOCIAL_SECURITY_NUMBER"}],
+                                }
+                            }
+                        }
+                    },
+                }
+            )
+        ),
+    ):
+        delivered = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/messages"),
+                response=_iter_chunks(_ANTHROPIC_SSE_CHUNKS),
+                request_data={
+                    "model": "claude-sonnet-4-5",
+                    "messages": [{"role": "user", "content": "what is my ssn"}],
+                    "metadata": {"guardrails": ["model-armor-test"]},
+                },
+            )
+        ]
+
+    body = b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode() for chunk in delivered)
+    assert b"123-45-6789" not in body
+    assert b"Model Armor" in body
+
+
 @pytest.mark.asyncio
 async def test_streaming_hook_fails_closed_on_unparseable_raw_sse():
     guardrail = _sse_armor_guardrail()
