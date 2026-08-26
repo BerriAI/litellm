@@ -473,12 +473,14 @@ def test_transform_messages_helper_strips_thinking_blocks():
             "thinking_blocks": [
                 {"type": "thinking", "thinking": "internal", "signature": ""}
             ],
+            "reasoning_content": "internal",
         },
     ]
     out = config._transform_messages_helper(
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
+    assert "reasoning_content" not in out[1]
     assert out[1]["content"] == "I can help."
 
 

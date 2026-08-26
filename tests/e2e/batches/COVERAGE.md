@@ -81,6 +81,21 @@ File delete asserts `object=="file"` and `deleted==True`.
 | `capabilities.py` | the provider x scenario matrix + per-provider /model/new params + id-shape classifiers + per-provider raw-id assertion |
 | `conftest.py` | session-scoped batch deployment registration and teardown |
 | `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, per-backend content download, failure paths, second-hop routing, terminal state + cost |
+| `test_managed_files_enforcement_e2e.py` | require_managed_files enforcement pins; deselected unless `E2E_MANAGED_FILES_STACK` is set (see below) |
+
+## require_managed_files enforcement (separate stack phase)
+
+`litellm_settings.require_managed_files` is a boot-time module global with no per-key
+or runtime override, and turning it on 400s every upload that lacks
+`target_model_names`, including the files_settings-routed `provider_fallback`
+scenario above. So its pins cannot share a proxy with the rest of this suite:
+`test_managed_files_enforcement_e2e.py` carries the `managed_files` marker, is
+deselected unless `E2E_MANAGED_FILES_STACK` is set (the same pattern as the `weekly`
+marker), and the PR gate runs it in a sequential phase after the main suite, against
+the same ephemeral stack redeployed with the flag on. The pins: upload without
+`target_model_names` is a 400, upload carrying a `model` param is a 400, a raw
+provider file id on retrieve is a 400, and another user's managed unified id is a
+403 while the owning user still retrieves it.
 
 ## Failure paths
 

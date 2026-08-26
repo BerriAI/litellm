@@ -13,6 +13,7 @@ import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import {
+  REASONING_EFFORT_OPTIONS,
   ReasoningEffort,
   TierModelParamsByTier,
   pruneTierModelParams,
@@ -31,7 +32,8 @@ export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
-export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
+export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
+export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
@@ -137,6 +139,7 @@ export interface ComplexityRouterConfigValue {
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -250,11 +253,16 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
   const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
-  // Embedding models can't serve a chat-completion role, so they're excluded here.
-  const reasoningModels = new Set(
-    modelInfo.filter((model) => model.supports_reasoning).map((model) => model.model_group),
+  // An absent list means the proxy does not send the field yet, so every level is offered as before.
+  // An empty list is the group's own answer that its deployments share no level, and is left empty.
+  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
+    modelInfo.map((model) => [
+      model.model_group,
+      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
+    ]),
   );
 
+  // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
     .map((model) => ({
@@ -365,7 +373,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <TierModelEffortRows
                     tierLabel={label}
                     models={value.tiers[tier]}
-                    reasoningModels={reasoningModels}
+                    effortOptionsByModel={effortOptionsByModel}
                     paramsByModel={value.tier_model_params?.[tier]}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
                   />

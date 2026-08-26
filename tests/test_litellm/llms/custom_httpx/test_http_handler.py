@@ -56,9 +56,7 @@ async def test_async_post_streaming_status_error_should_not_wait_forever_for_bod
 
     litellm_handler = AsyncHTTPHandler()
     await litellm_handler.client.aclose()
-    litellm_handler.client = httpx.AsyncClient(
-        transport=httpx.MockTransport(mock_handler)
-    )
+    litellm_handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
     try:
         with pytest.raises(MaskedHTTPStatusError) as exc_info:
             await asyncio.wait_for(
@@ -202,9 +200,7 @@ async def test_ssl_verification_with_aiohttp_transport(monkeypatch: pytest.Monke
         transport_connector = transport._get_valid_client_session().connector
         assert isinstance(transport_connector, TCPConnector)
 
-        aiohttp_session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(ssl=False)
-        )
+        aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False))
         try:
             aiohttp_connector = aiohttp_session.connector
             assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
@@ -378,7 +374,8 @@ async def test_get_async_httpx_client_with_shared_session():
 
     # Test with shared session
     client = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session,  # type: ignore
     )
 
     # Verify the client was created successfully
@@ -397,9 +394,7 @@ async def test_get_async_httpx_client_without_shared_session():
     from litellm.types.utils import LlmProviders
 
     # Test without shared session
-    client = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=None
-    )
+    client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC, shared_session=None)
 
     # Verify the client was created successfully
     assert client is not None
@@ -476,11 +471,13 @@ async def test_session_reuse_integration():
 
     # Create two clients with the same session
     client1 = get_async_httpx_client(
-        llm_provider=LlmProviders.ANTHROPIC, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session,  # type: ignore
     )
 
     client2 = get_async_httpx_client(
-        llm_provider=LlmProviders.OPENAI, shared_session=mock_session  # type: ignore
+        llm_provider=LlmProviders.OPENAI,
+        shared_session=mock_session,  # type: ignore
     )
 
     # Both clients should be created successfully
@@ -512,9 +509,7 @@ async def test_session_reuse_integration():
         (None, None, None, False),  # None value - skip configuration
     ],
 )
-def test_ssl_ecdh_curve(
-    env_curve, litellm_curve, expected_curve, should_call, monkeypatch
-):
+def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, monkeypatch):
     """Test SSL ECDH curve configuration with valid curves and precedence"""
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
 
@@ -717,9 +712,7 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
             _default_cached_client_timeout,
         )
 
-        monkeypatch.setattr(
-            litellm, "request_timeout", litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
-        )
+        monkeypatch.setattr(litellm, "request_timeout", litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS)
         monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
         assert _default_cached_client_timeout() is _DEFAULT_TIMEOUT
 
@@ -734,9 +727,7 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
         assert resolved.read == 300.0
         assert resolved.connect == 5.0
 
-    def test_cached_async_client_built_with_explicit_request_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_cached_async_client_built_with_explicit_request_timeout(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.caching.llm_caching_handler import LLMClientCache
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.utils import LlmProviders
@@ -1195,3 +1186,131 @@ async def test_aiohttp_session_never_replays_one_upstreams_cookie_to_another():
     assert len(jar) == 0
     assert dict(jar.filter_cookies(URL("https://upstream-a.example.com"))) == {}
     await session.close()
+
+
+def _mint_session_on_dead_loop(handler: AsyncHTTPHandler) -> ClientSession:
+    """Create the transport's real ClientSession on a loop that then closes.
+
+    This is the lifecycle of every client minted for a short-lived event loop
+    (the loop-id-keyed LLM client cache creates one handler per loop): the
+    session outlives its loop and can only ever be disposed loop-lessly.
+    """
+    transport = handler.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    loop = asyncio.new_event_loop()
+
+    async def _create() -> ClientSession:
+        return transport._get_valid_client_session()
+
+    session = loop.run_until_complete(_create())
+    loop.close()
+    return session
+
+
+def test_finalizer_without_running_loop_closes_dead_loop_session():
+    """A handler finalized with no running event loop must still dispose its
+    aiohttp session.
+
+    The async close can never run in that context; without the synchronous
+    fallback the session and its connector are abandoned to GC and emit
+    "Unclosed client session" / "Unclosed connector" warnings."""
+    handler = AsyncHTTPHandler(timeout=61.0)
+    session = _mint_session_on_dead_loop(handler)
+    assert not session.closed
+
+    del handler
+    gc.collect()
+
+    assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
+    """With a running loop, finalization schedules an async close and must keep
+    a strong reference to the task until it completes — a bare create_task()
+    result may be collected before it runs, leaving the session unclosed."""
+    handler = AsyncHTTPHandler(timeout=61.0)
+    transport = handler.client._transport
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    session = transport._get_valid_client_session()
+    assert not session.closed
+    del transport
+
+    baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
+    del handler
+    gc.collect()
+
+    scheduled = AsyncHTTPHandler._finalizer_close_tasks - baseline_tasks
+    assert len(scheduled) == 1
+
+    await asyncio.gather(*scheduled)
+    assert session.closed
+    assert not (AsyncHTTPHandler._finalizer_close_tasks & scheduled)
+
+
+@pytest.mark.asyncio
+async def test_sync_close_helper_respects_session_ownership():
+    """The loop-less fallback closes only sessions the transport owns; a
+    shared session (e.g. the proxy's) must never be closed by a handler."""
+    owned_handler = AsyncHTTPHandler(timeout=61.0)
+    owned_transport = owned_handler.client._transport
+    assert isinstance(owned_transport, LiteLLMAiohttpTransport)
+    owned_session = owned_transport._get_valid_client_session()
+
+    baseline = set(LiteLLMAiohttpTransport._background_close_tasks)
+    owned_handler._dispose_wrapped_aiohttp_session()
+    scheduled = LiteLLMAiohttpTransport._background_close_tasks - baseline
+    await asyncio.gather(*scheduled)
+    assert owned_session.closed
+
+    shared_session = ClientSession()
+    shared_handler = AsyncHTTPHandler(timeout=61.0, shared_session=shared_session)
+    shared_transport = shared_handler.client._transport
+    assert isinstance(shared_transport, LiteLLMAiohttpTransport)
+    assert shared_transport._owns_session is False
+
+    shared_handler._dispose_wrapped_aiohttp_session()
+    assert not shared_session.closed
+
+    await shared_session.close()
+    await shared_handler.close()
+    await owned_handler.close()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_close_done_consumes_exception():
+    """A failing finalizer close must have its exception retrieved by the done
+    callback, or asyncio emits "Task exception was never retrieved" at GC —
+    the same log noise the finalizer path exists to eliminate."""
+
+    async def failing_close() -> None:
+        raise RuntimeError("close failed")
+
+    task = asyncio.get_running_loop().create_task(failing_close())
+    AsyncHTTPHandler._finalizer_close_tasks.add(task)
+    await asyncio.sleep(0)
+
+    AsyncHTTPHandler._on_finalizer_close_done(task)
+    assert task not in AsyncHTTPHandler._finalizer_close_tasks
+
+    cancelled = asyncio.get_running_loop().create_task(asyncio.sleep(30))
+    cancelled.cancel()
+    await asyncio.sleep(0)
+    AsyncHTTPHandler._on_finalizer_close_done(cancelled)
+
+
+@pytest.mark.asyncio
+async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_scheduling():
+    """GC on a live loop (e.g. the app's) of a handler whose session belongs to
+    another, dead loop must not schedule aclose() here — that is the cross-loop
+    path the transport refuses — and must still dispose the session."""
+    handler = AsyncHTTPHandler(timeout=61.0)
+    session = await asyncio.to_thread(_mint_session_on_dead_loop, handler)
+    assert not session.closed
+
+    baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
+    del handler
+    gc.collect()
+
+    assert AsyncHTTPHandler._finalizer_close_tasks == baseline_tasks
+    assert session.closed

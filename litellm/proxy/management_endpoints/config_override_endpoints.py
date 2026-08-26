@@ -46,7 +46,8 @@ router: Final = APIRouter()
 
 
 class _ConfigOverrideRow(Protocol):
-    config_value: str | Mapping[str, object] | None
+    @property
+    def config_value(self) -> str | Mapping[str, object] | None: ...
 
 
 class _ConfigOverridesTableClient(Protocol):

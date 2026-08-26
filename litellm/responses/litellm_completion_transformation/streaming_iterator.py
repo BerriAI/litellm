@@ -1,5 +1,6 @@
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Any, Final, cast
 
 import litellm
@@ -48,14 +49,18 @@ from litellm.types.utils import (
 )
 
 
+def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int | None:
+    return next(
+        (index for index, item in enumerate(items) if getattr(item, "type", None) == item_type),
+        None,
+    )
+
+
 def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[Any, ...]:
     if item_id is None:
         return items
 
-    target_index: Final = next(
-        (index for index, item in enumerate(items) if getattr(item, "type", None) == item_type),
-        None,
-    )
+    target_index: Final = _index_of_output_item_type(items, item_type)
     if target_index is None:
         return items
 
@@ -86,7 +91,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.litellm_metadata: dict | None = litellm_metadata or {}
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
-        self.collected_chat_completion_chunks: list[dict[str, Any]] = []
+        self.collected_chat_completion_chunks: list[dict[str, object]] = []
         self.finished: bool = False
         self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
         self.sent_response_created_event: bool = False
@@ -98,10 +103,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_item_done_event: bool = False
         self.sent_annotation_events: bool = False
         self.litellm_model_response: ModelResponse | TextCompletionResponse | None = None
-        self.completed_response: Any = None
+        self.completed_response = None
         self.final_text: str = ""
         self._cached_item_id: str | None = None
         self._cached_response_id: str | None = None
+        self._buffered_chunk: ModelResponseStream | None = None
+        self._upstream_exhausted: bool = False
+        self._response_id_primed: bool = False
         self._pending_tool_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
@@ -120,7 +128,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_done_emitted = False
         self._reasoning_item_id: str | None = None
         self._accumulated_reasoning_content_parts: list[str] = []
-        self._accumulated_provider_specific_fields: dict[str, Any] = {}
+        self._accumulated_provider_specific_fields: dict[str, object] = {}
         self._custom_tool_names: set[str] = extract_custom_tool_names(self.responses_api_request.get("tools"))
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
             self.responses_api_request.get("tools")
@@ -346,6 +354,59 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             self._pending_tool_events.append(item_done_event)
 
+    def _adopt_response_id_from_chunk(self, chunk: ModelResponseStream) -> None:
+        if self._cached_response_id is not None:
+            return
+        chunk_id: Final = getattr(chunk, "id", None)
+        if chunk_id and isinstance(chunk_id, str):
+            self._cached_response_id = chunk_id
+
+    async def _aprime_response_id(self) -> None:
+        """
+        Pull the first upstream chunk before `response.created` is emitted so every event
+        carries the chat completion id that spend tracking stores as `request_id`.
+        """
+        if self._response_id_primed:
+            return
+        self._response_id_primed = True
+        while True:
+            try:
+                chunk = await self.litellm_custom_stream_wrapper.__anext__()
+            except StopAsyncIteration:
+                self._upstream_exhausted = True
+                return
+            if chunk is not None:
+                self._buffered_chunk = chunk
+                self._adopt_response_id_from_chunk(chunk)
+                return
+
+    def _prime_response_id(self) -> None:
+        if self._response_id_primed:
+            return
+        self._response_id_primed = True
+        while True:
+            try:
+                chunk = self.litellm_custom_stream_wrapper.__next__()
+            except StopIteration:
+                self._upstream_exhausted = True
+                return
+            if chunk is not None:
+                self._buffered_chunk = chunk
+                self._adopt_response_id_from_chunk(chunk)
+                return
+
+    def _take_buffered_chunk(self) -> ModelResponseStream | None:
+        buffered: Final = self._buffered_chunk
+        self._buffered_chunk = None
+        return buffered
+
+    def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
+        return ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            responses_api_response=response,
+            custom_llm_provider=self.custom_llm_provider,
+            litellm_metadata=self.litellm_metadata,
+        )
+
     def _default_response_created_event_data(self) -> dict:
         # Use cached response ID if available, otherwise generate a new one
         if self._cached_response_id is None:
@@ -404,7 +465,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sequence_number += 1
         event: Final = ResponseCreatedEvent(
             type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
-            response=ResponsesAPIResponse(**response_created_event_data),
+            response=self._with_encoded_response_id(ResponsesAPIResponse(**response_created_event_data)),
         )
         event.__dict__["sequence_number"] = self._sequence_number
         return event
@@ -415,7 +476,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sequence_number += 1
         event: Final = ResponseInProgressEvent(
             type=ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
-            response=ResponsesAPIResponse(**response_in_progress_event_data),
+            response=self._with_encoded_response_id(ResponsesAPIResponse(**response_in_progress_event_data)),
         )
         event.__dict__["sequence_number"] = self._sequence_number
         return event
@@ -487,7 +548,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     @staticmethod
     def _snapshot_chunk_for_stream_chunk_builder(
         chunk: ModelResponseStream,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Convert a streaming chunk into a plain dict for end-of-stream assembly.
         Keep _hidden_params so downstream usage/header behavior is preserved.
@@ -827,6 +888,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 if self.finished is True:
                     raise StopAsyncIteration
 
+                await self._aprime_response_id()
                 result = self.return_default_initial_events()
                 if result:
                     return result
@@ -838,7 +900,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return self._pending_tool_events.pop(0)
 
                 try:
-                    chunk = await self.litellm_custom_stream_wrapper.__anext__()
+                    chunk = self._take_buffered_chunk()
+                    if chunk is None:
+                        if self._upstream_exhausted:
+                            raise StopAsyncIteration
+                        chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
                         self._ensure_output_item_for_chunk(chunk)
@@ -929,6 +995,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             while True:
                 if self.finished is True:
                     raise StopIteration
+                self._prime_response_id()
                 result = self.return_default_initial_events()
                 if result:
                     return result
@@ -939,7 +1006,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 if self._pending_tool_events:
                     return self._pending_tool_events.pop(0)
                 try:
-                    chunk = self.litellm_custom_stream_wrapper.__next__()
+                    buffered_chunk = self._take_buffered_chunk()
+                    if buffered_chunk is not None:
+                        chunk = buffered_chunk
+                    elif self._upstream_exhausted:
+                        raise StopIteration
+                    else:
+                        chunk = self.litellm_custom_stream_wrapper.__next__()
                     self._ensure_output_item_for_chunk(chunk)
                     # Accumulate provider_specific_fields from chunk and delta
                     for src in (
@@ -1093,7 +1166,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if litellm_model_response:
             # Add cost to usage object if include_cost_in_streaming_usage is True
             if litellm.include_cost_in_streaming_usage and self.litellm_logging_obj is not None:
-                usage: Final = getattr(litellm_model_response, "usage", None)
+                usage: Final[object] = getattr(litellm_model_response, "usage", None)
                 if usage is not None:
                     setattr(
                         usage,
@@ -1117,11 +1190,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             responses_api_response.output = list(self._output_with_streamed_item_ids(responses_api_response))
 
             # Encode the response ID to match non-streaming behavior
-            encoded_response: Final = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                responses_api_response=responses_api_response,
-                custom_llm_provider=self.custom_llm_provider,
-                litellm_metadata=self.litellm_metadata,
-            )
+            encoded_response: Final = self._with_encoded_response_id(responses_api_response)
 
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
