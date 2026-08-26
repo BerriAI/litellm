@@ -1068,13 +1068,18 @@ async def test_http_transport_without_streamable_http_client_raises_actionable_i
         transport_type=MCPTransport.http,
     )
 
-    with patch.object(mcp_client_module, "streamable_http_client", None):  # test-quality-ok: simulates mcp<1.24.0 whose module lacks this import-time symbol; no HTTP boundary exists before the raise
+    with patch.object(  # test-quality-ok: simulates mcp<1.24.0 whose module lacks this import-time symbol
+        mcp_client_module, "streamable_http_client", None
+    ):
         with pytest.raises(ImportError, match=r"pip install 'litellm\[mcp\]'"):
             await client.list_tools(raise_on_error=True)
 
 
 def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
-    tomllib = pytest.importorskip("tomllib")
+    try:
+        import tomllib
+    except ImportError:
+        tomllib = pytest.importorskip("tomli")
     from packaging.requirements import Requirement
 
     pyproject_path = Path(__file__).parents[3] / "pyproject.toml"
