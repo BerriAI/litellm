@@ -2670,6 +2670,42 @@ def test_token_type_cost_breakdown_includes_cache_creation_from_top_level_usage(
     )
 
 
+def test_token_type_cost_breakdown_applies_anthropic_fast_speed_multiplier_to_reasoning(
+    _local_model_cost_map,
+):
+    """
+    Regression: Anthropic's "fast" speed mode multiplies the completion cost
+    (anthropic/cost_calculation.py::cost_per_token), and reasoning tokens are billed
+    as part of completion cost. The breakdown's reasoning_cost must scale by the same
+    multiplier, or the reported reasoning cost silently drifts from (i.e. undercounts
+    relative to) the completion total it is supposed to be a slice of.
+    """
+    model = "claude-test-fast-reasoning-breakdown-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "litellm_provider": "anthropic",
+                "max_tokens": 8192,
+                "provider_specific_entry": {"fast": 2.0},
+            }
+        }
+    )
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=300),
+    )
+    usage.speed = "fast"
+
+    breakdown = get_token_type_cost_breakdown(model=model, custom_llm_provider="anthropic", usage=usage)
+
+    assert breakdown.reasoning_cost == pytest.approx(300 * 15e-6 * 2)
+
+
 def test_token_type_cost_breakdown_reads_cache_write_tokens(_local_model_cost_map):
     """
     Some OpenAI-compatible providers (e.g. kimi-k2) report cache-write tokens under
