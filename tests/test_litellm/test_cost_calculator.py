@@ -2613,6 +2613,52 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate():
     assert cost == pytest.approx(expected_priority)
 
 
+def test_completion_cost_vertex_ai_gemini_flex_traffic_type(monkeypatch):
+    """
+    Vertex AI flex-tier billing regression for issue #37647.
+
+    Vertex Gemini 3.x models route through ``cost_per_character`` (the
+    ``cost_router`` token-path gate only matches "gemini-2"), and its token
+    fallbacks dropped ``service_tier``. A response served with
+    ``trafficType=ON_DEMAND_FLEX`` must be billed at the flex rate, not the
+    standard rate.
+    """
+    from litellm import completion_cost
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "gemini-3-test-flex-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1.5e-6,
+                "output_cost_per_token": 9e-6,
+                "input_cost_per_token_flex": 7.5e-7,
+                "output_cost_per_token_flex": 4.5e-6,
+                "litellm_provider": "vertex_ai",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    def _cost_for_traffic_type(traffic_type):
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        response = ModelResponse(usage=usage, model=model)
+        response._hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type}
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="vertex_ai",
+        )
+
+    standard_cost = _cost_for_traffic_type("ON_DEMAND")
+    flex_cost = _cost_for_traffic_type("ON_DEMAND_FLEX")
+
+    assert standard_cost == pytest.approx(1000 * 1.5e-6 + 500 * 9e-6)
+    assert flex_cost == pytest.approx(1000 * 7.5e-7 + 500 * 4.5e-6)
+
+
 def test_completion_cost_non_string_service_tier_defers_to_served_tier():
     """
     Regression: a non-string request-level ``service_tier`` (reachable via
