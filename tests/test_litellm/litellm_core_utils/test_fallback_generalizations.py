@@ -8,12 +8,9 @@ resolution (get_model_info) including the shipped rules in the bundled cost map.
 """
 
 import logging
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm._logging import verbose_logger
@@ -381,7 +378,7 @@ def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_ma
     "model,provider",
     [
         ("claude-opus-4-9@20260101", "vertex_ai"),
-        ("databricks-claude-opus-5-1", "databricks"),
+        ("databricks-claude-haiku-5-1", "databricks"),
     ],
 )
 def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, model, provider):
@@ -391,6 +388,8 @@ def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, m
     assert info["supports_adaptive_thinking"] is True
     assert info["supports_mid_conversation_system"] is True
     assert info["supports_function_calling"] is True
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
 
 
 @pytest.mark.parametrize(

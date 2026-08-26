@@ -34,6 +34,7 @@ def _apply() -> bool:
 _MANAGED_DB_ENV_VARS = (
     "IAM_TOKEN_DB_AUTH",
     "AZURE_POSTGRESQL_AUTH",
+    "DATABASE_DISABLE_PREPARED_STATEMENTS",
     "DATABASE_URL",
     "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
@@ -504,7 +505,7 @@ def test_apply_to_env_rejects_pinned_sqlite_direct_url(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
     monkeypatch.setenv("DIRECT_URL", "sqlite:///data/litellm.db")
 
-    with pytest.raises(RuntimeError, match="DIRECT_URL.*sqlite"):
+    with pytest.raises(RuntimeError, match=r"DIRECT_URL.*sqlite"):
         _apply()
 
 
@@ -514,7 +515,7 @@ def test_apply_to_env_rejects_pinned_non_postgres_reader(monkeypatch):
         "DATABASE_URL_READ_REPLICA", "mysql://u:p@reader.example.com:3306/db"
     )
 
-    with pytest.raises(RuntimeError, match="DATABASE_URL_READ_REPLICA.*mysql"):
+    with pytest.raises(RuntimeError, match=r"DATABASE_URL_READ_REPLICA.*mysql"):
         _apply()
 
 
@@ -654,6 +655,83 @@ def test_reader_url_left_alone_when_writer_has_no_params(monkeypatch):
         os.environ["DATABASE_URL_READ_REPLICA"]
         == "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dapp"
     )
+
+
+# ---------------------------------------------------------------------------
+# DATABASE_DISABLE_PREPARED_STATEMENTS
+# ---------------------------------------------------------------------------
+
+
+def test_disable_prepared_statements_appends_pgbouncer_to_assembled_writer(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+
+    assert _apply() is True
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?pgbouncer=true"
+    )
+    assert "DIRECT_URL" not in os.environ
+
+
+def test_disable_prepared_statements_appends_pgbouncer_to_pinned_writer(monkeypatch):
+    """The componentized entrypoints (gateway / backend / migrations) receive a
+    pinned DATABASE_URL and call apply_to_env; without the pgbouncer param Prisma
+    keeps named prepared statements and 42P05 collisions surface behind a
+    transaction-pooling pgbouncer."""
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+
+    assert _apply() is False
+    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=true"
+
+
+def test_disable_prepared_statements_respects_a_pinned_pgbouncer_value(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=false")
+
+    _apply()
+
+    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=false"
+
+
+def test_disable_prepared_statements_applies_to_direct_url(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+    monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@direct.example.com:5432/litellm_db")
+
+    _apply()
+
+    assert os.environ["DIRECT_URL"] == "postgresql://u:p@direct.example.com:5432/litellm_db?pgbouncer=true"
+
+
+def test_reader_inherits_pgbouncer_from_disable_prepared_statements(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db")
+
+    _apply()
+
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)
+    assert query["pgbouncer"] == ["true"]
+
+
+def test_disable_prepared_statements_off_leaves_urls_alone(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "false")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+
+    _apply()
+
+    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db"
+
+
+def test_disable_prepared_statements_rejects_an_unreadable_value(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "enabled")
+
+    with pytest.raises(ValidationError, match="DATABASE_DISABLE_PREPARED_STATEMENTS"):
+        DatabaseURLSettings.from_env()
 
 
 def test_unsupported_db_scheme_message_names_var_and_scheme():

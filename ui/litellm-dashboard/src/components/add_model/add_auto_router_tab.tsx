@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
 import { ChevronDown, ChevronRight, CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -22,7 +22,6 @@ import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
-  ComplexityTiers,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -40,7 +39,9 @@ import {
   getSemanticConfigError,
   getTierLabelsError,
 } from "./build_complexity_router_config";
-import { resolveComplexityDefaultModel } from "./complexity_router_tiers";
+import { activeTierName, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
+import { DEFAULT_TIER_LABELS } from "./complexity_router_tiers";
+import type { ComplexityTier } from "./KeywordTierRules";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
@@ -104,17 +105,10 @@ const presets = getAllPresets();
 
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
-const tierConfigSummary = (tiers: ComplexityTiers): string => {
-  const parts = (
-    [
-      ["Simple", tiers.SIMPLE],
-      ["Medium", tiers.MEDIUM],
-      ["Complex", tiers.COMPLEX],
-      ["Reasoning", tiers.REASONING],
-    ] as const
-  )
-    .filter(([, models]) => models.length > 0)
-    .map(([label, models]) => `${label}: ${models.join(", ")}`);
+const tierConfigSummary = (config: ComplexityRouterConfigValue): string => {
+  const parts = activeTierRows(config)
+    .filter((row) => row.models.length > 0)
+    .map((row) => `${DEFAULT_TIER_LABELS[row.id as ComplexityTier] ?? activeTierName(row)}: ${row.models.join(", ")}`);
   return parts.length > 0 ? parts.join(" · ") : "No tiers configured yet";
 };
 
@@ -128,9 +122,9 @@ const getSubmitBlockedReason = (
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
   availability: ModelAvailability,
 ): string | null =>
-  getMissingTiersError(config.tiers) ??
+  getMissingTiersError(activeTierRows(config)) ??
   getTierLabelsError(config.tier_labels) ??
-  getPlanModeTierError(config.plan_mode_min_tier, config.tiers) ??
+  getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
   getKeywordTierRulesError(keywordTierRules) ??
   getReferencedModelsError(referencedModelsParams, availability);
 
@@ -352,7 +346,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
-    classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
+    classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
     classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
@@ -378,7 +372,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const submitRecommendedRouter = async (name: string) => {
     const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
 
-    const missingTiersError = getMissingTiersError(tiers);
+    const missingTiersError = getMissingTiersError(activeTierRows(complexityRouterConfig));
     if (missingTiersError) {
       setShowValidationErrors(true);
       toast.fromError(missingTiersError);
@@ -423,7 +417,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const defaultModel = resolveComplexityDefaultModel(tiers, complexityRouterConfig.default_model);
+    const defaultModel = resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model);
     const validatedFields = requiresTeamScope
       ? (["auto_router_name", "team_id"] as const)
       : (["auto_router_name"] as const);
@@ -463,10 +457,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const handleTestConnection = () => {
     const testTargetParams = {
-      tiers: complexityRouterConfig.tiers,
+      tiers: activeTierRows(complexityRouterConfig).map(
+        (row) => [activeTierName(row), row.models] as [string, string[]],
+      ),
       semanticMatchingEnabled,
       embeddingModel,
-      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig.tiers, complexityRouterConfig.default_model),
+      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
     };
     const targets = buildAutoRouterTestTargets(testTargetParams);
 
@@ -581,7 +577,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   </span>
                   {!detailsExpanded && (
                     <span className="text-xs text-muted-foreground line-clamp-2">
-                      {tierConfigSummary(complexityRouterConfig.tiers)}
+                      {tierConfigSummary(complexityRouterConfig)}
                     </span>
                   )}
                 </button>
@@ -694,10 +690,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <AutoRouterRoutingTest
               accessToken={accessToken}
               config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-              defaultModel={resolveComplexityDefaultModel(
-                complexityRouterConfig.tiers,
-                complexityRouterConfig.default_model,
-              )}
+              defaultModel={resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model)}
               routerName={watchedName}
               teamId={requiresTeamScope ? watchedTeamId : undefined}
             />
@@ -707,7 +700,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -744,7 +736,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             >
               Close
             </Button>
-            , ]
           </DialogFooter>
         </DialogContent>
       </Dialog>

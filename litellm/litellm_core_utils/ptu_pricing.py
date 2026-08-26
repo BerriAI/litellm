@@ -124,6 +124,14 @@ def ptu_identity_error(
     return None
 
 
+PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+
+
+def declares_ptu(model_info: Mapping[str, object]) -> bool:
+    """Whether any PTU field is set here, including one too malformed to charge."""
+    return any(model_info.get(field) is not None for field in PTU_MODEL_INFO_FIELDS)
+
+
 def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None = None) -> str | None:
     """Why this PTU configuration cannot be honoured, else None.
 

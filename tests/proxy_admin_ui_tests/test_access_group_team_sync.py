@@ -10,7 +10,6 @@ suite, which is the only place a `NOT (... = ANY(...))` guard going missing show
 
 import asyncio
 import os
-import sys
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
@@ -18,7 +17,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.management_helpers.access_group_team_sync import (
     reconcile_team_access_group_membership,

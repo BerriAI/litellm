@@ -1,11 +1,7 @@
 import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 from fastapi import HTTPException, Request
@@ -1791,7 +1787,6 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
 # Routes returning proxy-wide spend across every team / customer / api_key.
 # Sourced from `LiteLLMRoutes.global_spend_tracking_routes` so any future
 # additions to that list are exercised by these tests automatically.
-from litellm.proxy._types import LiteLLMRoutes
 
 GLOBAL_SPEND_ROUTES = LiteLLMRoutes.global_spend_tracking_routes.value
 
@@ -2617,10 +2612,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
 
 # ── _user_is_org_admin tests ──────────────────────────────────────────────────
 
-from datetime import datetime
 
-from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:

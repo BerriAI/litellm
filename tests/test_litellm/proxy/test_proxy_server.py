@@ -2,9 +2,9 @@ import asyncio
 import importlib
 import json
 import os
+import re
 import socket
 import subprocess
-import sys
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +19,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
@@ -77,6 +76,16 @@ def client_no_auth():
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     asyncio.run(initialize(config=config_fp, debug=True))
     return TestClient(app)
+
+
+def test_cors_exposes_cache_key_header_to_browser_js():
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from litellm.constants import LITELLM_UI_ALLOW_HEADERS
+
+    cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
+    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
 
 
 def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
@@ -1852,6 +1861,38 @@ def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_nam
 
 
 @pytest.mark.asyncio
+async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
+    """
+    Regression test: /key/generate mints keys without a LiteLLM_UserTable row, so
+    find_unique returns None for such a user. That miss must neither raise (a 400
+    here, or the AttributeError on `user_row.teams` that used to surface as a 500)
+    nor leak team models: the user belongs to no team, so only the models they
+    added themselves come back.
+    """
+    from litellm.proxy.proxy_server import non_admin_all_models
+
+    user_added_model = {"model_name": "my-model", "model_info": {"id": "user-model-1"}}
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
+
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        user_added_model,
+        {"model_name": "team-model", "model_info": {"id": "team-model-1", "team_id": "team-a"}},
+    ]
+
+    result = await non_admin_all_models(
+        all_models=[user_added_model],
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="ghost-user"),
+        prisma_client=prisma_client,
+    )
+
+    assert result == [user_added_model]
+
+
+@pytest.mark.asyncio
 async def test_apply_search_filter_matches_team_public_model_name():
     """
     Regression test: team BYOK models persist an internal model_name
@@ -2683,7 +2724,7 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
     with open(empty_file, "w") as f:
         f.write("")  # Write empty content which will result in None when loaded
 
-    with pytest.raises(Exception, match="Config cannot be None or Empty."):
+    with pytest.raises(Exception, match=re.escape("Config cannot be None or Empty.")):
         await proxy_config._get_config_from_file(str(empty_file))
 
     # Test Case 5: Using global user_config_file_path when no config_file_path provided
@@ -3344,7 +3385,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -3392,7 +3433,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4698,6 +4739,90 @@ async def test_add_router_settings_from_db_config_merge_logic():
         "setting3": "db_value3",
     }
     assert combined_settings["nested_config"] == expected_nested
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_config_fallbacks():
+    """
+    Regression test for DB router_settings rows carrying explicit empty lists
+    (e.g. {"fallbacks": []} written by the dashboard's delete-last-fallback flow):
+    empty lists are "no value" and must not clobber config.yaml fallbacks,
+    matching _deep_merge_dicts semantics. Non-empty DB lists still win.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {
+        "router_settings": {
+            "fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "context_window_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "content_policy_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+        }
+    }
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "fallbacks": [],
+        "context_window_fallbacks": [],
+        "content_policy_fallbacks": [{"gpt-oss-120b": ["other-model"]}],
+        "model_group_alias": {},
+        "num_retries": 3,
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["other-model"]}]
+    assert combined_settings["num_retries"] == 3
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unconfigured_key():
+    """
+    An empty DB list only yields to config.yaml where the yaml configures that key.
+    When the yaml router_settings has no fallbacks, a DB {"fallbacks": []} (the
+    dashboard's delete-last-fallback write) must still reach the router so the
+    running pods drop the deleted fallback without a restart.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {"router_settings": {"num_retries": 1}}
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {"fallbacks": [], "model_group_alias": {}}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert combined_settings["fallbacks"] == []
+    assert combined_settings["num_retries"] == 1
 
 
 @pytest.mark.asyncio
@@ -11263,9 +11388,7 @@ class TestRouterModelNameOnStreamingChunks:
             with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
                 return [
                     data
-                    async for data in async_data_generator(
-                        mock_response, MagicMock(spec=UserAPIKeyAuth), request_data
-                    )
+                    async for data in async_data_generator(mock_response, MagicMock(spec=UserAPIKeyAuth), request_data)
                 ]
 
     @staticmethod
@@ -11348,3 +11471,38 @@ class TestRouterModelNameOnStreamingChunks:
         assert len(frames) >= 3
         assert '"router_model_name":"deep-model"' in frames[0]
         assert all('"router_model_name":"backup-tier"' in frame for frame in frames[1:])
+
+
+@pytest.mark.asyncio
+async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the_db_read():
+    """A team-member spend reset writes the post-reset floor to the spend_db_floor marker
+    (auth_checks.invalidate_team_member_spend_state). A floor read already in flight when the
+    reset commits would otherwise cache its stale pre-reset DB value over the fresh marker,
+    letting a budget check raise the counter right back above the just-reset spend
+    (regression: PR #37971 Greptile finding)."""
+    from litellm.proxy.proxy_server import _authoritative_floor_spend
+
+    real_spend_counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+    marker_key = f"spend_db_floor:{counter_key}"
+
+    async def db_read_racing_with_a_reset(prisma_client, counter_key):
+        real_spend_counter_cache.in_memory_cache.set_cache(key=marker_key, value=0.0)
+        return 999.0
+
+    with (
+        patch.object(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            proxy_server_module, "spend_counter_cache", real_spend_counter_cache
+        ),
+        patch.object(  # test-quality-ok: the DB read must race the reset; no injectable seam for module-global prisma reads
+            proxy_server_module.SpendCounterReseed,
+            "from_db",
+            AsyncMock(side_effect=db_read_racing_with_a_reset),
+        ),
+    ):
+        result = await _authoritative_floor_spend(counter_key=counter_key)
+
+    assert result == 0.0
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key=marker_key) == 0.0, (
+        "the in-flight DB read clobbered the post-reset floor marker with the stale pre-reset value"
+    )

@@ -3,9 +3,8 @@ import contextlib
 import json
 import logging
 import math
-import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -31,10 +30,11 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     ROUTER_MODEL_NAME_RESPONSE_FIELD,
     STREAM_SSE_DATA_PREFIX,
+    STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -178,6 +178,7 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
+    refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
 )
 from litellm.types.utils import (
@@ -200,6 +201,10 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
     "error_message": "Client disconnected the request",
     "error_class": "ClientDisconnected",
 }
+
+
+def _withheld_provider_output(response: object) -> bool:
+    return getattr(response, "has_buffered_provider_output", False) is True
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -279,7 +284,7 @@ def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
     )
 
 
-def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: object) -> bool:
+def _assembled_model_came_from_a_later_chunk(chunks: Sequence[object], assembled_model: object) -> bool:
     """Report whether stream_chunk_builder picked a model the first chunk did not carry.
 
     Azure Model Router puts the routed model on the chunks after the first one, and the
@@ -301,7 +306,10 @@ def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: obje
     )
 
 
-def _assembled_model_is_the_name_the_client_asked_for(request_data: dict, assembled_model: object) -> bool:
+def _assembled_model_is_the_name_the_client_asked_for(
+    request_data: Mapping[str, object],
+    assembled_model: object,
+) -> bool:
     """Report whether the assembled model is the public name the proxy stamps onto chunks.
 
     That stamp is what leaves an unpriced alias on the partial response, so the deployment's
@@ -1138,24 +1146,25 @@ async def open_sse_before_first_byte(
     )
 
 
-def _is_azure_model_router_request(model: str) -> bool:
+def _is_azure_model_router_request(model: str, hidden_params: Mapping[str, object] | None = None) -> bool:
     """
-    Check if the requested model is an Azure Model Router.
+    Check if a request went down the Azure Model Router route.
 
-    Azure Model Router models follow the pattern:
-    - azure_ai/model_router/<deployment-name>
-    - azure_ai/model-router
-    - model_router/<deployment-name>
-    - model-router
+    ``model`` here is what the *client* sent, a model group alias with no ``model_router/``
+    prefix, so matching on it alone only works when the operator happened to put "model-router"
+    in the alias. Where the response is in hand its stamp answers this outright, so callers
+    should pass ``hidden_params``.
 
     Args:
         model: The requested model name
+        hidden_params: ``_hidden_params`` from the response, when the caller has it
 
     Returns:
         bool: True if this is an Azure Model Router request
     """
-    model_lower: Final = model.lower()
-    return "model-router" in model_lower or "model_router" in model_lower
+    from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
+    return AzureFoundryModelInfo.is_model_router_call(model=model, hidden_params=hidden_params)
 
 
 def _override_openai_response_model(
@@ -1223,7 +1232,7 @@ def _override_openai_response_model(
                 return
 
     # Check if this is an Azure Model Router request - if so, preserve the actual model used
-    if _is_azure_model_router_request(requested_model):
+    if _is_azure_model_router_request(requested_model, hidden_params):
         verbose_proxy_logger.debug(
             "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
             log_context,
@@ -1379,7 +1388,12 @@ def _log_llm_api_exception(e: Exception) -> None:
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
         )
         return
-    verbose_proxy_logger.exception("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
+    log_fn: Final = (
+        verbose_proxy_logger.error
+        if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
+        else verbose_proxy_logger.exception
+    )
+    log_fn("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
 
 
 async def _cancel_llm_call_on_client_disconnect(
@@ -1725,13 +1739,17 @@ class ProxyBaseLLMRequestProcessing:
             )
 
         # Calculate request queue time after add_litellm_data_to_request
-        # which sets arrival_time in proxy_server_request
+        # which sets arrival_time in proxy_server_request. Ends at start_time
+        # (not a freshly captured time.time() here) so this window is exactly
+        # [arrival_time, start_time], with zero overlap with the
+        # litellm_request_total_latency_metric window of [start_time, end_time] --
+        # otherwise the few lines of add_litellm_data_to_request's own work would
+        # be double-counted across both metrics.
         proxy_server_request: Final = self.data.get("proxy_server_request", {})
         arrival_time: Final = proxy_server_request.get("arrival_time")
         queue_time_seconds = None
         if arrival_time is not None:
-            processing_start_time: Final = time.time()
-            queue_time_seconds = processing_start_time - arrival_time
+            queue_time_seconds = start_time.timestamp() - arrival_time
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
@@ -1861,6 +1879,12 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,
         )
+
+        # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
+        # have mutated `self.data` in place, and the audit-trail snapshot taken in
+        # add_litellm_data_to_request predates that mutation.
+        refresh_proxy_server_request_body_snapshot(self.data)
+        verbose_proxy_logger.debug("receiving data: %s", self.data)
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
@@ -3432,8 +3456,9 @@ class ProxyBaseLLMRequestProcessing:
                 # so a GeneratorExit on client disconnect is raised there and any
                 # statement after the yield never runs. The slow-path hook is
                 # awaited above, so a cancellation during it still leaves this
-                # False and refunds.
-                delivered_chunk = True
+                # False and refunds. A keepalive ping carries no provider output,
+                # so it must not suppress that refund.
+                delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 yield serialize_chunk(chunk)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
@@ -3447,7 +3472,7 @@ class ProxyBaseLLMRequestProcessing:
             # only sees GeneratorExit on GC) cannot own the refund.
             if not stream_completed:
                 client_disconnected = True
-            if not delivered_chunk:
+            if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
                 )

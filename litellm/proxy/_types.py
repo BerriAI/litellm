@@ -15,7 +15,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing_extensions import NotRequired, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
@@ -815,6 +815,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/team/member_update",
+        "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
@@ -1286,6 +1287,16 @@ class RegenerateKeyRequest(GenerateKeyRequest):
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
     reset_to: float
+
+    @field_validator("reset_to", mode="before")
+    @classmethod
+    def reject_bool_reset_to(cls, v):
+        # bool is a subclass of int, so pydantic silently coerces True/False into
+        # 1.0/0.0 for a `float` field: a caller who accidentally sends a boolean
+        # would otherwise get an unintended spend reset instead of a 422.
+        if isinstance(v, bool):
+            raise ValueError("reset_to must be a number, not a boolean")  # noqa: TRY004  # pydantic needs ValueError
+        return v
 
 
 class KeyRequest(LiteLLMPydanticObjectBase):
@@ -2808,11 +2819,11 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
     # and validating it here would make one malformed row fail auth outright.
     # resolve_model_budget validates the single entry a request actually needs.
-    user_model_max_budget: dict[str, object] | None = None
+    user_model_max_budget: Mapping[str, object] | None = None
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
-    # (_reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
+    # (reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session
     # bearer or bridge envelope. Not a DB column and never populated from caller-controlled key
     # metadata or JWT claims, so it cannot be forged to gain the team-inherited MCP grant union
     # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
@@ -2986,8 +2997,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     sso_user_id: str | None = None
     teams: list[str] = []  # Just team IDs, not full team objects
     object_permission: LiteLLM_ObjectPermissionTable | None = None
-    model_max_budget: dict | None = None
-    model_max_budget_usage: dict | None = None
+    model_max_budget: Mapping[str, object] | None = None
+    model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3535,8 +3546,11 @@ class SpendLogsMetadata(TypedDict):
     litellm_overhead_time_ms: float | None  # LiteLLM overhead time in milliseconds
     attempted_retries: int | None  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: int | None  # Max retries configured for this request
+    attempted_fallbacks: ReadOnly[int | None]  # Number of fallbacks attempted (0 = primary model group served)
+    original_model_group: ReadOnly[str | None]  # Model group requested before any fallbacks
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
+    autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
 
 
 class SpendLogsPayload(TypedDict):

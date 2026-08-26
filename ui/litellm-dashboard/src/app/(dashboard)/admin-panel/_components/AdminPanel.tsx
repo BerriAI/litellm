@@ -10,7 +10,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Info, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
 import { toast } from "@/lib/toast";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "@/components/networking";
@@ -29,7 +28,7 @@ import {
 } from "@/components/Settings/AdminSettings/SSOSettings/Modals/BaseSSOSettingsForm";
 import UIAccessControlForm from "@/components/UIAccessControlForm";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -378,12 +377,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "ui-settings",
-      label: (
-        <span className="flex items-center gap-1.5">
-          UI Settings
-          <NewBadge />
-        </span>
-      ),
+      label: "UI Settings",
       children: (
         <div className="flex flex-col gap-4">
           <UISettings />

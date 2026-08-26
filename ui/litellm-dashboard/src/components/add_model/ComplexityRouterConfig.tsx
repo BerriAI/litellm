@@ -13,34 +13,35 @@ import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import {
+  REASONING_EFFORT_OPTIONS,
   ReasoningEffort,
   TierModelParamsByTier,
   pruneTierModelParams,
-  resolveComplexityDefaultModel,
   setTierModelReasoningEffort,
-  tierOptions,
 } from "./complexity_router_tiers";
 import TierModelEffortRows from "./TierModelEffortRows";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import { type TierRow, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
 export const DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE = 3;
-export const DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS = 200;
+export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
+export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
-export interface ComplexityTiers {
+export type ComplexityTiers = {
   SIMPLE: string[];
   MEDIUM: string[];
   COMPLEX: string[];
   REASONING: string[];
-}
+};
 
 export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
 
@@ -137,6 +138,7 @@ export interface ComplexityRouterConfigValue {
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -221,10 +223,6 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
-/** Tiers the plan-mode floor may name: the backend rejects a floor whose tier has no models. */
-export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>
-  TIER_KEYS.filter((tier) => (tiers[tier] ?? []).length > 0);
-
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
   value,
@@ -243,18 +241,23 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
-  const planModeTiers = planModeEligibleTiers(value.tiers);
-  const planModeTierOptions = tierOptions(value.tier_labels).filter((option) =>
-    (planModeTiers as string[]).includes(option.value),
+  const tierRows = activeTierRows(value);
+  const planModeTierOptions = tierRows
+    .filter((row) => row.models.length > 0)
+    .map((row) => ({ value: row.id, label: effectiveTierLabel(row.id as keyof ComplexityTiers, value.tier_labels) }));
+  const derivedDefaultModel = resolveComplexityDefaultModel(value);
+  const defaultModel = resolveComplexityDefaultModel(value, value.default_model);
+
+  // An absent list means the proxy does not send the field yet, so every level is offered as before.
+  // An empty list is the group's own answer that its deployments share no level, and is left empty.
+  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
+    modelInfo.map((model) => [
+      model.model_group,
+      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
+    ]),
   );
-  const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
-  const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
-  const reasoningModels = new Set(
-    modelInfo.filter((model) => model.supports_reasoning).map((model) => model.model_group),
-  );
-
   const modelOptions = modelInfo
     .filter((model) => model.mode !== "embedding")
     .map((model) => ({
@@ -317,12 +320,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
       <Card>
         <CardContent>
-          {TIER_KEYS.map((tier, index) => {
+          {tierRows.map((row: TierRow, index) => {
+            const tier = row.id as keyof ComplexityTiers;
             const tierInfo = TIER_DESCRIPTIONS[tier];
             const label = effectiveTierLabel(tier, value.tier_labels);
-            const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
+            const tierMissing = showValidationErrors && row.models.length === 0;
             return (
-              <div key={tier}>
+              <div key={row.id}>
                 {index > 0 && <Separator className="my-4" />}
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
@@ -331,7 +335,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                       <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                     <span className="text-xs text-muted-foreground">
-                      Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
+                      Tier {index + 1} of {tierRows.length} &middot; {row.id}
                     </span>
                   </div>
                   <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
@@ -356,7 +360,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   </InputGroup>
                   <MultiSelect
                     options={modelOptions}
-                    value={value.tiers[tier]}
+                    value={row.models}
                     onValueChange={(models: string[]) => handleTierChange(tier, models)}
                     placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
                     emptyText="No models found"
@@ -364,12 +368,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   />
                   <TierModelEffortRows
                     tierLabel={label}
-                    models={value.tiers[tier]}
-                    reasoningModels={reasoningModels}
+                    models={row.models}
+                    effortOptionsByModel={effortOptionsByModel}
                     paramsByModel={value.tier_model_params?.[tier]}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
                   />
-                  {value.tiers[tier].length > 1 && (
+                  {row.models.length > 1 && (
                     <span className="text-xs text-muted-foreground">
                       Multiple models selected — the router randomly picks among them per request (or Thompson-samples
                       within the pool when adaptive routing is on).
@@ -475,9 +479,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 <div className="flex items-center gap-2 mb-2">
                   <Switch
                     checked={value.plan_mode_min_tier !== undefined}
-                    disabled={planModeTiers.length === 0}
+                    disabled={planModeTierOptions.length === 0}
                     onCheckedChange={(enabled) =>
-                      onChange({ ...value, plan_mode_min_tier: enabled ? planModeTiers.at(-1) : undefined })
+                      onChange({
+                        ...value,
+                        plan_mode_min_tier: enabled ? planModeTierOptions.at(-1)?.value : undefined,
+                      })
                     }
                     aria-label="Route plan-mode requests to a minimum tier"
                   />
@@ -486,7 +493,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 <span className="block text-xs mb-3 text-muted-foreground">
                   Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier.
                   The classifier still wins when it picks higher, and the override only lasts while plan mode is active.
-                  {planModeTiers.length === 0 && " Add models to a tier to enable this."}
+                  {planModeTierOptions.length === 0 && " Add models to a tier to enable this."}
                 </span>
                 {value.plan_mode_min_tier !== undefined && (
                   <div style={{ maxWidth: 320 }}>

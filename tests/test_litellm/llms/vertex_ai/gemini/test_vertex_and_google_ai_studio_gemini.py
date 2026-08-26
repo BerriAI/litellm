@@ -3002,8 +3002,11 @@ def test_accumulated_json_does_not_reparse_every_fragment():
 
     The buffer only becomes a complete JSON object on the final fragment, so a
     correct implementation parses it ~once, not once per fragment. We assert the
-    full chunk still parses correctly AND that json.loads is not called on every
-    fragment (which is what made it quadratic).
+    full chunk still parses correctly AND that the buffer is not decoded on
+    every fragment (which is what made it quadratic). Post-migration to the
+    shared JSONFragmentAccumulator, decoding goes through
+    `json.JSONDecoder.raw_decode`, not `json.loads` (see the equivalent
+    Anthropic tests) so the spy targets that call, not `json.loads`.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
@@ -3024,7 +3027,9 @@ def test_accumulated_json_does_not_reparse_every_fragment():
     assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
 
     parsed = None
-    with patch("json.loads", wraps=json.loads) as spy:
+    with patch.object(
+        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
+    ) as spy:
         for fragment in fragments:
             out = iterator.handle_accumulated_json_chunk(chunk=fragment)
             if out is not None:
@@ -3035,14 +3040,16 @@ def test_accumulated_json_does_not_reparse_every_fragment():
     assert parsed.choices[0].delta.content == text, "content must be preserved intact"
 
     assert parse_calls <= 2, (
-        f"json.loads was called {parse_calls} times for {len(fragments)} "
+        f"raw_decode was called {parse_calls} times for {len(fragments)} "
         "fragments; the O(n^2) per-fragment re-parse has regressed"
     )
 
 
 def test_accumulated_json_partial_fragment_returns_none_without_parsing():
-    """A fragment that cannot complete the JSON must not trigger a json.loads
-    parse of the whole growing buffer (issue #26181)."""
+    """A fragment that cannot complete the JSON must not trigger a decode
+    attempt over the whole growing buffer (issue #26181). Decoding goes
+    through `json.JSONDecoder.raw_decode` post-JSONFragmentAccumulator
+    migration, not `json.loads`."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
     )
@@ -3054,7 +3061,9 @@ def test_accumulated_json_partial_fragment_returns_none_without_parsing():
     )
     iterator.chunk_type = "accumulated_json"
 
-    with patch("json.loads", wraps=json.loads) as spy:
+    with patch.object(
+        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
+    ) as spy:
         result = iterator.handle_accumulated_json_chunk(
             chunk='{"candidates": [{"content": {"parts": [{"text": "partial'
         )
@@ -5273,7 +5282,6 @@ class TestModelResponseIteratorCleanup:
         return obj
 
     def test_aclose_closes_iterator_and_response(self):
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -5323,7 +5331,6 @@ class TestModelResponseIteratorCleanup:
         mock_response.close.assert_called_once()
 
     def test_aclose_without_response_does_not_raise(self):
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -5345,7 +5352,6 @@ class TestModelResponseIteratorCleanup:
         mock_iterator.aclose.assert_awaited_once()
 
     def test_aclose_tolerates_iterator_error(self):
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -5372,7 +5378,6 @@ class TestModelResponseIteratorCleanup:
 
     def test_custom_stream_wrapper_aclose_triggers_model_response_iterator_aclose(self):
         """CustomStreamWrapper.aclose() must propagate to ModelResponseIterator.aclose()."""
-        import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -5556,3 +5561,21 @@ def test_accumulated_json_skips_non_dict_leading_value():
 
     assert len(out) == 1
     assert out[0].choices[0].delta.content == "a"
+
+
+def test_accumulated_json_async_end_of_stream_drains_buffered_value():
+    """Async twin of test_accumulated_json_end_of_stream_drains_all_buffered_values:
+    __anext__'s StopAsyncIteration branch must also parse a buffered value."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    obj = '{"candidates":[{"content":{"parts":[{"text":"a"}]}}],"usageMetadata":{}}'
+    iterator = _accumulating_gemini_iterator()
+    iterator.accumulated_json = obj
+    mock_async_iterator = MagicMock()
+    mock_async_iterator.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+    iterator.async_response_iterator = mock_async_iterator
+
+    result = asyncio.run(iterator.__anext__())
+    assert result is not None
+    assert result.choices[0].delta.content == "a"

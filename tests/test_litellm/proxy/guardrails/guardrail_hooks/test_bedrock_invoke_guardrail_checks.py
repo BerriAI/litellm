@@ -6,14 +6,11 @@ All Bedrock HTTP calls are mocked; no real AWS calls are made.
 
 import json
 import logging
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.exceptions import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (

@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import { type TierRow, activeTierName, tierRowById } from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
 import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
@@ -10,6 +11,7 @@ import {
   ComplexityTierLabels,
   ComplexityTiers,
   DimensionWeights,
+  TIER_KEYS,
   TIER_DESCRIPTIONS,
   TierBoundaries,
   TokenThresholds,
@@ -80,7 +82,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
   classifierContextWindowSize: number | undefined;
-  classifierContextPerTurnChars: number | undefined;
+  classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   sessionAffinity: boolean;
@@ -111,6 +113,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
@@ -133,8 +136,6 @@ export interface ComplexityRouterConfigPayload {
   reasoning_override_min_score?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
-
-const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
 export const serializeTierLabels = (tierLabels: ComplexityTierLabels | undefined): ComplexityTierLabels | undefined => {
   const renamed = TIER_KEYS.map((tier) => [tier, tierLabels?.[tier]?.trim() ?? ""] as const).filter(
@@ -170,26 +171,20 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
   return null;
 };
 
-// Requires all 4 tiers non-empty, so the create form can never reach the
-// resolveComplexityDefaultModel(tiers, ...) === undefined case — MEDIUM (or SIMPLE) is always
-// populated. The edit modal has no equivalent of this check (it allows saving with only some
-// tiers filled), which is why it needs its own explicit `!defaultModel` guard after deriving —
-// see edit_auto_router_modal.tsx's save handler. A future contributor copying this form's submit
-// handler elsewhere should not assume the same guarantee holds without this check.
-export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
-  const missing = TIER_KEYS.filter((tier) => tiers[tier].length === 0);
+// Requires every active tier non-empty, so the create form can never reach the
+// resolveComplexityDefaultModel === undefined case. The edit modal allows a partially filled
+// set, which is why it keeps its own !defaultModel guard after deriving.
+export const getMissingTiersError = (rows: readonly TierRow[]): string | null => {
+  const missing = rows.filter((row) => row.models.length === 0).map(activeTierName);
   if (missing.length === 0) return null;
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
 };
 
-// The backend rejects a plan-mode floor naming a tier with no models. The create form's
-// getMissingTiersError makes this unreachable there; the edit modal allows partially filled
-// tiers, so both gates call this to keep the two forms symmetric.
-export const getPlanModeTierError = (planModeMinTier: string | undefined, tiers: ComplexityTiers): string | null => {
+export const getPlanModeTierError = (planModeMinTier: string | undefined, rows: readonly TierRow[]): string | null => {
   if (!planModeMinTier) return null;
-  const models = tiers[planModeMinTier as keyof ComplexityTiers] ?? [];
-  if (models.length > 0) return null;
-  return `The plan-mode minimum tier (${planModeMinTier}) has no models. Add one or turn the override off.`;
+  const floor = tierRowById(rows, planModeMinTier);
+  if (floor && floor.models.length > 0) return null;
+  return `The plan-mode minimum tier (${floor ? activeTierName(floor) : planModeMinTier}) has no models. Add one or turn the override off.`;
 };
 
 export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
@@ -219,7 +214,7 @@ export const buildComplexityRouterConfig = ({
   classifierType,
   classifierLlmConfig,
   classifierContextWindowSize,
-  classifierContextPerTurnChars,
+  classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   sessionAffinity,
@@ -270,8 +265,8 @@ export const buildComplexityRouterConfig = ({
         classifier_context_window_size: classifierContextWindowSize,
       }),
     ...(classifierType === "llm" &&
-      classifierContextPerTurnChars !== undefined && {
-        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
       }),
     ...(classifierType === "llm" &&
       classifierContextIncludeAssistantTurns !== undefined && {

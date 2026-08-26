@@ -158,9 +158,18 @@ class AutoRouterBenchmarksResponse(BaseModel):
 
     start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
     end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")
-    routers_in_scope: int
+    routers_in_scope: int = Field(
+        description="How many groups this response carries. Every auto-router configured on the "
+        "proxy counts, whether or not it served anything in the window. To count only the routers "
+        "that did serve traffic, filter `groups` to the entries whose `sessions` is above zero"
+    )
     totals: AutoRouterBenchmarkTotals
-    groups: tuple[AutoRouterBenchmarkGroup, ...]
+    groups: tuple[AutoRouterBenchmarkGroup, ...] = Field(
+        description="One entry per auto-router, listed from the model registry rather than from "
+        "the rollup, so a router appears as soon as it is configured and reads zero until it "
+        "serves traffic. Semantic auto-routers are absent: they record no routing decision, so no "
+        "session can ever be attributed to them"
+    )
 
 
 ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]

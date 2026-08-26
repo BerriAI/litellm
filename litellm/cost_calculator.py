@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -149,6 +150,7 @@ _VIDEO_CALL_TYPES: Final = frozenset(
         CallTypes.avideo_remix.value,
     }
 )
+
 
 _SPEECH_CALL_TYPES: Final = frozenset(
     {
@@ -792,12 +794,25 @@ def _select_model_name_for_cost_calc(
         and custom_llm_provider is not None
         and not _model_contains_known_llm_provider(return_model)
     ):  # add provider prefix if not already present, to match model_cost
-        if region_name is not None:
-            return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
-        else:
-            return_model = f"{custom_llm_provider}/{return_model}"
+        provider_prefix: Final = custom_llm_provider if region_name is None else f"{custom_llm_provider}/{region_name}"
+        return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", region_name)
 
     return return_model
+
+
+def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
+    """Resolve a provider-prefixed slash alias like "vertex_ai/vertex/claude-opus-5" to the
+    registered cost key ("vertex_ai/claude-opus-5"), keeping the model unchanged when it already
+    resolves downstream (custom-priced router ids) or no stripped candidate is registered (#38069)."""
+    segments: Final = model.split("/")
+    if "/".join(segments[1:]) in litellm.model_cost:
+        return model
+    head_len: Final = 2 if region_name is not None and len(segments) > 2 and segments[1] == region_name else 1
+    head: Final = "/".join(segments[:head_len])
+    tail: Final = segments[head_len:]
+    strippable: Final = next((index for index, segment in enumerate(tail) if segment in LlmProvidersSet), len(tail))
+    candidates: Final = (f"{head}/{'/'.join(tail[start:])}" for start in range(min(strippable, len(tail) - 1) + 1))
+    return next((candidate for candidate in candidates if candidate in litellm.model_cost), model)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -912,6 +927,8 @@ def _get_usage_object(
                 usage_obj,
             )
         )
+    elif isinstance(usage_obj, dict) and InteractionsUsageObjectTransformation.is_interactions_usage_object(usage_obj):
+        return InteractionsUsageObjectTransformation.transform_interactions_usage_object(usage_obj)
     elif isinstance(usage_obj, dict):
         return Usage(**usage_obj)
     elif isinstance(usage_obj, BaseModel):
@@ -1288,6 +1305,10 @@ def completion_cost(
                         )
                         if tr_usage is not None:
                             _usage = tr_usage.model_dump()
+                    elif InteractionsUsageObjectTransformation.is_interactions_usage_object(_usage):
+                        _usage = InteractionsUsageObjectTransformation.transform_interactions_usage_object(
+                            _usage
+                        ).model_dump()
                     else:
                         _usage = _usage
 
@@ -1372,22 +1393,35 @@ def completion_cost(
                     if custom_pricing and litellm_logging_obj is not None:
                         _litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
                         if _litellm_params is not None:
-                            _metadata = _litellm_params.get("metadata", {}) or {}
-                            _video_model_info = _metadata.get("model_info", None)
+                            _video_model_info = next(
+                                (
+                                    model_info
+                                    for _metadata_key in ("metadata", "litellm_metadata")
+                                    if (model_info := (_litellm_params.get(_metadata_key) or {}).get("model_info"))
+                                    is not None
+                                ),
+                                None,
+                            )
 
                     usage_obj = getattr(completion_response, "usage", None)
                     duration_seconds: float | None = None
                     video_resolution: str | None = None
+                    provider_reported_cost: float | None = None
                     if completion_response is not None and usage_obj:
                         # Handle both dict and Pydantic Usage object
                         if isinstance(usage_obj, dict):
                             duration_seconds = usage_obj.get("duration_seconds", None)
                             _vr = usage_obj.get("video_resolution", None)
+                            provider_reported_cost = usage_obj.get("provider_reported_cost_usd", None)
                         else:
                             duration_seconds = getattr(usage_obj, "duration_seconds", None)
                             _vr = getattr(usage_obj, "video_resolution", None)
+                            provider_reported_cost = getattr(usage_obj, "provider_reported_cost_usd", None)
                         if _vr is not None:
                             video_resolution = str(_vr).strip().lower()
+
+                        if _video_model_info is None and provider_reported_cost is not None:
+                            return float(provider_reported_cost)
 
                         if duration_seconds is not None:
                             # Calculate cost based on video duration using video-specific cost calculation
