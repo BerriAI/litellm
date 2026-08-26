@@ -87,11 +87,20 @@ jobs:
         run: |
           uv pip uninstall pytest-retry || true
 
+      # Ends before the job's own deadline so a run that outlasts the budget is
+      # still followed by the report and upload steps. mutmut writes each
+      # mutant's result to mutants/mutmut-stats.json as it goes, so an
+      # interrupted run still scores the mutants it finished; a cancelled job
+      # skips those steps and publishes nothing at all.
       - name: Run mutmut
+        timeout-minutes: 300
         env:
           # Make the mutants/ sandbox win over site-packages on sys.path so the
           # trampolined files are imported instead of the installed copy.
           PYTHONPATH: ${{ github.workspace }}/mutants
+          # Without this mutmut finds no covered lines and generates 0 mutants.
+          # See the file itself for why.
+          COVERAGE_RCFILE: ${{ github.workspace }}/.github/mutmut-coverage.rc
         run: |
           set -o pipefail
           mkdir -p mutants
