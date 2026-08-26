@@ -755,11 +755,18 @@ def _map_openai_like_exception(
                 llm_provider=custom_llm_provider,
                 model=model,
             )
-        elif original_exception.status_code == 401 or original_exception.status_code == 403:
+        elif original_exception.status_code == 401:
             raise AuthenticationError(
                 message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                 llm_provider=custom_llm_provider,
                 model=model,
+            )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=getattr(original_exception, "response", None),
             )
         elif original_exception.status_code == 400:
             raise BadRequestError(

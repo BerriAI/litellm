@@ -805,7 +805,7 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         503: UPSTREAM_STATUS_DISCARDED,
     },
     "databricks": {
-        403: (litellm.AuthenticationError, 401),
+        403: (litellm.PermissionDeniedError, 403),
         422: (litellm.BadRequestError, 400),
     },
     "gemini": {
@@ -1096,7 +1096,11 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
 
 @pytest.mark.parametrize(
     "status_code, expected_class",
-    [(401, litellm.AuthenticationError), (429, litellm.RateLimitError)],
+    [
+        (401, litellm.AuthenticationError),
+        (403, litellm.PermissionDeniedError),
+        (429, litellm.RateLimitError),
+    ],
 )
 def test_a_base_llm_exception_without_a_provider_branch_maps_by_status_code(
     status_code, expected_class, quiet_exception_mapping
