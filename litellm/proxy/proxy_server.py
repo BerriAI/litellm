@@ -4101,7 +4101,7 @@ def resolve_complexity_router_plugins(
         complexity_router_config["classifier_plugin"] = resolved_classifier  # rebind-ok: out-param, resolved in place
 
 
-def validate_deployment_max_agentic_loops(model: Mapping[str, Any]) -> None:
+def validate_deployment_max_agentic_loops(model: Mapping[str, object]) -> None:
     """
     Reject a per-deployment `max_agentic_loops` the agentic loop cannot honor.
 
@@ -4111,7 +4111,9 @@ def validate_deployment_max_agentic_loops(model: Mapping[str, Any]) -> None:
     start. Left unchecked entirely, a `0` used to read as the default ceiling
     of 3 and a non-integer failed every request to that model instead.
     """
-    litellm_params: Final = model.get("litellm_params") or {}
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return
     if "max_agentic_loops" not in litellm_params:
         return
 
