@@ -78,8 +78,8 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     """
     Handle Anthropic OAuth token detection and header setup.
 
-    If an OAuth token is detected in the Authorization header, extracts it
-    and sets the required OAuth headers.
+    If an OAuth token is detected in the Authorization header (any casing),
+    extracts it and sets the required OAuth headers.
 
     Args:
         headers: Request headers dict
@@ -89,16 +89,18 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
         Tuple of (updated headers, api_key)
     """
     # Check Authorization header (passthrough / forwarded requests)
-    auth_header: Final = headers.get("authorization", "")
-    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.replace("Bearer ", "")
-        headers.pop("x-api-key", None)
+    auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
+    if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.removeprefix("Bearer ")
+        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+            headers.pop(name)
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
-        headers.pop("x-api-key", None)
+        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+            headers.pop(name)
         headers["authorization"] = f"Bearer {api_key}"
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
