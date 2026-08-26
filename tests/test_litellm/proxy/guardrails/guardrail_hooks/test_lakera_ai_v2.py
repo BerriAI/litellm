@@ -931,6 +931,83 @@ class TestAdvisoryModeWiring:
         assert len(result["messages"]) == 1, "no advisory note should be appended once PII is masked"
 
     @pytest.mark.asyncio
+    async def test_pre_call_mixed_violation_masks_pii_before_appending_advisory(self):
+        """
+        Bugbot finding on BerriAI/litellm#34940: a mixed violation (PII plus a
+        non-PII flag like prompt injection) isn't PII-only, so it fell straight
+        through to the advisory branch with the raw PII still in place. It must
+        mask the maskable PII first, then still append the advisory note for the
+        remaining, non-PII concern.
+        """
+        lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        mock_response = {
+            "flagged": True,
+            "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 0}],
+            "breakdown": [
+                {"detector_type": "pii/email", "detected": True},
+                {"detector_type": "prompt_injection", "detected": True},
+            ],
+        }
+        original_content = "My email is test@example.com"
+
+        with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (mock_response, {})
+            data = {
+                "messages": [{"role": "user", "content": original_content}],
+                "model": "gpt-5-mini",
+                "metadata": {},
+            }
+
+            result = await lakera_guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=DualCache(),
+                data=data,
+                call_type="completion",
+            )
+
+        assert "[MASKED" in result["messages"][0]["content"]
+        assert result["messages"][0]["content"] != original_content
+        assert len(result["messages"]) == 2, "the remaining, non-PII concern still gets an advisory note"
+        assert result["messages"][1]["role"] == "system"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_blocks_instead_of_advisory_when_pii_is_not_maskable(self):
+        """
+        Bugbot finding on BerriAI/litellm#34940: a PII-only or mixed violation on
+        input that can't be safely masked (combined messages+input, multimodal
+        content) fell through to the advisory branch with raw, unredacted content.
+        It must degrade to blocking instead, same as block mode already does for
+        this exact case, rather than showing an advisory note next to raw content.
+        """
+        lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        mock_response = {
+            "flagged": True,
+            "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 0}],
+            "breakdown": [{"detector_type": "pii/email", "detected": True}],
+        }
+
+        with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (mock_response, {})
+            data = {
+                "messages": [{"role": "user", "content": "My email is test@example.com"}],
+                "input": "responses-api content",
+                "model": "gpt-5-mini",
+                "metadata": {},
+            }
+            with pytest.raises(HTTPException):
+                await lakera_guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    cache=DualCache(),
+                    data=data,
+                    call_type="completion",
+                )
+
+        assert "messages" in data
+        assert data["messages"][0]["content"] == "My email is test@example.com", (
+            "the raw content must be untouched, not partially rewritten before the block"
+        )
+
+    @pytest.mark.asyncio
     async def test_moderation_hook_inspects_all_message_roles_not_just_user(self):
         """See test_pre_call_inspects_all_message_roles_not_just_user."""
         lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
@@ -1021,6 +1098,42 @@ class TestAdvisoryModeWiring:
 
         assert "[MASKED" in result["messages"][0]["content"]
         assert result["messages"][0]["content"] != original_content
+
+    @pytest.mark.asyncio
+    async def test_moderation_hook_mixed_violation_masks_pii_even_though_advisory_has_no_effect(self):
+        """
+        Bugbot finding on BerriAI/litellm#34940: a mixed violation isn't PII-only,
+        so it fell through to the during_call no-op branch with the raw PII still
+        in place. It must mask the maskable PII even though the advisory note
+        itself still has no effect during during_call.
+        """
+        lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        mock_response = {
+            "flagged": True,
+            "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 0}],
+            "breakdown": [
+                {"detector_type": "pii/email", "detected": True},
+                {"detector_type": "prompt_injection", "detected": True},
+            ],
+        }
+        original_content = "My email is test@example.com"
+
+        with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (mock_response, {})
+            data = {
+                "messages": [{"role": "user", "content": original_content}],
+                "model": "gpt-5-mini",
+                "metadata": {},
+            }
+            result = await lakera_guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                call_type="completion",
+            )
+
+        assert "[MASKED" in result["messages"][0]["content"]
+        assert result["messages"][0]["content"] != original_content
+        assert len(result["messages"]) == 1, "no advisory note is appended during during_call"
 
 
 class TestAdvisoryModePostCall:

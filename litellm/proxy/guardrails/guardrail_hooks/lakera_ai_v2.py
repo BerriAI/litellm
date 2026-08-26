@@ -138,7 +138,7 @@ def _pre_masking_scope_indices(
 def _apply_redacted_messages_back_preserving_fields(
     guardrail: "LakeraAIGuardrail",
     data: dict[str, object],  # mutable-ok: writes the redacted result back into the caller's request dict in place
-    redacted_messages: Sequence[Mapping[str, str]],
+    redacted_messages: Sequence[AllMessageValues],
 ) -> None:
     """Write masked content back to ``data["messages"]`` without losing fields
     the synthetic role/content-only ``redacted_messages`` never carried (e.g. a
@@ -346,7 +346,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     async def call_v2_guard(
         self,
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         request_data: dict,
         event_type: GuardrailEventHooks,
     ) -> tuple[LakeraAIResponse, dict]:
@@ -408,10 +408,10 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     def _mask_pii_in_messages(
         self,
-        messages: list[AllMessageValues],
+        messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
         masked_entity_count: dict,
-    ) -> list[AllMessageValues]:
+    ) -> Sequence[AllMessageValues]:
         """
         Return a copy of messages with any detected PII replaced by
         “[MASKED <TYPE>]” tokens.
@@ -540,12 +540,30 @@ class LakeraAIGuardrail(CustomGuardrail):
                 _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
                 verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
             elif self.on_flagged == "inject_system_message":
+                if is_multimodal_input:
+                    # Nothing here can be safely masked, so an advisory note next
+                    # to this raw, unredacted content would be no safer than a
+                    # note next to nothing. Degrade to blocking instead, same as
+                    # this on_flagged setting already does when the advisory
+                    # itself has no field it can be delivered into.
+                    raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
+                # A mixed violation (PII plus something else, e.g. prompt injection):
+                # mask whatever Lakera returned location data for before advising
+                # about what remains, so the advisory is never shown next to raw
+                # PII that could have been redacted.
+                mixed_redacted_messages: Final = self._mask_pii_in_messages(
+                    messages=new_messages,
+                    lakera_response=lakera_guardrail_response,
+                    masked_entity_count=masked_entity_count,
+                )
+                _apply_redacted_messages_back_preserving_fields(self, data, mixed_redacted_messages)
                 advisory_delivered: Final = self.inject_advisory_message(
                     data, self._build_advisory_message(lakera_guardrail_response)
                 )
                 if advisory_delivered:
                     verbose_proxy_logger.warning(
-                        "Lakera Guardrail: Advisory mode - violation detected, appended advisory system message"
+                        "Lakera Guardrail: Advisory mode - violation detected, masked PII and appended advisory "
+                        "system message"
                     )
                 else:
                     # Structured Responses-API input (a list, not a plain string)
@@ -636,6 +654,17 @@ class LakeraAIGuardrail(CustomGuardrail):
                 _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
                 verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
             elif self.on_flagged == "inject_system_message":
+                if not is_multimodal_input:
+                    # A mixed violation (PII plus something else): mask whatever's
+                    # maskable even though the advisory note below has no effect
+                    # here, so raw PII doesn't pass through untouched just because
+                    # this violation wasn't PII-only.
+                    mixed_redacted_messages: Final = self._mask_pii_in_messages(
+                        messages=new_messages,
+                        lakera_response=lakera_guardrail_response,
+                        masked_entity_count=masked_entity_count,
+                    )
+                    _apply_redacted_messages_back_preserving_fields(self, data, mixed_redacted_messages)
                 # during_call runs concurrently with the LLM dispatch (see
                 # ProxyLogging.during_call_hook / common_request_processing.py),
                 # with no pre-call barrier -- mutating data["messages"] here races
