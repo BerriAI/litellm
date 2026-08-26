@@ -200,7 +200,10 @@ def test_main_refuses_to_write_a_snapshot_missing_skipped_features(tmp_path, cap
 
 def test_main_writes_sorted_snapshot_when_every_feature_loads(tmp_path):
     snapshot_file = tmp_path / "snapshot.json"
-    fragments = {"zeta": {"paths": {"/z": {}}, "components": {"schemas": {}}}, "alpha": {"paths": {}, "components": {"schemas": {}}}}
+    fragments = {
+        "zeta": {"paths": {"/z": {}}, "components": {"schemas": {}}},
+        "alpha": {"paths": {}, "components": {"schemas": {}}},
+    }
 
     assert main(snapshot_file, generate=lambda: SnapshotResult(fragments=fragments, skipped=())) == 0
     assert json.loads(snapshot_file.read_text()) == fragments
