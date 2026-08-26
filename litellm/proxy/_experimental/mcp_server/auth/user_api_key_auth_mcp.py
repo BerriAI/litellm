@@ -447,6 +447,8 @@ class MCPRequestHandler:
             )
             is not None
             and not oauth2_headers
+            and not mcp_server_auth_headers
+            and not mcp_auth_header
         ):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
@@ -456,9 +458,13 @@ class MCPRequestHandler:
                 client_ip=IPAddressUtils.get_mcp_client_ip(request),
             )
         ) is not None and oauth2_headers:
-            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
+            (
+                validated_user_api_key_auth,
+                mcp_server_auth_headers,
+            ) = await MCPRequestHandler._admit_dcr_bridge_authorization(
                 server=bridge_delegate_target,
                 authorization_value=oauth2_headers["Authorization"],
+                litellm_api_key=litellm_api_key,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 request=request,
                 route=request_route,
@@ -802,27 +808,56 @@ class MCPRequestHandler:
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
-                resource_name: Final = server.alias or server.server_name
-                if resource_name is None:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Server misconfigured: MCP server has no routable name",
-                    )
-                raise HTTPException(
-                    status_code=401,
-                    detail="Invalid or expired credential",
-                    headers=MappingProxyType(
-                        {
-                            "www-authenticate": get_passthrough_www_authenticate(
-                                scope=request.scope,
-                                server_name=resource_name,
-                                invalid_token=True,
-                            )
-                        }
-                    ),
-                )
+                raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(server=server, request=request)
             case _:
                 assert_never(result)
+
+    @staticmethod
+    async def _admit_dcr_bridge_authorization(
+        server: MCPServer,
+        authorization_value: str,
+        litellm_api_key: str,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        request: Request,
+        route: str,
+    ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:
+        if is_bridge_envelope_shaped(authorization_value):
+            return await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=server,
+                authorization_value=authorization_value,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=route,
+            )
+        try:
+            admitted: Final = await user_api_key_auth(api_key=litellm_api_key, request=request)
+        except (HTTPException, ProxyException) as exc:
+            if not _is_litellm_auth_admission_error(exc):
+                raise
+            raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(server=server, request=request) from exc
+        return admitted, mcp_server_auth_headers
+
+    @staticmethod
+    def _dcr_bridge_invalid_token_challenge(server: MCPServer, request: Request) -> HTTPException:
+        resource_name: Final = server.alias or server.server_name
+        if resource_name is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Server misconfigured: MCP server has no routable name",
+            )
+        return HTTPException(
+            status_code=401,
+            detail="Invalid or expired credential",
+            headers=MappingProxyType(
+                {
+                    "www-authenticate": get_passthrough_www_authenticate(
+                        scope=request.scope,
+                        server_name=resource_name,
+                        invalid_token=True,
+                    )
+                }
+            ),
+        )
 
     @staticmethod
     async def _admit_gateway_session(
