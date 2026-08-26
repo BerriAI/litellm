@@ -108,8 +108,8 @@ def filter_team_based_models(
     Only use if request is from that team. Router-internal deployment exclusions
     are also enforced here so the single-dict specific-deployment shape cannot
     bypass the same exclusion boundary applied to model-group lists. Exclusions
-    persist across retries of the same target and are cleared only when fallback
-    execution advances to the next trusted target.
+    persist across retries of the same trusted target and are cleared only when
+    routing advances to a different target.
     """
     if request_kwargs is None:
         return healthy_deployments
@@ -119,29 +119,40 @@ def filter_team_based_models(
     request_team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
 
     # Router health selection consumes ``_excluded_deployment_ids`` after this
-    # filter runs. Keep a retry-scoped copy keyed by fallback depth so every
-    # retry of the same trusted target restores the preflight boundary, while
-    # advancing to the next fallback depth naturally discards the old state.
-    fallback_depth: Final = request_kwargs.get("fallback_depth")
+    # filter runs. Keep a retry-scoped copy keyed by the trusted fallback target,
+    # not fallback depth: weighted failover can increment depth while still
+    # retrying that same target. When weighted failover supplies additional
+    # failed deployment IDs, union them with the persisted preflight boundary
+    # instead of replacing it. A different target naturally clears the state.
+    target_model: Final = request_kwargs.get("model")
     raw_excluded_deployment_ids = request_kwargs.get("_excluded_deployment_ids")
     retry_state: Final = request_kwargs.get(_RETRY_SCOPED_EXCLUSION_STATE_KEY)
-    if isinstance(raw_excluded_deployment_ids, (list, tuple, set, frozenset)):
-        persisted_ids: Final = [
-            deployment_id for deployment_id in raw_excluded_deployment_ids if isinstance(deployment_id, str)
-        ]
-        request_kwargs[_RETRY_SCOPED_EXCLUSION_STATE_KEY] = {
-            "fallback_depth": fallback_depth,
-            "deployment_ids": persisted_ids,
-        }
-    elif isinstance(retry_state, Mapping) and retry_state.get("fallback_depth") == fallback_depth:
-        persisted_ids_value: Final = retry_state.get("deployment_ids")
+    retry_state_matches_target = isinstance(retry_state, Mapping) and retry_state.get("model") == target_model
+
+    persisted_ids: set[str] = set()
+    if retry_state_matches_target:
+        persisted_ids_value = retry_state.get("deployment_ids")
         if isinstance(persisted_ids_value, (list, tuple, set, frozenset)):
-            raw_excluded_deployment_ids = [
+            persisted_ids = {
                 deployment_id for deployment_id in persisted_ids_value if isinstance(deployment_id, str)
-            ]
-            request_kwargs["_excluded_deployment_ids"] = list(raw_excluded_deployment_ids)
+            }
     elif retry_state is not None:
         request_kwargs.pop(_RETRY_SCOPED_EXCLUSION_STATE_KEY, None)
+
+    if isinstance(raw_excluded_deployment_ids, (list, tuple, set, frozenset)):
+        current_ids = {
+            deployment_id for deployment_id in raw_excluded_deployment_ids if isinstance(deployment_id, str)
+        }
+        combined_ids = persisted_ids | current_ids
+        raw_excluded_deployment_ids = sorted(combined_ids)
+        request_kwargs["_excluded_deployment_ids"] = list(raw_excluded_deployment_ids)
+        request_kwargs[_RETRY_SCOPED_EXCLUSION_STATE_KEY] = {
+            "model": target_model,
+            "deployment_ids": list(raw_excluded_deployment_ids),
+        }
+    elif retry_state_matches_target and persisted_ids:
+        raw_excluded_deployment_ids = sorted(persisted_ids)
+        request_kwargs["_excluded_deployment_ids"] = list(raw_excluded_deployment_ids)
 
     excluded_deployment_ids: Final = (
         {deployment_id for deployment_id in raw_excluded_deployment_ids if isinstance(deployment_id, str)}
