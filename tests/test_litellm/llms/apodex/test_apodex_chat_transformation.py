@@ -72,6 +72,13 @@ def _chat_config(model: str):
 
 
 class TestProviderResolution:
+    def test_openai_compatible_provider_info_uses_apodex_credentials(self):
+        config = _chat_config("apodex-1.1")
+        assert config._get_openai_compatible_provider_info("https://override.test/v1", "sk-override") == (
+            "https://override.test/v1",
+            "sk-override",
+        )
+
     def test_prefixed_model_resolves_to_the_default_base(self):
         model, provider, api_key, api_base = litellm.get_llm_provider(model=CORE_MODEL)
         assert (model, provider, api_key, api_base) == (

@@ -117,13 +117,13 @@ class ApodexResponsesConfig(OpenAIResponsesAPIConfig):
             status_code=raw_response.status_code,
             # Content-Encoding and Content-Length describe the body being replaced here;
             # carrying them over makes httpx try to decompress plain JSON on read.
-            headers={
+            headers={  # mutable-ok: httpx requires mutable response headers
                 name: value for name, value in raw_response.headers.items() if name.lower() not in _BODY_FRAMING_HEADERS
             },
-            json={
+            json={  # mutable-ok: httpx requires a JSON-compatible response dict
                 **payload,
                 "created_at": payload.get("created_at", int(time())),
-                "output": payload.get("output", []),
+                "output": payload.get("output", []),  # mutable-ok: Responses payload requires an array default
             },
         )
         return super().transform_cancel_response_api_response(

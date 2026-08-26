@@ -55,6 +55,7 @@ class TestNativePassthroughRouting:
         assert config is not None
         assert type(config).__name__ == "ApodexAnthropicMessagesConfig"
         assert config.custom_llm_provider == "apodex"
+        assert config.should_strip_billing_metadata() is True
 
     @pytest.mark.parametrize("model", DEEP_RESEARCH_MODELS)
     def test_deep_research_models_fall_back_to_translation(self, model: str):

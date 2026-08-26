@@ -367,6 +367,18 @@ class TestDeepResearchKeepsState:
 
         assert event.type == "response.swarm.llm_delta"
 
+    def test_non_string_delta_is_not_claimed(self):
+        config = _responses_config("apodex-1-1-deep-research")
+        assert (
+            config._map_swarm_delta(
+                {
+                    "type": "response.swarm.llm_delta",
+                    "swarm": {"data": {"channel": "output_text", "delta": None}},
+                }
+            )
+            is None
+        )
+
     @pytest.mark.parametrize(
         "event_type",
         (

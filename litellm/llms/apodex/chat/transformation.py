@@ -125,13 +125,15 @@ class ApodexChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: list[AllMessageValues],  # mutable-ok: matches the base-class signature
         optional_params: dict,  # mutable-ok: matches the base-class signature
         litellm_params: dict,  # mutable-ok: matches the base-class signature
         headers: dict,  # mutable-ok: matches the base-class signature
     ) -> dict:  # mutable-ok: JSON request body
         pin_non_streaming: Final = bool(optional_params.get(_PIN_NON_STREAMING, False))
-        forwarded_params: Final = {key: value for key, value in optional_params.items() if key != _PIN_NON_STREAMING}
+        forwarded_params: Final = {  # mutable-ok: base transformer requires a request dict
+            key: value for key, value in optional_params.items() if key != _PIN_NON_STREAMING
+        }
         transformed: Final = super().transform_request(
             model=model,
             messages=messages,

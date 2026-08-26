@@ -74,7 +74,7 @@ class AnthropicResponsesStreamWrapper:
         if self._open_block_index is None:
             return
         self._chunk_queue.append(
-            {
+            {  # mutable-ok: queued Anthropic event payload
                 "type": "content_block_stop",
                 "index": self._open_block_index,
             }
@@ -88,7 +88,7 @@ class AnthropicResponsesStreamWrapper:
             {
                 "type": "content_block_start",
                 "index": block_idx,
-                "content_block": dict(content_block),
+                "content_block": dict(content_block),  # mutable-ok: queued Anthropic event payload
             }
         )
         self._open_block_index = block_idx
@@ -143,7 +143,11 @@ class AnthropicResponsesStreamWrapper:
                 block_idx = self._next_block_index()
                 if item_id:
                     self._item_id_to_block_index[item_id] = block_idx
-                self._start_block(block_idx, "text", {"type": "text", "text": ""})
+                self._start_block(
+                    block_idx,
+                    "text",
+                    {"type": "text", "text": ""},  # mutable-ok: Anthropic content block payload
+                )
             elif item_type == "function_call":
                 call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
@@ -172,7 +176,7 @@ class AnthropicResponsesStreamWrapper:
             text_block_idx: Final = self._get_or_start_block(
                 item_id=item_id,
                 block_type="text",
-                content_block={"type": "text", "text": ""},
+                content_block={"type": "text", "text": ""},  # mutable-ok: Anthropic content block payload
             )
             self._chunk_queue.append(
                 {
@@ -192,7 +196,11 @@ class AnthropicResponsesStreamWrapper:
             thinking_block_idx: Final = self._get_or_start_block(
                 item_id=item_id,
                 block_type="thinking",
-                content_block={"type": "thinking", "thinking": "", "signature": ""},
+                content_block={  # mutable-ok: Anthropic content block payload
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": "",
+                },
             )
             self._chunk_queue.append(
                 {

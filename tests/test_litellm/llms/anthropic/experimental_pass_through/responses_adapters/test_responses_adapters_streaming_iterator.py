@@ -245,9 +245,15 @@ class TestProcessEventTextDeltaWithoutOutputItemAdded:
         assert chunks[1]["delta"] == {"type": "text_delta", "text": "Hel"}
 
     def test_process_event_delta_without_item_id_never_yields_negative_index(self):
-        chunks = _process_all([{"type": "response.output_text.delta", "delta": "Hi"}])
+        chunks = _process_all(
+            [
+                {"type": "response.output_text.delta", "delta": "Hi"},
+                {"type": "response.output_text.delta", "delta": " again"},
+            ]
+        )
         assert [(c["type"], c["index"]) for c in chunks] == [
             ("content_block_start", 0),
+            ("content_block_delta", 0),
             ("content_block_delta", 0),
         ]
 
