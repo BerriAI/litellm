@@ -7344,7 +7344,7 @@ class Router:
             ):
                 raise error  # then raise the error
 
-        if isinstance(error, openai.AuthenticationError):
+        if isinstance(error, (openai.AuthenticationError, openai.PermissionDeniedError)):
             """
             - if other deployments available -> retry
             - else -> raise error
