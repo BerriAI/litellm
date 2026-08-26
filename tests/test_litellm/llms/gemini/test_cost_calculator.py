@@ -361,3 +361,52 @@ def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
     )
 
     assert cost_zero == cost_none
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,expected_cache_read_cost",
+    [
+        ("gemini/gemini-flash-latest", "gemini", 3e-08),
+        ("gemini/gemini-flash-lite-latest", "gemini", 1e-08),
+        ("gemini/gemini-2.5-flash-preview-09-2025", "gemini", 3e-08),
+        ("gemini/gemini-2.5-flash-lite-preview-06-17", "gemini", 1e-08),
+        ("vertex_ai/gemini-2.5-flash-preview-09-2025", "vertex_ai", 3e-08),
+        ("vertex_ai/gemini-2.5-flash-lite-preview-06-17", "vertex_ai", 1e-08),
+    ],
+)
+def test_flash_alias_cache_read_is_ten_percent_of_input(
+    monkeypatch, model, custom_llm_provider, expected_cache_read_cost
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.get_model_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    assert model_info["cache_read_input_token_cost"] == expected_cache_read_cost
+    assert model_info["cache_read_input_token_cost"] == pytest.approx(
+        0.10 * model_info["input_cost_per_token"]
+    )
+
+
+@pytest.mark.parametrize(
+    "prefixed,bare",
+    [
+        ("gemini/gemini-flash-latest", "gemini-flash-latest"),
+        ("gemini/gemini-flash-lite-latest", "gemini-flash-lite-latest"),
+    ],
+)
+def test_flash_latest_alias_spellings_price_identically(monkeypatch, prefixed, bare):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prefixed_entry = litellm.model_cost[prefixed]
+    bare_entry = litellm.model_cost[bare]
+
+    for cost_key in (
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+    ):
+        assert prefixed_entry[cost_key] == bare_entry[cost_key]
