@@ -1564,12 +1564,16 @@ _MODEL_ROUTING_ROUTE_MARKERS: Final = (
     "/evals",
     "/fine_tuning",
     "/videos",
+    # vLLM GET passthrough selects the router model via ?model=; include so
+    # key/team allowlists and model budgets see the same model as the body path.
+    "/vllm",
 )
 _MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS: Final = (
     "/files",
     "/batches",
     "/skills",
     "/evals",
+    "/vllm",
 )
 _MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS: Final = (
     "/files",

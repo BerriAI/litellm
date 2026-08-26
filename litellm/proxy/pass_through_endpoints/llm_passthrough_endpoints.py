@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
+from starlette.datastructures import QueryParams
 from starlette.websockets import WebSocketState
 
 import litellm
@@ -28,6 +29,7 @@ from litellm.constants import (
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import can_key_call_model
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token,
@@ -87,15 +89,54 @@ def create_request_copy(request: Request):
     }
 
 
-def is_passthrough_request_using_router_model(request_body: dict, llm_router: litellm.Router | None) -> bool:
+def _model_from_body_or_query(
+    request_body: Mapping[str, object],
+    query_params: Mapping[str, str] | QueryParams | None = None,
+) -> str | None:
+    """Resolve model name from JSON body, falling back to query string (vLLM GET)."""
+    body_model: Final = request_body.get("model")
+    if isinstance(body_model, str) and body_model:
+        return body_model
+    if query_params is None:
+        return None
+    query_model: Final = query_params.get("model")
+    if isinstance(query_model, str) and query_model:
+        return query_model
+    return None
+
+
+def is_passthrough_request_using_router_model(
+    request_body: Mapping[str, object],
+    llm_router: litellm.Router | None,
+    query_params: Mapping[str, str] | QueryParams | None = None,
+) -> bool:
     """
     Returns True if the model is in the llm_router model names
     """
     try:
-        model: Final = request_body.get("model")
+        model: Final = _model_from_body_or_query(request_body, query_params)
         return is_known_model(model, llm_router)
     except Exception:
         return False
+
+
+async def _authorize_passthrough_route_model(
+    model_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: litellm.Router | None,
+) -> None:
+    """Enforce key model allowlists for router-selected passthrough models.
+
+    Defense-in-depth for routes (for example vLLM GET) where the model may
+    arrive via query string after user_api_key_auth has already run. Uses the
+    public can_key_call_model helper (same path as body-selected models).
+    """
+    await can_key_call_model(
+        model=model_name,
+        llm_model_list=None,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -361,13 +402,29 @@ async def vllm_proxy_route(
     from litellm.proxy.proxy_server import llm_router
 
     request_body: Final = await get_request_body(request)
-    is_router_model: Final = is_passthrough_request_using_router_model(request_body, llm_router)
+    is_router_model: Final = is_passthrough_request_using_router_model(
+        request_body, llm_router, query_params=request.query_params
+    )
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
+        model_name: Final = _model_from_body_or_query(request_body, query_params=request.query_params)
+        if not model_name:
+            raise HTTPException(
+                status_code=400,
+                detail="model is required in the request body or query string for vLLM router passthrough",
+            )
+        # Re-check allowlists here: GET query models may not have been visible to
+        # user_api_key_auth on older deployments, and this is the last gate before
+        # the request is forwarded to a managed deployment.
+        await _authorize_passthrough_route_model(
+            model_name=model_name,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+        )
         result: Final = cast(
             httpx.Response,
             await llm_router.allm_passthrough_route(
-                model=request_body.get("model"),
+                model=model_name,
                 method=request.method,
                 endpoint=endpoint,
                 request_query_params=request.query_params,

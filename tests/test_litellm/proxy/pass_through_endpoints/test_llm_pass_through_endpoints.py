@@ -2013,6 +2013,10 @@ class TestLLMPassthroughFactoryProxyRoute:
 
 class TestVLLMProxyRoute:
     @pytest.mark.asyncio
+    @patch(  # test-quality-ok: isolate allowlist gate from router passthrough
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._authorize_passthrough_route_model",
+        new_callable=AsyncMock,
+    )
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={"model": "router-model", "stream": False},
@@ -2023,7 +2027,7 @@ class TestVLLMProxyRoute:
     )
     @patch("litellm.proxy.proxy_server.llm_router")
     async def test_vllm_proxy_route_with_router_model(
-        self, mock_llm_router, mock_is_router, mock_get_body
+        self, mock_llm_router, mock_is_router, mock_get_body, mock_authorize
     ):
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
@@ -2043,7 +2047,104 @@ class TestVLLMProxyRoute:
         )
 
         mock_is_router.assert_called_once()
+        mock_authorize.assert_awaited_once_with(
+            model_name="router-model",
+            user_api_key_dict=mock_user_api_key_dict,
+            llm_router=mock_llm_router,
+        )
         mock_llm_router.allm_passthrough_route.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: isolate allowlist gate from router passthrough
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._authorize_passthrough_route_model",
+        new_callable=AsyncMock,
+    )
+    @patch(  # test-quality-ok: empty body; model comes from query only
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={},
+    )
+    @patch(  # test-quality-ok: force router branch for query-model path
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch(  # test-quality-ok: capture allm_passthrough_route model kwarg
+        "litellm.proxy.proxy_server.llm_router"
+    )
+    async def test_vllm_proxy_route_query_only_model_uses_router_and_auth(
+        self, mock_llm_router, mock_is_router, mock_get_body, mock_authorize
+    ):
+        """GET /vllm/...?model= must route and authorize like body model selection."""
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.headers = {}
+        mock_request.query_params = {"model": "query-router-model"}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.team_models = []
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, json={"response": "success"})
+        )
+
+        await vllm_proxy_route(
+            endpoint="/v1/models",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        mock_authorize.assert_awaited_once_with(
+            model_name="query-router-model",
+            user_api_key_dict=mock_user_api_key_dict,
+            llm_router=mock_llm_router,
+        )
+        call_kwargs = mock_llm_router.allm_passthrough_route.await_args.kwargs
+        assert call_kwargs["model"] == "query-router-model"
+        assert call_kwargs["method"] == "GET"
+
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: inject ProxyException without full auth stack
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._authorize_passthrough_route_model",
+        new_callable=AsyncMock,
+    )
+    @patch(  # test-quality-ok: empty body; model comes from query only
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={},
+    )
+    @patch(  # test-quality-ok: force router branch before deny
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch(  # test-quality-ok: assert forward is skipped on deny
+        "litellm.proxy.proxy_server.llm_router"
+    )
+    async def test_vllm_proxy_route_query_model_auth_denies_disallowed(
+        self, mock_llm_router, mock_is_router, mock_get_body, mock_authorize
+    ):
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.headers = {}
+        mock_request.query_params = {"model": "disallowed-model"}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_authorize.side_effect = ProxyException(
+            message="key not allowed to access model",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="model",
+            code=403,
+        )
+        mock_llm_router.allm_passthrough_route = AsyncMock()
+
+        with pytest.raises(ProxyException):
+            await vllm_proxy_route(
+                endpoint="/v1/models",
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        mock_llm_router.allm_passthrough_route.assert_not_awaited()
 
     @pytest.mark.asyncio
     @patch(
@@ -2074,6 +2175,23 @@ class TestVLLMProxyRoute:
 
         assert result == "factory_success"
         mock_factory_route.assert_awaited_once()
+
+    def test_is_passthrough_request_using_router_model_reads_query_params(self):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            is_passthrough_request_using_router_model,
+        )
+
+        with patch(  # test-quality-ok: assert query model is passed into is_known_model
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_known_model",
+            return_value=True,
+        ) as mock_known:
+            assert (
+                is_passthrough_request_using_router_model(
+                    {}, MagicMock(), query_params={"model": "from-query"}
+                )
+                is True
+            )
+            mock_known.assert_called_once_with("from-query", mock.ANY)
 
 
 class TestForwardHeaders:
