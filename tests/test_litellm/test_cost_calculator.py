@@ -2844,7 +2844,9 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
     "model",
     ["claude-sonnet-4-6", "claude-mythos-5", "claude-mythos-preview"],
 )
-def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(_local_model_cost_map, monkeypatch, model):
+def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(
+    _local_model_cost_map, monkeypatch, model
+):
     """
     Anthropic bills every Claude 4.6+ model served with ``inference_geo="us"`` at
     1.1x, and echoes that geo back in the response usage, so each of these real
