@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
@@ -291,6 +291,54 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> LLMResponseTypes | None:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, Any],
+        exception: Exception,
+        call_type: CallTypes | None,
+        fallback_depth: int | None = None,
+    ) -> None:
+        """
+        Called once per failed deployment attempt - attempt 1, every retry, and
+        every fallback chain step - because the router re-invokes the wrapped
+        function on each attempt, re-entering this hook's call site fresh
+        every time.
+
+        This is a DEPLOYMENT-LEVEL signal, distinct from the REQUEST-LEVEL
+        ``async_log_failure_event``, which fires once per logical client
+        request behind a dedup gate. ``request_data`` is mostly this
+        attempt's own kwargs, with one exception: it omits
+        ``attempted_targets``, the router's own bookkeeping of which fallback
+        targets this request has already tried, since that one object *is*
+        shared by reference across every hop of the live fallback walk.
+
+        Pairs with ``async_pre_call_deployment_hook`` and
+        ``async_post_call_success_deployment_hook`` to complete the
+        pre-call/success/failure lifecycle for a single deployment attempt.
+
+        ``fallback_depth`` is best-effort: ``None`` on the first attempt and on
+        any call made without a ``Router`` (a bare SDK call has no fallback
+        chain to be at a depth in), ``1`` on the first fallback hop, ``2`` on
+        the second, and so on. It reflects ``Router``'s own internal fallback
+        bookkeeping (``kwargs["fallback_depth"]``), not a value this hook
+        computes or guarantees the shape of across versions. It tracks
+        fallback hops only, not retries within the same model group - a
+        retry-only failure (no fallback yet) also reports ``None``. If an
+        override predates this field it's simply never passed, rather than
+        raising - safe to leave off an override written before it existed.
+
+        ``exception`` is a same-class snapshot, not the exact object about to
+        be re-raised to the real caller: read it freely, but setting an
+        attribute on it (e.g. ``status_code``) has no effect on what the
+        caller actually receives.
+
+        Default: no-op. Opt in by overriding. Keep overrides fast - this
+        runs on the request's exception path, so a slow implementation
+        delays error propagation to the caller. The reported failure
+        duration is captured before this hook runs, so a slow override
+        doesn't inflate that metric, but the caller still waits for it.
         """
 
     async def async_post_call_streaming_deployment_hook(
