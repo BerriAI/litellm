@@ -9,7 +9,6 @@ declare global {
 interface GitHubIssue {
   number: number;
   title: string;
-  user: { login: string };
   labels: { name: string }[];
 }
 
@@ -21,7 +20,6 @@ interface GitHubComment {
 }
 
 interface GitHubReaction {
-  user: { login: string };
   content: string;
 }
 
@@ -240,17 +238,17 @@ async function autoCloseDuplicates(): Promise<void> {
       `[DEBUG] Issue #${issue.number} - duplicate comment has ${reactions.length} reactions`,
     );
 
-    const authorThumbsDown = reactions.some(
-      (reaction) =>
-        reaction.user.login === issue.user.login && reaction.content === "-1",
-    );
+    // Any thumbs down, not just the author's. The notice tells every reader that a
+    // 👎 keeps the issue open, and anyone can already stop the clock by commenting,
+    // so honouring only the author would make the notice a lie without buying safety.
+    const thumbsDown = reactions.some((reaction) => reaction.content === "-1");
     console.log(
-      `[DEBUG] Issue #${issue.number} - author thumbs down reaction: ${authorThumbsDown}`,
+      `[DEBUG] Issue #${issue.number} - thumbs down reaction: ${thumbsDown}`,
     );
 
-    if (authorThumbsDown) {
+    if (thumbsDown) {
       console.log(
-        `[DEBUG] Issue #${issue.number} - author disagreed with duplicate detection, skipping`,
+        `[DEBUG] Issue #${issue.number} - someone disagreed with duplicate detection, skipping`,
       );
       continue;
     }
