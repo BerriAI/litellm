@@ -4476,34 +4476,32 @@ def _init_custom_logger_compatible_class(
                 SIGNOZ_INGESTION_ENDPOINT_ENV,
             )
 
-            _signoz_endpoint = os.getenv(SIGNOZ_INGESTION_ENDPOINT_ENV)
+            _signoz_endpoint: Final = os.getenv(SIGNOZ_INGESTION_ENDPOINT_ENV)
             if not _signoz_endpoint:
                 raise ValueError(f"{SIGNOZ_INGESTION_ENDPOINT_ENV} not found in environment variables")
 
-            _v2 = _maybe_construct_otel_v2("signoz", _in_memory_loggers)
-            if _v2 is not None:
-                return _v2
+            _signoz_v2: Final = _maybe_construct_otel_v2("signoz", _in_memory_loggers)
+            if _signoz_v2 is not None:
+                return _signoz_v2
 
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
                 OpenTelemetryConfig,
             )
-            from litellm.integrations.otel.plumbing.providers import (
-                _otlp_traces_endpoint,
-            )
 
-            _signoz_key = os.getenv("SIGNOZ_INGESTION_KEY")
-            otel_config = OpenTelemetryConfig(
+            _signoz_base: Final = _signoz_endpoint.rstrip("/")
+            _signoz_key: Final = os.getenv("SIGNOZ_INGESTION_KEY")
+            _signoz_config: Final = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint=_otlp_traces_endpoint(_signoz_endpoint),
+                endpoint=(_signoz_base if _signoz_base.endswith("/v1/traces") else f"{_signoz_base}/v1/traces"),
                 headers=(f"signoz-ingestion-key={_signoz_key}" if _signoz_key else None),
             )
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry) and callback.callback_name == "signoz":
                     return callback
-            _signoz_otel_logger = OpenTelemetry(config=otel_config, callback_name="signoz")
-            _in_memory_loggers.append(_signoz_otel_logger)
-            return _signoz_otel_logger
+            _signoz_logger: Final = OpenTelemetry(config=_signoz_config, callback_name="signoz")
+            _in_memory_loggers.append(_signoz_logger)
+            return _signoz_logger
 
         elif logging_integration == "mlflow":
             for callback in _in_memory_loggers:
