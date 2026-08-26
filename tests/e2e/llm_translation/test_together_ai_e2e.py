@@ -423,6 +423,9 @@ class TestTogetherChatCompletions:
         registry: dict[str, CostMapEntry],
         reasoning_tool_backend: str,
     ) -> None:
+        """Cached prompt tokens (Together caches shared prefixes across calls) bill at
+        the registry's cache read rate, which is $0 until a row carries one (LIT-5972),
+        so the expected cost is computed from the same registry row the proxy prices with."""
         model, key = _register(client, resources, reasoning_tool_backend)
 
         result = client.proxy.transport.send(
@@ -450,7 +453,7 @@ class TestTogetherChatCompletions:
         cached = (usage.prompt_tokens_details.cached_tokens or 0) if usage.prompt_tokens_details else 0
         expected = (
             (usage.prompt_tokens - cached) * price.input_cost_per_token
-            + cached * (price.cache_read_input_token_cost or price.input_cost_per_token)
+            + cached * (price.cache_read_input_token_cost or 0.0)
             + usage.completion_tokens * price.output_cost_per_token
         )
         assert _approx_equal(header_cost, expected), (
