@@ -12,6 +12,7 @@ from functools import partial
 from typing import Any, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
@@ -382,13 +383,18 @@ async def anthropic_messages(
     )
     ctx: Final = contextvars.copy_context()
     func_with_context: Final = partial(ctx.run, func)
-    init_response: Final = await loop.run_in_executor(None, func_with_context)
-
-    if asyncio.iscoroutine(init_response):
-        response = await init_response
-    else:
-        response = init_response
-    return response
+    try:
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            return await init_response
+        return init_response
+    except Exception as e:  # noqa: BLE001  # the mapping boundary must see every provider-layer failure, like acompletion
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            extra_kwargs=kwargs,
+        )
 
 
 def validate_anthropic_api_metadata(metadata: dict | None = None) -> dict | None:
