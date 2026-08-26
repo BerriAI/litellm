@@ -2840,6 +2840,38 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
     assert completion_cost == pytest.approx(500 * 25e-6 * 2.0 * 1.1)
 
 
+@pytest.mark.parametrize(
+    "model",
+    ["claude-sonnet-4-6", "claude-mythos-5", "claude-mythos-preview"],
+)
+def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(_local_model_cost_map, monkeypatch, model):
+    """
+    Anthropic bills every Claude 4.6+ model served with ``inference_geo="us"`` at
+    1.1x, and echoes that geo back in the response usage, so each of these real
+    cost-map entries has to carry the ``us`` multiplier or US-pinned traffic is
+    under-reported by 10%.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import Usage
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def make_usage() -> "Usage":
+        return Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
+
+    base_prompt_cost, base_completion_cost = anthropic_cost_per_token(model=model, usage=make_usage())
+
+    geo_usage = make_usage()
+    geo_usage.inference_geo = "us"
+    geo_prompt_cost, geo_completion_cost = anthropic_cost_per_token(model=model, usage=geo_usage)
+
+    assert base_prompt_cost > 0
+    assert geo_prompt_cost == pytest.approx(base_prompt_cost * 1.1)
+    assert geo_completion_cost == pytest.approx(base_completion_cost * 1.1)
+
+
 def test_gemini_cache_tokens_details_no_negative_values():
     """
     Test for Issue #18750: Negative text_tokens with Gemini caching
