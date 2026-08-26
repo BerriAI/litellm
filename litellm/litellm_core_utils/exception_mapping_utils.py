@@ -550,6 +550,13 @@ def _map_anthropic_exception(
                 llm_provider="anthropic",
                 model=model,
             )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"AnthropicException - {error_str}",
+                llm_provider="anthropic",
+                model=model,
+                response=original_exception.response,
+            )
         elif original_exception.status_code == 400 or original_exception.status_code == 413:
             raise BadRequestError(
                 message=f"AnthropicException - {error_str}",
