@@ -48,7 +48,7 @@ HYBRID_REASONING_MODELS: Final = frozenset(
 HIGH_MAX_EFFORT_MODEL_PREFIX: Final = "deepseek-ai/DeepSeek-V4-Pro"
 EFFORT_TRANSLATION: Final = MappingProxyType({"minimal": "low", "xhigh": "high", "max": "high"})
 HIGH_MAX_EFFORT_TRANSLATION: Final = MappingProxyType(
-    {"minimal": "high", "low": "high", "medium": "high", "high": "max", "xhigh": "max"}
+    {"minimal": "high", "low": "high", "medium": "high", "xhigh": "max"}
 )
 
 

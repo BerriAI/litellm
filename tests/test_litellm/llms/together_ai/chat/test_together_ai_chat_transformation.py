@@ -250,7 +250,7 @@ def test_reasoning_effort_none_does_not_clobber_user_reasoning():
 
 @pytest.mark.parametrize(
     "effort, expected",
-    [("minimal", "high"), ("low", "high"), ("medium", "high"), ("high", "max"), ("xhigh", "max"), ("max", "max")],
+    [("minimal", "high"), ("low", "high"), ("medium", "high"), ("high", "high"), ("xhigh", "max"), ("max", "max")],
 )
 def test_deepseek_v4_pro_remaps_to_high_max(effort, expected):
     mapped = _map_reasoning_effort(HIGH_MAX_REASONING_MODEL, effort)
