@@ -2,10 +2,8 @@ import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy.pass_through_endpoints.success_handler import (
-    PassThroughEndpointLogging,
-)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 if TYPE_CHECKING:
@@ -14,8 +12,6 @@ if TYPE_CHECKING:
     )
 else:
     BaseGoogleGenAIGenerateContentConfig = Any
-
-GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
 
 def _encode_google_genai_sse_event(event_lines: list[str]) -> bytes:
@@ -78,15 +74,25 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         self,
     ):
         """Handle the logging after all chunks have been collected."""
-        from litellm.proxy.pass_through_endpoints.streaming_handler import (
-            PassThroughStreamingHandler,
-        )
+        try:
+            from litellm.proxy.pass_through_endpoints.streaming_handler import (
+                PassThroughStreamingHandler,
+            )
+            from litellm.proxy.pass_through_endpoints.success_handler import (
+                PassThroughEndpointLogging,
+            )
+        except ImportError as e:
+            verbose_logger.debug(
+                "Skipping google_genai streaming cost logging; proxy extras not installed: %s",
+                e,
+            )
+            return
 
         end_time: Final = datetime.now()
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
-                passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+                passthrough_success_handler_obj=PassThroughEndpointLogging(),
                 url_route="/v1/generateContent",
                 request_body=self.request_body or {},
                 endpoint_type=EndpointType.VERTEX_AI,
