@@ -65,3 +65,26 @@ def test_reload_prompt_replaces_callback_without_leaking_the_old_one(isolated_ca
     assert _served_content(registry) == "begin every reply with HOWDY"
     assert stale_callback not in isolated_callbacks
     assert len(isolated_callbacks) == 1
+
+
+def test_reload_prompt_keeps_the_old_template_when_the_replacement_fails(isolated_callbacks: list) -> None:
+    registry = InMemoryPromptRegistry()
+    registry.initialize_prompt(prompt=_db_prompt_spec("begin every reply with AHOY"))
+    old_callback = registry.get_prompt_callback_by_id("greeting.v1")
+
+    broken = PromptSpec(
+        prompt_id="greeting.v1",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="greeting",
+            prompt_integration="does_not_exist",
+            prompt_data={"content": "begin every reply with HOWDY", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+
+    with pytest.raises(ValueError, match="Unsupported prompt"):
+        registry.reload_prompt(prompt=broken)
+
+    assert registry.get_prompt_callback_by_id("greeting.v1") is old_callback
+    assert _served_content(registry) == "begin every reply with AHOY"
+    assert isolated_callbacks == [old_callback]
