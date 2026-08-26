@@ -361,3 +361,33 @@ def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
     )
 
     assert cost_zero == cost_none
+
+
+@pytest.mark.parametrize(
+    "traffic_type, expected_service_tier",
+    [
+        ("ON_DEMAND", None),
+        ("ON_DEMAND_PRIORITY", "priority"),
+        ("FLEX", "flex"),
+        ("BATCH", "flex"),
+        # Vertex AI reports flex/shared-capacity traffic as ON_DEMAND_FLEX.
+        ("ON_DEMAND_FLEX", "flex"),
+        # trafficType is matched case-insensitively.
+        ("on_demand_flex", "flex"),
+        (None, None),
+        ("SOMETHING_UNKNOWN", None),
+    ],
+)
+def test_map_traffic_type_to_service_tier(
+    traffic_type: str | None, expected_service_tier: str | None
+):
+    """
+    Gemini/Vertex usageMetadata.trafficType maps to the LiteLLM service_tier
+    that selects flex/priority cost keys. ON_DEMAND_FLEX (Vertex's flex opt-in
+    value) must map to "flex" so flex-tier requests are not billed as standard.
+    """
+    from litellm.cost_calculator import _map_traffic_type_to_service_tier
+
+    assert (
+        _map_traffic_type_to_service_tier(traffic_type) == expected_service_tier
+    )
