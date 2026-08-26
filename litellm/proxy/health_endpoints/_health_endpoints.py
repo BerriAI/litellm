@@ -11,6 +11,7 @@ from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -164,6 +165,7 @@ services = (
         "langfuse",
         "langfuse_otel",
         "slack",
+        "ms_teams",
         "openmeter",
         "webhook",
         "email",
@@ -178,6 +180,15 @@ services = (
     ]
     | str
 )
+
+
+class _ServiceTestErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+class _ServiceTestSuccessResponse(TypedDict):
+    status: ReadOnly[str]
+    message: ReadOnly[str]
 
 
 @router.get(
@@ -238,6 +249,7 @@ async def health_services_endpoint(
             "langfuse",
             "langfuse_otel",
             "slack",
+            "ms_teams",
             "openmeter",
             "webhook",
             "braintrust",
@@ -448,6 +460,27 @@ async def health_services_endpoint(
                     status_code=422,
                     detail={"error": f'"{service}" not in proxy config: general_settings. Unable to test this.'},
                 )
+        if service == "ms_teams":
+            if "ms_teams" not in general_settings.get("alerting", ()):
+                not_configured_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": f'"{service}" not in proxy config: general_settings. Unable to test this.'
+                }
+                raise HTTPException(status_code=422, detail=not_configured_detail)
+            if os.getenv("MS_TEAMS_WEBHOOK_URL") is None:
+                missing_webhook_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "MS_TEAMS_WEBHOOK_URL not set. Unable to test this."
+                }
+                raise HTTPException(status_code=422, detail=missing_webhook_detail)
+            await proxy_logging_obj.alerting_handler(
+                message="This is a test MS Teams alert message",
+                level="Low",
+                alert_type=AlertType.budget_alerts,
+            )
+            ms_teams_success: Final[_ServiceTestSuccessResponse] = {
+                "status": "success",
+                "message": "Mock MS Teams Alert sent, verify MS Teams Alert Received in your channel",
+            }
+            return ms_teams_success
         if service == "email":
             webhook_event: Final = WebhookEvent(
                 event="key_created",

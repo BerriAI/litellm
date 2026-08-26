@@ -40,7 +40,7 @@ import anyio
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, Json, JsonValue
-from typing_extensions import NotRequired, assert_never
+from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -378,6 +378,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.config_resolvers import resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
+    MS_TEAMS_DESCRIPTORS,
     SLACK_DESCRIPTORS,
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
@@ -16181,6 +16182,11 @@ def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     return [{**entry, "variables": _redact_callback_env_vars(entry.get("variables") or {})} for entry in entries]
 
 
+class _AlertingDestinationEntry(TypedDict):
+    name: ReadOnly[str]
+    variables: ReadOnly[Mapping[str, str | None]]
+
+
 def _apply_alerting_env_role_gate(env_vars: dict, is_full_admin: bool) -> dict:
     if is_full_admin:
         return mask_sensitive_keys(env_vars, _ALERTING_SENSITIVE_VARS)
@@ -16822,6 +16828,17 @@ async def get_config(
                 "variables": _email_env_vars,
             }
         )
+
+        _ms_teams_values, _ = resolve_fields(
+            MS_TEAMS_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True
+        )
+        _ms_teams_env_vars: Final = _apply_alerting_env_role_gate(_ms_teams_values, is_full_admin)
+
+        ms_teams_alerting_entry: Final[_AlertingDestinationEntry] = {
+            "name": "ms_teams",
+            "variables": _ms_teams_env_vars,
+        }
+        alerting_data.append(ms_teams_alerting_entry)
 
         if llm_router is None:
             _router_settings = {}
