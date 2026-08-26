@@ -967,7 +967,7 @@ async def exchange_token_with_server(
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
-    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, lambda s: s.effective_token_url)
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, _token_flow_needed_endpoint)
     token_url: Final = resolved_server.effective_token_url
     if token_url is None:
         raise HTTPException(
@@ -1662,6 +1662,18 @@ def _register_flow_needed_endpoint(mcp_server: MCPServer) -> str | None:
     if mcp_server.is_dcr_bridge and not mcp_server.client_id and mcp_server.effective_registration_url is None:
         return None
     return mcp_server.effective_authorization_url
+
+
+def _token_flow_needed_endpoint(mcp_server: MCPServer) -> str | None:
+    """The token exchange's deferred-discovery join gate. The exchange's relay-vs-callback arm
+    (:func:`_dcr_bridge_relays_client_registration`) reads the registration url, so a clientless
+    DCR bridge rebuilt without its discovered registration endpoint must keep joining discovery
+    even when the token url already resolves; skipping it would select the gateway-callback arm
+    and the upstream would reject the code over a redirect_uri mismatch. Every other shape only
+    needs the token url."""
+    if mcp_server.is_dcr_bridge and not mcp_server.client_id and mcp_server.effective_registration_url is None:
+        return None
+    return mcp_server.effective_token_url
 
 
 async def register_client_with_server(
