@@ -3096,6 +3096,85 @@ async def test_a_hops_own_rejection_on_a_different_check_does_not_undercount_the
 
 
 @pytest.mark.asyncio
+async def test_a_third_hops_admission_still_recognizes_a_charge_that_survived_a_middle_hops_rejection(
+    time_controller,
+):
+    """
+    Regression test for Cursor Bugbot's follow-up finding on the fix above:
+    an earlier version had _release_stale_hop_reservations *pop* the pending
+    "requests" entry, re-queuing it only after this hop's own atomic batch
+    fully succeeded. A middle hop that failed *before* reaching that point
+    (exactly the concurrency-rejection scenario the test above covers) left
+    the real counter correctly charged but the bookkeeping field empty, so
+    a *third* hop's own peek came back with nothing to renew and charged a
+    fresh unit on top of the one still sitting in the real counter --
+    doubling the charge (or, with a tighter limit, a false 429) despite the
+    fix that was supposed to prevent exactly that.
+
+    Reuses the same request_kwargs (the same model_call_details) across all
+    three hops -- unlike the probe above, which deliberately uses a fresh,
+    independent context and so can't distinguish "the real counter is
+    correct" from "the bookkeeping that lets a future hop recognize it is
+    intact"; only a third hop sharing the same chain's own bookkeeping can.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_period", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    },
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "shared_pool", "limit": 1, "period_seconds": 300}]
+                    },
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # Hop 1 admits (claiming the requests unit and the only concurrency
+    # slot), then fails for real.
+    request_kwargs, kwargs = _call_context(["end_user_id:u1", "shared_pool:pool-a"])
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    await limiter.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # An unrelated request claims the now-free concurrency slot and holds it.
+    other_request_kwargs, other_kwargs = _call_context(["shared_pool:pool-a"])
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=other_request_kwargs
+    )
+
+    # Hop 2 of our original request rejects on concurrency (not requests) --
+    # its own admission never reaches its own successful queuing step.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    # The unrelated request finishes, freeing the concurrency slot. Release
+    # runs as a background task on success (see async_log_success_event's
+    # own implementation), so let it actually complete before hop 3 checks.
+    await limiter.async_log_success_event(kwargs=other_kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # Hop 3 of our original request, same request_kwargs: if the bookkeeping
+    # survived hop 2's rejection, this renews at zero cost and succeeds. If
+    # it was lost, this charges a fresh unit on top of hop 1's still-live
+    # real charge and wrongly rejects.
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert result == healthy
+
+
+@pytest.mark.asyncio
 async def test_own_rejection_does_not_release_a_live_reservation(time_controller):
     """
     Security regression test: Router.async_callback_filter_deployments fires

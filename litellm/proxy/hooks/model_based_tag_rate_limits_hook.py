@@ -1050,28 +1050,6 @@ def _queue_pending_reservations(
     pending.extend(reservations)  # mutable-ok: see comment above
 
 
-def _pop_reservations(model_call_details: Mapping[str, object], field: str) -> tuple[tuple[str, "_PartitionKey"], ...]:
-    """No external cache-mirror interaction -- only
-    `_PENDING_CONCURRENCY_KEYS_FIELD` needs that (see its docstring); a
-    "requests" entry here never needs a final-hop release path, so this is
-    the whole mechanism. Snapshots then removes individual items from the
-    same list object rather than a blanket pop of `field` itself, matching
-    `_pop_pending_concurrency_keys`'s own reasoning: a sibling hop sharing
-    this request's `model_call_details` can still be live and appending
-    concurrently, so clearing the whole field here could silently strand
-    that entry instead of it being refunded or left to stand later."""
-    pending = model_call_details.get(field)
-    if not isinstance(pending, list) or not pending:
-        return ()
-    keys: Final = tuple(pending)
-    for key in keys:
-        try:
-            pending.remove(key)  # mutable-ok: see queuing helper above
-        except ValueError:
-            pass
-    return keys
-
-
 def _record_admission_time(request_kwargs: Mapping[str, object], now: float) -> None:
     """Stash this hop's admission timestamp -- see `_ADMISSION_TIME_FIELD`'s
     docstring for why. Silently a no-op without a real logging object
@@ -1405,10 +1383,16 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                     concurrency_reservations,
                 )
 
+            # Only genuinely new keys, never one already in stale_request_keys:
+            # that key's own check just renewed at zero net cost above and is
+            # still sitting in the field (see _release_stale_hop_reservations'
+            # own comment on why this is a peek, not a pop) -- appending it
+            # again here would grow the list with a duplicate entry on every
+            # hop of a long retry chain without changing what it means.
             request_increments: Final = tuple(
                 (key, _partition_key(configured_limit.entry))
                 for configured_limit, _tag_value, key in atomic_checks
-                if configured_limit.unit == "requests"
+                if configured_limit.unit == "requests" and key not in stale_request_keys
             )
             if request_increments:
                 _queue_pending_reservations(
@@ -1612,6 +1596,18 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         a logical request that genuinely made an earlier, real attempt. The
         returned keys let `async_filter_deployments` fold the swap into its
         own atomic batch instead -- see its own comment for how.
+
+        Deliberately a peek, not a pop, for that same field: an earlier
+        version popped it here and only re-queued on a fully successful
+        atomic batch, so a hop that failed *before* reaching that point (a
+        read-only check, or a different entry in its own batch) silently
+        dropped the bookkeeping -- the real counter was untouched (0.0
+        renewals roll back to a no-op), but the *next* hop's own peek would
+        come back empty, no longer recognize the key as already charged, and
+        charge a fresh unit on top of the one still sitting in the real
+        counter. Peeking leaves the field exactly as it was for whichever
+        hop reads it next, regardless of how many hops in between fail
+        before ever reaching their own successful queuing step.
         """
         logging_obj: Final = request_kwargs.get("litellm_logging_obj")
         model_call_details: Final = getattr(logging_obj, "model_call_details", None)
@@ -1620,8 +1616,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         release_keys: Final = await self._pop_pending_concurrency_keys(model_call_details)
         if release_keys:
             await self._release_keys(release_keys)
-        stale_request_increments: Final = _pop_reservations(model_call_details, _PENDING_REQUEST_INCREMENTS_FIELD)
-        return frozenset(key for key, _partition_key in stale_request_increments)
+        pending_request_increments: Final = model_call_details.get(_PENDING_REQUEST_INCREMENTS_FIELD)
+        if not isinstance(pending_request_increments, list):
+            return frozenset()
+        return frozenset(key for key, _partition_key in pending_request_increments)
 
     async def _pop_pending_concurrency_keys(
         self, kwargs: Mapping[str, object]
