@@ -223,19 +223,12 @@ class ToolCallFunction(BaseModel):
 
 
 class ToolCall(BaseModel):
-    """A tool call as the model emitted it. `id` and `type` are what a client
-    replays in the assistant turn so the tool result can be matched to it."""
-
     id: str | None = None
     type: str | None = None
     function: ToolCallFunction = ToolCallFunction()
 
 
 class ChatAssistantTurn(BaseModel):
-    """An assistant turn replayed into history as the client received it: the tool
-    calls a tool result answers, or the reasoning a thinking-preserving chat
-    template consumes on the next turn."""
-
     role: Literal["assistant"] = "assistant"
     content: str | None = None
     reasoning_content: str | None = None
@@ -243,8 +236,6 @@ class ChatAssistantTurn(BaseModel):
 
 
 class ChatToolResultTurn(BaseModel):
-    """The tool-role answer to a `ToolCall`; `tool_call_id` must be the id the model emitted."""
-
     role: Literal["tool"] = "tool"
     tool_call_id: str
     content: str
