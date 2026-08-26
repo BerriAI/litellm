@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from unittest.mock import MagicMock
 
 import httpx
@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
 )
@@ -31,6 +32,11 @@ def force_local_model_cost(monkeypatch):
     from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
     monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+
+
+@pytest.fixture(autouse=True)
+def isolate_together_api_base_env(monkeypatch):
+    monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
 
 
 @pytest.fixture
@@ -476,3 +482,334 @@ def test_completion_unmapped_model_sends_tools_to_together():
     tool_call = response.choices[0].message.tool_calls[0]
     assert tool_call.function.name == "get_weather"
     assert json.loads(tool_call.function.arguments) == {"city": "San Francisco"}
+
+
+TOGETHER_CHAT_URL = "https://api.together.ai/v1/chat/completions"
+
+WEATHER_AND_TIME_TOOLS = [
+    *WEATHER_TOOLS,
+    {"type": "function", "function": {"name": "get_time", "parameters": {}}},
+]
+
+ANTHROPIC_WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Get the weather",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+}
+
+
+def _chat_completion(message: Mapping[str, object], finish_reason: str = "stop") -> dict:
+    return {
+        "id": "chatcmpl-together",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": UNMAPPED_MODEL,
+        "choices": [{"index": 0, "message": dict(message), "finish_reason": finish_reason}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _chunk(delta: Mapping[str, object], finish_reason: str | None = None) -> dict:
+    return {
+        "id": "chatcmpl-together-stream",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": UNMAPPED_MODEL,
+        "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason}],
+    }
+
+
+def _sse(*events: Mapping[str, object]) -> bytes:
+    return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events) + b"data: [DONE]\n\n"
+
+
+def _sse_response(*events: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(200, content=_sse(*events), headers={"Content-Type": "text/event-stream"})
+
+
+def _sync_client(captured_requests: list[httpx.Request], response: httpx.Response) -> HTTPHandler:
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return response
+
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+
+def _async_client(captured_requests: list[httpx.Request], response: httpx.Response) -> AsyncHTTPHandler:
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return response
+
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    return handler
+
+
+PARALLEL_TOOL_CALL_STREAM = (
+    _chunk({"role": "assistant", "reasoning": "Need weather "}),
+    _chunk({"reasoning": "and time."}),
+    _chunk(
+        {
+            "tool_calls": [
+                {"index": 0, "id": "call_weather", "type": "function", "function": {"name": "get_weather", "arguments": ""}}
+            ]
+        }
+    ),
+    _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"city": "San'}}]}),
+    _chunk({"tool_calls": [{"index": 0, "function": {"arguments": ' Francisco"}'}}]}),
+    _chunk(
+        {"tool_calls": [{"index": 1, "id": "call_time", "type": "function", "function": {"name": "get_time", "arguments": ""}}]}
+    ),
+    _chunk({"tool_calls": [{"index": 1, "function": {"arguments": '{"tz": "PST"}'}}]}, finish_reason="tool_calls"),
+)
+
+
+def test_streaming_completion_rebuilds_reasoning_and_parallel_tool_calls():
+    captured_requests: list[httpx.Request] = []
+    client = _sync_client(captured_requests, _sse_response(*PARALLEL_TOOL_CALL_STREAM))
+
+    chunks = list(
+        litellm.completion(
+            model=f"together_ai/{UNMAPPED_MODEL}",
+            messages=[{"role": "user", "content": "Weather and time in San Francisco?"}],
+            tools=WEATHER_AND_TIME_TOOLS,
+            stream=True,
+            api_key="fake-key",
+            client=client,
+        )
+    )
+
+    request_body = json.loads(captured_requests[0].content)
+    assert str(captured_requests[0].url) == TOGETHER_CHAT_URL
+    assert request_body["stream"] is True
+    assert request_body["tools"] == WEATHER_AND_TIME_TOOLS
+
+    streamed_reasoning = "".join(getattr(chunk.choices[0].delta, "reasoning_content", None) or "" for chunk in chunks)
+    assert streamed_reasoning == "Need weather and time."
+
+    rebuilt = litellm.stream_chunk_builder(chunks)
+    message = rebuilt.choices[0].message
+    assert message.reasoning_content == "Need weather and time."
+    assert rebuilt.choices[0].finish_reason == "tool_calls"
+    calls = {call.id: call for call in message.tool_calls}
+    assert calls["call_weather"].function.name == "get_weather"
+    assert json.loads(calls["call_weather"].function.arguments) == {"city": "San Francisco"}
+    assert calls["call_time"].function.name == "get_time"
+    assert json.loads(calls["call_time"].function.arguments) == {"tz": "PST"}
+
+
+async def test_async_streaming_completion_strips_internal_fields_and_streams_reasoning():
+    captured_requests: list[httpx.Request] = []
+    client = _async_client(
+        captured_requests,
+        _sse_response(
+            _chunk({"role": "assistant", "reasoning": "Recalling 47."}),
+            _chunk({"content": "47"}, finish_reason="stop"),
+        ),
+    )
+
+    stream = await litellm.acompletion(
+        model=f"together_ai/{REASONING_MODEL}",
+        messages=[dict(message) for message in PRESERVED_THINKING_MESSAGES],
+        chat_template_kwargs={"clear_thinking": False},
+        stream=True,
+        api_key="fake-key",
+        client=client,
+    )
+    chunks = [chunk async for chunk in stream]
+
+    request_body = json.loads(captured_requests[0].content)
+    assert str(captured_requests[0].url) == TOGETHER_CHAT_URL
+    assert request_body["chat_template_kwargs"] == {"clear_thinking": False}
+    _assert_internal_fields_stripped_reasoning_kept(request_body["messages"])
+
+    rebuilt = litellm.stream_chunk_builder(chunks)
+    assert rebuilt.choices[0].message.reasoning_content == "Recalling 47."
+    assert rebuilt.choices[0].message.content == "47"
+
+
+@pytest.mark.parametrize("api_base", ["https://api.together.ai/v1", "https://api.together.xyz/v1"])
+def test_completion_bare_model_with_together_api_base_uses_together_config(api_base):
+    captured_requests: list[httpx.Request] = []
+    client = _sync_client(
+        captured_requests,
+        httpx.Response(200, json=_chat_completion({"role": "assistant", "content": "4", "reasoning": "2+2"})),
+    )
+
+    response = litellm.completion(
+        model=UNMAPPED_MODEL,
+        messages=[{"role": "user", "content": "What is 2+2?"}],
+        api_base=api_base,
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert str(captured_requests[0].url) == f"{api_base}/chat/completions"
+    assert captured_requests[0].headers["authorization"] == "Bearer fake-key"
+    assert response._hidden_params["custom_llm_provider"] == "together_ai"
+    assert response.choices[0].message.reasoning_content == "2+2"
+
+
+def test_completion_honors_together_ai_api_base_env(monkeypatch):
+    monkeypatch.setenv("TOGETHER_AI_API_BASE", "https://together.internal.example/v1")
+    captured_requests: list[httpx.Request] = []
+    client = _sync_client(
+        captured_requests,
+        httpx.Response(200, json=_chat_completion({"role": "assistant", "content": "4"})),
+    )
+
+    litellm.completion(
+        model=f"together_ai/{REASONING_MODEL}",
+        messages=[{"role": "user", "content": "What is 2+2?"}],
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert str(captured_requests[0].url) == "https://together.internal.example/v1/chat/completions"
+
+
+def test_responses_api_sends_tools_and_maps_reasoning_and_function_call():
+    captured_requests: list[httpx.Request] = []
+    client = _sync_client(
+        captured_requests,
+        httpx.Response(
+            200,
+            json=_chat_completion(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "reasoning": "Need the weather tool.",
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "San Francisco"}'},
+                        }
+                    ],
+                },
+                finish_reason="tool_calls",
+            ),
+        ),
+    )
+
+    response = litellm.responses(
+        model=f"together_ai/{UNMAPPED_MODEL}",
+        input="What is the weather in San Francisco?",
+        tools=[{"type": "function", "name": "get_weather", "parameters": {}}],
+        api_key="fake-key",
+        client=client,
+    )
+
+    request_body = json.loads(captured_requests[0].content)
+    assert str(captured_requests[0].url) == TOGETHER_CHAT_URL
+    assert [tool["function"]["name"] for tool in request_body["tools"]] == ["get_weather"]
+    outputs = {item.type: item for item in response.output}
+    assert outputs["reasoning"].content[0].text == "Need the weather tool."
+    assert outputs["function_call"].name == "get_weather"
+    assert json.loads(outputs["function_call"].arguments) == {"city": "San Francisco"}
+
+
+ANTHROPIC_TOOL_LOOP_MESSAGES = [
+    {"role": "user", "content": "What is the weather in San Francisco?"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "I should call get_weather.", "signature": ""},
+            {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "San Francisco"}},
+        ],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Sunny, 18C"}],
+    },
+]
+
+
+def test_anthropic_messages_replays_tool_loop_and_maps_reasoning_to_thinking_block():
+    captured_requests: list[httpx.Request] = []
+    client = _sync_client(
+        captured_requests,
+        httpx.Response(
+            200,
+            json=_chat_completion({"role": "assistant", "content": "Sunny in SF.", "reasoning": "Tool said sunny."}),
+        ),
+    )
+
+    response = litellm.anthropic.messages.create(
+        model=f"together_ai/{UNMAPPED_MODEL}",
+        max_tokens=100,
+        messages=[dict(message) for message in ANTHROPIC_TOOL_LOOP_MESSAGES],
+        tools=[ANTHROPIC_WEATHER_TOOL],
+        api_key="fake-key",
+        client=client,
+    )
+
+    request_body = json.loads(captured_requests[0].content)
+    assert str(captured_requests[0].url) == TOGETHER_CHAT_URL
+    assert [tool["function"]["name"] for tool in request_body["tools"]] == ["get_weather"]
+    assistant_turn = request_body["messages"][1]
+    assert assistant_turn["role"] == "assistant"
+    assert assistant_turn["reasoning_content"] == "I should call get_weather."
+    assert "thinking_blocks" not in assistant_turn
+    replayed_call = assistant_turn["tool_calls"][0]
+    assert replayed_call["id"] == "toolu_01"
+    assert replayed_call["function"]["name"] == "get_weather"
+    assert json.loads(replayed_call["function"]["arguments"]) == {"city": "San Francisco"}
+    tool_turn = request_body["messages"][2]
+    assert tool_turn["role"] == "tool"
+    assert tool_turn["tool_call_id"] == "toolu_01"
+    assert tool_turn["content"] == "Sunny, 18C"
+
+    blocks = {block["type"]: block for block in response["content"]}
+    assert blocks["thinking"]["thinking"] == "Tool said sunny."
+    assert blocks["text"]["text"] == "Sunny in SF."
+    assert response["stop_reason"] == "end_turn"
+
+
+def _anthropic_sse_events(stream: Iterator[bytes]) -> list[dict]:
+    return [
+        json.loads(line.removeprefix("data: "))
+        for raw in stream
+        for line in raw.decode().splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+def test_anthropic_messages_streams_together_tool_call_as_input_json_delta():
+    captured_requests: list[httpx.Request] = []
+    client = _sync_client(captured_requests, _sse_response(*PARALLEL_TOOL_CALL_STREAM))
+
+    events = _anthropic_sse_events(
+        litellm.anthropic.messages.create(
+            model=f"together_ai/{UNMAPPED_MODEL}",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Weather and time in San Francisco?"}],
+            tools=[ANTHROPIC_WEATHER_TOOL, {"name": "get_time", "input_schema": {"type": "object"}}],
+            stream=True,
+            api_key="fake-key",
+            client=client,
+        )
+    )
+
+    assert json.loads(captured_requests[0].content)["stream"] is True
+    tool_starts = {
+        event["index"]: event["content_block"]
+        for event in events
+        if event["type"] == "content_block_start" and event["content_block"]["type"] == "tool_use"
+    }
+    input_json_deltas = [
+        event for event in events if event["type"] == "content_block_delta" and event["delta"]["type"] == "input_json_delta"
+    ]
+    tool_inputs = {
+        block["name"]: json.loads("".join(delta["delta"]["partial_json"] for delta in input_json_deltas if delta["index"] == index))
+        for index, block in tool_starts.items()
+    }
+    assert {block["id"] for block in tool_starts.values()} == {"call_weather", "call_time"}
+    assert tool_inputs == {"get_weather": {"city": "San Francisco"}, "get_time": {"tz": "PST"}}
+    thinking_text = "".join(
+        event["delta"]["thinking"]
+        for event in events
+        if event["type"] == "content_block_delta" and event["delta"]["type"] == "thinking_delta"
+    )
+    assert thinking_text == "Need weather and time."
+    assert [event["delta"]["stop_reason"] for event in events if event["type"] == "message_delta"] == ["tool_use"]
