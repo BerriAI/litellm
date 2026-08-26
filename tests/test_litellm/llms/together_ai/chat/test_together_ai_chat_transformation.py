@@ -535,12 +535,13 @@ def _sync_client(captured_requests: list[httpx.Request], response: httpx.Respons
     return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
 
 
-def _async_client(captured_requests: list[httpx.Request], response: httpx.Response) -> AsyncHTTPHandler:
+async def _async_client(captured_requests: list[httpx.Request], response: httpx.Response) -> AsyncHTTPHandler:
     def respond(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
         return response
 
     handler = AsyncHTTPHandler()
+    await handler.close()
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     return handler
 
@@ -600,7 +601,7 @@ def test_streaming_completion_rebuilds_reasoning_and_parallel_tool_calls():
 
 async def test_async_streaming_completion_strips_internal_fields_and_streams_reasoning():
     captured_requests: list[httpx.Request] = []
-    client = _async_client(
+    client = await _async_client(
         captured_requests,
         _sse_response(
             _chunk({"role": "assistant", "reasoning": "Recalling 47."}),
@@ -608,15 +609,18 @@ async def test_async_streaming_completion_strips_internal_fields_and_streams_rea
         ),
     )
 
-    stream = await litellm.acompletion(
-        model=f"together_ai/{REASONING_MODEL}",
-        messages=[dict(message) for message in PRESERVED_THINKING_MESSAGES],
-        chat_template_kwargs={"clear_thinking": False},
-        stream=True,
-        api_key="fake-key",
-        client=client,
-    )
-    chunks = [chunk async for chunk in stream]
+    try:
+        stream = await litellm.acompletion(
+            model=f"together_ai/{REASONING_MODEL}",
+            messages=[dict(message) for message in PRESERVED_THINKING_MESSAGES],
+            chat_template_kwargs={"clear_thinking": False},
+            stream=True,
+            api_key="fake-key",
+            client=client,
+        )
+        chunks = [chunk async for chunk in stream]
+    finally:
+        await client.client.aclose()
 
     request_body = json.loads(captured_requests[0].content)
     assert str(captured_requests[0].url) == TOGETHER_CHAT_URL
