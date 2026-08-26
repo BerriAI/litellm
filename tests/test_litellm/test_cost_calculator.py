@@ -3942,6 +3942,34 @@ def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_ma
     assert selected == "vertex_ai/claude-opus-5"
 
 
+def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_map):
+    """A "region/model" alias whose leading segment repeats the request's region must
+    resolve to the region-priced cost key instead of keeping the region segment twice."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="us-east-1/anthropic.claude-v2:1",
+    )
+    response._hidden_params = {"region_name": "us-east-1"}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
     """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
 
