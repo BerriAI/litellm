@@ -361,6 +361,47 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return False, descriptors
 
+    def _batch_input_file_models_only(
+        self,
+        data: dict,  # mutable-ok: read only here, and mirrors the sibling skip helper's signature
+        user_api_key_dict: UserAPIKeyAuth,
+        has_enqueued_scopes: bool = False,
+    ) -> bool:
+        """True when the JSONL is read only to validate ``body.model``.
+
+        ``_should_skip_batch_input_file_processing`` returns on the model
+        allowlist check before it consults the operator opt-outs, so a key with a
+        restricted ``models`` list always takes the full path even when batch
+        input-file rate limiting is disabled. The download itself is still
+        required -- the allowlist can only be enforced by inspecting every row --
+        but the per-row token counting it also performs is then discarded by the
+        caller.
+
+        Reporting that case lets the read collect ``body.model`` without
+        tokenizing each row. Enforcement is unchanged: this returns False
+        whenever anything still needs the totals, including enqueued-token
+        scopes, whose reservation is priced from them.
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        if has_enqueued_scopes:
+            return False
+
+        if not self._key_requires_batch_model_access_check(user_api_key_dict):
+            # An unrestricted key is already covered by the full-skip paths.
+            return False
+
+        if general_settings.get("disable_batch_input_file_rate_limiting") is True:
+            return True
+
+        skip_providers: Final = tuple(general_settings.get("skip_batch_input_file_rate_limiting_for_providers") or ())
+        if skip_providers:
+            batch_provider: Final = self._resolve_batch_provider(self._get_batch_routing_model(data))
+            if batch_provider and batch_provider in skip_providers:
+                return True
+
+        return False
+
     def _warn_if_unsupported_model_skip_configured(self, general_settings: dict) -> None:
         """Warn once that ``skip_batch_input_file_rate_limiting_for_models`` is a no-op.
 
@@ -729,6 +770,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth | None = None,
         data: dict | None = None,
         descriptors: Sequence["RateLimitDescriptor"] | None = None,
+        models_only: bool = False,
     ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
@@ -739,6 +781,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             user_api_key_dict: User authentication information for file access (required for managed files)
             descriptors: Rate limit descriptors already computed for this batch, so the
                 configured project OTPM limit can scale the no-``max_tokens`` output floor
+            models_only: Collect and validate every row's ``body.model`` but skip
+                per-row token counting. Set when the file is read solely for
+                allowlist enforcement, so the token fields come back 0 and the
+                caller must not charge them.
 
         Returns:
             BatchFileUsage with total_tokens, output_tokens, request_count, and
@@ -831,6 +877,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 try:
                     entry = json.loads(raw_line)
                 except Exception:
+                    if models_only:
+                        # A malformed row names no model, so skipping its size
+                        # estimate cannot weaken the allowlist check below.
+                        continue
                     entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
                     entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
                         min_configured_otpm_limit
@@ -842,6 +892,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
                 if model:
                     models.add(model)
+
+                if models_only:
+                    # Every row's `body.model` is collected above, which is all
+                    # `_enforce_batch_file_model_access` needs. Tokenizing here
+                    # would be work the caller throws away.
+                    continue
 
                 if isinstance(entry, dict):
                     entry_output_tokens = self._estimate_entry_output_tokens(entry, min_configured_otpm_limit)
@@ -1109,6 +1165,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if should_skip:
                 return data
 
+            models_only: Final = self._batch_input_file_models_only(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                has_enqueued_scopes=bool(enqueued_scopes),
+            )
+
             # Get custom_llm_provider for token counting
             custom_llm_provider: Final = data.get("custom_llm_provider", "openai")
 
@@ -1120,7 +1182,18 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
                 data=data,
                 descriptors=batch_rate_limit_descriptors,
+                models_only=models_only,
             )
+
+            if models_only:
+                # The allowlist was enforced inside count_input_file_usage and
+                # nothing charges this batch, so there are no counters to check.
+                # Returning here keeps the zeroed totals out of `data`, matching
+                # the full-skip path above which also leaves them unset.
+                verbose_proxy_logger.debug(
+                    "Batch model-access validation passed; batch input file rate limiting disabled"
+                )
+                return data
 
             verbose_proxy_logger.debug(
                 "Batch input file usage - Tokens: %s, Requests: %s", batch_usage.total_tokens, batch_usage.request_count
