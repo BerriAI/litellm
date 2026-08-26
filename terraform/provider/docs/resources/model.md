@@ -182,11 +182,11 @@ The following arguments are supported:
   * Note: the remote API may not echo back all custom parameters; this provider preserves `additional_litellm_params` in state when present in configuration.
 
   **Special parameter: `additional_drop_params`**
-  * When `additional_drop_params` is provided as a JSON array string, it specifies parameters to remove from the final `litellm_params` before sending to the API
-  * This allows you to override or remove built-in parameters if needed
-  * The `additional_drop_params` key itself is not included in the final parameters
+  * When `additional_drop_params` is provided as a JSON array string, it is stored on the model as `litellm_params.additional_drop_params` (a `[]string`)
+  * At request time the proxy strips those parameter names from client payloads before calling the upstream provider
+  * This matches LiteLLM proxy/config semantics — it is not a Terraform-only filter on the create/update body
 
-  Example showing booleans, integers, floats, strings, and parameter dropping:
+  Example showing booleans, integers, floats, strings, and runtime drop params:
 
   ```hcl
   resource "litellm_model" "with_additional" {
@@ -202,7 +202,7 @@ The following arguments are supported:
       "scale"                  = "0.75"                    # becomes float 0.75
       "note"                   = "for testing"             # stays string
       "complex_config"         = "{\"nested\": {\"value\": 42}}"  # parsed as JSON object
-      "additional_drop_params" = "[\"reasoningEffort\"]"   # removes reasoningEffort parameter
+      "additional_drop_params" = "[\"reasoningEffort\"]"   # stored on the model; proxy drops this param on each request
     }
   }
   ```

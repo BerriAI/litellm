@@ -166,75 +166,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 
 	// Add additional parameters if provided
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
-		var dropParams []string
-
-		for key, value := range additionalParams.(map[string]interface{}) {
-			// Convert string values to appropriate types where possible
-			if strValue, ok := value.(string); ok {
-				// Check if it's JSON (starts with [ or {)
-				trimmedValue := strings.TrimSpace(strValue)
-				if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
-					var parsedValue interface{}
-					if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
-						// Successfully parsed JSON
-						if key == "additional_drop_params" {
-							// Handle drop params specially
-							if dropList, ok := parsedValue.([]interface{}); ok {
-								for _, item := range dropList {
-									if paramStr, ok := item.(string); ok {
-										dropParams = append(dropParams, paramStr)
-									}
-								}
-							}
-							continue // Don't add to litellmParams
-						} else {
-							litellmParams[key] = parsedValue
-						}
-					} else {
-						// Not valid JSON, apply existing conversion logic
-						if strValue == "true" {
-							litellmParams[key] = true
-						} else if strValue == "false" {
-							litellmParams[key] = false
-						} else {
-							// Try to convert numeric strings
-							if intValue, err := strconv.Atoi(strValue); err == nil {
-								litellmParams[key] = intValue
-							} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-								litellmParams[key] = floatValue
-							} else {
-								// Keep as string
-								litellmParams[key] = strValue
-							}
-						}
-					}
-				} else {
-					// Apply existing conversion logic for non-JSON strings
-					if strValue == "true" {
-						litellmParams[key] = true
-					} else if strValue == "false" {
-						litellmParams[key] = false
-					} else {
-						// Try to convert numeric strings
-						if intValue, err := strconv.Atoi(strValue); err == nil {
-							litellmParams[key] = intValue
-						} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-							litellmParams[key] = floatValue
-						} else {
-							// Keep as string
-							litellmParams[key] = strValue
-						}
-					}
-				}
-			} else {
-				litellmParams[key] = value
-			}
-		}
-
-		// Apply drop params at the end
-		for _, paramToDrop := range dropParams {
-			delete(litellmParams, paramToDrop)
-		}
+		mergeAdditionalLiteLLMParams(litellmParams, additionalParams.(map[string]interface{}))
 	}
 
 	// Add litellm_credential_name to litellmParams if provided
@@ -421,4 +353,63 @@ func resourceLiteLLMModelDelete(d *schema.ResourceData, m interface{}) error {
 
 	d.SetId("")
 	return nil
+}
+
+// mergeAdditionalLiteLLMParams coerces additional_litellm_params values and
+// merges them into litellmParams. additional_drop_params is a first-class
+// LiteLLM litellm_params field (runtime param strip list) and must be sent to
+// the API as []string — it must not be used to delete keys from this request body.
+func mergeAdditionalLiteLLMParams(litellmParams map[string]interface{}, additionalParams map[string]interface{}) {
+	for key, value := range additionalParams {
+		strValue, ok := value.(string)
+		if !ok {
+			litellmParams[key] = value
+			continue
+		}
+
+		trimmedValue := strings.TrimSpace(strValue)
+		if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
+			var parsedValue interface{}
+			if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
+				if key == "additional_drop_params" {
+					litellmParams[key] = coerceStringList(parsedValue)
+					continue
+				}
+				litellmParams[key] = parsedValue
+				continue
+			}
+		}
+
+		litellmParams[key] = coerceStringScalar(strValue)
+	}
+}
+
+func coerceStringList(parsedValue interface{}) []string {
+	dropList, ok := parsedValue.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(dropList))
+	for _, item := range dropList {
+		if paramStr, ok := item.(string); ok {
+			out = append(out, paramStr)
+		}
+	}
+	return out
+}
+
+func coerceStringScalar(strValue string) interface{} {
+	if strValue == "true" {
+		return true
+	}
+	if strValue == "false" {
+		return false
+	}
+	if intValue, err := strconv.Atoi(strValue); err == nil {
+		return intValue
+	}
+	if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
+		return floatValue
+	}
+	return strValue
 }

@@ -10,7 +10,7 @@ provider "litellm" {
 # - JSON strings (starting with [ or {) will be parsed as JSON objects/arrays.
 # - Non-convertible strings remain strings.
 # - Non-string map values are passed through unchanged.
-# - Use "additional_drop_params" as a JSON array to remove parameters from the final request.
+# - Use "additional_drop_params" as a JSON array of client param names the proxy should strip at request time.
 
 resource "litellm_model" "with_additional" {
   model_name          = "custom-model"
@@ -26,7 +26,7 @@ resource "litellm_model" "with_additional" {
     "temperature_scale"      = "0.75"                           # becomes float 0.75
     "experimental_feature"   = "enabled"                        # stays string "enabled"
     "complex_config"         = "{\"nested\": {\"value\": 42}}"  # parsed as JSON object
-    "additional_drop_params" = "[\"reasoningEffort\"]"          # removes reasoningEffort parameter
+    "additional_drop_params" = "[\"reasoningEffort\"]"          # stored on model; proxy drops at request time
     # You may also pass non-string values (they will be passed through unchanged)
     # "raw_flag" = true
   }
@@ -47,7 +47,7 @@ resource "litellm_model" "azure_with_drop_params" {
   tier                = "paid"
   mode                = "completion"
 
-  # Drop the reasoningEffort parameter that might be automatically added
+  # Ask the proxy to strip reasoningEffort from client requests for this deployment
   additional_litellm_params = {
     "additional_drop_params" = "[\"reasoningEffort\"]"
   }
