@@ -2495,12 +2495,12 @@ class PrometheusLogger(CustomLogger):
             return None
 
         def _get_user_email() -> str | None:
-            val = _metadata.get("user_api_key_user_email")
-            if val is not None:
-                return val
-            val = _litellm_params_metadata.get("user_api_key_user_email")
-            if val is not None:
-                return val
+            from_metadata: Final = _metadata.get("user_api_key_user_email")
+            if from_metadata is not None:
+                return from_metadata
+            from_params: Final = _litellm_params_metadata.get("user_api_key_user_email")
+            if from_params is not None:
+                return from_params
             if user_api_key_auth is not None:
                 return self._safe_get(user_api_key_auth, "user_email")
             return None
