@@ -743,3 +743,61 @@ class TestOtelTraceCompleteness:
         )
         genai = next(span for span in hits[0].spans if span.operation_name == genai_span)
         _assert_error_span_contract(genai)
+
+    @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["messages"])
+    def test_failed_messages_error_span_attributes(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A failed `/v1/messages` request must carry the same error-span
+        contract as a failed `/chat/completions` request (LIT-6164). The
+        async messages entrypoint used to surface the provider handler's raw
+        BaseLLMException to the failure logger, so the model-call span came
+        out with error.type=BaseLLMException and no
+        litellm.provider.error.llm_provider attribute.
+
+        Same setup as the chat sibling: a deployment with an invalid upstream
+        API key passes proxy auth and fails at the provider with a real 401,
+        and failed requests are not billed, so no cost-write span."""
+        route = "/v1/messages"
+        _assert_otel_destination_configured(client)
+
+        model_name = f"otel-err-{unique_marker()}"
+        model_id = client.create_model(
+            model_name,
+            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+        )
+        resources.defer(lambda: client.delete_model(model_id))
+        key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
+        resources.defer(lambda: client.delete_key(key))
+
+        deadline = time.monotonic() + client.proxy.poll_timeout
+        while True:
+            outcome = client.messages_raw(key, model_name, "trigger an upstream auth failure", max_tokens=16)
+            assert not outcome.ok, "the call must fail; the deployment's upstream key is invalid"
+            if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
+                break
+            time.sleep(client.proxy.poll_interval)
+        assert "AnthropicException" in outcome.body, (
+            "never saw the mapped upstream provider failure before the deadline; either the key is "
+            "still propagating or the messages route surfaced the raw unmapped provider error - "
+            f"last outcome {outcome.status_code}: {outcome.body[:200]}"
+        )
+        assert outcome.status_code == 401, (
+            f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"
+        )
+        assert outcome.call_id is not None, "failed responses must still carry x-litellm-call-id"
+
+        genai_span = f"chat {model_name}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span, require_cost_span=False),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span, require_cost_span=False)
+
+        root = next(span for span in hits[0].spans if not span.references)
+        assert str(_tag(root, "http.status_code")) == "401", (
+            f"the SERVER span must record the 401 the client received, got {_tag(root, 'http.status_code')!r}"
+        )
+        genai = next(span for span in hits[0].spans if span.operation_name == genai_span)
+        _assert_error_span_contract(genai)
