@@ -8855,7 +8855,7 @@ async def test_authorize_wall_names_the_issuer_for_anchored_servers():
 
 
 @pytest.mark.asyncio
-async def test_authorize_uses_admin_entered_github_oauth_urls_after_issuer_yield():
+async def test_authorize_uses_admin_entered_github_oauth_urls_after_issuer_yield(monkeypatch):
     """GitHub MCP servers store Authorization URL and Token URL on the row. 1.99 can empty
     the resolved authorization_url when a leftover issuer is treated as a pin (RFC 8414
     yield). The UI authorize must still redirect to the admin-entered GitHub authorize URL
@@ -8887,15 +8887,14 @@ async def test_authorize_uses_admin_entered_github_oauth_urls_after_issuer_yield
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
-    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
-        mock_encrypt.return_value = "mocked_encrypted_state"
-        response = await authorize_with_server(
-            request=mock_request,
-            mcp_server=server,
-            client_id="github-app-client",
-            redirect_uri="http://127.0.0.1:60108/callback",
-            state="state123",
-        )
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-lit-6255")
+    response = await authorize_with_server(
+        request=mock_request,
+        mcp_server=server,
+        client_id="github-app-client",
+        redirect_uri="http://127.0.0.1:60108/callback",
+        state="state123",
+    )
 
     assert response.status_code == 307
     assert "https://github.com/login/oauth/authorize" in response.headers["location"]
@@ -8924,6 +8923,137 @@ def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
         configured_token_url="https://github.com/login/oauth/access_token",
     )
     assert _oauth_endpoints_unresolved(server) is False
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_with_configured_token_url_never_joins_discovery(monkeypatch):
+    """A server can hold an admin-entered Token URL while its Authorization URL is absent. The
+    token exchange must post to that stored endpoint without awaiting deferred discovery, which
+    can 503 against an unreachable issuer even though nothing it resolves is needed here."""
+    from litellm.proxy._experimental.mcp_server import (
+        discoverable_endpoints,
+        mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="token-url-only",
+        name="token_url_only",
+        server_name="token_url_only",
+        alias="token_url_only",
+        url="https://mcp.example.com/mcp/",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        client_secret="cs",
+        authorization_url=None,
+        token_url=None,
+        issuer="https://idp.example.com",
+        issuer_is_anchored=True,
+        configured_token_url="https://idp.example.com/oauth/token",
+    )
+
+    async def fail_discovery(_srv):
+        raise AssertionError("the exchange joined deferred discovery despite a stored token url")
+
+    monkeypatch.setattr(
+        mcp_server_manager.global_mcp_server_manager,
+        "ensure_oauth_metadata_discovered",
+        fail_discovery,
+    )
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"access_token": "tok", "token_type": "Bearer"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+    monkeypatch.setattr(
+        discoverable_endpoints,
+        "get_async_httpx_client",
+        lambda llm_provider: fake_http_client,
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    response = await exchange_token_with_server(
+        request=mock_request,
+        mcp_server=server,
+        grant_type="authorization_code",
+        code="upstream-code",
+        redirect_uri="http://127.0.0.1:3000/cb",
+        client_id="cid",
+        client_secret=None,
+        code_verifier=None,
+    )
+
+    assert response.status_code == 200
+    assert fake_http_client.post.await_args.args[0] == "https://idp.example.com/oauth/token"
+
+
+@pytest.mark.asyncio
+async def test_bridge_authorize_relays_with_registration_url_resolved_by_deferred_discovery(monkeypatch):
+    """When deferred discovery resolves a DCR-bridge server during the authorize request, the
+    relay-vs-short-circuit call must read the resolved server: a client that registered itself
+    through the front door keeps its own redirect binding instead of being routed through the
+    gateway callback the upstream never granted it."""
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="bridge-deferred",
+        name="bridge_deferred",
+        server_name="bridge_deferred",
+        alias="bridge_deferred",
+        url="https://mcp.example.com/mcp/",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+        dcr_bridge=True,
+        authorization_url=None,
+        token_url=None,
+        registration_url=None,
+    )
+    resolved = server.model_copy(
+        update={
+            "authorization_url": "https://idp.example.com/oauth/authorize",
+            "token_url": "https://idp.example.com/oauth/token",
+            "registration_url": "https://idp.example.com/oauth/register",
+        }
+    )
+
+    async def resolve_discovery(_srv):
+        return resolved
+
+    monkeypatch.setattr(
+        mcp_server_manager.global_mcp_server_manager,
+        "ensure_oauth_metadata_discovered",
+        resolve_discovery,
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    response = await authorize_with_server(
+        request=mock_request,
+        mcp_server=server,
+        client_id="front-door-client",
+        redirect_uri="http://127.0.0.1:60110/client-callback",
+        state="state456",
+        code_challenge="E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        code_challenge_method="S256",
+    )
+
+    assert response.status_code == 307
+    location = response.headers["location"]
+    assert location.startswith("https://idp.example.com/oauth/authorize")
+    assert "redirect_uri=http%3A%2F%2F127.0.0.1%3A60110%2Fclient-callback" in location
 
 
 def test_passthrough_authorization_code_round_trips_and_rejects_hostile_input():
