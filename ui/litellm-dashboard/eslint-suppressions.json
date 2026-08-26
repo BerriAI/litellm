@@ -2018,11 +2018,6 @@
       "count": 1
     }
   },
-  "src/components/shared/form/field.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/shared/numerical_input.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2138,6 +2133,11 @@
       "count": 1
     }
   },
+  "src/components/ui/alert.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/avatar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2198,6 +2198,11 @@
       "count": 1
     }
   },
+  "src/components/ui/field.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/hover-card.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2214,11 +2219,6 @@
     }
   },
   "src/components/ui/label.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ui/meter.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }
@@ -2249,11 +2249,6 @@
     }
   },
   "src/components/ui/sheet.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ui/sidebar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

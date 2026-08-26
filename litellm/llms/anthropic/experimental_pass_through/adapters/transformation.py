@@ -64,6 +64,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
+    reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -433,7 +434,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 content_items = list(content.get("content", []))
 
                                 # Single-item text keeps the backward-compatible string format; a single
-                                # image becomes a structured image_url part
+                                # image or document becomes a structured image_url part
                                 if len(content_items) == 1:
                                     c = content_items[0]
                                     if isinstance(c, str):
@@ -453,7 +454,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
-                                        elif c.get("type") == "image":
+                                        elif c.get("type") in ("image", "document"):
                                             image_part = self._tool_result_image_part(c.get("source"))
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
@@ -481,7 +482,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                                         text=c.get("text", ""),
                                                     )
                                                 )
-                                            elif c.get("type") == "image":
+                                            elif c.get("type") in ("image", "document"):
                                                 image_part = self._tool_result_image_part(c.get("source"))
                                                 if image_part:
                                                     combined_content_parts.append(image_part)
@@ -592,6 +593,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     assistant_message["tool_calls"] = tool_calls
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks
+                reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
                 new_messages.append(assistant_message)
 
         return new_messages

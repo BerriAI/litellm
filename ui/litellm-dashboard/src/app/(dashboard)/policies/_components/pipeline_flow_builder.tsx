@@ -1631,7 +1631,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         right: 0,
         bottom: 0,
         backgroundColor: "var(--color-muted)",
-        zIndex: 1000,
+        zIndex: 40,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",

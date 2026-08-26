@@ -133,6 +133,7 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
     from fastapi.routing import APIRoute
     from opentelemetry.trace import Span as _Span
+    from prisma import models as prisma_models
 
     from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -634,6 +635,7 @@ from litellm.proxy.utils import (
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -1642,12 +1644,21 @@ class _InvitationLinkRow(Protocol):
 class _UserTableRow(Protocol):
     user_id: str
     user_email: str | None
-    user_role: str
+    user_role: str | None
 
 
-class _ModelTableRow(Protocol):
-    model_id: str | None
-    created_by: str | None
+class _UserTeamsRow(Protocol):
+    @property
+    def teams(self) -> Sequence[str]: ...
+
+
+_ProxyModelRow: TypeAlias = "prisma_models.LiteLLM_ProxyModelTable"
+
+
+def _config_param_table(client: PrismaClient | None) -> TableActions[_ConfigParamRow]:
+    return cast(  # cast-ok: this is prisma's LiteLLM_Config actions object, which parses its Json column to a mapping
+        "TableActions[_ConfigParamRow]", ConfigRepository(client).table
+    )
 
 
 class _TTFTRow(TypedDict):
@@ -2554,6 +2565,12 @@ async def _authoritative_floor_spend(
         )
     if db_spend is None:
         return None
+
+    # a spend reset that committed during the DB read above wrote the post-reset
+    # floor to the marker; keep it over this read's now-stale pre-commit value
+    rechecked: Final = spend_counter_cache.in_memory_cache.get_cache(key=marker_key)
+    if rechecked is not None:
+        return float(rechecked)
 
     spend_counter_cache.in_memory_cache.set_cache(
         key=marker_key,
@@ -4370,7 +4387,7 @@ class ProxyConfig:
         if prisma_client is None or not (general_settings.get("store_model_in_db", False) is True or store_model_in_db):
             return
 
-        row: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+        row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
             where={"param_name": "environment_variables"}
         )
         existing: Final[dict] = dict(row.param_value) if row is not None and row.param_value is not None else {}
@@ -4852,6 +4869,14 @@ class ProxyConfig:
         if litellm_settings is None:
             litellm_settings = {}
         if litellm_settings:
+            # Prometheus collectors have fixed label schemas. Load and validate this
+            # setting before processing callbacks so YAML key order cannot construct
+            # the collectors with the default caller-identity mode, and so an invalid
+            # value fails the boot instead of being swallowed by callback init.
+            from litellm.types.integrations.prometheus import validate_caller_identity_settings
+
+            validate_caller_identity_settings(litellm_settings)
+
             # ANSI escape code for blue text
             blue_color_code: Final = "\033[94m"
             reset_color_code: Final = "\033[0m"
@@ -6226,7 +6251,7 @@ class ProxyConfig:
         4. Update router settings
         """
         if llm_router is not None and prisma_client is not None:
-            db_router_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+            db_router_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
                 where={"param_name": "router_settings"}
             )
 
@@ -6654,7 +6679,7 @@ class ProxyConfig:
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
 
-    async def _get_models_from_db(self, prisma_client: PrismaClient) -> list | None:
+    async def _get_models_from_db(self, prisma_client: PrismaClient) -> Sequence[_ProxyModelRow] | None:
         """
         Fetch all model deployments from the DB.
 
@@ -6664,7 +6689,7 @@ class ProxyConfig:
           as "all models deleted" and must not evict existing router deployments.
         """
         try:
-            new_models: Final[list[_ModelTableRow]] = await ModelRepository(prisma_client).table.find_many()
+            new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(prisma_client).table.find_many()
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -6798,6 +6823,7 @@ class ProxyConfig:
         subscriber: Final = AuthCacheInvalidationSubscriber(
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
+            additional_in_memory_caches=(spend_counter_cache.in_memory_cache,),
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()
@@ -6950,10 +6976,13 @@ class ProxyConfig:
         """
 
         try:
-            sso_settings: Final[_SSOConfigRow | None] = await call_with_db_reconnect_retry(
-                prisma_client,
-                lambda: SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"}),
-                reason="init_sso_settings_in_db_lookup_failure",
+            sso_settings: Final[_SSOConfigRow | None] = cast(  # cast-ok: prisma Json stub is `str`, runtime is a dict
+                "_SSOConfigRow | None",
+                await call_with_db_reconnect_retry(
+                    prisma_client,
+                    lambda: SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"}),
+                    reason="init_sso_settings_in_db_lookup_failure",
+                ),
             )
             if sso_settings is not None:
                 sso_settings.sso_settings.pop("role_mappings", None)
@@ -6981,12 +7010,15 @@ class ProxyConfig:
         )
 
         try:
-            db_record: Final[_ConfigOverridesRow | None] = await call_with_db_reconnect_retry(
-                prisma_client,
-                lambda: ConfigOverridesRepository(prisma_client).table.find_unique(
-                    where={"config_type": "hashicorp_vault"}
+            db_record: Final[_ConfigOverridesRow | None] = cast(  # cast-ok: prisma Json stub is `str`, runtime dict
+                "_ConfigOverridesRow | None",
+                await call_with_db_reconnect_retry(
+                    prisma_client,
+                    lambda: ConfigOverridesRepository(prisma_client).table.find_unique(
+                        where={"config_type": "hashicorp_vault"}
+                    ),
+                    reason="init_hashicorp_vault_config_override_lookup_failure",
                 ),
-                reason="init_hashicorp_vault_config_override_lookup_failure",
             )
 
             if db_record is None or db_record.config_value is None:
@@ -8834,8 +8866,9 @@ class ProxyStartupEvent:
 
             if prisma_client is None:
                 return
-            db_record: Final[_UISettingsRow | None] = await UISettingsRepository(prisma_client).table.find_unique(
-                where={"id": "ui_settings"}
+            db_record: Final[_UISettingsRow | None] = cast(  # cast-ok: prisma Json stub is `str`, runtime is a dict
+                "_UISettingsRow | None",
+                await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"}),
             )
             if db_record and db_record.ui_settings:
                 raw: Final = db_record.ui_settings
@@ -8998,7 +9031,7 @@ class ProxyStartupEvent:
         # but YAML config has False.
         if store_model_in_db is not True and prisma_client is not None:
             try:
-                _db_gs_record: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+                _db_gs_record: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
                     where={"param_name": "general_settings"}
                 )
                 if _db_gs_record is not None and isinstance(_db_gs_record.param_value, dict):
@@ -12143,14 +12176,14 @@ async def _check_if_model_is_user_added(
         id = model.get("model_info", {}).get("id", None)
         if id is None:
             continue
-        db_model: _ModelTableRow | None = await ModelRepository(prisma_client).table.find_unique(where={"model_id": id})
+        db_model: _ProxyModelRow | None = await ModelRepository(prisma_client).table.find_unique(where={"model_id": id})
         if db_model is not None:
             if db_model.created_by == user_api_key_dict.user_id:
                 filtered_models.append(model)
     return filtered_models
 
 
-def _check_if_model_is_team_model(models: list[DeploymentTypedDict], user_row: LiteLLM_UserTable) -> list[dict]:
+def _check_if_model_is_team_model(models: list[DeploymentTypedDict], user_row: _UserTeamsRow) -> list[dict]:
     """
     Check if model is a team model
 
@@ -12203,10 +12236,11 @@ async def non_admin_all_models(
             raise HTTPException(status_code=400, detail={"error": "User not found"})
 
         # Get all models that are team models, when model team_id == user_row.teams
-        all_models += _check_if_model_is_team_model(
-            models=llm_router.get_model_list() or [],
-            user_row=user_row,
-        )
+        if user_row is not None:
+            all_models += _check_if_model_is_team_model(
+                models=llm_router.get_model_list() or [],
+                user_row=user_row,
+            )
 
     # de-duplicate models. Only return unique model ids
     unique_models: Final = _deduplicate_litellm_router_models(models=all_models)
@@ -12630,7 +12664,7 @@ async def _fetch_db_models_for_search(
 
     db_models_total_count: Final = await ModelRepository(prisma_client).table.count(where=db_where_condition)
 
-    db_models_raw: list = []
+    db_models_raw: Sequence[_ProxyModelRow] = []
     if take_limit > 0:
         db_models_raw = await ModelRepository(prisma_client).table.find_many(
             where=db_where_condition,
@@ -13020,7 +13054,7 @@ async def _gather_team_accessible_model_ids(
     try:
         if team_object.models and SpecialModelNames.all_proxy_models.value not in team_object.models:
             _resolved_names: Final = _team_models_resolve_to_names(team_object.models, access_groups)
-            db_models: Final[Sequence[_ModelTableRow]] = await ModelRepository(prisma_client).table.find_many(
+            db_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(prisma_client).table.find_many(
                 where={"model_name": {"in": _resolved_names}}
             )
             for db_model in db_models:
@@ -14494,14 +14528,18 @@ async def alerting_settings(
         )
 
     ## get general settings from db
-    db_general_settings: Final = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final = await _config_param_table(prisma_client).find_first(
         where={"param_name": "general_settings"}
     )
 
     if db_general_settings is not None and db_general_settings.param_value is not None:
         db_general_settings_dict: Final = dict(db_general_settings.param_value)
-        alerting_args_dict: dict = db_general_settings_dict.get("alerting_args", {})
-        alerting_values: list | None = db_general_settings_dict.get("alerting")
+        alerting_args_dict: dict = cast(  # cast-ok: ConfigGeneralSettings validates alerting_args as a dict on write
+            dict[str, JsonValue], db_general_settings_dict.get("alerting_args", {})
+        )
+        alerting_values: list | None = cast(  # cast-ok: ConfigGeneralSettings validates alerting as a list on write
+            list[JsonValue] | None, db_general_settings_dict.get("alerting")
+        )
     else:
         alerting_args_dict = {}
         alerting_values = None
@@ -15052,7 +15090,7 @@ async def onboarding(invite_link: str, request: Request):
         user_id=user_obj.user_id,
         key=onboarding_token,
         user_email=user_obj.user_email,
-        user_role=user_obj.user_role,
+        user_role=user_obj.user_role,  # pyright: ignore[reportArgumentType]  # nullable DB column, no unset contract
         login_method="username_password",
         premium_user=premium_user,
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
@@ -15161,7 +15199,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
         user_id=user_obj.user_id,
         key=key,
         user_email=user_obj.user_email,
-        user_role=user_obj.user_role,
+        user_role=user_obj.user_role,  # pyright: ignore[reportArgumentType]  # nullable DB column, no unset contract
         login_method="username_password",
         premium_user=premium_user,
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
@@ -15722,7 +15760,7 @@ async def update_config(
             raise Exception("No DB Connected")
 
         async def _read_section(param_name: str) -> dict:
-            row: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+            row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
                 where={"param_name": param_name}
             )
             if row is None or row.param_value is None:
@@ -15979,7 +16017,7 @@ async def update_config_general_settings(
         )
 
     ## get general settings from db
-    db_general_settings: Final = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final = await _config_param_table(prisma_client).find_first(
         where={"param_name": "general_settings"}
     )
     ### update value
@@ -15997,7 +16035,7 @@ async def update_config_general_settings(
     if data.field_name == "plugins":
         field_value = _preserve_redacted_plugin_keys(field_value, general_settings.get("plugins"))
 
-    general_settings[data.field_name] = field_value
+    general_settings[data.field_name] = cast(JsonValue, field_value)  # cast-ok: ConfigGeneralSettings validated it
 
     response: Final = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
@@ -16017,7 +16055,7 @@ async def update_config_general_settings(
     )
 
     if data.field_name == "plugins":
-        register_plugins_from_config(general_settings)
+        register_plugins_from_config(cast(dict[str, object], general_settings))  # cast-ok: the callee only reads it
     _apply_ssrf_general_settings(general_settings)
 
     return response
@@ -16193,7 +16231,7 @@ async def get_config_general_settings(
         )
 
     ## get general settings from db
-    db_general_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
         where={"param_name": "general_settings"}
     )
     ### pop the value
@@ -16382,7 +16420,7 @@ async def get_config_list(
     is_full_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     ## get general settings from db
-    db_general_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
         where={"param_name": "general_settings"}
     )
 
@@ -16478,7 +16516,7 @@ async def get_config_list(
                 )
                 return_val.append(_response_obj)
 
-    db_litellm_settings_row: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+    db_litellm_settings_row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
         where={"param_name": "litellm_settings"}
     )
     db_litellm_settings: Final[dict] = (
@@ -16555,7 +16593,7 @@ async def delete_config_general_settings(
         )
 
     ## get general settings from db
-    db_general_settings: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_first(
+    db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
         where={"param_name": "general_settings"}
     )
     ### pop the value
@@ -17122,7 +17160,7 @@ async def reload_anthropic_beta_headers(
         last_anthropic_beta_headers_reload = current_time.isoformat()
 
         # Set force reload flag in database for other pods, preserving existing interval_hours
-        existing_beta_config: Final[_ConfigParamRow | None] = await ConfigRepository(prisma_client).table.find_unique(
+        existing_beta_config: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_unique(
             where={"param_name": "anthropic_beta_headers_reload_config"}
         )
         existing_beta_interval = None
@@ -17300,7 +17338,7 @@ async def get_anthropic_beta_headers_reload_status(
             }
 
         # Get reload configuration from database
-        config_record: Final = await ConfigRepository(prisma_client).table.find_unique(
+        config_record: Final = await _config_param_table(prisma_client).find_unique(
             where={"param_name": "anthropic_beta_headers_reload_config"}
         )
 
@@ -17314,7 +17352,9 @@ async def get_anthropic_beta_headers_reload_status(
             }
 
         config: Final = config_record.param_value
-        interval_hours: Final = config.get("interval_hours")
+        interval_hours: Final = cast(  # cast-ok: every writer of this key stores `hours: int` or an explicit None
+            int | None, config.get("interval_hours")
+        )
 
         if interval_hours is None:
             verbose_proxy_logger.info("No interval configured, returning not scheduled")
