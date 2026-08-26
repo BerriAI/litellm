@@ -5,7 +5,6 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 import pytest
 
-
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -183,6 +182,24 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.usage.prompt_tokens == 13797
         assert result.usage.completion_tokens == 350
         assert result.usage.total_tokens == 14147
+
+    def test_chunk_parser_preserves_service_tier(self):
+        """Provider service-tier responses must survive chunk normalization."""
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        result = handler.chunk_parser(
+            {
+                "id": "gen-123",
+                "created": 1234567890,
+                "model": "xai/grok-4.6",
+                "choices": [],
+                "service_tier": "priority",
+            }
+        )
+
+        assert result.service_tier == "priority"
 
     def test_chunk_parser_raises_on_in_body_error_payload(self):
         """vLLM/sglang return HTTP 200 streams whose body carries the error,
