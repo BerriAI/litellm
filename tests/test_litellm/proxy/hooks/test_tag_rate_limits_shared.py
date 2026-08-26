@@ -14,6 +14,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     extract_identity,
     extract_key_hash,
     fixed_length_identity,
+    order_tags_for_identity_resolution,
     partition_key,
 )
 from litellm.types.router import TagRateLimitEntry, TagRateLimitScope
@@ -34,6 +35,42 @@ def test_extract_identity_returns_none_when_absent():
 def test_extract_identity_skips_negation_tags():
     """A `!end_user_id:u1` routing-negation marker must never be read as identity."""
     assert extract_identity(["!end_user_id:u1"], "end_user_id") is None
+
+
+# ---------------------------------------------------------------------------
+# order_tags_for_identity_resolution -- veria-ai finding on PR #38292: a
+# caller-supplied tag must not shadow a policy-backed (key/team/project)
+# tag sharing the same tag_id prefix
+# ---------------------------------------------------------------------------
+
+
+def test_order_tags_for_identity_resolution_prefers_inherited_tag_over_caller_supplied():
+    request_kwargs = {"metadata": {"inherited_tags": ["company_id:real-company"]}}
+    tags = ["company_id:attacker-chosen", "end_user_id:u1"]
+    ordered = order_tags_for_identity_resolution(tags, request_kwargs, "metadata")
+    assert extract_identity(ordered, "company_id") == "real-company"
+
+
+def test_order_tags_for_identity_resolution_falls_back_to_caller_tags_when_nothing_inherited():
+    request_kwargs = {"metadata": {}}
+    tags = ["end_user_id:u1"]
+    ordered = order_tags_for_identity_resolution(tags, request_kwargs, "metadata")
+    assert extract_identity(ordered, "end_user_id") == "u1"
+
+
+def test_order_tags_for_identity_resolution_keeps_caller_only_tags_not_shadowed_by_a_different_tag_id():
+    request_kwargs = {"metadata": {"inherited_tags": ["company_id:real-company"]}}
+    tags = ["end_user_id:u1"]
+    ordered = order_tags_for_identity_resolution(tags, request_kwargs, "metadata")
+    assert extract_identity(ordered, "end_user_id") == "u1"
+    assert extract_identity(ordered, "company_id") == "real-company"
+
+
+def test_order_tags_for_identity_resolution_deduplicates_identical_tag_present_in_both_sources():
+    request_kwargs = {"metadata": {"inherited_tags": ["company_id:real-company"]}}
+    tags = ["company_id:real-company"]
+    ordered = order_tags_for_identity_resolution(tags, request_kwargs, "metadata")
+    assert ordered.count("company_id:real-company") == 1
 
 
 # ---------------------------------------------------------------------------
