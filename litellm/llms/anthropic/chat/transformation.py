@@ -1217,8 +1217,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if reasoning_effort is None or reasoning_effort == "none":
             return None
         if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
+            # without display, Anthropic defaults adaptive thinking to
+            # display="omitted" and returns a blank thinking block
             return AnthropicThinkingParam(
                 type="adaptive",
+                display="summarized",
             )
         elif reasoning_effort == "low":
             return AnthropicThinkingParam(
@@ -2146,7 +2149,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _thinking_tokens_from_usage(usage_object: Mapping[str, object]) -> int | None:
+    def thinking_tokens_from_usage(usage_object: Mapping[str, object]) -> int | None:
         details: Final = usage_object.get("output_tokens_details")
         if not isinstance(details, Mapping):
             return None
@@ -2178,7 +2181,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         reported_thinking_tokens: Final = (
             iteration_thinking_tokens
             if iteration_thinking_tokens is not None
-            else self._thinking_tokens_from_usage(usage_object)
+            else self.thinking_tokens_from_usage(usage_object)
         )
         if reported_thinking_tokens is not None:
             capped_reported: Final = min(max(0, reported_thinking_tokens), completion_tokens)
@@ -2201,7 +2204,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _sum_iteration_thinking_tokens(self, iterations: Sequence[object]) -> int | None:
         per_iteration: Final = tuple(
-            self._thinking_tokens_from_usage(iteration) if isinstance(iteration, Mapping) else None
+            self.thinking_tokens_from_usage(iteration) if isinstance(iteration, Mapping) else None
             for iteration in iterations
         )
         reported: Final = tuple(tokens for tokens in per_iteration if tokens is not None)

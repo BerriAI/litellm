@@ -4130,7 +4130,7 @@ def get_optional_params(
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
     elif custom_llm_provider == "together_ai":
-        optional_params = litellm.TogetherAIConfig().map_openai_params(
+        optional_params = litellm.TogetherAIChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -7897,7 +7897,7 @@ class ProviderConfigManager:
             LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
             LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
-            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
+            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIChatConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
@@ -8609,6 +8609,12 @@ class ProviderConfigManager:
             )
 
             return BedrockPassthroughConfig()
+        elif LlmProviders.BEDROCK_MANTLE == provider:
+            from litellm.llms.bedrock_mantle.passthrough.transformation import (
+                BedrockMantlePassthroughConfig,
+            )
+
+            return BedrockMantlePassthroughConfig()
         elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.passthrough.transformation import (
                 VLLMPassthroughConfig,
@@ -9095,6 +9101,7 @@ class ProviderConfigManager:
         from litellm.llms.apiserpent.search.transformation import (
             APISerpentSearchConfig,
         )
+        from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
@@ -9136,6 +9143,7 @@ class ProviderConfigManager:
             SearchProviders.TINYFISH: TinyfishSearchConfig,
             SearchProviders.AGENTCORE: AgentCoreSearchConfig,
             SearchProviders.NIMBLE: NimbleSearchConfig,
+            SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
         }
         config_class: Final = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

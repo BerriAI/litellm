@@ -621,7 +621,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         # Check wildcard patterns
         for route_pattern in routes_defined:
-            if RouteChecks._route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
+            if RouteChecks.route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
                 return True
 
         return False

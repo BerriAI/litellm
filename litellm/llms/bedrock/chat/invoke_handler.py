@@ -331,6 +331,7 @@ class AWSEventStreamDecoder:
         self.json_mode = json_mode
         self._current_tool_name: str | None = None
         self._thinking_ran = False
+        self._provider_reasoning_tokens: int | None = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -559,10 +560,14 @@ class AWSEventStreamDecoder:
                 tool_use = self._handle_converse_stop_event(content_block_index)
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
+                self._provider_reasoning_tokens = AmazonConverseConfig.thinking_tokens_from_additional_fields(
+                    chunk_data.get("additionalModelResponseFields")
+                )
             elif "usage" in chunk_data:
                 usage = converse_config.transform_usage(
                     chunk_data.get("usage", {}),
                     thinking_ran=self._thinking_ran,
+                    provider_reasoning_tokens=self._provider_reasoning_tokens,
                 )
             if thinking_blocks:
                 self._thinking_ran = True

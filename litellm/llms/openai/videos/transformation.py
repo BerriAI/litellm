@@ -1,5 +1,7 @@
 import mimetypes
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import quote
 
@@ -502,15 +504,26 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        video_file: FileContent | None = None,
         extra_body: dict[str, object] | None = None,
         prefetched_source_data: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
-        original_video_id: Final = extract_original_video_id(video_id)
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         url: Final = f"{api_base.rstrip('/')}/edits"
+
+        if video_file is not None:
+            files: Final[RequestFiles] = (self._video_file_tuple(video_file, "video"),)
+            form_data: Final = (
+                MappingProxyType({"prompt": prompt, **extra_body})
+                if extra_body
+                else MappingProxyType({"prompt": prompt})
+            )
+            return url, form_data, files
+
+        original_video_id: Final = extract_original_video_id(video_id)
         data: Final[dict[str, object]] = {"prompt": prompt, "video": {"id": original_video_id}}
         if extra_body:
             data.update(extra_body)
-        return url, data
+        return url, data, None
 
     def transform_video_edit_response(
         self,
@@ -570,21 +583,22 @@ class OpenAIVideoConfig(BaseVideoConfig):
         else:
             files_list.append((field_name, ("input_reference.png", image, image_content_type)))
 
+    def _video_file_tuple(self, video: FileContent, field_name: str) -> tuple[str, FileTypes]:
+        """
+        Build a multipart field tuple for a video upload with proper video MIME
+        type detection: these paths must send video/mp4, not image/* content types.
+        """
+        filename: Final = getattr(video, "name", None) or "input_video.mp4"
+        content_type: Final = self._get_video_content_type(video=video, filename=filename)
+        return (field_name, (filename, video, content_type))
+
     def _add_video_to_files(
         self,
         files_list: list[tuple[str, FileTypes]],
         video: FileContent,
         field_name: str,
     ) -> None:
-        """
-        Add a video to files with proper video MIME type detection.
-
-        This path is used by POST /videos/characters and must send video/mp4,
-        not image/* content types.
-        """
-        filename: Final = getattr(video, "name", None) or "input_video.mp4"
-        content_type: Final = self._get_video_content_type(video=video, filename=filename)
-        files_list.append((field_name, (filename, video, content_type)))
+        files_list.append(self._video_file_tuple(video, field_name))
 
     def _get_video_content_type(self, video: FileContent, filename: str) -> str:
         guessed_content_type, _ = mimetypes.guess_type(filename)

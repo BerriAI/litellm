@@ -961,8 +961,7 @@ class TestManagementReadsTheStoredCredential:
             credential_values={"anthropic_issuer_url": "https://old.example.com"},
             credential_info={"custom_llm_provider": "anthropic"},
         )
-        row = MagicMock()
-        row.dict.return_value = {
+        row = {
             "credential_name": "anthropic-wif",
             "credential_values": {"anthropic_issuer_url": "https://new.example.com"},
             "credential_info": {"custom_llm_provider": "anthropic"},

@@ -2,7 +2,10 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Final
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
+)
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
@@ -185,8 +188,12 @@ async def create_credential(
             credential_info=credential.credential_info,
         )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
+        # exclude_none: wif.py rejects foreign-variant fields by presence, so persisting a null
+        # for every unset variant field would fail the next request against this credential
         credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
-        credentials_dict_jsonified: Final = jsonify_object(credentials_dict)
+        credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
+            "dict[str, object]", jsonify_object(credentials_dict)
+        )
         await CredentialsRepository(prisma_client).create(
             data={
                 **credentials_dict_jsonified,
@@ -487,7 +494,9 @@ async def update_credential(
             if shadowed_credential is not None:
                 _reject_non_admin_wif_fields(_stored_wif_fields(shadowed_credential), user_api_key_dict)
         merged_credential: Final = update_db_credential(db_credential, credential)
-        credential_object_jsonified: Final = jsonify_object(merged_credential.model_dump(exclude_none=True))
+        credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
+            "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
+        )
         await credentials_repository.update_by_name(
             credential_name,
             data={

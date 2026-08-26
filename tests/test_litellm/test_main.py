@@ -2944,3 +2944,16 @@ def test_a_stream_that_reported_no_usage_is_still_billed(local_cost_map):
     assert cost == pytest.approx(
         _priced_at(rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens)
     )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_resolves_provider_from_api_base():
+    response = await litellm.acompletion(
+        model="deepseek-chat",
+        api_base="https://api.deepseek.com/v1",
+        api_key="fake-key",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="resolved",
+    )
+
+    assert response.choices[0].message.content == "resolved"

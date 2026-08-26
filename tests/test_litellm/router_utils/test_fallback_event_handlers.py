@@ -308,7 +308,11 @@ async def test_run_async_fallback_handles_explicitly_none_metadata():
         metadata=None,
     )
 
-    assert router.received_kwargs["metadata"] == {"model_group": "azure-group"}
+    assert router.received_kwargs["metadata"] == {
+        "model_group": "azure-group",
+        "attempted_fallbacks": 1,
+        "original_model_group": "openai-group",
+    }
 
 
 @pytest.mark.asyncio
@@ -877,3 +881,44 @@ async def test_the_refusal_is_not_swallowed_as_a_fallback_error():
             fallback_depth=0,
             include_fallback_errors=True,
         )
+
+
+async def test_run_async_fallback_stamps_fallback_info_into_metadata():
+    """Spend logs are built from the request metadata of the nested call, so the
+    fallback signal has to be stamped there before recursing."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("original failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+    )
+
+    metadata = router.received_kwargs["metadata"]
+    assert metadata["attempted_fallbacks"] == 1
+    assert metadata["original_model_group"] == "primary-model"
+    assert metadata["model_group"] == "fallback-model"
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_preserves_original_model_group_on_nested_fallback():
+    """A second-level fallback receives the first fallback target as its
+    original_model_group argument, so the first-stamped value must survive the hop."""
+    router = RecordingRouter()
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["second-fallback"],
+        original_model_group="first-fallback",
+        original_exception=RuntimeError("first fallback failed"),
+        max_fallbacks=3,
+        fallback_depth=1,
+        metadata={"attempted_fallbacks": 1, "original_model_group": "primary-model"},
+    )
+
+    metadata = router.received_kwargs["metadata"]
+    assert metadata["attempted_fallbacks"] == 2
+    assert metadata["original_model_group"] == "primary-model"

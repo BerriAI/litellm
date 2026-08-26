@@ -44,6 +44,21 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "thinking blocks, and those thinking tokens are billed as output tokens."
 )
 
+# Anthropic error `type` (both the JSON error body and SSE `event: error`
+# payloads use this field) mapped to the HTTP status code it corresponds to.
+ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
+    {
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "rate_limit_error": 429,
+        "api_error": 500,
+        "overloaded_error": 503,
+        "timeout_error": 504,
+    }
+)
+
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
