@@ -65,9 +65,7 @@ async def send_to_webhook(slackAlertingInstance: SlackAlertingType, item, count)
             payload["text"] = f"[Num Alerts: {count}]\n\n{payload['text']}"
 
         request_body: Final = (
-            build_ms_teams_payload(payload["text"])
-            if item.get("format") == MS_TEAMS_ALERTING_DESTINATION
-            else payload
+            build_ms_teams_payload(payload["text"]) if item.get("format") == MS_TEAMS_ALERTING_DESTINATION else payload
         )
         response: Final = await slackAlertingInstance.async_http_handler.post(
             url=item["url"],

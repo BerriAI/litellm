@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import os
 import secrets
@@ -16,6 +17,11 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.integrations.SlackAlerting.ms_teams import (
+    MS_TEAMS_ALERT_HEADERS,
+    build_ms_teams_payload,
+    get_ms_teams_webhook_url,
+)
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -466,16 +472,27 @@ async def health_services_endpoint(
                     "error": f'"{service}" not in proxy config: general_settings. Unable to test this.'
                 }
                 raise HTTPException(status_code=422, detail=not_configured_detail)
-            if os.getenv("MS_TEAMS_WEBHOOK_URL") is None:
+            ms_teams_webhook_url: Final = get_ms_teams_webhook_url()
+            if ms_teams_webhook_url is None:
                 missing_webhook_detail: Final[_ServiceTestErrorDetail] = {
                     "error": "MS_TEAMS_WEBHOOK_URL not set. Unable to test this."
                 }
                 raise HTTPException(status_code=422, detail=missing_webhook_detail)
-            await proxy_logging_obj.alerting_handler(
-                message="This is a test MS Teams alert message",
-                level="Low",
-                alert_type=AlertType.budget_alerts,
+            ms_teams_test_message: Final = (
+                f"Alert type: `{AlertType.budget_alerts.value}`\nLevel: `Low`\n"
+                f"Timestamp: `{datetime.now().strftime('%H:%M:%S')}`\n\n"
+                "Message: This is a test MS Teams alert message"
             )
+            ms_teams_response: Final = await proxy_logging_obj.slack_alerting_instance.async_http_handler.post(
+                url=ms_teams_webhook_url,
+                headers=dict(MS_TEAMS_ALERT_HEADERS),  # mutable-ok: async_http_handler.post only accepts dict headers
+                data=json.dumps(build_ms_teams_payload(ms_teams_test_message)),
+            )
+            if ms_teams_response.status_code >= 400:
+                delivery_failed_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": f"MS Teams webhook returned status {ms_teams_response.status_code}: {ms_teams_response.text}"
+                }
+                raise HTTPException(status_code=500, detail=delivery_failed_detail)
             ms_teams_success: Final[_ServiceTestSuccessResponse] = {
                 "status": "success",
                 "message": "Mock MS Teams Alert sent, verify MS Teams Alert Received in your channel",

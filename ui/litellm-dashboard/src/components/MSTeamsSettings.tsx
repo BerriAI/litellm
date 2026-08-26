@@ -14,6 +14,7 @@ interface AlertingDestination {
 interface MSTeamsSettingsProps {
   accessToken: string | null;
   alerts: AlertingDestination[];
+  activeAlertingDestinations: string[];
 }
 
 const FIELD_HELP: Record<string, React.ReactNode> = {
@@ -27,7 +28,7 @@ const FIELD_HELP: Record<string, React.ReactNode> = {
 
 const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN|URL)/i;
 
-const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, alerts }) => {
+const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, alerts, activeAlertingDestinations }) => {
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
 
   const toggleFieldVisibility = (key: string) => {
@@ -42,30 +43,30 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, alerts }
       return;
     }
 
-    const updatedVariables: Record<string, string> = {};
-
-    alerts
-      .filter((alert) => alert.name === "ms_teams")
-      .forEach((alert) => {
-        Object.entries(alert.variables ?? {}).forEach(([key, value]) => {
-          const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
-          if (!inputElement || !inputElement.value) {
-            return;
-          }
-          // Only send fields the admin actually edited. Values rendered from the
-          // server are masked or sourced from the process environment, so
-          // re-submitting an untouched field would persist a mask or copy
-          // env-managed config into the database.
-          if (inputElement.value === (value == null ? "" : String(value))) {
-            return;
-          }
-          updatedVariables[key] = inputElement.value;
-        });
-      });
+    // Only send fields the admin actually edited. Values rendered from the
+    // server are masked or sourced from the process environment, so
+    // re-submitting an untouched field would persist a mask or copy
+    // env-managed config into the database.
+    const updatedVariables: Record<string, string> = Object.fromEntries(
+      alerts
+        .filter((alert) => alert.name === "ms_teams")
+        .flatMap((alert) =>
+          Object.entries(alert.variables ?? {}).flatMap(([key, value]) => {
+            const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
+            if (!inputElement || !inputElement.value) {
+              return [];
+            }
+            if (inputElement.value === (value == null ? "" : String(value))) {
+              return [];
+            }
+            return [[key, inputElement.value] as const];
+          }),
+        ),
+    );
 
     const payload = {
       general_settings: {
-        alerting: ["ms_teams"],
+        alerting: Array.from(new Set([...activeAlertingDestinations, "ms_teams"])),
       },
       environment_variables: updatedVariables,
     };

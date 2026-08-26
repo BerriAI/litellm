@@ -16849,6 +16849,7 @@ async def get_config(
             "status": "success",
             "callbacks": _data_to_return,
             "alerts": alerting_data,
+            "active_alerting_destinations": tuple(_alerting),
             "router_settings": _router_settings,
             "available_callbacks": all_available_callbacks,
         }
