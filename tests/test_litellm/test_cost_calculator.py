@@ -2692,12 +2692,10 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier(_l
     """
     Regression for the cache/tier interaction in the Anthropic geo/speed path.
 
-    When a request is served at "priority" and also carries a geo/speed
-    multiplier (here ``speed="fast"``), the cache portion is held out of the
-    multiplier so it is not scaled. That held-out cache cost must use the
-    served tier's cache rate; pricing it at the standard rate while the cache
-    embedded in ``prompt_cost`` is priced at the priority rate leaves a
-    ``(cache_priority - cache_standard)(multiplier - 1)`` billing error.
+    When a request is served at "priority" and also carries the ``fast`` speed
+    multiplier, the cache portion must be priced at the served tier's cache
+    rate and, per Anthropic's fast-mode pricing, scaled by the multiplier like
+    every other token type.
     """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
@@ -2734,10 +2732,7 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier(_l
         model=model, usage=usage, service_tier="priority"
     )
 
-    # non-cache input priced at the priority rate and scaled by the fast
-    # multiplier; the 200 cache-hit tokens priced at the priority cache rate
-    # and held out of the multiplier
-    expected_prompt = (1000 - 200) * 6e-6 * 2 + 200 * 0.6e-6
+    expected_prompt = ((1000 - 200) * 6e-6 + 200 * 0.6e-6) * 2
     expected_completion = 500 * 30e-6 * 2
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
@@ -2805,10 +2800,9 @@ def test_anthropic_geo_multiplier_applies_to_cache_tokens(_local_model_cost_map,
 
 def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monkeypatch):
     """
-    The ``fast`` speed multiplier stays cache-exclusive (the old explicit
-    ``fast/`` entries kept base cache rates) while the geo multiplier scales the
-    whole cost, so a fast + regional row prices as
-    ``((non_cache * fast) + cache) * geo``.
+    Anthropic's fast-mode pricing doubles every token type, cache reads and
+    writes included, and the regional uplift stacks on top, so a fast +
+    regional row prices as ``(non_cache + cache) * fast * geo``.
     """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
@@ -2836,8 +2830,30 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
 
     cache_cost = 2_000 * 0.5e-6 + 6_000 * 6.25e-6
     non_cache_cost = 2_000 * 5e-6
-    assert prompt_cost == pytest.approx((non_cache_cost * 2.0 + cache_cost) * 1.1)
+    assert prompt_cost == pytest.approx((non_cache_cost + cache_cost) * 2.0 * 1.1)
     assert completion_cost == pytest.approx(500 * 25e-6 * 2.0 * 1.1)
+
+
+@pytest.mark.parametrize(
+    "model,expected_fast",
+    [
+        ("claude-opus-5", 2.0),
+        ("claude-opus-4-8", 2.0),
+        ("claude-opus-4-6", None),
+        ("claude-opus-4-6-20260205", None),
+        ("claude-opus-4-7", None),
+        ("claude-opus-4-7-20260416", None),
+    ],
+)
+def test_anthropic_fast_multiplier_only_on_models_with_fast_mode(_local_model_cost_map, model, expected_fast):
+    """
+    Anthropic serves fast mode on Opus 5 and Opus 4.8 only, at 2x. Opus 4.6 and
+    4.7 accept the ``speed`` request param but are always served standard, so a
+    ``fast`` multiplier on their map entries overbills every request that asked
+    for fast and was served standard.
+    """
+    entry = litellm.model_cost[model]
+    assert entry["provider_specific_entry"].get("fast") == expected_fast
 
 
 def test_gemini_cache_tokens_details_no_negative_values():
