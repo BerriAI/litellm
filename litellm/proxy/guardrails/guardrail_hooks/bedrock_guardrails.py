@@ -779,8 +779,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             ):
                 return []
             if not any(
-                isinstance(deployment, Mapping)
-                and (deployment.get("model_info") or {}).get("allow_fail_open") is True
+                isinstance(deployment, Mapping) and (deployment.get("model_info") or {}).get("allow_fail_open") is True
                 for deployment in deployments
             ):
                 return []
@@ -888,11 +887,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 if isinstance(deployment, Mapping)
                 else getattr(deployment, "litellm_params", None)
             )
-            return (
-                params.get(weight_by)
-                if isinstance(params, Mapping)
-                else getattr(params, weight_by, None)
-            )
+            return params.get(weight_by) if isinstance(params, Mapping) else getattr(params, weight_by, None)
 
         for weight_by in ("weight", "rpm", "tpm"):
             first_weight: Final[object | None] = _weight(deployments[0], weight_by)
