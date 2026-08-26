@@ -3162,7 +3162,9 @@ async def test_list_vector_stores_returns_config_sourced_and_leaves_registry_int
                 ),
             )
 
-        returned_ids = [vs["vector_store_id"] for vs in response.data]
+        # LiteLLM_ManagedVectorStoreListResponse is a TypedDict — use dict access.
+        response_data = response["data"] if isinstance(response, dict) else response.data
+        returned_ids = [vs["vector_store_id"] for vs in response_data]
         assert "vs_from_config" in returned_ids
         # And, critically, the registry must NOT have been mutated —
         # config-loaded stores stay resident for downstream routing.
