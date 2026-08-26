@@ -6268,10 +6268,14 @@ class ProxyConfig:
             ):
                 from litellm.utils import _update_dictionary
 
-                db_overlay_without_empty_lists: Final = {
-                    k: v for k, v in db_router_settings.param_value.items() if not (isinstance(v, list) and len(v) == 0)
+                db_overlay_deferring_empty_lists_to_config: Final = {
+                    k: v
+                    for k, v in db_router_settings.param_value.items()
+                    if not (k in config_router_settings and isinstance(v, list) and len(v) == 0)
                 }
-                combined_router_settings = _update_dictionary(config_router_settings, db_overlay_without_empty_lists)
+                combined_router_settings = _update_dictionary(
+                    config_router_settings, db_overlay_deferring_empty_lists_to_config
+                )
             elif config_router_settings is not None and isinstance(config_router_settings, dict):
                 combined_router_settings = config_router_settings
             elif db_router_settings is not None and isinstance(db_router_settings.param_value, dict):
