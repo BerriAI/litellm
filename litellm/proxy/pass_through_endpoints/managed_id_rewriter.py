@@ -821,10 +821,6 @@ async def rewrite_response_ids(
     return mutated if changed else body
 
 
-# ---------------------------------------------------------------------------
-# OUTPUT path — streamed Responses API bodies
-# ---------------------------------------------------------------------------
-
 _RESPONSE_ID_PREFIX: Final = "resp_"
 _STREAMED_RESPONSE_ID_SPEC: Final[_FieldSpec] = ("id", _RESPONSE_ID_PREFIX)
 _SSE_DATA_PREFIX: Final = "data:"

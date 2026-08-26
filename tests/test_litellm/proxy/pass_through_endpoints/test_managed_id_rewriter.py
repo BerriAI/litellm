@@ -212,6 +212,29 @@ async def test_streamed_response_is_owned_and_rewritten_across_chunk_boundaries(
 
 
 @pytest.mark.asyncio
+async def test_streamed_response_with_cr_only_frame_delimiters_is_still_owned_and_rewritten():
+    """SSE also terminates lines with a lone CR; those frames must mint and rewrite too."""
+    pc = _prisma_client()
+    payload = _response_stream_bytes().replace(b"\n", b"\r")
+
+    output = await _collect(
+        rewrite_streamed_response_ids(
+            stream=_chunks(payload, 7),
+            provider="openai",
+            method="POST",
+            route="/openai_passthrough/v1/responses",
+            user_api_key_dict=_user(),
+            prisma_client=pc,
+        )
+    )
+
+    pc.db.litellm_managedobjecttable.upsert.assert_awaited_once()
+    managed_id = pc.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]["create"]["unified_object_id"]
+    assert RAW_RESPONSE_ID.encode() not in output
+    assert output == _response_stream_bytes(managed_id).replace(b"\n", b"\r")
+
+
+@pytest.mark.asyncio
 async def test_streamed_bytes_untouched_on_routes_without_a_response_id():
     pc = _prisma_client()
     payload = _response_stream_bytes()
