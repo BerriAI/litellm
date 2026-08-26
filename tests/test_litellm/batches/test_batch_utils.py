@@ -15,15 +15,13 @@ deterministic stand-ins so the arithmetic under test is the only variable.
 """
 
 import json
-import os
-import sys
+import logging
 from types import MappingProxyType
 
 import httpx
 import pytest
 import respx
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.batches.batch_utils as bu
@@ -149,13 +147,13 @@ def test_parse_jsonl_empty_content_is_empty_list():
     assert bu._get_file_content_as_dictionary(b"") == []
 
 
-def test_parse_jsonl_malformed_raises():
-    with pytest.raises(Exception):
-        bu._get_file_content_as_dictionary(b"not valid json")
+def test_parse_jsonl_malformed_lines_skipped():
+    content = b'{"a": 1}\nnot valid json\n{"b": 2}\n'
+    assert bu._get_file_content_as_dictionary(content) == [{"a": 1}, {"b": 2}]
 
 
 # =========================================================================== #
-# _iter_batch_input_lines / _iter_batch_input_entries  (JSONL parsing)
+# _iter_batch_input_lines / _iter_batch_output_entries  (JSONL parsing)
 # =========================================================================== #
 
 
@@ -172,19 +170,22 @@ def test_iter_input_lines_empty():
     assert list(bu._iter_batch_input_lines(b"")) == []
 
 
-def test_iter_input_entries_parses_each_row():
+def test_iter_output_entries_parses_each_row():
     content = b'{"body": {"model": "gpt-4o"}}\n{"body": {"model": "claude-3"}}\n'
-    assert list(bu._iter_batch_input_entries(content)) == [
+    assert list(bu._iter_batch_output_entries(content)) == [
         {"body": {"model": "gpt-4o"}},
         {"body": {"model": "claude-3"}},
     ]
 
 
-def test_iter_input_entries_raises_on_malformed_line():
-    # _iter_batch_input_entries raises on a bad row; callers that must survive
-    # bad rows iterate _iter_batch_input_lines and parse per-row instead.
-    with pytest.raises(Exception):
-        list(bu._iter_batch_input_entries(b'{"ok":1}\nnot-json\n'))
+def test_iter_output_entries_skips_malformed_and_non_object_lines():
+    content = b'{"ok": 1}\nnot-json\n[1, 2]\n{"ok": 2}\n'
+    assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
+
+
+def test_iter_output_entries_skips_undecodable_line():
+    content = b'{"ok": 1}\n{"note": "\xff-bad"}\n{"ok": 2}\n'
+    assert list(bu._iter_batch_output_entries(content)) == [{"ok": 1}, {"ok": 2}]
 
 
 # =========================================================================== #
@@ -468,6 +469,25 @@ def test_cost_from_content_completion_cost_path(monkeypatch):
 
     assert total == 1.0  # 2 successful * 0.5
     assert len(calls) == 2  # failed row not costed
+
+
+def test_empty_body_line_does_not_zero_whole_batch():
+    """A status-200 row with an empty body makes litellm.completion_cost raise;
+    that line must be skipped instead of zeroing the whole batch."""
+    rows = [
+        _success_row(usage=_usage(10, 5)),
+        {
+            "custom_id": "request-poison-empty",
+            "response": {"status_code": 200, "request_id": "inject-empty-body", "body": {}},
+        },
+        _success_row(usage=_usage(20, 10)),
+    ]
+
+    cost, usage, models = bu._aggregate_batch_cost_usage_models(entries=rows, custom_llm_provider="openai")
+
+    assert cost > 0.0
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
+    assert models == ["gpt-4o", "gpt-4o"]
 
 
 def test_cost_from_content_model_info_path(monkeypatch):
@@ -777,6 +797,43 @@ async def test_output_file_content_vertex_unified_file_id_extracts_gcs_uri(monke
     assert captured["custom_llm_provider"] == "vertex_ai"
 
 
+@pytest.mark.asyncio
+async def test_output_file_content_model_encoded_file_id_decoded_to_provider_id(monkeypatch):
+    import litellm.files.main as files_main
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b'{"a": 1}'})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    encoded_id = encode_file_id_with_model("file-Y3FHrMpi7uCkDpY6fgWGeR", "my-batch-model")
+
+    await bu._fetch_batch_output_file_content(_batch(encoded_id), custom_llm_provider="openai")
+
+    assert captured["file_id"] == "file-Y3FHrMpi7uCkDpY6fgWGeR"
+    assert captured["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_output_file_content_raw_openai_file_id_passes_through(monkeypatch):
+    import litellm.files.main as files_main
+
+    captured: dict = {}
+
+    async def fake_afile_content(**kw):
+        captured.update(kw)
+        return type("R", (), {"content": b'{"a": 1}'})()
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+
+    await bu._fetch_batch_output_file_content(_batch("file-abc123"), custom_llm_provider="openai")
+
+    assert captured["file_id"] == "file-abc123"
+
+
 def _vertex_predictions_row(custom_id, prompt_tokens, completion_tokens):
     return {
         "request": {
@@ -889,8 +946,14 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
         litellm_params={"vertex_project": "proj-1", "vertex_location": "us-central1"},
     )
 
+    pricing = litellm.model_cost["vertex_ai/gemini-3.6-flash"]
+    batch_input = pricing["input_cost_per_token_batches"]
+    batch_output = pricing["output_cost_per_token_batches"]
+
+    assert batch_input < pricing["input_cost_per_token"]
+    assert batch_output < pricing["output_cost_per_token"]
     assert cost > 0
-    assert cost == pytest.approx(30 * 7.5e-07 + 15 * 3.75e-06)
+    assert cost == pytest.approx(30 * batch_input + 15 * batch_output)
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (30, 15, 45)
     assert models == ["gemini-3.6-flash", "gemini-3.6-flash"]
 
@@ -975,6 +1038,27 @@ async def test_handle_completed_batch_orchestration(monkeypatch):
     assert cost == 3.3
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 5, 15)
     assert models == ["gpt-4o"]
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
+    """
+    Regression: an all-error batch completes with output_file_id=None (results go
+    to a separate error_file_id). _handle_completed_batch must report an empty
+    result set - zero cost, zero usage, no models - instead of letting the file
+    fetch raise "Output file id is None" on every aretrieve_batch logging poll.
+    """
+    # The output-file fetch must not even be attempted when there is no output file.
+    async def _must_not_fetch(*args, **kwargs):
+        pytest.fail("_fetch_batch_output_file_content should not be called")
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", _must_not_fetch)
+
+    cost, usage, models = await bu._handle_completed_batch(_batch(None), custom_llm_provider="openai")
+
+    assert cost == 0.0
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (0, 0, 0)
+    assert models == []
 
 
 @pytest.mark.asyncio
@@ -1299,3 +1383,143 @@ async def test_output_file_content_bedrock_reads_with_deployment_aws_credentials
     assert captured["aws_region_name"] == "us-west-2"
     assert captured["_litellm_internal_model_credentials"] is snapshot
     assert "model" not in captured
+
+
+# =========================================================================== #
+# _handle_completed_batch threads the deployment's model identity + pricing
+# =========================================================================== #
+
+
+def _bedrock_row(model: str, input_tokens: int, output_tokens: int) -> dict[str, object]:
+    return {
+        "modelInput": {"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]},
+        "modelOutput": {
+            "model": model,
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        },
+        "recordId": "r",
+    }
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monkeypatch) -> None:
+    """A bedrock batch must price from the deployment model, not the response model."""
+    rows = [_bedrock_row("claude-sonnet-4-6", 18, 10)] * 100
+
+    async def fake_fetch(batch: object, custom_llm_provider: str, litellm_params: dict | None = None) -> bytes:
+        return _vertex_jsonl(rows)
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+
+    cost, usage, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="bedrock",
+        model_name="bedrock/global.anthropic.claude-sonnet-4-6",
+    )
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (1800, 1000, 2800)
+    # 3e-06 / 1.5e-05 on-demand, halved for batch.
+    assert cost == pytest.approx(1800 * 3e-06 / 2 + 1000 * 1.5e-05 / 2)
+
+    # The response model alone cannot price a bedrock batch: this is the $0 bug.
+    zero_cost, zero_usage, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="bedrock",
+        model_name=None,
+    )
+    assert zero_cost == 0.0
+    assert zero_usage.total_tokens == 2800
+
+
+@pytest.mark.asyncio
+async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> None:
+    """A deployment's configured rates must win over the global cost map."""
+    rows = [_success_row(model="gemini-2.5-flash", usage=_usage(60, 75))]
+
+    async def fake_fetch(batch: object, custom_llm_provider: str, litellm_params: dict | None = None) -> bytes:
+        return _vertex_jsonl(rows)
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+
+    free_cost, _, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="vertex_ai",
+        model_name="vertex_ai/gemini-2.5-flash",
+        model_info={
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "input_cost_per_token_batches": 0.0,
+            "output_cost_per_token_batches": 0.0,
+        },
+    )
+    assert free_cost == 0.0
+
+    billed_cost, _, _ = await bu._handle_completed_batch(
+        _batch("of"),
+        custom_llm_provider="vertex_ai",
+        model_name="vertex_ai/gemini-2.5-flash",
+        model_info=None,
+    )
+    assert billed_cost > 0.0
+
+
+# =========================================================================== #
+# _get_batch_job_usage_from_response_body: bedrock usage shapes
+# =========================================================================== #
+
+
+def test_bedrock_converse_shaped_batch_usage_is_parsed():
+    body = {"model": "us.amazon.nova-lite-v1:0", "usage": {"inputTokens": 2202, "outputTokens": 540, "totalTokens": 2742}}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (2202, 540, 2742)
+
+
+def test_bedrock_converse_batch_usage_totals_default_when_absent():
+    body = {"model": "us.amazon.nova-lite-v1:0", "usage": {"inputTokens": 10, "outputTokens": 4}}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (10, 4, 14)
+
+
+def test_bedrock_converse_batch_usage_includes_cache_tokens():
+    body = {
+        "model": "us.amazon.nova-lite-v1:0",
+        "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "totalTokens": 120,
+            "cacheReadInputTokens": 800,
+            "cacheWriteInputTokens": 200,
+        },
+    }
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert usage.prompt_tokens == 1100
+    assert usage.completion_tokens == 20
+    assert usage.prompt_tokens_details.cached_tokens == 800
+    assert usage.prompt_tokens_details.cache_creation_tokens == 200
+
+
+def test_bedrock_anthropic_shaped_batch_usage_still_parsed():
+    """Anthropic-shaped bedrock output (what an Anthropic model's batch emits) must not regress."""
+    body = {"model": "claude-sonnet-4-6", "usage": {"input_tokens": 18, "output_tokens": 10}}
+    usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (18, 10, 28)
+
+
+def test_unparsable_bedrock_batch_usage_warns(caplog):
+    """An unrecognized usage shape must be visible, not a silent $0."""
+    body = {"model": "amazon.titan-text-lite-v1", "usage": {"inputTextTokenCount": 42}}
+    with caplog.at_level(logging.WARNING):
+        usage = bu._get_batch_job_usage_from_response_body(body, custom_llm_provider="bedrock")
+    assert usage.total_tokens == 0
+    assert "does not understand" in caplog.text
+    assert "inputTextTokenCount" in caplog.text

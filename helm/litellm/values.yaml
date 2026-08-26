@@ -56,6 +56,15 @@ migrationJob:
   enabled: true
   backoffLimit: 4
   ttlSecondsAfterFinished: 120
+  # Wall-clock budget for the whole Job, shared across every `backoffLimit`
+  # retry rather than granted per attempt. Without it a migration that blocks
+  # on the database never fails, and because this is a pre-upgrade hook the
+  # release waits on it forever: `helm upgrade` and any GitOps controller
+  # driving it stop reconciling the whole chart until someone deletes the Job
+  # by hand. A migration that has exhausted its retries is not going to
+  # succeed on the next one, so failing is strictly better than hanging.
+  # Set to null to opt out and restore the unbounded behaviour.
+  activeDeadlineSeconds: 1800
   resources: {}
   # ServiceAccount for the Job pod only.
   #
@@ -136,6 +145,8 @@ database:
     dbname: ""
     schema: ""
     useIAMAuth: false
+    # Azure Database for PostgreSQL with a Microsoft Entra ID token; mutually exclusive with useIAMAuth
+    useAzureEntraAuth: false
     passwordSecret:
       name: litellm-writer-secret
       usernameKey: username
@@ -150,6 +161,8 @@ database:
     dbname: ""
     schema: ""
     useIAMAuth: false
+    # Azure Database for PostgreSQL with a Microsoft Entra ID token; mutually exclusive with useIAMAuth
+    useAzureEntraAuth: false
     passwordSecret:
       name: litellm-reader-secret
       usernameKey: username
@@ -415,9 +428,11 @@ ui:
     maxUnavailable: ""
   podAnnotations: {}
   # Same shape as the gateway blocks of the same name. The nginx runtime
-  # writes its pid, cache, and proxy temp files under the image's root
-  # filesystem, so `securityContext.readOnlyRootFilesystem: true` here needs
-  # emptyDir volumes mounted over those paths.
+  # writes its pid, cache, and proxy temp files under /tmp, so it boots as
+  # any (arbitrary, non-root) uid; `securityContext.readOnlyRootFilesystem:
+  # true` here needs an emptyDir volume mounted over /tmp. Images before
+  # the /tmp move instead need emptyDirs over /var/cache/nginx and /run to
+  # run as a non-root uid at all.
   podLabels: {}
   podSecurityContext: {}
   securityContext: {}

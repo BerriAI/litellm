@@ -1,7 +1,10 @@
+<!-- The whole description's target audience is humans, not AI agents: write it in plain, simple,
+     everyday engineering language, extremely parsable and readable at a glance. This goes double for
+     the TLDR, User Flow, and Caveats sections -->
+
 ## TLDR
 
-<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
-     This section must be extremely human parsable, comprehensible, and readable: its target audience is humans, not AI agents -->
+<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max -->
 
 Problem this solves:
 
@@ -53,7 +56,8 @@ After: the same request comes back with real token counts, so the dashboard show
 **Please complete all items before asking a LiteLLM maintainer to review your PR**
 
 - [ ] I have added meaningful tests
-- [ ] My PR passes all CI/CD checks (e.g., lint, format, unit tests)
+- [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/test_litellm/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
+- [ ] My PR passes all required CI/CD checks (e.g., lint, schema.d.ts sync check, etc.)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
 - [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically once the PR is opened; only comment `@greptileai` to re-request a review after pushing changes)
 
@@ -109,8 +113,20 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 ## Caveats (if any)
 
-<!-- Short bullet points, just like the TLDR: one line per bullet, roughly 10 words max
+<!-- Group caveats under severity subheadings (### Severe, ### High, ### Medium, ### Low), with
+     short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
      Call out known limitations, follow-up work, or anything a reviewer should watch out for
+     Include only the tiers that have caveats; drop the empty ones
+     - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
+       it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
+       rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
+       operator must plan around it before rollout
+     - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
+       unsafe to ship as is
+     - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
+     - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
+     Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
+     human reader
      Leave this section empty if there are none -->
 
 ## QA runbook
@@ -133,6 +149,6 @@ Example checklists:
   - [ ] Sanity check: this test makes sense to add and is not hand-wavey (e.g., assert actual expected spend instead of just spend > 0) or potentially flaky
 -->
 
-### Final Attestation
+## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR

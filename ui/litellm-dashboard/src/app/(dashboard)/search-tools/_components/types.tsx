@@ -1,6 +1,6 @@
 export interface SearchToolLiteLLMParams {
   search_provider: string;
-  api_key?: string;
+  api_key?: string | null;
   api_base?: string;
   timeout?: number;
   max_retries?: number;
@@ -8,7 +8,7 @@ export interface SearchToolLiteLLMParams {
 }
 
 export interface SearchToolInfo {
-  description?: string;
+  description?: string | null;
   [key: string]: any;
 }
 

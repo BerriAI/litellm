@@ -49,7 +49,7 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, "say hi",
+            client.proxy, scoped_key, primary, f"say hi {unique_marker()}",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)
@@ -63,7 +63,7 @@ class TestReliabilityFallbacks:
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
         resp = chat_override(
-            client.proxy, scoped_key, primary, "say hi",
+            client.proxy, scoped_key, primary, f"say hi {unique_marker()}",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)

@@ -1,14 +1,9 @@
 import json
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import traceback
 from typing import Optional
@@ -982,7 +977,7 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
         make_call=_raise_400,
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(Exception, match='litellm\\.BadRequestError: BedrockException') as excinfo:
         await response.__anext__()
     assert not isinstance(excinfo.value, MidStreamFallbackError)
     assert getattr(excinfo.value, "status_code", None) == 400
@@ -1606,6 +1601,104 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     assert usage_chunks[-1].usage.cost == 0.00025
 
 
+@pytest.mark.asyncio
+async def test_openrouter_streaming_usage_only_chunk_without_stream_options():
+    """
+    Regression: OpenRouter's post-finish chunk has `choices: []`. When the caller did not
+    pass stream_options.include_usage it was dropped before cost tracking, so the
+    provider-reported cost never reached the assembled response.
+    """
+    import time
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import ModelResponseListIterator
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056047,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(
+                finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant")
+            )
+        ],
+        usage=None,
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056048,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=None,
+    )
+    usage_only_chunk = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056049,
+        model="openrouter/claude",
+        choices=[],
+        usage=Usage(
+            completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+        ),
+    )
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    previous_success_callback = litellm.success_callback
+    previous_async_success_callback = litellm._async_success_callback
+    litellm.success_callback = [mock_callback]
+    litellm._async_success_callback = [mock_callback]
+
+    stream_logging_obj = Logging(
+        model="openrouter/claude",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    stream_logging_obj.update_environment_variables(
+        model="openrouter/claude",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="openrouter",
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[chunk1, chunk2, usage_only_chunk]
+        ),
+        model="openrouter/claude",
+        custom_llm_provider="openrouter",
+        logging_obj=stream_logging_obj,
+    )
+
+    success_logged = asyncio.Event()
+    try:
+        with patch.object(
+            mock_callback,
+            "async_log_success_event",
+            new_callable=AsyncMock,
+            side_effect=lambda *args, **kwargs: success_logged.set(),
+        ) as mock_success_event:
+            collected_chunks = [chunk async for chunk in response]
+            await asyncio.wait_for(success_logged.wait(), timeout=30)
+    finally:
+        litellm.success_callback = previous_success_callback
+        litellm._async_success_callback = previous_async_success_callback
+
+    assert all(getattr(chunk, "usage", None) is None for chunk in collected_chunks)
+
+    mock_success_event.assert_called_once()
+    logged_kwargs = mock_success_event.call_args.kwargs["kwargs"]
+    assert logged_kwargs["response_cost"] == 0.00025
+    assert logged_kwargs["standard_logging_object"]["response_cost"] == 0.00025
+
+
 def test_openrouter_streaming_cost_propagates_to_hidden_params():
     """
     Verify that provider-reported cost from usage.cost flows into
@@ -1674,6 +1767,80 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
         complete_response._hidden_params
     )
     assert provider_cost == 0.00025
+
+
+def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
+    """
+    Regression: Perplexity reports usage.cost as a breakdown object, which used to
+    blow up the end of the stream with
+    `float() argument must be a string or a real number, not 'dict'`.
+    """
+    import litellm
+    from litellm.cost_calculator import get_response_cost_from_hidden_params
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056047,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hi", role="assistant"),
+                )
+            ],
+            usage=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056048,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+            ],
+            usage=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-pplx",
+            created=1742056049,
+            model="perplexity/sonar",
+            choices=[
+                StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))
+            ],
+            usage=Usage(
+                completion_tokens=18,
+                prompt_tokens=12,
+                total_tokens=30,
+                cost={
+                    "input_tokens_cost": 0.000012,
+                    "output_tokens_cost": 0.000018,
+                    "request_cost": 0.005,
+                    "total_cost": 0.00503,
+                },
+            ),
+        ),
+    ]
+
+    complete_response = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "test"}]
+    )
+
+    assert complete_response is not None
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+
+    assert (
+        get_response_cost_from_hidden_params(complete_response._hidden_params)
+        == 0.00503
+    )
+
+
+def test_provider_reported_cost_ignores_unusable_shapes():
+    assert CustomStreamWrapper._resolve_provider_reported_cost(None) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost({}) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost({"total_cost": None}) is None
+    assert CustomStreamWrapper._resolve_provider_reported_cost(0.5) == 0.5
 
 
 def test_handle_special_delta_attributes(
@@ -1971,10 +2138,13 @@ def test_raise_on_model_repetition(
     chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
 
     if should_raise:
-        with pytest.raises(litellm.InternalServerError) as exc_info:
+        def _feed():
             for chunk in chunks:
                 wrapper.chunks.append(chunk)
                 wrapper.raise_on_model_repetition()
+
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            _feed()
         assert "repeating the same chunk" in str(exc_info.value)
     else:
         for chunk in chunks:
@@ -2547,7 +2717,7 @@ def test_dispatch_text_completion_codestral_requires_string(
     is a programming error and must surface loudly."""
     initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-codestral"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="chunk is not a string: \\{'not': 'a string'\\}"):
         _run_dispatch(initialized_custom_stream_wrapper, {"not": "a string"})
 
 
@@ -3216,6 +3386,128 @@ def test_record_partial_usage_for_failure_noop_without_chunks():
     assert "combined_usage_object" not in logging_obj.model_call_details
 
 
+def _wrapper_with_partial_chunks(
+    chunk_model: str,
+    usage: Optional[Usage] = None,
+    model: str = "gpt-4o-mini",
+    custom_llm_provider: str = "openai",
+) -> tuple:
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "Tell me a long story"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-alias",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    logging_obj.optional_params = {}
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-alias-1",
+            created=1742056047,
+            model=chunk_model,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=usage,
+        )
+    ]
+    return wrapper, logging_obj
+
+
+def test_record_partial_usage_for_failure_prices_alias_restamped_chunks_at_real_model():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="bedrock-claude-opus-5",
+        usage=Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45),
+        model="us.anthropic.claude-opus-5",
+        custom_llm_provider="bedrock",
+    )
+    assert "bedrock/bedrock-claude-opus-5" not in litellm.model_cost
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.completion_tokens == 5
+    rates = litellm.model_cost["us.anthropic.claude-opus-5"]
+    expected = 40 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+
+
+def test_record_partial_usage_for_failure_counts_prompt_tokens_from_request_messages():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="my-public-alias")
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.prompt_tokens > 0
+
+
+def test_record_partial_usage_for_failure_backfills_missing_cache_fields():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="gpt-4o-mini")
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_creation_input_tokens == 0
+    assert stashed.cache_read_input_tokens == 0
+    assert stashed.prompt_tokens_details is not None
+    assert stashed.prompt_tokens_details.cached_tokens == 0
+
+
+def test_record_partial_usage_for_failure_carries_up_openai_style_cached_tokens():
+    recovered = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=500),
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini", usage=recovered
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_read_input_tokens == 500
+    assert stashed.cache_creation_input_tokens == 0
+
+
+def test_record_partial_usage_for_failure_keeps_cache_values_recovered_from_chunks():
+    recovered = Usage(
+        prompt_tokens=40,
+        completion_tokens=5,
+        total_tokens=45,
+        cache_read_input_tokens=7,
+        cache_creation_input_tokens=3,
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini", usage=recovered
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_read_input_tokens == 7
+    assert stashed.cache_creation_input_tokens == 3
+    assert stashed.prompt_tokens_details is not None
+    assert stashed.prompt_tokens_details.cached_tokens == 7
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_stream_chunk_builder_raise_at_end_of_stream_still_recovers_usage(
@@ -3444,9 +3736,12 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     )
 
     received = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in response:
             received.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     fabricated_finish_reasons = [
         chunk.choices[0].finish_reason
@@ -4004,7 +4299,7 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
 
         wrapper._stream_created_time = time.time() - 10
 
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.Timeout):
             await wrapper.__anext__()
 
         assert trace_id_var.get() == "outer-trace-max-duration"
@@ -4151,7 +4446,9 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
 
         monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.exception_type", fake_exception_type)
 
-        with pytest.raises(Exception):
+        from litellm.exceptions import MidStreamFallbackError
+
+        with pytest.raises(MidStreamFallbackError):
             wrapper._handle_stream_fallback_error(RuntimeError("boom"))
 
         # The mapper ran while the stream's own ids were still active.

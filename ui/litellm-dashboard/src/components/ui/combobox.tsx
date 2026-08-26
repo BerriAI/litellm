@@ -32,12 +32,13 @@ const ComboboxTrigger = React.forwardRef<
 });
 ComboboxTrigger.displayName = "ComboboxTrigger";
 
-function ComboboxClear({ className, ...props }: ComboboxPrimitive.Clear.Props) {
+function ComboboxClear({ className, "aria-label": ariaLabel = "Clear", ...props }: ComboboxPrimitive.Clear.Props) {
   return (
     <ComboboxPrimitive.Clear
       data-slot="combobox-clear"
       render={<InputGroupButton variant="ghost" size="icon-xs" />}
       className={cn(className)}
+      aria-label={ariaLabel}
       {...props}
     >
       <XIcon className="pointer-events-none" />
@@ -58,7 +59,7 @@ function ComboboxInput({
 }) {
   return (
     <InputGroup className={cn("w-auto", className)}>
-      <ComboboxPrimitive.Input render={<InputGroupInput disabled={disabled} />} {...props} />
+      <ComboboxPrimitive.Input disabled={disabled} render={<InputGroupInput />} {...props} />
       <InputGroupAddon align="inline-end">
         {showTrigger && (
           <InputGroupButton
@@ -100,7 +101,7 @@ function ComboboxContent({
         alignOffset={alignOffset}
         collisionAvoidance={collisionAvoidance}
         anchor={anchor}
-        className="isolate z-50"
+        className="isolate z-popup"
       >
         <ComboboxPrimitive.Popup
           data-slot="combobox-content"

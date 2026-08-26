@@ -19,6 +19,7 @@ from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -422,24 +423,32 @@ def image_generation(
                 aimg_generation=aimg_generation,
             )
         elif custom_llm_provider == "azure_ai":
-            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            from litellm.llms.azure_ai.common_utils import (
+                AzureFoundryModelInfo,
+                get_azure_ai_auth_headers,
+            )
 
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
             api_key = AzureFoundryModelInfo.get_api_key(api_key)
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            default_headers = {
+            caller_header_names = frozenset(name.lower() for name in headers)
+            caller_set_auth = "api-key" in caller_header_names or "authorization" in caller_header_names
+            auth_headers = (
+                headers
+                if caller_set_auth
+                else get_azure_ai_auth_headers(
+                    api_key=api_key,
+                    litellm_params=litellm_params_dict,
+                    api_key_header="api-key",
+                )
+            )
+            request_headers: Final = {
                 "Content-Type": "application/json",
+                **auth_headers,
+                **headers,
             }
-            # Only add api-key header if api_key is not None
-            # Azure AD authentication will use Authorization header instead
-            if api_key is not None:
-                default_headers["api-key"] = api_key
-
-            for k, v in default_headers.items():
-                if k not in headers:
-                    headers[k] = v
 
             model_response = azure_chat_completions.image_generation(
                 model=model,
@@ -455,7 +464,7 @@ def image_generation(
                 api_version=api_version,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=request_headers,
                 litellm_params=litellm_params_dict,
             )
         elif (
@@ -846,6 +855,18 @@ def image_edit(
             additional_drop_params=kwargs.get("additional_drop_params"),
         )
 
+        if (
+            custom_llm_provider == "openai"
+            or custom_llm_provider == "azure"
+            or custom_llm_provider in litellm.openai_compatible_providers
+        ):
+            image_edit_request_params.update(
+                flatten_form_field_values(
+                    non_default_params,
+                    extra_body if isinstance(extra_body, dict) else None,
+                )
+            )
+
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -995,6 +1016,9 @@ async def aimage_edit(
             response_format=response_format,
             size=size,
             user=user,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             **kwargs,

@@ -4,12 +4,13 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
+from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
 
@@ -351,6 +352,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     milvus_text_field: str | None = None
     milvus_db_name: str | None = None
     milvus_partition_names: list[str] | None = None
+    valkey_host: str | None = None
+    valkey_port: int | None = None
+    valkey_password: str | None = None
+    valkey_ssl: bool | None = None
+    valkey_text_field: str | None = None
+    valkey_embedding_field: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -473,7 +480,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: float | None
     input_cost_per_second: float | None
     output_cost_per_second: float | None
+    output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##
     mock_response: str | ModelResponse | Exception | None
@@ -567,6 +576,11 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
+    no_healthy_deployments = "There are no healthy deployments for this model"
+    only_strategy_marker_deployments = (
+        "Every deployment for it is a strategy router marker (auto_router/...), which is not a callable "
+        "model, and no pre-routing strategy selected a deployment for this request"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -628,6 +642,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
+    supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
@@ -891,6 +906,7 @@ class PreRoutingHookResponse(BaseModel):
     messages: list[dict[str, Any]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
     session_affinity_ttl_seconds: int | None = None
+    litellm_params: Mapping[str, object] | None = None
 
 
 _PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)
@@ -954,6 +970,21 @@ class RoutingPlugin(Protocol):
     """Interface a custom routing plugin must implement to run in `Router(plugins=[...])`."""
 
     async def run(self, context: RoutingContext) -> RoutingContext: ...
+
+
+@runtime_checkable
+class ClassifierPlugin(Protocol):
+    """Interface a custom classifier must implement to run as the complexity router's classifier_type='custom'.
+
+    `classify` returns the name of the tier the request belongs to (a built-in tier value or label,
+    or a tier_definitions name), or None to decline and let classifier_fallback decide.
+
+    The context's `candidate_models` is an informational snapshot of every tier's models, unlike
+    the narrowing surface RoutingPlugin filters: the returned tier decides the pool, so mutating
+    the list is a no-op.
+    """
+
+    async def classify(self, context: RoutingContext) -> str | None: ...
 
 
 class RequestType(str, enum.Enum):
