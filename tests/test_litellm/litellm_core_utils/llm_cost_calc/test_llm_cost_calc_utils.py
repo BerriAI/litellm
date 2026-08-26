@@ -3377,26 +3377,26 @@ def test_generic_cost_per_token_gemini_35_flash_lite(_local_model_cost_map):
     assert completion_cost == pytest.approx(0.00125)
 
 
-GEMINI_35_FLASH_LITE_SERVICE_TIER_PRICING = [
-    (None, 3e-07, 2.5e-06, 3e-08),
-    ("flex", 1.5e-07, 1.25e-06, 1.5e-08),
-    ("priority", 5.4e-07, 4.5e-06, 5e-08),
+GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE = [
+    ("gemini", None, 3e-07, 2.5e-06, 3e-08),
+    ("gemini", "flex", 1.5e-07, 1.25e-06, 2e-08),
+    ("gemini", "priority", 5.4e-07, 4.5e-06, 5e-08),
+    ("vertex_ai", None, 3e-07, 2.5e-06, 3e-08),
+    ("vertex_ai", "flex", 1.5e-07, 1.25e-06, 1.5e-08),
+    ("vertex_ai", "priority", 5.4e-07, 4.5e-06, 5e-08),
 ]
 
 
 @pytest.mark.parametrize(
-    "service_tier,input_rate,output_rate,cache_read_rate", GEMINI_35_FLASH_LITE_SERVICE_TIER_PRICING
-)
-@pytest.mark.parametrize(
-    "model",
-    ["gemini-3.5-flash-lite", "gemini/gemini-3.5-flash-lite", "vertex_ai/gemini-3.5-flash-lite"],
+    "custom_llm_provider,service_tier,input_rate,output_rate,cache_read_rate",
+    GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE,
 )
 def test_gemini_35_flash_lite_service_tier_pricing(
-    model, service_tier, input_rate, output_rate, cache_read_rate, _local_model_cost_map
+    custom_llm_provider, service_tier, input_rate, output_rate, cache_read_rate, _local_model_cost_map
 ):
-    """Regression: Vertex publishes flash-lite Flex/Batch context caching at $0.015/M
-    (1.5e-08/token), so flex cache reads must not be billed at the 2e-08 rate the map
-    used to carry."""
+    """Regression: Vertex publishes flash-lite flex context caching at $0.015/M while the
+    Gemini API publishes $0.02/M, so vertex_ai flex cache reads must bill 1.5e-08/token
+    instead of the 2e-08 the map used to carry, without disturbing the Gemini API rate."""
     usage = Usage(
         prompt_tokens=1_000,
         completion_tokens=500,
@@ -3405,14 +3405,23 @@ def test_gemini_35_flash_lite_service_tier_pricing(
     )
 
     prompt_cost, completion_cost = generic_cost_per_token(
-        model=model.split("/")[-1],
+        model="gemini-3.5-flash-lite",
         usage=usage,
-        custom_llm_provider=model.split("/")[0] if "/" in model else "gemini",
+        custom_llm_provider=custom_llm_provider,
         service_tier=service_tier,
     )
 
     assert prompt_cost == pytest.approx(800 * input_rate + 200 * cache_read_rate, rel=1e-9)
     assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
+
+
+def test_gemini_35_flash_lite_flex_cache_read_map_entries(_local_model_cost_map):
+    """Each map entry carries its own surface's published flex cache-read rate: the bare
+    and vertex_ai keys are the Vertex surface at $0.015/M, the gemini key is the Gemini
+    API surface at $0.02/M."""
+    assert litellm.model_cost["gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
+    assert litellm.model_cost["vertex_ai/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 1.5e-08
+    assert litellm.model_cost["gemini/gemini-3.5-flash-lite"]["cache_read_input_token_cost_flex"] == 2e-08
 
 
 @pytest.mark.parametrize(
