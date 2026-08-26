@@ -539,3 +539,84 @@ class TestAsyncResponsesAPIPromptManagement:
         assert sent_input[0]["cache_control"] == {"type": "ephemeral"}
         assert sent_input[1] == reasoning_item
         assert sent_input[2]["id"] == "msg_1"
+
+
+# ---------------------------------------------------------------------------
+# Cross-provider model swap guard (prompt swaps model after credential resolution)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_prompt_swapped_provider_raises_cross_provider_with_credentials():
+    import litellm
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
+        _resolve_prompt_swapped_provider(
+            original_model="anthropic/claude-haiku-4-5",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="anthropic",
+            kwargs={"api_key": "sk-ant-test"},
+            prompt_id="p1",
+        )
+
+
+def test_resolve_prompt_swapped_provider_allows_swap_without_credentials():
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    assert (
+        _resolve_prompt_swapped_provider(
+            original_model="anthropic/claude-haiku-4-5",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="anthropic",
+            kwargs={},
+            prompt_id="p1",
+        )
+        == "openai"
+    )
+
+
+def test_resolve_prompt_swapped_provider_allows_same_provider_swap_with_credentials():
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    assert (
+        _resolve_prompt_swapped_provider(
+            original_model="openai/gpt-4o",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="openai",
+            kwargs={"api_key": "sk-test", "api_base": "https://api.openai.com/v1"},
+            prompt_id="p1",
+        )
+        == "openai"
+    )
+
+
+def test_sync_prompt_swap_cross_provider_with_credentials_raises():
+    import litellm
+    from litellm.responses.main import _apply_prompt_management_to_responses_call
+
+    logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
+    with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
+        _apply_prompt_management_to_responses_call(
+            input="hi",
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            litellm_logging_obj=logging_obj,
+            kwargs={"prompt_id": "p1", "api_key": "sk-ant-test"},
+            local_vars={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_aresponses_prompt_swap_cross_provider_with_credentials_raises():
+    import litellm
+
+    logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
+    logging_obj.async_failure_handler = AsyncMock()
+    with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
+        await litellm.aresponses(
+            input="hi",
+            model="anthropic/claude-haiku-4-5",
+            litellm_logging_obj=logging_obj,
+            prompt_id="p1",
+            api_key="sk-ant-test",
+        )
