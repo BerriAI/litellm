@@ -367,6 +367,45 @@ async def test_router_order_fallback_with_wildcard_model_group():
     assert response._hidden_params["model_id"] == "2"
 
 
+@pytest.mark.asyncio
+async def test_router_order_fallback_with_hidden_model_group_alias():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "canonical-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad",
+                    "mock_response": Exception("fail order 1"),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "canonical-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "good",
+                    "mock_response": "success from order 2",
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        model_group_alias={"hidden-alias": {"model": "canonical-model", "hidden": True}},
+        num_retries=0,
+    )
+
+    assert "hidden-alias" not in {deployment["model_name"] for deployment in router.get_model_list() or []}
+
+    response = await router.acompletion(
+        model="hidden-alias",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert response._hidden_params["model_id"] == "2"
+
+
 def test_check_non_standard_fallback_format():
     from litellm.router_utils.fallback_event_handlers import (
         _check_non_standard_fallback_format,

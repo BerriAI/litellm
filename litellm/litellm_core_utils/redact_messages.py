@@ -10,6 +10,7 @@
 import asyncio
 import copy
 import inspect
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -191,7 +192,7 @@ def _redact_standard_logging_object(model_call_details: dict):
             standard_logging_object["response"] = {"text": redacted_str}
 
 
-def _redact_tool_calls_dict(message: dict) -> None:
+def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
     """Redact tool call / function_call arguments in a dict-form message or delta."""
     tool_calls: Final = message.get("tool_calls")
     if isinstance(tool_calls, list):

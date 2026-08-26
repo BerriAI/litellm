@@ -1846,6 +1846,7 @@ async def test_model_connection(
         "audio_speech",
         "audio_transcription",
         "image_generation",
+        "image_edit",
         "video_generation",
         "batch",
         "rerank",
