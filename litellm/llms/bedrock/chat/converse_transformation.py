@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     filter_internal_params,
     map_finish_reason,
+    process_response_headers,
     safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -2336,6 +2337,11 @@ class AmazonConverseConfig(BaseConfig):
             service_tier_block: Final = completion_response["serviceTier"]
             if isinstance(service_tier_block, dict) and "type" in service_tier_block:
                 setattr(model_response, "service_tier", service_tier_block["type"])
+
+        # Populate response headers into _hidden_params["additional_headers"]
+        if hasattr(response, "headers") and response.headers is not None:
+            raw_headers = dict(response.headers)
+            model_response._hidden_params["additional_headers"] = process_response_headers(raw_headers)
 
         return model_response
 
