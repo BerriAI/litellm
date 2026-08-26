@@ -832,7 +832,7 @@ async def authorize_with_server(
     ephemeral_dcr_client: "EphemeralDcrClient | None" = None,
 ):
     _raise_if_not_oauth2(mcp_server)
-    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, lambda s: s.effective_authorization_url)
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, _register_flow_needed_endpoint)
     if resolved_server.effective_authorization_url is None:
         raise HTTPException(
             status_code=400,
@@ -1653,6 +1653,17 @@ async def resolve_ephemeral_dcr_client(
     return await mint_ephemeral_dcr_client(request, mcp_server)
 
 
+def _register_flow_needed_endpoint(mcp_server: MCPServer) -> str | None:
+    """The register flow's deferred-discovery join gate. A DCR bridge with no admin-configured
+    client can only register callers through the upstream's registration endpoint
+    (``_oauth_endpoints_unresolved`` keeps its discovery slot armed for exactly this shape), so
+    the flow must keep joining discovery while registration is still missing instead of silently
+    degrading to the dummy short-circuit. Every other shape only needs the authorization url."""
+    if mcp_server.is_dcr_bridge and not mcp_server.client_id and mcp_server.effective_registration_url is None:
+        return None
+    return mcp_server.effective_authorization_url
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1687,7 +1698,7 @@ async def register_client_with_server(
     ):
         return dummy_return
 
-    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, lambda s: s.effective_authorization_url)
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, _register_flow_needed_endpoint)
     if resolved_server.effective_authorization_url is None:
         raise HTTPException(
             status_code=400,
