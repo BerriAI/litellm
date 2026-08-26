@@ -332,16 +332,17 @@ def validate_caller_identity_settings(litellm_settings: Mapping[str, object]) ->
     that request a label the selected mode removes."""
     if "prometheus_deployment_and_latency_caller_identity" not in litellm_settings:
         return
-    litellm.prometheus_deployment_and_latency_caller_identity = cast(
+    litellm.prometheus_deployment_and_latency_caller_identity = cast(  # cast-ok: validated on the next line, which raises on an invalid value
         'Literal["api_key_alias", "user_email", "both"]',
         litellm_settings["prometheus_deployment_and_latency_caller_identity"],
-    )  # cast-ok: validated on the next line, which raises on an invalid value
+    )
     caller_identity_mode: Final = validate_prometheus_deployment_and_latency_caller_identity()
     if caller_identity_mode != "user_email":
         return
+    raw_metrics_config: Final = litellm_settings.get("prometheus_metrics_config")
     conflicting_metrics: Final = tuple(
         metric_name
-        for metric_config in (litellm_settings.get("prometheus_metrics_config") or ())
+        for metric_config in (raw_metrics_config if isinstance(raw_metrics_config, list) else ())
         if isinstance(metric_config, dict) and "api_key_alias" in (metric_config.get("include_labels") or ())
         for metric_name in (metric_config.get("metrics") or ())
         if metric_name in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS
