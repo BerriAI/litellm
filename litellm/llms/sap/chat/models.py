@@ -6,7 +6,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-def validate_different_content(v: str | dict | list) -> str:
+def validate_different_content(v: str | Mapping[str, object] | Sequence[object]) -> str:
     if v in ((), {}, []):
         return ""
     elif isinstance(v, dict) and "text" in v:
@@ -26,7 +26,6 @@ def validate_different_content(v: str | dict | list) -> str:
 
 
 def _has_cache_control(v: str | Mapping[str, object] | Sequence[object]) -> bool:
-    """True if any content block carries a ``cache_control`` breakpoint."""
     if isinstance(v, Mapping):
         return v.get("cache_control") is not None
     if isinstance(v, str):
@@ -36,30 +35,16 @@ def _has_cache_control(v: str | Mapping[str, object] | Sequence[object]) -> bool
 
 def validate_cacheable_content(
     v: str | Mapping[str, object] | Sequence[object],
-) -> str | Sequence[Mapping[str, object]]:
-    """Flatten content to a string, keeping the block form when it is cached.
-
-    SAP Orchestration accepts either a plain string or a list of ``text`` blocks for
-    system/developer messages. Flattening unconditionally drops any ``cache_control``
-    breakpoint set on a block, so prompt caching never activates on the ``sap/`` route.
-    Keep the block form only when a breakpoint is present, leaving every other request
-    byte-for-byte unchanged.
-    """
+) -> str | tuple[Mapping[str, object], ...]:
     if not _has_cache_control(v):
         return validate_different_content(v)
 
     blocks: Final = (v,) if isinstance(v, Mapping) else v
     normalized: Final = ({"type": "text", "text": item} if isinstance(item, str) else item for item in blocks)
-    return [block for block in normalized if isinstance(block, Mapping) and block.get("text")]
+    return tuple(block for block in normalized if isinstance(block, Mapping) and block.get("text"))
 
 
 class CacheControl(BaseModel):
-    """Prompt-cache breakpoint forwarded to the model provider.
-
-    SAP Orchestration passes this through to Bedrock-hosted Anthropic Claude and
-    Amazon Nova models, which use it to mark where the cached prefix ends.
-    """
-
     type_: Literal["ephemeral"] = Field(default="ephemeral", alias="type")
     ttl: str | None = None
 
