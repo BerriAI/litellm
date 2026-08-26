@@ -754,6 +754,12 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
+        # New Relic routing reads these from the trusted-vars overlay with no
+        # callback-name check, so scope them to the newrelic entry: a team that
+        # put newrelic_* under a different callback never asked for New Relic and
+        # must not export to it.
+        if var.startswith("newrelic_") and data.callback_name != "newrelic":
+            continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
         team_callback_settings_obj.callback_vars[var] = str(value)

@@ -18,7 +18,7 @@ import {
   Member,
 } from "@/components/networking";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   Combobox,
   ComboboxContent,

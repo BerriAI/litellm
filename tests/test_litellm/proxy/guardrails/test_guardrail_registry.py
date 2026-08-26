@@ -1,8 +1,11 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
     get_guardrail_initializer_from_hooks,
+    GuardrailRegistry,
     InMemoryGuardrailHandler,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams
@@ -657,3 +660,22 @@ class TestScanOnlyToolResultsInitRefusal:
                     "scan_only_tool_results": True,
                 },
             )
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_raises_when_row_missing():
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(return_value=None)
+
+    with pytest.raises(
+        Exception,
+        match=r"^Error updating guardrail in DB: Guardrail not found, passed guardrail_id=missing-guardrail$",
+    ):
+        await GuardrailRegistry().update_guardrail_in_db(
+            guardrail_id="missing-guardrail",
+            guardrail=Guardrail(
+                guardrail_name="missing-guardrail",
+                litellm_params=LitellmParams(guardrail="bedrock", mode="pre_call"),
+            ),
+            prisma_client=prisma_client,
+        )

@@ -7,9 +7,10 @@ import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -466,9 +467,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
                     </span>
                     <div className="flex flex-wrap gap-1">
                       {resolvedGuardrails.map((g) => (
-                        <Badge key={g} variant="info">
-                          {g}
-                        </Badge>
+                        <StatusBadge key={g} tone="info" label={g} />
                       ))}
                     </div>
                   </AlertDescription>
