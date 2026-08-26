@@ -147,6 +147,9 @@ class InMemoryPromptRegistry:
             prompt_info=prompt.prompt_info or PromptInfo(prompt_type="config"),
             created_at=prompt.created_at,
             updated_at=prompt.updated_at,
+            version=prompt.version,
+            environment=prompt.environment,
+            created_by=prompt.created_by,
         )
 
         # store references to the prompt in memory
