@@ -247,6 +247,28 @@ def extract_key_alias(request_kwargs: Mapping[str, object], metadata_variable_na
     return key_alias if isinstance(key_alias, str) else None
 
 
+def order_tags_for_identity_resolution(
+    tags: Sequence[str], request_kwargs: Mapping[str, object], metadata_variable_name: str
+) -> tuple[str, ...]:
+    """`extract_identity`/`entry_applies` both resolve a `tag_id` via
+    first-match-by-prefix. `_merge_tags` (litellm_pre_call_utils.py) appends
+    key/team/project tags only if not already present, keeping caller-supplied
+    tags first in the merged `tags` list -- so an authenticated caller could
+    submit e.g. `company_id:attacker-chosen` ahead of the calling key's real
+    `company_id:real-company` tag and have every entry scoped to `company_id`
+    resolve to the caller's own value instead of the key's. `metadata.inherited_tags`
+    is a separate, server-computed snapshot of only the tags the calling
+    key/team/project's own config contributed (see that field's docstring in
+    litellm_pre_call_utils.py), so putting it first makes a policy-backed tag
+    win over a same-prefix caller-supplied one.
+    """
+    active: Final = request_kwargs.get(metadata_variable_name) or EMPTY_MAPPING
+    inherited_tags: Final = active.get("inherited_tags") if isinstance(active, Mapping) else None
+    if not isinstance(inherited_tags, (list, tuple)) or not inherited_tags:
+        return tuple(tags)
+    return tuple(dict.fromkeys((*inherited_tags, *tags)))
+
+
 def fixed_length_identity(tag_value: str) -> str:
     """
     `tag_value` is caller-controlled (whatever follows the tag_id prefix in
