@@ -20,6 +20,11 @@ NATIVE_AUDIO_KEYS: Final = tuple(
     for suffix in ("latest", "preview-09-2025", "preview-12-2025")
 )
 
+LIVE_NATIVE_AUDIO_KEYS: Final = (
+    "gemini-live-2.5-flash-preview-native-audio-09-2025",
+    "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025",
+)
+
 FLASH_TTS_INPUT: Final = 5e-07
 FLASH_TTS_AUDIO_OUTPUT: Final = 1e-05
 PRO_TTS_INPUT: Final = 1e-06
@@ -45,10 +50,15 @@ PUBLISHED_RATES: Final = {
             "output_cost_per_token": NATIVE_AUDIO_TEXT_OUTPUT,
             "output_cost_per_audio_token": NATIVE_AUDIO_AUDIO_OUTPUT,
         }
-        for key in NATIVE_AUDIO_KEYS
+        for key in (*NATIVE_AUDIO_KEYS, *LIVE_NATIVE_AUDIO_KEYS)
     },
 }
 ALL_KEYS: Final = tuple(PUBLISHED_RATES)
+NATIVE_AUDIO_BILLING_CASES: Final = (
+    *((key, "gemini") for key in NATIVE_AUDIO_KEYS),
+    ("gemini-live-2.5-flash-preview-native-audio-09-2025", "vertex_ai"),
+    ("gemini/gemini-live-2.5-flash-preview-native-audio-09-2025", "gemini"),
+)
 LONG_CONTEXT_TIER_FIELDS: Final = (
     "input_cost_per_token_above_200k_tokens",
     "output_cost_per_token_above_200k_tokens",
@@ -118,8 +128,8 @@ def test_tts_audio_output_is_billed_at_the_audio_rate(
     assert completion_cost == pytest.approx(49 * audio_output_rate)
 
 
-@pytest.mark.parametrize("model", NATIVE_AUDIO_KEYS)
-def test_native_audio_output_is_billed_at_the_audio_rate(model: str, local_model_cost_map):
+@pytest.mark.parametrize("model, provider", NATIVE_AUDIO_BILLING_CASES)
+def test_native_audio_output_is_billed_at_the_audio_rate(model: str, provider: str, local_model_cost_map):
     usage: Final = Usage(
         prompt_tokens=377,
         completion_tokens=84,
@@ -127,18 +137,18 @@ def test_native_audio_output_is_billed_at_the_audio_rate(model: str, local_model
         prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=377),
         completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=48, reasoning_tokens=36, text_tokens=0),
     )
-    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="gemini")
+    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=provider)
     assert prompt_cost == pytest.approx(377 * NATIVE_AUDIO_TEXT_INPUT)
     assert completion_cost == pytest.approx(48 * NATIVE_AUDIO_AUDIO_OUTPUT + 36 * NATIVE_AUDIO_TEXT_OUTPUT)
 
 
-@pytest.mark.parametrize("model", NATIVE_AUDIO_KEYS)
-def test_native_audio_input_is_billed_at_the_audio_rate(model: str, local_model_cost_map):
+@pytest.mark.parametrize("model, provider", NATIVE_AUDIO_BILLING_CASES)
+def test_native_audio_input_is_billed_at_the_audio_rate(model: str, provider: str, local_model_cost_map):
     usage: Final = Usage(
         prompt_tokens=1000,
         completion_tokens=0,
         total_tokens=1000,
         prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100, audio_tokens=900),
     )
-    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="gemini")
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=provider)
     assert prompt_cost == pytest.approx(100 * NATIVE_AUDIO_TEXT_INPUT + 900 * NATIVE_AUDIO_AUDIO_INPUT)
