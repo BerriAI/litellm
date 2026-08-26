@@ -5,7 +5,6 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Any, Final, cast
 
 import litellm
@@ -74,20 +73,26 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
 
 
-GEMINI_LIVE_VOICE_MAPPINGS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "alloy": "Zephyr",
-        "ash": "Charon",
-        "ballad": "Fenrir",
-        "cedar": "Charon",
-        "coral": "Aoede",
-        "echo": "Puck",
-        "marin": "Aoede",
-        "sage": "Kore",
-        "shimmer": "Leda",
-        "verse": "Orus",
-    }
+OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
+    {"alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"}
 )
+
+
+def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
+    """Build the Gemini Live speechConfig for a client-requested voice.
+
+    OpenAI stock voice names have no Gemini equivalent and Gemini Live closes
+    the session on an unknown voice, so they are dropped with a warning and
+    the model keeps its default voice. Every other name is forwarded verbatim.
+    """
+    if isinstance(voice, str) and voice.lower() in OPENAI_STOCK_REALTIME_VOICES:
+        verbose_logger.warning(
+            "Gemini Realtime: voice %s is an OpenAI voice with no Gemini equivalent; "
+            "dropping it so the session keeps the model's default voice.",
+            voice,
+        )
+        return None
+    return VertexGeminiConfig()._map_audio_params({"voice": voice})
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -307,13 +312,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         automaticActivityDetection=transformed_audio_activity_config
                     )
             elif key == "voice":
-                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                    VertexGeminiConfig,
-                )
-
-                vertex_gemini_config = VertexGeminiConfig()
-                gemini_voice = GEMINI_LIVE_VOICE_MAPPINGS.get(value.lower(), value) if isinstance(value, str) else value
-                speech_config = vertex_gemini_config._map_audio_params({"voice": gemini_voice})
+                speech_config = _gemini_live_speech_config(value)
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:

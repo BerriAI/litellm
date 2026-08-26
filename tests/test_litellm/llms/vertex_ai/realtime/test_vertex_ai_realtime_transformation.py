@@ -513,11 +513,12 @@ def test_google_ai_studio_native_audio_still_strips_voice(patch_native_audio_cos
     assert "speechConfig" not in generation_config
 
 
-def test_vertex_native_audio_maps_openai_stock_voice(patch_native_audio_cost_map_entry):
-    """Regression: OpenAI stock voice names must be mapped, not forwarded verbatim.
+def test_vertex_native_audio_drops_openai_stock_voice(patch_native_audio_cost_map_entry):
+    """Regression: OpenAI stock voice names must be dropped, not forwarded verbatim.
 
     Vertex Live closes the socket with 1007 on an unknown voice name, so a
     client sending OpenAI's default voice would lose the session entirely.
+    Dropping the voice keeps the session alive on the model's default voice.
     """
     cfg = VertexAIRealtimeConfig(
         access_token="tok", project="my-proj", location="us-central1"
@@ -534,7 +535,7 @@ def test_vertex_native_audio_maps_openai_stock_voice(patch_native_audio_cost_map
     )
 
     generation_config = json.loads(messages[0])["setup"]["generationConfig"]
-    assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Zephyr"
+    assert "speechConfig" not in generation_config
 
 
 def test_vertex_native_audio_unmapped_voice_passes_through(patch_native_audio_cost_map_entry):
