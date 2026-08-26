@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Eye, EyeOff } from "lucide-react";
 import { toast } from "@/lib/toast";
-import { serviceHealthCheck, setCallbacksCall } from "./networking";
+import { getCallbacksCall, serviceHealthCheck, setCallbacksCall } from "./networking";
 
 interface AlertingDestination {
   name: string;
@@ -13,8 +13,9 @@ interface AlertingDestination {
 
 interface MSTeamsSettingsProps {
   accessToken: string | null;
+  userID: string | null;
+  userRole: string | null;
   alerts: AlertingDestination[];
-  activeAlertingDestinations: string[];
 }
 
 const FIELD_HELP: Record<string, React.ReactNode> = {
@@ -28,7 +29,7 @@ const FIELD_HELP: Record<string, React.ReactNode> = {
 
 const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN|URL)/i;
 
-const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, alerts, activeAlertingDestinations }) => {
+const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, userRole, alerts }) => {
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
 
   const toggleFieldVisibility = (key: string) => {
@@ -39,7 +40,7 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, alerts, 
   };
 
   const handleSaveMSTeamsSettings = async () => {
-    if (!accessToken) {
+    if (!accessToken || !userID || !userRole) {
       return;
     }
 
@@ -64,13 +65,17 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, alerts, 
         ),
     );
 
-    const payload = {
-      general_settings: {
-        alerting: Array.from(new Set([...activeAlertingDestinations, "ms_teams"])),
-      },
-      environment_variables: updatedVariables,
-    };
     try {
+      // Re-read the persisted destinations at save time so that a Teams save
+      // never restores destinations another form disabled after page load.
+      const currentConfig = await getCallbacksCall(accessToken, userID, userRole);
+      const currentDestinations: string[] = currentConfig.active_alerting_destinations ?? [];
+      const payload = {
+        general_settings: {
+          alerting: Array.from(new Set([...currentDestinations, "ms_teams"])),
+        },
+        environment_variables: updatedVariables,
+      };
       await setCallbacksCall(accessToken, payload);
       toast.success("MS Teams settings updated successfully");
     } catch (error) {

@@ -226,7 +226,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [activeAlertingDestinations, setActiveAlertingDestinations] = useState<string[]>([]);
   const addForm = useForm<CallbackFormValues>({ shouldUnregister: true });
   const editForm = useForm<CallbackFormValues>({ shouldUnregister: true });
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
@@ -326,7 +325,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         }
 
         setAlerts(alerts_data);
-        setActiveAlertingDestinations(data.active_alerting_destinations ?? []);
       } finally {
         setIsLoadingCallbacks(false);
       }
@@ -612,11 +610,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
           </TabsContent>
           <TabsContent value="ms-teams-alerts" keepMounted>
-            <MSTeamsSettings
-              accessToken={accessToken}
-              alerts={alerts}
-              activeAlertingDestinations={activeAlertingDestinations}
-            />
+            <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />
           </TabsContent>
         </Tabs>
       </div>
