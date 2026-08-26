@@ -109,20 +109,38 @@ class SingulrGuardrail(CustomGuardrail):
         return SingulrGuardrailConfigModel
 
     @staticmethod
-    def _resolve_metadata_value(request_data: Mapping[str, Any], key: str) -> str | None:
-        for container_key in ("litellm_metadata", "metadata"):
-            container: Final = request_data.get(container_key) or _EMPTY_MAPPING
-            if container:
-                value: Final = container.get(key)
-                if value:
-                    return value
+    def _metadata_containers(request_data: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+        """Candidate metadata dicts to check, in priority order.
+
+        Most call paths put metadata at the top level of ``request_data``
+        (``litellm_metadata`` or ``metadata``). ``post_mcp_call`` instead hands
+        us ``litellm_logging_obj.model_call_details``, which nests it under
+        ``litellm_params`` instead, so that's checked as a fallback.
+        """
+        litellm_params: Final = request_data.get("litellm_params") or _EMPTY_MAPPING
+        return tuple(
+            container
+            for container in (
+                request_data.get("litellm_metadata"),
+                request_data.get("metadata"),
+                litellm_params.get("litellm_metadata") if litellm_params else None,
+                litellm_params.get("metadata") if litellm_params else None,
+            )
+            if container
+        )
+
+    @classmethod
+    def _resolve_metadata_value(cls, request_data: Mapping[str, Any], key: str) -> str | None:
+        for container in cls._metadata_containers(request_data=request_data):
+            value: Final = container.get(key)
+            if value:
+                return value
         return None
 
-    @staticmethod
-    def _resolve_user_role_from_request_data(request_data: Mapping[str, Any]) -> str | None:
-        for container_key in ("litellm_metadata", "metadata"):
-            container: Final = request_data.get(container_key) or _EMPTY_MAPPING
-            auth: Final = container.get("user_api_key_auth") if container else None
+    @classmethod
+    def _resolve_user_role_from_request_data(cls, request_data: Mapping[str, Any]) -> str | None:
+        for container in cls._metadata_containers(request_data=request_data):
+            auth: Final = container.get("user_api_key_auth")
             if isinstance(auth, UserAPIKeyAuth) and auth.user_role:
                 return auth.user_role.value
         return None
@@ -375,20 +393,24 @@ class SingulrGuardrail(CustomGuardrail):
         try:
             messages: Final = kwargs.get("messages") or ()
             if messages:
+                request_metadata: Final = self._build_metadata(request_data=kwargs)
                 singulr_req_obj = SingulrGuardrailPayload(
                     correlation_id=kwargs.get("litellm_call_id"),
                     model_name=kwargs.get("model"),
                     guardrail_scope="request",
                     messages=messages,
+                    metadata=request_metadata,
                 )
                 payload_req = singulr_req_obj.model_dump(mode="json")
                 await self._call_api(payload_req)
 
             if result:
+                response_metadata: Final = self._build_metadata(request_data=kwargs)
                 singulr_res_obj = SingulrGuardrailPayload(
                     correlation_id=kwargs.get("litellm_call_id"),
                     guardrail_scope="response",
                     response=result,
+                    metadata=response_metadata,
                 )
                 try:
                     payload = singulr_res_obj.model_dump(mode="json")
@@ -398,6 +420,7 @@ class SingulrGuardrail(CustomGuardrail):
                         "correlation_id": kwargs.get("litellm_call_id"),
                         "guardrail_scope": "response",
                         "response": str(result),
+                        "metadata": response_metadata,
                     }
                 await self._call_api(payload)
         except GuardrailRaisedException:
