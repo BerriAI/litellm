@@ -61,6 +61,10 @@ from litellm.types.integrations.newrelic import (
 )
 from litellm.types.utils import StandardLoggingPayload
 
+# 408 (request timeout) and 429 (rate limit) are transient client errors the
+# Metric API expects a retry on, unlike 400/403 which a retry would only repeat.
+_RETRYABLE_CLIENT_STATUSES: Final = frozenset({408, 429})
+
 
 def resolve_newrelic_metric_endpoint(newrelic_region: str | None) -> str:
     if not newrelic_region:
@@ -346,7 +350,7 @@ class NewRelicMetricsLogger(CustomBatchLogger):
         if 200 <= status < 300:
             return True
 
-        if 400 <= status < 500:
+        if 400 <= status < 500 and status not in _RETRYABLE_CLIENT_STATUSES:
             verbose_logger.warning(
                 "New Relic Metrics: %s from Metric API%s, dropping %s records.",
                 status,

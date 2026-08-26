@@ -771,6 +771,20 @@ async def test_raised_500_is_requeued():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 408])
+async def test_transient_4xx_is_requeued_not_dropped(status):
+    """The Metric API returns 429 when it throttles (and 408 on a request
+    timeout); both are transient and expect a retry, so the batch must be
+    requeued rather than permanently dropped like a 400/403."""
+    logger = _make_logger()
+    record = _record()
+    logger.log_queue.append(record)
+    logger.async_client.post = _raises(status)
+    await logger.async_send_batch()
+    assert logger.log_queue == [record], f"a transient {status} must requeue, not drop"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [200, 201, 204])
 async def test_any_2xx_is_treated_as_delivered_not_requeued(status):
     """The Metric API answers 202, but any 2xx means the destination accepted the
