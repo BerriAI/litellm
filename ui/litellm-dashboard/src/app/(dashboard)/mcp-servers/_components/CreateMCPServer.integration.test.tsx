@@ -1956,12 +1956,12 @@ describe("CreateMCPServer", () => {
 
       render(<CreateMCPServer {...defaultProps} prefillData={prefillData} />);
 
-      await waitFor(() => {
-        expect(getServerNameInput()).toHaveValue("nimble");
-        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toHaveValue("https://mcp.nimbleway.com/mcp");
-        expect(screen.getByText("Bearer Token")).toBeInTheDocument();
-        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
-      });
+      const urlInput = await screen.findByPlaceholderText("https://your-mcp-server.com");
+
+      expect(getServerNameInput()).toHaveValue("nimble");
+      expect(urlInput).toHaveValue("https://mcp.nimbleway.com/mcp");
+      expect(screen.getByText("Bearer Token")).toBeInTheDocument();
+      expect(screen.getByText("Authentication Value")).toBeInTheDocument();
     });
   });
 

@@ -4101,7 +4101,7 @@ def resolve_complexity_router_plugins(
         complexity_router_config["classifier_plugin"] = resolved_classifier  # rebind-ok: out-param, resolved in place
 
 
-def validate_deployment_max_agentic_loops(model: Mapping[str, Any]) -> None:
+def validate_deployment_max_agentic_loops(model: Mapping[str, object]) -> None:
     """
     Reject a per-deployment `max_agentic_loops` the agentic loop cannot honor.
 
@@ -4111,7 +4111,9 @@ def validate_deployment_max_agentic_loops(model: Mapping[str, Any]) -> None:
     start. Left unchecked entirely, a `0` used to read as the default ceiling
     of 3 and a non-integer failed every request to that model instead.
     """
-    litellm_params: Final = model.get("litellm_params") or {}
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return
     if "max_agentic_loops" not in litellm_params:
         return
 
@@ -4869,6 +4871,14 @@ class ProxyConfig:
         if litellm_settings is None:
             litellm_settings = {}
         if litellm_settings:
+            # Prometheus collectors have fixed label schemas. Load and validate this
+            # setting before processing callbacks so YAML key order cannot construct
+            # the collectors with the default caller-identity mode, and so an invalid
+            # value fails the boot instead of being swallowed by callback init.
+            from litellm.types.integrations.prometheus import validate_caller_identity_settings
+
+            validate_caller_identity_settings(litellm_settings)
+
             # ANSI escape code for blue text
             blue_color_code: Final = "\033[94m"
             reset_color_code: Final = "\033[0m"
