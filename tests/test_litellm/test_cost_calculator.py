@@ -1777,12 +1777,11 @@ def test_azure_gpt_5_6_rates_match_azure_price_page(_local_model_cost_map, model
     zone = model.split("/")[1]
     if zone in ("us", "eu"):
         global_entry = litellm.model_cost["azure/" + model.split("/", 2)[2]]
-        token_cost_keys = [
-            key
-            for key in entry
-            if key.startswith(("input_cost_per_token", "output_cost_per_token", "cache_read", "cache_creation"))
-        ]
+        prefixes = ("input_cost_per_token", "output_cost_per_token", "cache_read", "cache_creation")
+        token_cost_keys = [key for key in entry if key.startswith(prefixes)]
+        global_token_cost_keys = [key for key in global_entry if key.startswith(prefixes)]
         assert len(token_cost_keys) >= 9
+        assert sorted(token_cost_keys) == sorted(global_token_cost_keys)
         for key in token_cost_keys:
             assert entry[key] == pytest.approx(global_entry[key] * 1.1), key
 
