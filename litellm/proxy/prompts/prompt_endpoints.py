@@ -323,6 +323,7 @@ def create_versioned_prompt_spec(db_prompt: _PromptRow) -> PromptSpec:
         prompt_info=prompt_info,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        version=row.version,
         environment=row.environment,
         created_by=row.created_by,
     )
@@ -332,6 +333,21 @@ class Prompt(BaseModel):
     prompt_id: str
     litellm_params: PromptLiteLLMParams
     prompt_info: PromptInfo | None = None
+
+
+AMBIGUOUS_PROMPT_DATA_ERROR: Final = (
+    "litellm_params.prompt_id cannot be combined with prompt_data keyed by template name. "
+    'Send a flat template, prompt_data={"content": "...", "metadata": {...}}, together with litellm_params.prompt_id, '
+    'or send prompt_data={"<template_id>": {"content": "...", "metadata": {...}}} without litellm_params.prompt_id.'
+)
+
+
+def is_ambiguous_keyed_prompt_data(litellm_params: PromptLiteLLMParams) -> bool:
+    extra_fields: Final = litellm_params.model_extra or {}
+    prompt_data: Final = extra_fields.get("prompt_data")
+    if not litellm_params.prompt_id or not isinstance(prompt_data, dict):
+        return False
+    return bool(prompt_data) and "content" not in prompt_data
 
 
 class PatchPromptRequest(BaseModel):
@@ -737,11 +753,9 @@ async def create_prompt(
         -d '{
             "prompt_id": "my_prompt",
             "litellm_params": {
-                "prompt_id": "json_prompt",
+                "prompt_id": "my_prompt",
                 "prompt_integration": "dotprompt",
-                ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
-                "prompt_directory": "/path/to/dotprompt/folder",
-                "prompt_data": {"json_prompt": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}}
+                "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
             },
             "prompt_info": {
                 "prompt_type": "config"
@@ -762,6 +776,9 @@ async def create_prompt(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    if is_ambiguous_keyed_prompt_data(request.litellm_params):
+        raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
 
     try:
         # Extract environment from request
@@ -856,6 +873,9 @@ async def update_prompt(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    if is_ambiguous_keyed_prompt_data(request.litellm_params):
+        raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
 
     try:
         # Strip version suffix from prompt_id if present (e.g., "jack_success.v1" -> "jack_success")
@@ -1085,6 +1105,9 @@ async def patch_prompt(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    if request.litellm_params is not None and is_ambiguous_keyed_prompt_data(request.litellm_params):
+        raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
 
     try:
         # Resolve the target row: find the latest version in the given environment
