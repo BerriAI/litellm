@@ -4146,17 +4146,32 @@ def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) 
     assert cost == pytest.approx(expected_cost, rel=1e-9)
 
 
+@pytest.mark.parametrize(
+    "priceless_entry",
+    [
+        {"litellm_provider": "vertex_ai", "mode": "realtime"},
+        {
+            "litellm_provider": "vertex_ai",
+            "mode": "realtime",
+            "input_cost_per_token": None,
+            "output_cost_per_token": None,
+            "input_cost_per_audio_token": None,
+        },
+    ],
+    ids=["registered_without_price_fields", "registered_with_none_valued_price_fields"],
+)
 def test_realtime_priceless_deployment_entry_falls_through_to_priced_model(
-    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, priceless_entry: dict
 ) -> None:
     """Regression for https://github.com/BerriAI/litellm/issues/31087: the router registers every
-    deployment's backend key into litellm.model_cost without price fields, and the realtime cost
-    handler used to accept that zero-defaulted entry for the session.created model and stop, so a
-    configured base_model never priced the session."""
+    deployment's backend key into litellm.model_cost without price fields (and merges a None-valued
+    ModelInfo skeleton into mapped entries), and the realtime cost handler used to accept that
+    zero-defaulted entry for the session.created model and stop, so a configured base_model never
+    priced the session."""
     monkeypatch.setitem(
         litellm.model_cost,
         "vertex_ai/some-unmapped-live-model",
-        {"litellm_provider": "vertex_ai", "mode": "realtime"},
+        priceless_entry,
     )
     priced_model = "vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025"
     priced_entry = litellm.model_cost["gemini-live-2.5-flash-preview-native-audio-09-2025"]
