@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import inspect
 import os
 import traceback
 from collections.abc import Callable, Iterable, Mapping
@@ -181,10 +182,11 @@ class LangFuseLogger:
             "debug": self.langfuse_debug,
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
             "httpx_client": self.langfuse_client,
-            "environment": self.langfuse_environment,
         }
         self.langfuse_sdk_version: str = langfuse.version.__version__
 
+        if "environment" in inspect.signature(Langfuse.__init__).parameters:
+            parameters["environment"] = self.langfuse_environment
         if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)

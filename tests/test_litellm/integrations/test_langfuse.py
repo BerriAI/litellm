@@ -1179,6 +1179,14 @@ def test_max_langfuse_clients_limit():
 class _RecordingLangfuse:
     last_parameters: Optional[dict] = None
 
+    def __init__(self, environment=None, **parameters):
+        type(self).last_parameters = {"environment": environment, **parameters}
+        self.client = MagicMock()
+
+
+class _RecordingLangfuseWithoutEnvironment:
+    last_parameters: Optional[dict] = None
+
     def __init__(self, **parameters):
         type(self).last_parameters = parameters
         self.client = MagicMock()
@@ -1222,6 +1230,19 @@ def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
         )
     assert logger.langfuse_environment == "deployment-wide"
     assert _RecordingLangfuse.last_parameters["environment"] == "deployment-wide"
+
+
+def test_langfuse_environment_omitted_for_old_sdk_versions(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuseWithoutEnvironment):
+        LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="staging",
+        )
+    assert "environment" not in _RecordingLangfuseWithoutEnvironment.last_parameters
 
 
 def test_dynamic_langfuse_environment_triggers_dynamic_logger():
