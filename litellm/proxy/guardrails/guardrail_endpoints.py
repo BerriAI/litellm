@@ -2320,9 +2320,18 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
+        # The proxy-injected metadata is merged last so it wins: the body's is
+        # caller-controlled, and a guardrail reading it would let a caller name a
+        # different virtual key than the one that authenticated.
+        merged_metadata: Final = {
+            name: value
+            for source in (request.metadata, data.get("metadata"))
+            if isinstance(source, dict)
+            for name, value in source.items()
+        }
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
+            "metadata": merged_metadata,
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(

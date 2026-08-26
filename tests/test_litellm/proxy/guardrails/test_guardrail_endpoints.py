@@ -1497,7 +1497,7 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
-def _patch_apply_guardrail_env(mocker, guardrail_result):
+def _patch_apply_guardrail_env(mocker, guardrail_result, proxy_metadata=None):
     mock_guardrail = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
 
@@ -1511,8 +1511,12 @@ def _patch_apply_guardrail_env(mocker, guardrail_result):
     mock_logging_obj.async_success_handler = AsyncMock()
     mock_logging_obj.model_call_details = {}
     mock_processor = mocker.Mock()
+    processed_data = {
+        "guardrail_name": "test-guardrail",
+        **({"metadata": proxy_metadata} if proxy_metadata is not None else {}),
+    }
     mock_processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+        return_value=(processed_data, mock_logging_obj)
     )
     mocker.patch(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
@@ -1584,9 +1588,17 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
-    """Without metadata, request_data stays empty (backward-compatible)."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+async def test_apply_guardrail_forwards_proxy_identity_when_body_has_no_metadata(mocker):
+    """Guardrails that target specific virtual keys need the authenticated key
+    even when the body carries no metadata of its own."""
+    proxy_metadata = {
+        "route": "/apply_guardrail",
+        "user_api_key_alias": "prod-key",
+        "user_api_key_hash": "hash-abc",
+    }
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker, {"texts": ["ok"]}, proxy_metadata=proxy_metadata
+    )
 
     request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
     await apply_guardrail(
@@ -1597,9 +1609,43 @@ async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
 
     mock_guardrail.apply_guardrail.assert_awaited_once_with(
         inputs={"texts": ["hello"]},
-        request_data={},
+        request_data={"metadata": proxy_metadata},
         input_type="request",
     )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_proxy_identity_overrides_caller_metadata(mocker):
+    """A caller must not be able to name a virtual key other than the one that
+    authenticated, while the body's non-identity fields still reach the guardrail."""
+    mock_guardrail = _patch_apply_guardrail_env(
+        mocker,
+        {"texts": ["ok"]},
+        proxy_metadata={
+            "user_api_key_alias": "authenticated-key",
+            "user_api_key_hash": "hash-real",
+        },
+    )
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={
+            "user_api_key_alias": "spoofed-key",
+            "user_api_key_hash": "hash-spoofed",
+            "forbidden_topics": ["tax"],
+        },
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    forwarded = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
+    assert forwarded["user_api_key_alias"] == "authenticated-key"
+    assert forwarded["user_api_key_hash"] == "hash-real"
+    assert forwarded["forbidden_topics"] == ["tax"]
 
 
 @pytest.mark.asyncio

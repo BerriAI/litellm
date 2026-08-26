@@ -323,7 +323,7 @@ class XecGuardGuardrail(CustomGuardrail):
         if isinstance(nested, dict):
             for meta_key in ("metadata", "litellm_metadata"):
                 md = nested.get(meta_key)
-                if isinstance(md, dict):
+                if isinstance(md, dict) and any(field in md for field in cls._KEY_IDENTITY_FIELDS):
                     return {meta_key: md}  # mutable-ok: lifts nested metadata to the readers' shape
         return data
 

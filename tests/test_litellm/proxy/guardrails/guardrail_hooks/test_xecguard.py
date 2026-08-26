@@ -2314,6 +2314,20 @@ class TestXecGuardLoggingHookKeyTargeting:
         )
         assert ctx["metadata"]["user_api_key_alias"] == "nested"
 
+    def test_key_context_nested_skips_metadata_without_identity(self):
+        # logging path: an empty litellm_params.metadata must not shadow the
+        # sibling key that actually carries the identity.
+        gr = _extension_guardrail()
+        ctx = gr._key_context(
+            {
+                "litellm_params": {
+                    "metadata": {},
+                    "litellm_metadata": {"user_api_key_alias": "sibling"},
+                }
+            }
+        )
+        assert gr._calling_key_identity(ctx) == ("sibling", None)
+
     def test_key_context_returns_proxy_shape_untouched(self):
         # pre/during/post_call: reshaping to a single key would drop the other
         # location _calling_key_identity also reads.
