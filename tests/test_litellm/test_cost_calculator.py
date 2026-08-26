@@ -3866,3 +3866,51 @@ def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
     )
 
     assert selected == "vertex_ai/team/nonsense-model"
+
+
+def test_completion_cost_keeps_custom_priced_slash_router_id(_local_model_cost_map):
+    """A custom-priced router id containing "/" keeps its custom pricing instead of being
+    rewritten to the built-in key its suffix happens to match."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    litellm.register_model(
+        model_cost={
+            "vertex/claude-opus-5": {
+                "input_cost_per_token": 7e-6,
+                "output_cost_per_token": 8e-6,
+                "litellm_provider": "vertex_ai",
+            }
+        }
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="vertex_ai/claude-opus-5",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="vertex_ai",
+        router_model_id="vertex/claude-opus-5",
+    )
+    assert selected == "vertex_ai/vertex/claude-opus-5"
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {"custom_llm_provider": "vertex_ai"}
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+        custom_pricing=True,
+        router_model_id="vertex/claude-opus-5",
+    )
+    assert cost == pytest.approx(100 * 7e-6 + 50 * 8e-6, rel=1e-9)
