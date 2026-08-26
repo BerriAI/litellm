@@ -8,6 +8,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -307,10 +308,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
-        if "x-api-key" not in headers and "authorization" not in headers:
+        header_names: Final = frozenset(name.lower() for name in headers)
+        if "x-api-key" not in header_names and "authorization" not in header_names:
             auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
-            if auth_header is not None:
-                headers.update(auth_header)
+            if auth_header is None:
+                raise AuthenticationError(
+                    message=(
+                        "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
+                        "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
+                        "or `ANTHROPIC_AUTH_TOKEN` in your environment vars"
+                    ),
+                    llm_provider=self._resolved_provider,
+                    model=model,
+                )
+            headers.update(auth_header)
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
