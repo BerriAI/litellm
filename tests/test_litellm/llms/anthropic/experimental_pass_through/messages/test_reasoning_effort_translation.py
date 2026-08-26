@@ -42,7 +42,7 @@ def test_reasoning_effort_maps_to_output_config_for_adaptive_model(
     )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 

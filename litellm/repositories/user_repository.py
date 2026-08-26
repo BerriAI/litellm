@@ -4,10 +4,14 @@ User repository for database operations on LiteLLM_UserTable.
 
 import json
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 _JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget"})
 
@@ -16,7 +20,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
     @property
-    def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
+    def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
         return self.prisma_client.db.litellm_usertable
 
     @property
