@@ -930,9 +930,20 @@ class AmazonConverseConfig(BaseConfig):
                         litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
                 else:
                     optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
+            elif param == "reasoning_effort" and value is not None:
+                # Accept both string ("low") and dict ({"effort": "low",
+                # "summary": "concise"}). The Responses->Chat parser keeps the
+                # full dict when `summary` is set (see #25359 / #28196), so a
+                # dict here is the standard shape Otto/OpenAI-Responses-Bridge
+                # callers send. Same coercion the direct Anthropic path already
+                # implements.
+                effort_value = value.get("effort") if isinstance(value, dict) else value
+                if not isinstance(effort_value, str):
+                    continue
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model,
+                    reasoning_effort=effort_value,
+                    optional_params=optional_params,
                 )
             elif param == "output_config" and isinstance(value, dict):
                 mapped_output_config = dict(value)
