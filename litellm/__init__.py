@@ -123,6 +123,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "dynamic_rate_limiter",
     "dynamic_rate_limiter_v3",
     "model_based_tag_rate_limits_hook",
+    "global_tag_rate_limits_hook",
     "langsmith",
     "prometheus",
     "otel",
@@ -395,6 +396,8 @@ default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
 model_based_tag_rate_limits_max_in_memory_cache_size: Optional[int] = None
+global_tag_rate_limits: Optional["TagRateLimits"] = None
+global_tag_rate_limits_max_in_memory_cache_size: Optional[int] = None
 model_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers

@@ -2061,7 +2061,10 @@ class ProxyBaseLLMRequestProcessing:
             )
         except ProxyRateLimitError as original_exc:
             original_model: Final = self.data.get("model")
-            if not original_model or not llm_router or self.data.get("disable_fallbacks"):
+            cross_model_scope: Final = (
+                isinstance(original_exc.detail, Mapping) and original_exc.detail.get("cross_model_scope") is True
+            )
+            if not original_model or not llm_router or self.data.get("disable_fallbacks") or cross_model_scope:
                 raise
 
             fallback_models: Final = self._resolve_fallback_models(
