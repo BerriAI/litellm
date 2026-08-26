@@ -96,7 +96,10 @@ class _PaginatedPrismaTable(Protocol[_TableRowT]):
 
 def _paginated_table(repository: BaseRepository[_TableRowT]) -> _PaginatedPrismaTable[_TableRowT]:
     """View a repository's prisma table through the pagination surface budget metrics need."""
-    return repository.table
+    return cast(
+        _PaginatedPrismaTable[_TableRowT],
+        repository.table,  # cast-ok: prisma rows carry the budget columns the domain model declares
+    )
 
 
 class _OrgBudgetRow(Protocol):

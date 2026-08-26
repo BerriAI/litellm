@@ -177,6 +177,7 @@ from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
+    from prisma import models as prisma_models
     from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
     from prisma.models import LiteLLM_DeprecatedVerificationToken
@@ -186,6 +187,7 @@ if TYPE_CHECKING:
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
     Span = _Span | object
@@ -3282,7 +3284,10 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
     if not param_names:
         return
     try:
-        rows: Final = await ConfigRepository(prisma_client).table.find_many(where={"param_name": {"in": param_names}})
+        config_table: Final = cast(  # cast-ok: ConfigRepository.table is prisma's litellm_config actions object
+            "TableActions[prisma_models.LiteLLM_Config]", ConfigRepository(prisma_client).table
+        )
+        rows: Final = await config_table.find_many(where={"param_name": {"in": param_names}})
     except Exception as e:
         verbose_proxy_logger.debug(
             "prefetch_config_params failed, falling through to per-param queries: %s",
@@ -3571,8 +3576,8 @@ class PrismaClient:
 
         return hashed_token
 
-    def jsonify_object(self, data: dict) -> dict:
-        db_data: Final = copy.deepcopy(data)
+    def jsonify_object(self, data: Mapping[str, object]) -> dict[str, object]:
+        db_data: Final[dict[str, object]] = copy.deepcopy(dict(data))
 
         for k, v in db_data.items():
             if isinstance(v, dict):
@@ -3706,7 +3711,10 @@ class PrismaClient:
             elif table_name == "keys":
                 return await VerificationTokenRepository(self).table.find_first(where={key: value})
             elif table_name == "config":
-                return await ConfigRepository(self).table.find_first(where={key: value})
+                config_table: Final = cast(  # cast-ok: ConfigRepository.table is prisma's litellm_config actions object
+                    "TableActions[prisma_models.LiteLLM_Config]", ConfigRepository(self).table
+                )
+                return await config_table.find_first(where={key: value})
             elif table_name == "spend":
                 return await self.db.l.find_first(where={key: value})
             return None
@@ -3809,9 +3817,9 @@ class PrismaClient:
         self,
         token: str | list | None = None,
         user_id: str | None = None,
-        user_id_list: list | None = None,
+        user_id_list: Sequence[str] | None = None,
         team_id: str | None = None,
-        team_id_list: list | None = None,
+        team_id_list: Sequence[str] | None = None,
         key_val: dict | None = None,
         table_name: Literal[
             "user", "key", "config", "spend", "enduser", "budget", "team", "user_notification", "combined_view"
@@ -3894,14 +3902,14 @@ class PrismaClient:
                             if isinstance(r.expires, datetime):
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all":
-                    where_filter: Final[dict] = {}
+                    where_filter: Final[dict[str, dict[str, Sequence[str]]]] = {}
                     if token is not None:
                         where_filter["token"] = {}
                         if isinstance(token, str):
                             token = _hash_token_if_needed(token=token)
                             where_filter["token"]["in"] = [token]
                         elif isinstance(token, list):
-                            hashed_tokens: Final = []
+                            hashed_tokens: Final[list[str]] = []
                             for t in token:
                                 assert isinstance(t, str)
                                 if t.startswith("sk-"):
@@ -4198,7 +4206,7 @@ class PrismaClient:
             )
             raise e
 
-    def jsonify_team_object(self, db_data: dict):
+    def jsonify_team_object(self, db_data: Mapping[str, object]) -> dict[str, object]:
         db_data = self.jsonify_object(data=db_data)
         if db_data.get("members_with_roles", None) is not None and isinstance(db_data["members_with_roles"], list):
             db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
@@ -4216,7 +4224,7 @@ class PrismaClient:
     )
     async def insert_data(
         self,
-        data: dict,
+        data: Mapping[str, object],
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
     ):
         """
@@ -4226,10 +4234,12 @@ class PrismaClient:
         try:
             verbose_proxy_logger.debug(
                 "PrismaClient: insert_data: %s",
-                {**data, "token": self.hash_token(token=data["token"])} if data.get("token") is not None else data,
+                {**data, "token": self.hash_token(token=cast("str", data["token"]))}  # cast-ok: a key token is a str
+                if data.get("token") is not None
+                else data,
             )
             if table_name == "key":
-                token: Final = data["token"]
+                token: Final = cast("str", data["token"])  # cast-ok: the key table's token column is a str
                 hashed_token: Final = self.hash_token(token=token)
                 db_data = self.jsonify_object(data=data)
                 db_data["token"] = hashed_token
@@ -4364,14 +4374,14 @@ class PrismaClient:
     async def update_data(
         self,
         token: str | None = None,
-        data: dict = {},
+        data: Mapping[str, object] = {},
         data_list: list | None = None,
         user_id: str | None = None,
         team_id: str | None = None,
         query_type: Literal["update", "update_many"] = "update",
         table_name: Literal["user", "key", "config", "spend", "team", "enduser", "budget"] | None = None,
-        update_key_values: dict | None = None,
-        update_key_values_custom_query: dict | None = None,
+        update_key_values: dict[str, object] | None = None,
+        update_key_values_custom_query: dict[str, object] | None = None,
     ):
         """
         Update existing data
@@ -4397,14 +4407,14 @@ class PrismaClient:
                     try:
                         _data = response.model_dump()
                     except Exception:
-                        _data = response.dict()
+                        _data = response.dict()  # pyright: ignore[reportDeprecated]  # pydantic-v1 row fallback
                 return {"token": token, "data": _data}
             elif user_id is not None or (table_name is not None and table_name == "user") and query_type == "update":
                 """
                 If data['spend'] + data['user'], update the user table with spend info as well
                 """
                 if user_id is None:
-                    user_id = db_data["user_id"]
+                    user_id = cast("str", db_data["user_id"])  # cast-ok: the user table's user_id column is a str
                 if update_key_values is None:
                     if update_key_values_custom_query is not None:
                         update_key_values = update_key_values_custom_query
@@ -4426,7 +4436,7 @@ class PrismaClient:
                 If data['spend'] + data['user'], update the user table with spend info as well
                 """
                 if team_id is None:
-                    team_id = db_data["team_id"]
+                    team_id = cast("str | None", db_data["team_id"])  # cast-ok: team_id column is a nullable str
                 if update_key_values is None:
                     update_key_values = db_data
                 if "team_id" not in db_data and team_id is not None:
@@ -4600,8 +4610,8 @@ class PrismaClient:
     )
     async def delete_data(
         self,
-        tokens: list | None = None,
-        team_id_list: list | None = None,
+        tokens: Sequence[str | None] | None = None,
+        team_id_list: Sequence[str] | None = None,
         table_name: Literal["user", "key", "config", "spend", "team"] | None = None,
         user_id: str | None = None,
     ):
@@ -4613,14 +4623,14 @@ class PrismaClient:
         start_time: Final = time.time()
         try:
             if tokens is not None and isinstance(tokens, list):
-                hashed_tokens: Final = []
+                hashed_tokens: Final[list[str | None]] = []
                 for token in tokens:
                     if isinstance(token, str) and token.startswith("sk-"):
                         hashed_token = self.hash_token(token=token)
                     else:
                         hashed_token = token
                     hashed_tokens.append(hashed_token)
-                filter_query: dict = {}
+                filter_query: dict[str, object] = {}
                 if user_id is not None:
                     filter_query = {"AND": [{"token": {"in": hashed_tokens}}, {"user_id": user_id}]}
                 else:
@@ -5765,12 +5775,12 @@ class PrismaClient:
         limit: int = 100,
         offset: int = 0,
         status_filter: str | None = None,
-    ):
+    ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
         """
         Get health check history with optional filtering
         """
         try:
-            where_clause: Final = {}
+            where_clause: Final[dict[str, str]] = {}
             if model_name:
                 where_clause["model_name"] = model_name
             if status_filter:
@@ -5787,7 +5797,7 @@ class PrismaClient:
             verbose_proxy_logger.error("Error getting health check history: %s", e)
             return []
 
-    async def get_all_latest_health_checks(self):
+    async def get_all_latest_health_checks(self) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
         """
         Get the latest health check for each model.
 
@@ -5965,15 +5975,17 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
         return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
 
     plaintext_users: Final = [
-        u for u in all_with_pw if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        (u.user_id, u.password)
+        for u in all_with_pw
+        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"
 
-    for user in plaintext_users:
+    for user_id, plaintext_password in plaintext_users:
         await UserRepository(prisma_client).table.update(
-            where={"user_id": user.user_id},
-            data={"password": hash_password(user.password)},
+            where={"user_id": user_id},
+            data={"password": hash_password(plaintext_password)},
         )
     return f"Migrated {len(plaintext_users)} plaintext passwords to scrypt"
 

@@ -157,7 +157,12 @@ class _PrismaVectorStoreRow(Protocol):
 
 class _PrismaUserRow(Protocol):
     user_id: str
-    organization_memberships: Sequence[LiteLLM_OrganizationMembershipTable | None] | None
+
+    @property
+    def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
+
+    @organization_memberships.setter
+    def organization_memberships(self, value: Sequence[_PrismaModelDumpRow] | None) -> None: ...
 
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
@@ -215,9 +220,14 @@ def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_P
     return repo.table
 
 
+class _VectorStorePermissionsRow(Protocol):
+    @property
+    def vector_stores(self) -> Sequence[str] | None: ...
+
+
 def _object_permission_table(
-    repo: _PrismaTableHolder[LiteLLM_ObjectPermissionTable],
-) -> _PrismaAuthTable[LiteLLM_ObjectPermissionTable]:
+    repo: _PrismaTableHolder[_VectorStorePermissionsRow],
+) -> _PrismaAuthTable[_VectorStorePermissionsRow]:
     return repo.table
 
 
@@ -5376,7 +5386,7 @@ async def vector_store_access_check(
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org"],
     vector_store_ids_to_run: list[str],
-    object_permissions: LiteLLM_ObjectPermissionTable | None,
+    object_permissions: _VectorStorePermissionsRow | None,
 ):
     """
     Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
