@@ -710,10 +710,6 @@ class ModelInfoResponse(BaseModel):
 
 
 class CostMapEntry(BaseModel):
-    """One `/public/litellm_model_cost_map` row: the price and capability flags the
-    proxy resolves for a `<provider>/<model>` key. Tests pick a deployment from
-    these flags instead of hardcoding a model name that rots."""
-
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
     mode: str | None = None
