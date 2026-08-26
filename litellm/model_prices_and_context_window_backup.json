@@ -6592,6 +6592,9 @@
         "supports_web_search": true
     },
     "azure/gpt-5.6": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
+        "cache_creation_input_token_cost_priority": 1.25e-05,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_priority": 1e-06,
@@ -6642,6 +6645,9 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-sol": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
+        "cache_creation_input_token_cost_priority": 1.25e-05,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_priority": 1e-06,
@@ -6693,6 +6699,9 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-terra": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_creation_input_token_cost_priority": 5e-06,
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_272k_tokens": 4e-07,
         "cache_read_input_token_cost_priority": 4e-07,
@@ -6744,6 +6753,9 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-luna": {
+        "cache_creation_input_token_cost": 2.5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
+        "cache_creation_input_token_cost_priority": 5e-07,
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4e-08,
         "cache_read_input_token_cost_priority": 4e-08,
@@ -6795,12 +6807,15 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6808,7 +6823,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6842,13 +6857,16 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-sol": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6856,7 +6874,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6890,13 +6908,16 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-terra": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_creation_input_token_cost_priority": 5.5e-06,
         "cache_read_input_token_cost": 2.2e-07,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
-        "cache_read_input_token_cost_priority": 5.5e-07,
+        "cache_read_input_token_cost_priority": 4.4e-07,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "input_cost_per_token_priority": 5.5e-06,
+        "input_cost_per_token_priority": 4.4e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6904,7 +6925,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
-        "output_cost_per_token_priority": 3.3e-05,
+        "output_cost_per_token_priority": 2.64e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6938,13 +6959,16 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-luna": {
+        "cache_creation_input_token_cost": 2.75e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
+        "cache_creation_input_token_cost_priority": 5.5e-07,
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
-        "cache_read_input_token_cost_priority": 5.5e-08,
+        "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "input_cost_per_token_priority": 5.5e-07,
+        "input_cost_per_token_priority": 4.4e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6952,7 +6976,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
-        "output_cost_per_token_priority": 3.3e-06,
+        "output_cost_per_token_priority": 2.64e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6986,12 +7010,15 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6999,7 +7026,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7033,13 +7060,16 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-sol": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -7047,7 +7077,7 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7081,13 +7111,16 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-terra": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_creation_input_token_cost_priority": 5.5e-06,
         "cache_read_input_token_cost": 2.2e-07,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
-        "cache_read_input_token_cost_priority": 5.5e-07,
+        "cache_read_input_token_cost_priority": 4.4e-07,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "input_cost_per_token_priority": 5.5e-06,
+        "input_cost_per_token_priority": 4.4e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -7095,7 +7128,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
-        "output_cost_per_token_priority": 3.3e-05,
+        "output_cost_per_token_priority": 2.64e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7129,13 +7162,16 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-luna": {
+        "cache_creation_input_token_cost": 2.75e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
+        "cache_creation_input_token_cost_priority": 5.5e-07,
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
-        "cache_read_input_token_cost_priority": 5.5e-08,
+        "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "input_cost_per_token_priority": 5.5e-07,
+        "input_cost_per_token_priority": 4.4e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -7143,7 +7179,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
-        "output_cost_per_token_priority": 3.3e-06,
+        "output_cost_per_token_priority": 2.64e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -30721,6 +30757,152 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "mistral/ministral-14b-2512": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://docs.mistral.ai/models/ministral-3-14b-25-12",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/ministral-14b-latest": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://docs.mistral.ai/models/ministral-3-14b-25-12",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/ministral-3b-2512": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1e-07,
+        "source": "https://docs.mistral.ai/models/ministral-3-3b-25-12",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/ministral-3b-latest": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1e-07,
+        "source": "https://docs.mistral.ai/models/ministral-3-3b-25-12",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-embed-2312": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "source": "https://docs.mistral.ai/models/mistral-embed-23-12"
+    },
+    "mistral/mistral-medium-3": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/voxtral-mini-transcribe-realtime-latest": {
+        "input_cost_per_second": 0.0001,
+        "litellm_provider": "mistral",
+        "mode": "audio_transcription",
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-mini-transcribe-realtime-26-02",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "mistral/voxtral-mini-tts-latest": {
+        "litellm_provider": "mistral",
+        "mode": "audio_speech",
+        "output_cost_per_character": 1.6e-05,
+        "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_output": true
+    },
+    "mistral/voxtral-small-2507": {
+        "input_cost_per_second": 6.666666666666667e-05,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://docs.mistral.ai/models/voxtral-small-25-07",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "mistral/voxtral-small-latest": {
+        "input_cost_per_second": 6.666666666666667e-05,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://docs.mistral.ai/models/voxtral-small-25-07",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "mistral/zai-glm-5-2": {
         "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 1.4e-06,
@@ -31191,9 +31373,9 @@
     "mistral/ministral-3-3b-2512": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 1e-07,
         "source": "https://mistral.ai/pricing",
@@ -38342,6 +38524,7 @@
         "supports_tool_choice": true
     },
     "together_ai/Qwen/Qwen3.5-397B-A17B": {
+        "cache_read_input_token_cost": 3.5e-07,
         "deprecation_date": "2026-06-29",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "together_ai",
@@ -38351,10 +38534,12 @@
         "source": "https://www.together.ai/models/Qwen/Qwen3.5-397B-A17B",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "together_ai/MiniMaxAI/MiniMax-M3": {
+        "cache_read_input_token_cost": 6e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 524288,
@@ -38365,6 +38550,7 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -38408,6 +38594,7 @@
         "supports_reasoning": true
     },
     "together_ai/Qwen/Qwen3.7-Max": {
+        "cache_read_input_token_cost": 1.3e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
@@ -38415,7 +38602,8 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 3.75e-06,
-        "source": "https://docs.together.ai/docs/serverless-models"
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_prompt_caching": true
     },
     "together_ai/Qwen/Qwen3.7-Plus": {
         "input_cost_per_token": 3.2e-07,
@@ -38428,6 +38616,7 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
+        "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1010000,
@@ -38435,7 +38624,8 @@
         "max_tokens": 1010000,
         "mode": "chat",
         "output_cost_per_token": 6.25e-06,
-        "source": "https://docs.together.ai/docs/serverless-models"
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_prompt_caching": true
     },
     "together_ai/arize-ai/qwen-2-1.5b-instruct": {
         "input_cost_per_token": 1e-07,
@@ -38448,6 +38638,7 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731": {
+        "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
@@ -38458,10 +38649,12 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Pro": {
+        "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1.74e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 512000,
@@ -38472,11 +38665,13 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813": {
+        "cache_read_input_token_cost": 1.3e-07,
         "input_cost_per_token": 1.32e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
@@ -38487,6 +38682,7 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
@@ -38538,6 +38734,7 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/meta-models/Muse-Glimmer-30B": {
+        "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 3.5e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
@@ -38545,9 +38742,11 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
-        "source": "https://docs.together.ai/docs/serverless-models"
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_prompt_caching": true
     },
     "together_ai/moonshotai/Kimi-K2.7-Code": {
+        "cache_read_input_token_cost": 1.9e-07,
         "input_cost_per_token": 9.5e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
@@ -38558,11 +38757,13 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "together_ai/moonshotai/Kimi-K3": {
+        "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
@@ -38573,12 +38774,14 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "together_ai/nvidia/nemotron-3-ultra-550b-a55b": {
+        "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 512288,
@@ -38589,6 +38792,7 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -38604,6 +38808,7 @@
         "source": "https://docs.together.ai/docs/serverless-models"
     },
     "together_ai/thinkingmachines/Inkling": {
+        "cache_read_input_token_cost": 1.7e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 524288,
@@ -38614,10 +38819,12 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "together_ai/thinkingmachines/Inkling-Small": {
+        "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 524288,
@@ -38625,9 +38832,11 @@
         "max_tokens": 524288,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://docs.together.ai/docs/serverless-models"
+        "source": "https://docs.together.ai/docs/serverless-models",
+        "supports_prompt_caching": true
     },
     "together_ai/zai-org/GLM-5.2": {
+        "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048575,
@@ -38638,6 +38847,7 @@
         "source": "https://docs.together.ai/docs/serverless-models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
