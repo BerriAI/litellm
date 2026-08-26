@@ -189,6 +189,24 @@ class _GlobalTagRateLimitStash:
     # decided on -- not whatever model a later fallback actually served.
     model: str | None = None
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
+    # "requests" keys already charged for this call_id -- veria-ai finding:
+    # ProxyBaseLLMRequestProcessing._pre_call_with_fallbacks reruns the whole
+    # pre-call pipeline (this hook included) once per fallback model on ANY
+    # ProxyRateLimitError, not only one this hook itself raised, but reuses
+    # the same litellm_call_id (self.data is mutated in place, only `model`
+    # changes) across every attempt -- so this stash is the SAME object each
+    # time. A "requests" check matching an already-charged key here renews
+    # at zero net cost instead of charging a second unit for the same
+    # logical request; see async_pre_call_hook's own comment for how.
+    charged_request_keys: list[str] = field(default_factory=list)  # mutable-ok: see comment above
+    # The server-authenticated key_hash (UserAPIKeyAuth.api_key) of whichever
+    # call first claimed this stash. litellm_call_id is caller-controlled via
+    # the x-litellm-call-id header (the exact forgery vector
+    # model_based_tag_rate_limits_hook's own pending-reservations mirror was
+    # hardened against earlier), so two unrelated requests sharing a
+    # caller-chosen id must not be allowed to "renew" each other's charge --
+    # only a later admission carrying this same, authenticated key_hash may.
+    owner_key_hash: str | None = None
 
 
 # Sentinel key for a call with no litellm_call_id at all (claim and lookup
@@ -509,12 +527,12 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         if config is None:
             return data
 
-        # Unlike model_based_tag_rate_limits_hook's async_filter_deployments
-        # (called once per routing hop, so a still-queued reservation can
-        # legitimately belong to an earlier, already-failed hop of the same
-        # request), async_pre_call_hook fires exactly once per request --
-        # there is no "prior hop" case here, so no stale-reservation release
-        # is needed at the top of admission.
+        # async_pre_call_hook fires once per request in the common case, but
+        # ProxyBaseLLMRequestProcessing._pre_call_with_fallbacks can re-run
+        # this same pipeline once per fallback model on any ProxyRateLimitError
+        # (not only one this hook raised) -- see charged_request_keys' own
+        # docstring for how a repeat run for the same call_id renews rather
+        # than re-charges both "requests" and "concurrency" checks below.
         stash: Final = _claim_stash_for_data(data)
 
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(data)
@@ -522,6 +540,14 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         key_alias: Final = user_api_key_dict.key_alias
         key_hash: Final = user_api_key_dict.api_key
         model: Final = data.get("model") if isinstance(data.get("model"), str) else None
+
+        # Only a repeat admission carrying the SAME authenticated key_hash as
+        # whichever call first claimed this stash may renew its charges --
+        # see owner_key_hash's own docstring for why a bare call_id match is
+        # not enough. First admission for this stash claims ownership here.
+        if stash.owner_key_hash is None:
+            stash.owner_key_hash = key_hash
+        renewal_allowed: Final = stash.owner_key_hash == key_hash
 
         now: Final = self._time_provider().timestamp()
         stash.admission_time = now
@@ -543,13 +569,32 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                     await self._partition_for(_partition_key(check.entry))
                 )  # mutable-ok: see comment above
             atomic_partitions: Final = tuple(atomic_partitions_list)
+            already_reserved_concurrency_keys: Final = frozenset(
+                key for key, _partition_key in stash.pending_concurrency_keys
+            )
             failing_index, values = await self._atomic_check_and_increment(
                 tuple(
                     (
                         partition.internal_usage_cache,
                         check.key,
                         check.entry.limit,
-                        1.0,
+                        # A key already charged/reserved for this call_id (an
+                        # earlier _pre_call_with_fallbacks attempt for the
+                        # same logical request) renews at zero net cost
+                        # instead of charging or reserving a second unit --
+                        # folded into this same all-or-nothing batch so a
+                        # rollback here (some other check in the batch
+                        # rejecting) refunds that zero-cost renewal as a
+                        # genuine no-op, same reasoning as
+                        # model_based_tag_rate_limits_hook's identical fix
+                        # for its own per-hop retries.
+                        0.0
+                        if renewal_allowed
+                        and (
+                            (check.unit == "requests" and check.key in stash.charged_request_keys)
+                            or (check.unit == "concurrency" and check.key in already_reserved_concurrency_keys)
+                        )
+                        else 1.0,
                         self._ttl_for(check.unit, check.entry),
                     )
                     for partition, check in zip(atomic_partitions, atomic_checks)
@@ -561,11 +606,36 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                     failing_check.unit, failing_check.entry, failing_check.tag_value, model, current=values[0]
                 )
 
+            # Only genuinely new reservations, never a key already in
+            # already_reserved_concurrency_keys: that key's own check just
+            # renewed at zero net cost above, so re-adding it here would
+            # make release (which decrements once per queued entry) decrement
+            # twice for a counter that was only ever incremented once.
             concurrency_reservations: Final = tuple(
-                (check.key, _partition_key(check.entry)) for check in atomic_checks if check.unit == "concurrency"
+                (check.key, _partition_key(check.entry))
+                for check in atomic_checks
+                if check.unit == "concurrency" and check.key not in already_reserved_concurrency_keys
             )
             if concurrency_reservations:
                 stash.pending_concurrency_keys.extend(concurrency_reservations)  # mutable-ok: see field's own docstring
+
+            # Only recorded when renewal_allowed: an admission that didn't
+            # own this stash (a call_id collision from a different key_hash)
+            # must not contaminate the rightful owner's own renewal
+            # tracking, or a later, genuine fallback retry from the owner
+            # could wrongly treat the impostor's charge as its own and
+            # renew for free.
+            request_keys: Final = (
+                tuple(
+                    check.key
+                    for check in atomic_checks
+                    if check.unit == "requests" and check.key not in stash.charged_request_keys
+                )
+                if renewal_allowed
+                else ()
+            )
+            if request_keys:
+                stash.charged_request_keys.extend(request_keys)  # mutable-ok: see field's own docstring
 
         return data
 

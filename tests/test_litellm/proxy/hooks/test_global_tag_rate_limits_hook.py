@@ -98,13 +98,15 @@ async def test_request_limit_shared_across_keys_by_default(time_controller, monk
     await hook.async_pre_call_hook(
         user_api_key_dict=_key(alias="key-a"), cache=DualCache(), data=_data(["end_user_id:u1"]), call_type="completion"
     )
-    # A different key, identical tag value: must be rejected too -- proves
-    # the bucket is genuinely shared, not per-key by default.
+    # A different key, identical tag value, and a distinct call_id (a
+    # genuinely separate logical request, not a fallback retry of the same
+    # one) -- must be rejected too, proving the bucket is genuinely shared,
+    # not per-key by default.
     with pytest.raises(ProxyRateLimitError):
         await hook.async_pre_call_hook(
             user_api_key_dict=_key(alias="key-b"),
             cache=DualCache(),
-            data=_data(["end_user_id:u1"]),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
             call_type="completion",
         )
 
@@ -125,7 +127,9 @@ async def test_request_limit_is_independent_of_model(time_controller, monkeypatc
     hook = _make_hook(time_controller)
 
     data_model_a = {**_data(["end_user_id:u1"]), "model": "gpt-4o"}
-    data_model_b = {**_data(["end_user_id:u1"]), "model": "claude-3"}
+    # A distinct call_id: this is a separate logical request, not the same
+    # one retrying against a different model via _pre_call_with_fallbacks.
+    data_model_b = {**_data(["end_user_id:u1"], call_id="call-2"), "model": "claude-3"}
     await hook.async_pre_call_hook(
         user_api_key_dict=_key(), cache=DualCache(), data=data_model_a, call_type="completion"
     )
@@ -198,11 +202,13 @@ async def test_apply_to_key_alias_enforces_for_the_listed_key(time_controller, m
         data=_data(["end_user_id:u1"]),
         call_type="completion",
     )
+    # A distinct call_id: a second, separate request from the same key, not
+    # a fallback retry of the first.
     with pytest.raises(ProxyRateLimitError):
         await hook.async_pre_call_hook(
             user_api_key_dict=_key(alias="premium-key"),
             cache=DualCache(),
-            data=_data(["end_user_id:u1"]),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
             call_type="completion",
         )
 
@@ -237,11 +243,13 @@ async def test_apply_to_key_alias_composes_with_scope_by_key_hash(time_controlle
         data=_data(["end_user_id:u1"]),
         call_type="completion",
     )
+    # A distinct call_id: a second, separate request from the same key, not
+    # a fallback retry of the first.
     with pytest.raises(ProxyRateLimitError):
         await hook.async_pre_call_hook(
             user_api_key_dict=_key(alias="key-a", api_key="hashA"),
             cache=DualCache(),
-            data=_data(["end_user_id:u1"]),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
             call_type="completion",
         )
     # key-b is unaffected by key-a's exhausted bucket.
@@ -505,6 +513,95 @@ async def test_apply_to_models_fallback_does_not_re_narrow_accounting_to_the_ser
             user_api_key_dict=_key(),
             cache=DualCache(),
             data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"},
+            call_type="completion",
+        )
+
+
+# ---------------------------------------------------------------------------
+# _pre_call_with_fallbacks reruns admission for the same logical request:
+# a repeat call_id must renew, not double-charge -- veria-ai finding on
+# PR #36541
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_repeat_admission_for_the_same_call_id_and_key_renews_instead_of_double_charging(
+    time_controller, monkeypatch
+):
+    """
+    ProxyBaseLLMRequestProcessing._pre_call_with_fallbacks reruns the whole
+    pre-call pipeline (this hook included) once per fallback model on ANY
+    ProxyRateLimitError, not only one this hook itself raised, but keeps the
+    same litellm_call_id across every attempt (self.data is mutated in
+    place; only "model" changes). Without this fix, an unrelated rejection
+    (a different rate limiter, a budget cap) triggering N fallback attempts
+    would charge this hook's own "requests" cap N times for one logical
+    client call. A limit of 1 makes a double-charge directly observable: if
+    the second admission (same call_id, same key) charged again instead of
+    renewing, this would raise.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+    key = _key(alias="key-a")
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=key, cache=DualCache(), data=_data(["end_user_id:u1"]), call_type="completion"
+    )
+    # Same call_id, same key, different model -- exactly what
+    # _pre_call_with_fallbacks produces for a fallback attempt of the same
+    # logical request.
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=key,
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"]), "model": "fallback-model"},
+        call_type="completion",
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_a_forged_shared_call_id_from_a_different_key_does_not_get_a_free_renewal(time_controller, monkeypatch):
+    """
+    Security regression: litellm_call_id is caller-controlled via the
+    x-litellm-call-id header (the same forgery vector
+    model_based_tag_rate_limits_hook's own pending-reservations mirror was
+    hardened against earlier in this PR). Two unrelated requests choosing
+    the identical call_id must not be able to renew each other's charge --
+    only a second admission carrying the SAME authenticated key_hash as
+    whichever request first claimed that call_id may. A limit of 1 makes
+    this observable: if the second, different-key admission wrongly
+    renewed, it would succeed instead of raising.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(alias="key-a", api_key="hashA"),
+        cache=DualCache(),
+        data=_data(["end_user_id:u1"], call_id="forged-call-id"),
+        call_type="completion",
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(alias="key-b", api_key="hashB"),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="forged-call-id"),
             call_type="completion",
         )
 
