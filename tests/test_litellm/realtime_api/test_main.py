@@ -190,3 +190,51 @@ def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch
     session = captured["request_data"]["session"]
     assert session["model"] == "gpt-4o-realtime-preview"
     assert session["input_audio_transcription"]["model"] == "whisper-1"
+
+
+def _run_arealtime(monkeypatch, provider, **kwargs):
+    captured = {}
+
+    async def mock_async_realtime(**call_kwargs):
+        captured.update(call_kwargs)
+
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model, provider, None, None
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    handler = realtime_main.openai_realtime if provider == "openai" else realtime_main.azure_realtime
+    monkeypatch.setattr(handler, "async_realtime", mock_async_realtime)
+
+    asyncio.run(
+        realtime_main._arealtime.__wrapped__(
+            model="gpt-4o-realtime-preview",
+            websocket=object(),
+            litellm_logging_obj=FakeLogging(),
+            **kwargs,
+        )
+    )
+    return captured
+
+
+def test_openai_realtime_uses_explicit_api_key(monkeypatch):
+    """A key resolved from litellm_credential_name arrives as the explicit
+    api_key argument and must not be discarded."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(realtime_main.litellm, "api_key", None)
+    monkeypatch.setattr(realtime_main.litellm, "openai_key", None)
+
+    captured = _run_arealtime(monkeypatch, "openai", api_key="sk-from-credential", api_base="http://localhost:8799")
+    assert captured["api_key"] == "sk-from-credential"
+    assert captured["api_base"] == "http://localhost:8799"
+
+
+def test_azure_realtime_uses_explicit_api_key(monkeypatch):
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    monkeypatch.setattr(realtime_main.litellm, "api_key", None)
+    monkeypatch.setattr(realtime_main.litellm, "openai_key", None)
+
+    captured = _run_arealtime(
+        monkeypatch, "azure", api_key="azure-from-credential", api_base="https://my-azure.openai.azure.com"
+    )
+    assert captured["api_key"] == "azure-from-credential"
