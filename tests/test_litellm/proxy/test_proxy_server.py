@@ -9152,6 +9152,78 @@ class TestLazyFeatureMiddleware:
         )
 
 
+class TestInjectLazyStubs:
+    """Stub injection keys off the app-tracked loaded set, never sys.modules:
+    proxy boot imports several feature modules (mcp_management, cloudzero,
+    vantage, config_overrides) without mounting their routers, and their
+    /openapi.json entries must survive that (LIT-6275)."""
+
+    def test_imported_but_unregistered_module_still_gets_stub(self):
+        import sys
+
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+        )
+        assert feat.module_path in sys.modules
+
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset(), features=(feat,))
+        assert "/dummy-lazy-test" in schema["paths"]
+
+    def test_registered_module_gets_no_stub(self):
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+        )
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset({"json"}), features=(feat,))
+        assert "/dummy-lazy-test" not in schema["paths"]
+
+    def test_snapshot_fragments_injected_for_boot_imported_features(self):
+        from litellm.proxy._lazy_features import LAZY_FEATURES, inject_lazy_stubs
+        from litellm.proxy._lazy_openapi_snapshot import load_snapshot
+
+        snapshot = load_snapshot()
+        assert snapshot
+        boot_imported = tuple(
+            f for f in LAZY_FEATURES if f.name in ("mcp_management", "cloudzero", "vantage", "config_overrides")
+        )
+        assert len(boot_imported) == 4
+
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset(), features=boot_imported)
+        for feat in boot_imported:
+            missing = [p for p in snapshot[feat.name]["paths"] if p not in schema["paths"]]
+            assert not missing, f"{feat.name} snapshot paths missing from /openapi.json: {missing}"
+
+    def test_persistent_stub_survives_load(self):
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+            persistent_swagger_stub=True,
+        )
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset({"json"}), features=(feat,))
+        assert "/dummy-lazy-test" in schema["paths"]
+
+    def test_loaded_lazy_modules_reads_app_state(self):
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import loaded_lazy_modules
+
+        app = FastAPI()
+        assert loaded_lazy_modules(app) == frozenset()
+
+        app.state.lazy_loaded = {"litellm.proxy.spend_tracking.cloudzero_endpoints"}
+        assert loaded_lazy_modules(app) == frozenset({"litellm.proxy.spend_tracking.cloudzero_endpoints"})
+
+
 @pytest.mark.asyncio
 async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
     """When Redis is reachable and cleanly returns None (TTL expired,
