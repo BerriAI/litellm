@@ -294,30 +294,6 @@ def test_bedrock_guardrail_ignores_client_tag_filtering_override(monkeypatch: py
     )
 
 
-def test_bedrock_guardrail_uses_trusted_tag_filtering_override(monkeypatch: pytest.MonkeyPatch):
-    from litellm.proxy import proxy_server
-
-    router = MagicMock()
-    router.enable_tag_filtering = False
-    router.get_model_list.return_value = [
-        {"litellm_params": {"custom_llm_provider": "openai", "tags": ["slow"]}, "model_info": {}},
-        {"litellm_params": {"custom_llm_provider": "bedrock", "tags": ["fast"]}, "model_info": {}},
-    ]
-    monkeypatch.setattr(proxy_server, "llm_router", router)
-
-    assert (
-        BedrockGuardrail._get_bedrock_api_key(
-            {
-                "model": "shared-alias",
-                "api_key": "bedrock-key",
-                "router_settings_override": {"enable_tag_filtering": True},
-                "metadata": {"tags": ["fast"]},
-            }
-        )
-        == "bedrock-key"
-    )
-
-
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_async_sync_strategy_uses_unfiltered_pool(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server

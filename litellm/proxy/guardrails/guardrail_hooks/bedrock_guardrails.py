@@ -704,14 +704,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if isinstance(chain_tag_filtering, bool)
             else getattr(router, "enable_tag_filtering", False)
         )
-        router_settings_override: Final[object] = request_data.get("router_settings_override")
-        trusted_request_tag_filtering: Final[bool] = (
-            isinstance(router_settings_override, Mapping)
-            and router_settings_override.get("enable_tag_filtering") is True
-        )
-        tag_filtering_enabled: Final = (
-            trusted_request_tag_filtering or effective_tag_filtering is True
-        )
+        tag_filtering_enabled: Final = effective_tag_filtering is True
         if not tag_filtering_enabled:
             return deployments
 
@@ -805,9 +798,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _get_trusted_router_request_kwargs(request_data: Mapping[str, object]) -> dict[str, object]:
         router_kwargs: Final = dict(request_data)
         router_kwargs.pop("enable_tag_filtering", None)
-        router_settings_override: Final[object] = request_data.get("router_settings_override")
-        if isinstance(router_settings_override, Mapping) and router_settings_override.get("enable_tag_filtering") is True:
-            router_kwargs["enable_tag_filtering"] = True
         for metadata_name in ("metadata", "litellm_metadata"):
             metadata: Final[object] = router_kwargs.get(metadata_name)
             if isinstance(metadata, Mapping) and "routing_decision" in metadata:
