@@ -104,6 +104,11 @@
           "minimum": 0,
           "description": "Flex service-tier rate for the same-named base field."
         },
+        "cache_creation_input_token_cost_above_272k_tokens_priority": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Priority service-tier rate for the same-named base field."
+        },
         "cache_creation_input_token_cost_flex": {
           "type": "number",
           "minimum": 0,
@@ -428,6 +433,14 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_480p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_4k": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -625,6 +638,9 @@
         "supports_image_size": {
           "type": "boolean"
         },
+        "supports_legacy_thinking": {
+          "type": "boolean"
+        },
         "supports_low_reasoning_effort": {
           "type": "boolean"
         },
@@ -704,6 +720,9 @@
           "type": "boolean"
         },
         "supports_xhigh_reasoning_effort": {
+          "type": "boolean"
+        },
+        "thinking_always_on": {
           "type": "boolean"
         },
         "tiered_pricing": {

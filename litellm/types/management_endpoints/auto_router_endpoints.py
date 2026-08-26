@@ -158,9 +158,18 @@ class AutoRouterBenchmarksResponse(BaseModel):
 
     start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
     end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")
-    routers_in_scope: int
+    routers_in_scope: int = Field(
+        description="How many groups this response carries. Every auto-router configured on the "
+        "proxy counts, whether or not it served anything in the window. To count only the routers "
+        "that did serve traffic, filter `groups` to the entries whose `sessions` is above zero"
+    )
     totals: AutoRouterBenchmarkTotals
-    groups: tuple[AutoRouterBenchmarkGroup, ...]
+    groups: tuple[AutoRouterBenchmarkGroup, ...] = Field(
+        description="One entry per auto-router, listed from the model registry rather than from "
+        "the rollup, so a router appears as soon as it is configured and reads zero until it "
+        "serves traffic. Semantic auto-routers are absent: they record no routing decision, so no "
+        "session can ever be attributed to them"
+    )
 
 
 ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
@@ -168,6 +177,10 @@ ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
 ShadowEvalDirection: TypeAlias = Literal["forward", "reverse"]
 
 DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
+
+# Sample-count ceiling written on every new job: a zero-cost error loop (a shadow arm that
+# fails before billing) never consumes spend budget, so it must terminate on count instead.
+SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
 
 
 class StartShadowEvalRequest(BaseModel):
@@ -179,7 +192,7 @@ class StartShadowEvalRequest(BaseModel):
         description=(
             "The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these "
             "keys' traffic; requests made with any other key are not sampled. Each key carries its own "
-            "max_turns budget, so one key exhausting its budget leaves the others sampling. At most 100 "
+            "max_budget spend budget, so one key exhausting its budget leaves the others sampling. At most 100 "
             "keys per job, which also bounds every read the job's endpoints make."
         ),
     )
@@ -219,16 +232,26 @@ class StartShadowEvalRequest(BaseModel):
         le=30,
         description="How many days the job samples traffic before completing on its own",
     )
-    max_turns: int = Field(
-        default=200,
-        ge=1,
-        le=2000,
+    max_budget: float = Field(
+        default=10.0,
+        ge=0.01,
+        le=10_000,
         description=(
-            "Per-key sample budget: the job judges at most this many turns of EACH scoped key's traffic, "
-            "so a job over N keys judges at most N times max_turns turns. This is also the spend bound; "
-            "expected judge cost is roughly that turn ceiling times one judge call"
+            "Per-key USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with "
+            "the same figures the spend pipeline bills. EACH scoped key samples until its recorded eval "
+            "spend reaches this, so a job over N keys spends at most about N times max_budget; in-flight "
+            "samples can overshoot the cap by one sampling cache window"
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_the_retired_turn_budget(cls, values: object) -> object:
+        """Pydantic ignores unknown fields, so a caller still sending max_turns would
+        silently run on the default dollar budget instead of the bound they asked for."""
+        if isinstance(values, Mapping) and "max_turns" in values:
+            raise ValueError("max_turns was replaced by max_budget, the per-key USD cap on the eval's own spend")
+        return values
 
     @field_validator("shadow_percentage")
     @classmethod
@@ -296,7 +319,19 @@ class ShadowEvalJobKeyResponse(BaseModel):
     """One key a job shadows, with its own budget and stop state."""
 
     api_key_id: str = Field(description="The hashed virtual key whose traffic this entry scopes")
-    max_turns: int = Field(description="This key's own sample budget, independent of its siblings'")
+    max_turns: int = Field(
+        description=(
+            "This key's sample-count ceiling: the whole budget for jobs created before max_budget "
+            "existed, and the error-loop safety valve otherwise"
+        )
+    )
+    max_budget: float | None = Field(
+        default=None,
+        description=(
+            "This key's own USD budget for the eval's shadow and judge spend, independent of its "
+            "siblings'; None on jobs created before spend budgets existed, which max_turns alone bounds"
+        ),
+    )
     stopped_at: datetime | None = Field(
         default=None,
         description=(
@@ -313,10 +348,19 @@ class ShadowEvalJobKeyResponse(BaseModel):
             "once the key is stamped, so in-flight attempts landing after a stop never reclassify it"
         ),
     )
+    spend: float | None = Field(
+        default=None,
+        description=(
+            "This key's recorded shadow plus judge spend in USD, the same figure the sampler budgets "
+            "against max_budget; populated on list and detail responses and frozen at stopped_at "
+            "exactly like attempt_count"
+        ),
+    )
 
     @property
     def budget_spent(self) -> bool:
-        return self.attempt_count is not None and self.attempt_count >= self.max_turns
+        over_spend: Final = self.max_budget is not None and self.spend is not None and self.spend >= self.max_budget
+        return over_spend or (self.attempt_count is not None and self.attempt_count >= self.max_turns)
 
     key_alias: str | None = Field(
         default=None,

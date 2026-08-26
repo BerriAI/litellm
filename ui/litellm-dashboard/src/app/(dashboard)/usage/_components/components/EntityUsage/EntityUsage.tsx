@@ -15,10 +15,9 @@ import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/compon
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
-import { ChevronDown, ChevronRight, ExternalLink, Info, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Alert, AlertDescription } from "@/components/shared/Alert";
-import { Button } from "@/components/ui/button";
+import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { type ReactNode, useMemo, useState } from "react";
@@ -643,57 +642,20 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="relative">
-      {isFetchingMore && (
-        <Alert variant="warning" className="mb-2">
-          <AlertDescription className="flex items-center justify-between text-inherit">
-            <span>
-              <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
-              Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
-              update periodically as data loads. Moving off of this page will stop and reset this. To continue using the
-              UI in the meantime,{" "}
-              <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
-              </a>
-              .
-            </span>
-            <Button variant="destructive" onClick={cancel}>
-              Stop
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {cancelled && (
-        <Alert variant="info" className="mb-2">
-          <AlertDescription className="text-inherit">
-            Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
-          </AlertDescription>
-        </Alert>
-      )}
-      {agentIsFetchingMore && showAgentBreakdown && (
-        <Alert variant="warning" className="mb-2">
-          <AlertDescription className="flex items-center justify-between text-inherit">
-            <span>
-              <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
-              Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
-              Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
-              continue using the UI in the meantime,{" "}
-              <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
-              </a>
-              .
-            </span>
-            <Button variant="destructive" onClick={agentCancel}>
-              Stop
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {agentCancelled && showAgentBreakdown && (
-        <Alert variant="info" className="mb-2">
-          <AlertDescription className="text-inherit">
-            Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
-          </AlertDescription>
-        </Alert>
+      <PaginationStatusAlerts
+        isFetchingMore={isFetchingMore}
+        cancelled={cancelled}
+        progress={progress}
+        cancel={cancel}
+      />
+      {showAgentBreakdown && (
+        <PaginationStatusAlerts
+          isFetchingMore={agentIsFetchingMore}
+          cancelled={agentCancelled}
+          progress={agentProgress}
+          cancel={agentCancel}
+          subject="agent data"
+        />
       )}
       <UsageExportHeader
         dateValue={dateValue}

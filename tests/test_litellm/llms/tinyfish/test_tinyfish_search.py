@@ -697,7 +697,7 @@ class TestErrorHandling:
             }
         }
         mock_response = _make_mock_response(body, status_code=400)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='TinyFish Search: query is required\\. See https') as exc_info:
             config.transform_search_response(
                 raw_response=mock_response, logging_obj=None
             )
@@ -713,7 +713,7 @@ class TestErrorHandling:
         mock_response = _make_mock_response(
             body, status_code=429, headers={"Retry-After": "60"}
         )
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='TinyFish Search: rate limit exceeded\\. See https') as exc_info:
             config.transform_search_response(
                 raw_response=mock_response, logging_obj=None
             )
@@ -728,7 +728,7 @@ class TestErrorHandling:
         config = TinyfishSearchConfig()
         body = {"errors": [{"code": "10000", "message": "Internal"}]}
         mock_response = _make_mock_response(body, status_code=502)
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='TinyFish Search') as exc_info:
             config.transform_search_response(
                 raw_response=mock_response, logging_obj=None
             )
@@ -742,7 +742,7 @@ class TestErrorHandling:
         mock_response = _make_mock_response(
             json_data=None, status_code=502, text="<html>Bad Gateway</html>"
         )
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='TinyFish Search: <html>Bad Gateway<') as exc_info:
             config.transform_search_response(
                 raw_response=mock_response, logging_obj=None
             )
@@ -756,7 +756,7 @@ class TestErrorHandling:
         mock_response = _make_mock_response(
             json_data=None, status_code=200, text="not json"
         )
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='TinyFish Search: Expected JSON response, got: not json\\.') as exc_info:
             config.transform_search_response(
                 raw_response=mock_response, logging_obj=None
             )
@@ -785,7 +785,7 @@ class TestErrorHandling:
         # check TinyFish's schema, not their own input.
         config = TinyfishSearchConfig()
         mock_response = _make_mock_response({"query": "x"})  # no `results` key
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='validation error for SearchResponse') as exc_info:
             config.transform_search_response(
                 raw_response=mock_response, logging_obj=None
             )

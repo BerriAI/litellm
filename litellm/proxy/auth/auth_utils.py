@@ -311,6 +311,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # the request away from the admin's pinned configuration.
     "nvcf_function_id",
     "use_ssl",
+    # Per-deployment opt-in that hands the whole call to the Rust core. It is a
+    # deployment decision, not a request one: the Rust path uses its own client
+    # rather than the one the deployment configured, and reports no post_call,
+    # so a caller-supplied value picks a transport and a callback surface the
+    # admin did not choose.
+    "rust",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
@@ -602,7 +608,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         # Check wildcard patterns
         for route_pattern in routes_defined:
-            if RouteChecks._route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
+            if RouteChecks.route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
                 return True
 
         return False
@@ -1795,7 +1801,7 @@ def _format_model_candidates(
     return candidates
 
 
-def _request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
+def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
     """Whether FastAPI resolved this request to a user-defined pass-through handler.
 
     Reads the marker set by ``create_pass_through_route`` off the dispatched endpoint
@@ -1836,7 +1842,7 @@ def get_model_from_request(
     and does not carry the marker. Built-in provider passthrough routes
     (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
-    if _request_dispatched_to_pass_through_endpoint(request):
+    if request_dispatched_to_pass_through_endpoint(request):
         return None
 
     candidates: Final = _extract_model_candidates_from_request(

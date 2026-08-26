@@ -59,10 +59,13 @@ async def test_updates_across_tables_share_one_batch_and_commit_once():
 async def test_raising_inside_block_skips_commit():
     batch = FakeBatch()
 
-    with pytest.raises(RuntimeError, match="boom"):
+    async def _blow_up_mid_transaction():
         async with spend_reset_unit_of_work(lambda: batch) as uow:
             uow.keys.queue_spend_reset(token="tok-1", budget_reset_at=None)
             raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await _blow_up_mid_transaction()
 
     assert batch.commit_count == 0
 
@@ -119,9 +122,12 @@ async def test_budget_cascade_raising_inside_block_skips_commit():
     the tier is still due on the next tick."""
     batch = FakeBatch()
 
-    with pytest.raises(RuntimeError, match="boom"):
+    async def _blow_up_mid_transaction():
         async with budget_cascade_unit_of_work(lambda: batch) as uow:
             uow.team_memberships.queue_spend_zero(where={"budget_id": {"in": ["budget-1"]}})
             raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await _blow_up_mid_transaction()
 
     assert batch.commit_count == 0

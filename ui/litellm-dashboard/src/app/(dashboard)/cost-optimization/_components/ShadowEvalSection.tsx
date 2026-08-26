@@ -57,9 +57,19 @@ export const shadowedKeyLabel = (key: ShadowEvalJobKey): string =>
 const shadowedKeysLabel = (job: ShadowEvalJob): string =>
   job.keys.length === 1 ? shadowedKeyLabel(job.keys[0]) : `${job.keys.length} keys`;
 
-const totalBudget = (job: ShadowEvalJob): number => job.keys.reduce((sum, key) => sum + key.max_turns, 0);
+const totalBudget = (job: ShadowEvalJob): number | null =>
+  job.keys.reduce<number | null>(
+    (sum, key) => (sum === null || key.max_budget == null ? null : sum + key.max_budget),
+    0,
+  );
 
-const keySpent = (key: ShadowEvalJobKey): boolean => key.attempt_count != null && key.attempt_count >= key.max_turns;
+const totalSpend = (job: ShadowEvalJob): number => job.keys.reduce((sum, key) => sum + (key.spend ?? 0), 0);
+
+const keySpent = (key: ShadowEvalJobKey): boolean => {
+  const spendBudgetReached = key.max_budget != null && key.spend != null && key.spend >= key.max_budget;
+  const turnValveReached = key.attempt_count != null && key.attempt_count >= key.max_turns;
+  return spendBudgetReached || turnValveReached;
+};
 
 const keyStatus = (job: ShadowEvalJob, key: ShadowEvalJobKey): string => {
   if (job.status === "completed" || (key.stopped_at == null && keySpent(key))) return "completed";
@@ -207,7 +217,9 @@ const KeyTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
                 <StatusBadge status={keyStatus(job, key)} />
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {(key.attempt_count ?? slice?.turn_count ?? 0).toLocaleString()} / {key.max_turns.toLocaleString()}
+                {key.max_budget != null
+                  ? `${usd(key.spend ?? 0)} / ${usd(key.max_budget)}`
+                  : `${(key.attempt_count ?? slice?.turn_count ?? 0).toLocaleString()} / ${key.max_turns.toLocaleString()} turns`}
               </TableCell>
               {slice ? (
                 <>
@@ -300,8 +312,9 @@ const JobResults: React.FC<{
           <div>
             <p className="text-sm font-medium text-foreground">{jobHeadline(job)}</p>
             <p className="text-xs text-muted-foreground">
-              {(job.judged_count ?? 0).toLocaleString()} of {totalBudget(job).toLocaleString()} turns judged ·{" "}
-              {(job.error_count ?? 0).toLocaleString()} errored · {usd(job.judge_spend ?? 0)} judge spend
+              {(job.judged_count ?? 0).toLocaleString()} turns judged · {(job.error_count ?? 0).toLocaleString()}{" "}
+              errored · {usd(totalSpend(job))}
+              {totalBudget(job) !== null ? ` of ${usd(totalBudget(job) ?? 0)}` : ""} eval spend
               {active && remaining ? ` · ${remaining}` : ""}
             </p>
           </div>
@@ -375,9 +388,9 @@ const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[
 
 const START_FORM_DESCRIPTION: Record<ShadowEvalDirection, string> = {
   forward:
-    "Duplicates a sampled slice of the selected keys' traffic through the auto-router and has an LLM judge compare both answers blind. Each key gets its own turn budget. The router's answers are never served to users; judge calls bill to the shadowed key.",
+    "Duplicates a sampled slice of the selected keys' traffic through the auto-router and has an LLM judge compare both answers blind. Each key gets its own spend budget. The router's answers are never served to users; judge calls bill to the shadowed key.",
   reverse:
-    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each key gets its own turn budget. The baseline's answers are never served to users; judge calls bill to the shadowed key.",
+    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each key gets its own spend budget. The baseline's answers are never served to users; judge calls bill to the shadowed key.",
 };
 
 const DURATION_OPTIONS = [
@@ -445,7 +458,7 @@ const StartForm: React.FC = () => {
   const [percentage, setPercentage] = useState("10");
   const [durationDays, setDurationDays] = useState("7");
   const [judgeModel, setJudgeModel] = useState("");
-  const [maxTurns, setMaxTurns] = useState("200");
+  const [maxBudget, setMaxBudget] = useState("10");
   const { data: autoRouters } = useAutoRouters();
   const judgeModelOptions = useJudgeModelOptions();
   const baselineModelOptions = useBaselineModelOptions();
@@ -460,11 +473,11 @@ const StartForm: React.FC = () => {
 
   const parsedPct = Number.parseFloat(percentage);
   const percentageValid = parsedPct >= 0.1 && parsedPct <= 100;
-  const parsedMaxTurns = Number.parseInt(maxTurns, 10);
-  const maxTurnsValid = parsedMaxTurns >= 1 && parsedMaxTurns <= 2000;
+  const parsedMaxBudget = Number.parseFloat(maxBudget);
+  const maxBudgetValid = parsedMaxBudget >= 0.01 && parsedMaxBudget <= 10000;
   const baselinePicked = direction === "forward" || baselineModel !== "";
   const filled = apiKeyIds.length > 0 && [routerName, judgeModel].every((field) => field !== "") && baselinePicked;
-  const boundsValid = percentageValid && maxTurnsValid;
+  const boundsValid = percentageValid && maxBudgetValid;
   const valid = Boolean(accessToken) && filled && boundsValid;
   const handleStart = () => {
     const startBody = {
@@ -474,7 +487,7 @@ const StartForm: React.FC = () => {
       ...(direction === "reverse" ? { baseline_model: baselineModel } : {}),
       shadow_percentage: parsedPct,
       duration_days: Number.parseInt(durationDays, 10),
-      max_turns: parsedMaxTurns,
+      max_budget: parsedMaxBudget,
       judge_model: judgeModel,
     };
     start.mutate(startBody);
@@ -551,20 +564,22 @@ const StartForm: React.FC = () => {
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Turn budget">
+          <Field label="Spend budget">
             <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">$</span>
               <Input
                 type="number"
-                min={1}
-                max={2000}
+                min={0.01}
+                max={10000}
+                step={0.01}
                 className="w-24"
-                value={maxTurns}
-                onChange={(e) => setMaxTurns(e.target.value)}
+                value={maxBudget}
+                onChange={(e) => setMaxBudget(e.target.value)}
               />
-              <span className="text-sm text-muted-foreground">turns judged, max</span>
+              <span className="text-sm text-muted-foreground">max shadow + judge spend, per key</span>
             </div>
-            {maxTurns.trim() !== "" && !maxTurnsValid && (
-              <p className="text-xs text-destructive">Enter a value from 1 to 2000</p>
+            {maxBudget.trim() !== "" && !maxBudgetValid && (
+              <p className="text-xs text-destructive">Enter a value from 0.01 to 10000</p>
             )}
           </Field>
           {direction === "reverse" && (
@@ -620,7 +635,7 @@ const PreviousJob: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
             <p className="text-sm font-medium text-foreground">{jobHeadline(shown)}</p>
             <p className="text-xs text-muted-foreground">
               {shown.judged_count != null &&
-                `${shown.judged_count.toLocaleString()} judged · ${(shown.error_count ?? 0).toLocaleString()} errored · ${usd(shown.judge_spend ?? 0)} judge spend · `}
+                `${shown.judged_count.toLocaleString()} judged · ${(shown.error_count ?? 0).toLocaleString()} errored · ${usd(totalSpend(shown))} eval spend · `}
               {new Date(shown.created_at).toLocaleDateString()}
             </p>
           </div>

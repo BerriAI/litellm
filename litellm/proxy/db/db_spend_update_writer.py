@@ -65,12 +65,16 @@ from litellm.proxy.spend_tracking.savings import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
+from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 else:
     PrismaClient = Any
     ProxyLogging = Any
+
+
+RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 
 
 class _SpendBatch(Protocol):
@@ -316,6 +320,7 @@ class DBSpendUpdateWriter:
                 model_id=payload.get("model_id"),
                 llm_router=_get_llm_router,
                 cost_breakdown=metadata.get("cost_breakdown"),
+                recorded_autorouter_savings=metadata.get("autorouter_savings"),
             )
             transaction: Final = build_autorouter_turn_transaction(
                 payload=payload,
@@ -819,9 +824,11 @@ class DBSpendUpdateWriter:
             )
         )
         if prisma_client is not None and spend_logs_url is not None or prisma_client is not None:
-            from litellm.proxy.utils import enqueue_spend_logs
+            from litellm.proxy.utils import enqueue_spend_logs, request_spend_log_flush
 
             await enqueue_spend_logs(prisma_client, (payload,))
+            if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
+                request_spend_log_flush()
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
 
@@ -1877,6 +1884,7 @@ class DBSpendUpdateWriter:
                 llm_router=_get_llm_router,
                 usage_object=usage_obj,
                 cost_breakdown=_metadata.get("cost_breakdown"),
+                recorded_autorouter_savings=_metadata.get("autorouter_savings"),
             )
 
             daily_transaction: Final = BaseDailySpendTransaction(

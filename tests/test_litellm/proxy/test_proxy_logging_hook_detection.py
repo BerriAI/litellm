@@ -291,13 +291,16 @@ async def test_post_call_stream_guardrail_blocks_anthropic_messages_stream(monke
             yield chunk
 
     delivered = []
-    with pytest.raises(HTTPException) as exc_info:
+    async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
             request_data=request_data,
         ):
             delivered.append(chunk)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _drain()
 
     detail = exc_info.value.detail
     assert detail["guardrail_name"] == "output-filter"
@@ -411,13 +414,16 @@ async def test_post_call_stream_guardrail_reroutes_inherited_apply_guardrail(mon
             yield chunk
 
     delivered = []
-    with pytest.raises(HTTPException) as exc_info:
+    async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
             request_data=request_data,
         ):
             delivered.append(chunk)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _drain()
 
     assert exc_info.value.detail["keyword"] == "zebra"
     assert delivered == []

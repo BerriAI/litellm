@@ -52,6 +52,8 @@ const project: ProjectResponse = {
     guardrails: ["pii-guard"],
     model_rpm_limit: { "gpt-4": 20 },
     model_tpm_limit: { "gpt-4": 100 },
+    model_itpm_limit: { "gpt-4": 60 },
+    model_otpm_limit: { "gpt-4": 40 },
   },
   models: ["gpt-4"],
   spend: 10,
@@ -120,6 +122,8 @@ describe("EditProjectModal submit payload", () => {
       guardrails: ["pii-guard"],
       model_rpm_limit: { "gpt-4": 20 },
       model_tpm_limit: { "gpt-4": 100 },
+      model_itpm_limit: { "gpt-4": 60 },
+      model_otpm_limit: { "gpt-4": 40 },
       metadata: { owner: "platform" },
       team_id: "team-1",
     });
@@ -200,6 +204,77 @@ describe("EditProjectModal submit payload", () => {
     expect(variables().params).not.toHaveProperty("guardrails");
     expect(variables().params).not.toHaveProperty("model_rpm_limit");
     expect(variables().params).not.toHaveProperty("model_tpm_limit");
+    expect(variables().params).not.toHaveProperty("model_itpm_limit");
+    expect(variables().params).not.toHaveProperty("model_otpm_limit");
     expect(variables().params).not.toHaveProperty("metadata");
+  });
+
+  it("sends empty limit maps once the model limit row is removed, so the stored limits are cleared", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    await screen.findByText("Model-Specific Limits");
+    await user.click(screen.getByRole("button", { name: "Remove model limit 1" }));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.model_itpm_limit).toStrictEqual({});
+    expect(variables().params.model_otpm_limit).toStrictEqual({});
+    expect(variables().params.model_tpm_limit).toStrictEqual({});
+    expect(variables().params.model_rpm_limit).toStrictEqual({});
+    expect(variables().params.metadata).toStrictEqual({ owner: "platform" });
+  });
+
+  it("sends an empty input TPM map when only that field is blanked on a row that keeps its other limits", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    await screen.findByText("Model-Specific Limits");
+    await user.clear(screen.getByLabelText("Input TPM Limit"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.model_itpm_limit).toStrictEqual({});
+    expect(variables().params.model_otpm_limit).toStrictEqual({ "gpt-4": 40 });
+    expect(variables().params.model_tpm_limit).toStrictEqual({ "gpt-4": 100 });
+  });
+
+  it("sends an empty metadata object once the last metadata row is removed", async () => {
+    const user = setup();
+    renderModal({ ...project, metadata: { owner: "platform" } } as unknown as ProjectResponse);
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    await screen.findByText("Metadata");
+    await user.click(screen.getByRole("button", { name: "Remove metadata pair 1" }));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.metadata).toStrictEqual({});
+  });
+
+  it("round-trips input and output-only model limits from project metadata", async () => {
+    const user = setup();
+    renderModal({
+      ...project,
+      metadata: {
+        model_itpm_limit: { "input-model": 150 },
+        model_otpm_limit: { "output-model": 250 },
+      },
+    } as unknown as ProjectResponse);
+    await screen.findByDisplayValue("My Project");
+
+    await user.click(screen.getByText("Advanced Settings"));
+    await screen.findByText("Model-Specific Limits");
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.model_itpm_limit).toStrictEqual({ "input-model": 150 });
+    expect(variables().params.model_otpm_limit).toStrictEqual({ "output-model": 250 });
+    expect(variables().params.metadata).toStrictEqual({});
   });
 });

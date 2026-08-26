@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import os
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -4440,7 +4441,7 @@ async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():
             proxy_logging_mock,
         ),
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="boom"):
             await call_mcp_tool(
                 name="test_server-any_tool",
                 arguments={"x": 1},
@@ -8093,6 +8094,54 @@ class TestPreemptive401ModeAware:
             await self._run(_make_oauth2_server("interactive"), None, has_stored_token=False)
         assert exc.value.status_code == 401
         assert "www-authenticate" in {k.lower() for k in exc.value.headers}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "original_path, expected_as_path",
+        (
+            ("/litellm/mcp/interactive", "/litellm/.well-known/oauth-authorization-server/litellm/mcp/interactive"),
+            ("/litellm/interactive/mcp", "/litellm/.well-known/oauth-authorization-server/litellm/interactive"),
+        ),
+    )
+    async def test_gateway_as_metadata_challenge_under_server_root_path(self, original_path, expected_as_path):
+        """Under SERVER_ROOT_PATH the challenge must keep the spelling the client called and point at
+        a route the proxy registered, so it has to compare a route-relative path and carry the root suffix."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _make_oauth2_server("interactive", oauth2_flow="authorization_code")
+        scope = {
+            **self._scope(server.alias),
+            "root_path": "/litellm",
+            "_original_path": original_path,
+            "headers": [(b"host", b"testserver")],
+        }
+        with (
+            patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}),
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "get_mcp_server_by_name",
+                return_value=server,
+            ),
+            patch.object(
+                server_module.global_mcp_server_manager,
+                "has_user_oauth_token",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=scope,
+                mcp_servers=[server.alias],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+                client_ip=None,
+            )
+
+        assert exc.value.status_code == 401
+        headers = {k.lower(): v for k, v in (exc.value.headers or {}).items()}
+        assert headers["www-authenticate"] == f'Bearer authorization_uri="http://testserver{expected_as_path}"'
 
     @pytest.mark.asyncio
     async def test_gateway_managed_interactive_no_token_challenges_with_authorization_bearer(self):

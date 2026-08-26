@@ -8,14 +8,11 @@ Without the fix, the AnthropicStreamWrapper silently dropped these
 arguments, causing tool_use blocks to arrive with empty input {}.
 """
 
-import os
-import sys
 from typing import List
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,

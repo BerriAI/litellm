@@ -44,6 +44,14 @@ describe("CostOptimizationView", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "Admin" });
   });
 
+  it("renders the standard page header with the sidebar's Cost Optimization icon", () => {
+    const { container, getByRole, getByText } = renderView();
+
+    expect(getByRole("heading", { level: 1, name: "Cost Optimization" })).toBeInTheDocument();
+    expect(getByText(/Track and configure the mechanisms that save you money/)).toBeInTheDocument();
+    expect(container.querySelector(".lucide-piggy-bank")).not.toBeNull();
+  });
+
   it("renders the four cost-optimization tabs", () => {
     const { getByText } = renderView();
 

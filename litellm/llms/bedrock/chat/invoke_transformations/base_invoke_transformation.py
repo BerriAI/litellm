@@ -1,7 +1,6 @@
 import copy
 import json
 import time
-from functools import partial
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
 import httpx
@@ -446,24 +445,24 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
+        completion_stream, response_headers = await make_call(
+            client=client,
+            api_base=api_base,
+            headers=headers,
+            data=json.dumps(data),
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            fake_stream=True if "ai21" in api_base else False,
+            bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+            json_mode=json_mode,
+        )
         streaming_response: Final = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_call,
-                client=client,
-                api_base=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                fake_stream=True if "ai21" in api_base else False,
-                bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
-                json_mode=json_mode,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
+            _response_headers=response_headers,
         )
         return streaming_response
 
@@ -481,27 +480,28 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
-        if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+        sync_client: Final = (
+            _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
+        )
+        completion_stream, response_headers = make_sync_call(
+            client=sync_client,
+            api_base=api_base,
+            headers=headers,
+            data=json.dumps(data),
+            signed_json_body=signed_json_body,
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            fake_stream=True if "ai21" in api_base else False,
+            bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+            json_mode=json_mode,
+        )
         streaming_response: Final = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_sync_call,
-                client=client,
-                api_base=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                signed_json_body=signed_json_body,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                fake_stream=True if "ai21" in api_base else False,
-                bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
-                json_mode=json_mode,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
+            _response_headers=response_headers,
         )
         return streaming_response
 

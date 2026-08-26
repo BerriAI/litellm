@@ -78,6 +78,7 @@ DD_SEARCH_INTERVAL = float(os.environ.get("E2E_DD_SEARCH_INTERVAL", "10"))
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
+SLOW_PROVIDER_TIMEOUT_SECONDS = float(os.environ.get("E2E_SLOW_PROVIDER_TIMEOUT", "180"))
 
 # How long a control-plane write (/model/new, /guardrails, /v1/agents) may take to
 # reach EVERY replica. Distinct from POLL_TIMEOUT, which is sized for spend-row
@@ -132,6 +133,7 @@ LOAD_MAX_SERIAL_LATENCY_SECONDS = float(os.environ.get("E2E_LOAD_MAX_SERIAL_LATE
 LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY_EFFICIENCY", "0.8"))
 
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
+MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -148,6 +150,15 @@ ANOMALY_MAX_KEY_SPEND_USD = float(
 ANOMALY_SPEND_SETTLE_SECONDS = float(
     os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
 )
+
+
+def ws_base_url() -> str:
+    """PROXY_BASE_URL with its scheme swapped for the websocket one, so a suite
+    opening a socket points at the same proxy every HTTP suite uses."""
+    for scheme, ws_scheme in (("https://", "wss://"), ("http://", "ws://")):
+        if PROXY_BASE_URL.startswith(scheme):
+            return ws_scheme + PROXY_BASE_URL[len(scheme) :]
+    return PROXY_BASE_URL
 
 
 def datadog_mcp_url(*, toolsets: str = "core") -> str:

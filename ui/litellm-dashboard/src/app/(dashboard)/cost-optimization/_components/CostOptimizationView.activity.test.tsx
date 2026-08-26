@@ -54,7 +54,7 @@ describe("CostOptimizationView daily activity", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-    const { getByRole, getByTestId, findByTestId } = render(
+    const { getByRole, getByTestId, findByTestId, queryByText } = render(
       <QueryClientProvider client={queryClient}>
         <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
       </QueryClientProvider>,
@@ -67,5 +67,28 @@ describe("CostOptimizationView daily activity", () => {
 
     expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
     expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
+    expect(queryByText(/Currently fetching spend data/)).not.toBeInTheDocument();
+  });
+
+  it("shows the fetch-progress banner while the paginated fallback streams pages in", async () => {
+    mockUserDailyActivityAggregatedCall.mockReset();
+    mockUserDailyActivityCall.mockReset();
+    mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("aggregated unavailable"));
+    mockUserDailyActivityCall.mockImplementation((...args: unknown[]) =>
+      args[3] === 1
+        ? Promise.resolve({ results: [], metadata: { total_pages: 3, has_more: true, page: 1 } })
+        : new Promise(() => {}),
+    );
+    useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    const { findByText, getByRole } = render(
+      <QueryClientProvider client={queryClient}>
+        <CostOptimizationView accessToken="test-token" userId="u1" userRole="proxy_admin" />
+      </QueryClientProvider>,
+    );
+
+    expect(await findByText(/Currently fetching spend data: fetched 1 \/ 3 pages/)).toBeInTheDocument();
+    expect(getByRole("button", { name: "Stop" })).toBeInTheDocument();
   });
 });

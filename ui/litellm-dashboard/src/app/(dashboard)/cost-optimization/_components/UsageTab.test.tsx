@@ -121,6 +121,9 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
         results,
         loading: false,
         isFetchingMore: false,
+        progress: { currentPage: 1, totalPages: 1 },
+        cancelled: false,
+        cancel: vi.fn(),
       }}
     />,
   );

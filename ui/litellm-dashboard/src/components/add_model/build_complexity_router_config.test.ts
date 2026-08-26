@@ -9,6 +9,7 @@ import {
   hydrateTierLabels,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
+import { activeTierRows } from "./tier_rows";
 
 const tiers = {
   SIMPLE: ["gpt-4o-mini"],
@@ -23,7 +24,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
   classifierContextWindowSize: undefined,
-  classifierContextPerTurnChars: undefined,
+  classifierContextBudgetChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
   classifierFallback: undefined,
   sessionAffinity: false,
@@ -93,39 +94,39 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toBeUndefined();
   });
 
-  it("includes classifier_context_window_size and classifier_context_per_turn_chars only when classifier_type is llm", () => {
+  it("includes classifier_context_window_size and classifier_context_budget_chars only when classifier_type is llm", () => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "llm",
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
       classifierContextWindowSize: 5,
-      classifierContextPerTurnChars: 300,
+      classifierContextBudgetChars: 4000,
     };
     const config = buildComplexityRouterConfig(params);
     expect(config.classifier_context_window_size).toBe(5);
-    expect(config.classifier_context_per_turn_chars).toBe(300);
+    expect(config.classifier_context_budget_chars).toBe(4000);
   });
 
-  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is heuristic even if values linger in state", () => {
+  it("omits classifier_context_window_size and classifier_context_budget_chars when classifier_type is heuristic even if values linger in state", () => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "heuristic",
       classifierContextWindowSize: 5,
-      classifierContextPerTurnChars: 300,
+      classifierContextBudgetChars: 4000,
     };
     const config = buildComplexityRouterConfig(params);
     expect(config.classifier_context_window_size).toBeUndefined();
-    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+    expect(config.classifier_context_budget_chars).toBeUndefined();
   });
 
-  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is llm but neither was set, leaving the backend default", () => {
+  it("omits classifier_context_window_size and classifier_context_budget_chars when classifier_type is llm but neither was set, leaving the backend default", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
       classifierType: "llm",
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_context_window_size).toBeUndefined();
-    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+    expect(config.classifier_context_budget_chars).toBeUndefined();
   });
 
   it("allows classifier_context_window_size of 0, distinct from unset, to send no prior-turn context", () => {
@@ -275,30 +276,30 @@ describe("buildComplexityRouterConfig", () => {
 
 describe("getMissingTiersError", () => {
   it("returns null when all four tiers have a model", () => {
-    expect(getMissingTiersError(tiers)).toBeNull();
+    expect(getMissingTiersError(activeTierRows({ tiers: tiers }))).toBeNull();
   });
 
   it("names the specific missing tier when only one is blank", () => {
-    expect(getMissingTiersError({ ...tiers, REASONING: [] })).toBe(
+    expect(getMissingTiersError(activeTierRows({ tiers: { ...tiers, REASONING: [] } }))).toBe(
       "Select a model for the following tier(s): REASONING",
     );
   });
 
   it("names multiple missing tiers in SIMPLE/MEDIUM/COMPLEX/REASONING order", () => {
-    expect(getMissingTiersError({ ...tiers, SIMPLE: [], REASONING: [] })).toBe(
+    expect(getMissingTiersError(activeTierRows({ tiers: { ...tiers, SIMPLE: [], REASONING: [] } }))).toBe(
       "Select a model for the following tier(s): SIMPLE, REASONING",
     );
   });
 
   it("names all four tiers when none are filled", () => {
     const noTiers = { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] };
-    expect(getMissingTiersError(noTiers)).toBe(
+    expect(getMissingTiersError(activeTierRows({ tiers: noTiers }))).toBe(
       "Select a model for the following tier(s): SIMPLE, MEDIUM, COMPLEX, REASONING",
     );
   });
 
   it("treats a tier with more than one model as filled", () => {
-    expect(getMissingTiersError({ ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o"] })).toBeNull();
+    expect(getMissingTiersError(activeTierRows({ tiers: { ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o"] } }))).toBeNull();
   });
 });
 
@@ -645,14 +646,31 @@ describe("getPlanModeTierError", () => {
   const tiersWithEmptyComplex = { SIMPLE: ["m1"], MEDIUM: ["m1"], COMPLEX: [], REASONING: [] };
 
   it("passes when the override is off", () => {
-    expect(getPlanModeTierError(undefined, tiersWithEmptyComplex)).toBeNull();
+    expect(getPlanModeTierError(undefined, activeTierRows({ tiers: tiersWithEmptyComplex }))).toBeNull();
   });
 
   it("passes when the named tier has models", () => {
-    expect(getPlanModeTierError("MEDIUM", tiersWithEmptyComplex)).toBeNull();
+    expect(getPlanModeTierError("MEDIUM", activeTierRows({ tiers: tiersWithEmptyComplex }))).toBeNull();
   });
 
   it("blocks a tier whose models were removed, which the backend would reject with a 400", () => {
-    expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
+    expect(getPlanModeTierError("COMPLEX", activeTierRows({ tiers: tiersWithEmptyComplex }))).toContain("COMPLEX");
+  });
+});
+
+describe("buildComplexityRouterConfig tier model params", () => {
+  it("keeps tier_model_configs out of the payload when nothing is set", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("tier_model_configs");
+  });
+
+  it("emits tier_model_configs beside string tiers when efforts are set", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierModelParams: { COMPLEX: { "claude-sonnet-4": { reasoning_effort: "high" } } },
+    });
+    expect(config.tiers).toEqual(tiers);
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "claude-sonnet-4", litellm_params: { reasoning_effort: "high" } }],
+    });
   });
 });

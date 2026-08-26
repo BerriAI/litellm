@@ -19,6 +19,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from html import escape
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -28,7 +29,6 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
-    TypeVar,
     Union,
     cast,
     overload,
@@ -121,6 +121,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -170,51 +171,16 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS: Final = frozenset(
     }
 )
 
-_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
-
-
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(
-        self,
-        where: Mapping[str, object],
-    ) -> _DbRecordT | None: ...
-
-    async def find_first(
-        self,
-        where: Mapping[str, object] | None = None,
-    ) -> _DbRecordT | None: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, bool] | None = None,
-    ) -> Sequence[_DbRecordT]: ...
-
-    async def update(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> _DbRecordT: ...
-
-    async def update_many(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> int: ...
-
 
 class _UserMetadataRow(Protocol):
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
 
 
-class _HasUserMetadataTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_UserMetadataRow]": ...
-
-
-def _user_meta_db(repo: "_HasUserMetadataTable") -> "_PrismaTableActions[_UserMetadataRow]":
-    return repo.table
+def _user_meta_db(repo: UserRepository) -> "TableActions[_UserMetadataRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UserMetadataRow]", repo.table
+    )
 
 
 class _SsoConfigRow(Protocol):
@@ -222,29 +188,22 @@ class _SsoConfigRow(Protocol):
     def sso_settings(self) -> Mapping[str, object] | None: ...
 
 
-class _HasSsoConfigTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_SsoConfigRow]": ...
-
-
-def _sso_config_db(repo: "_HasSsoConfigTable") -> "_PrismaTableActions[_SsoConfigRow]":
-    return repo.table
+def _sso_config_db(repo: SSOConfigRepository) -> "TableActions[_SsoConfigRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoConfigRow]", repo.table
+    )
 
 
 class _TeamDetailRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _HasTeamDetailTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_TeamDetailRow]": ...
-
-
-def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDetailRow]":
+def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
 _MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
+_SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _decode_model_aliases(value: object) -> object:
@@ -1002,6 +961,30 @@ def process_sso_jwt_access_token(
     return None
 
 
+def _decode_sso_token_claims(token: str | None) -> Mapping[str, object]:
+    if not token:
+        return MappingProxyType({})
+    try:
+        return MappingProxyType(
+            _SSO_TOKEN_CLAIMS_ADAPTER.validate_python(jwt.decode(token, options={"verify_signature": False}))
+        )
+    except (jwt.exceptions.InvalidTokenError, ValidationError):
+        verbose_proxy_logger.debug("SSO token is not a decodable JWT, skipping token claims")
+        return MappingProxyType({})
+
+
+def _merge_sso_token_claims(
+    userinfo: Mapping[str, object],
+    id_token: str | None,
+    access_token: str | None,
+) -> Mapping[str, object]:
+    sources: Final = (userinfo, _decode_sso_token_claims(id_token), _decode_sso_token_claims(access_token))
+    claim_names: Final = frozenset(key for source in sources for key in source)
+    return MappingProxyType(
+        {key: next((source[key] for source in sources if source.get(key) is not None), None) for key in claim_names}
+    )
+
+
 async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
     """Free tier allows SSO for up to 5 billable users; beyond that requires an Enterprise license."""
     if premium_user is True:
@@ -1534,12 +1517,34 @@ async def get_generic_sso_response(
 
     role_mappings: Final = await _setup_role_mappings()
     team_mappings: Final = await _setup_team_mappings()
+    generic_include_token_claims: Final = os.getenv("GENERIC_INCLUDE_TOKEN_CLAIMS", "false").lower() == "true"
 
-    def response_convertor(response, client):
+    def response_convertor(response: Mapping[str, object], httpx_session: object):
         nonlocal received_response  # return for user debugging
-        received_response = response
+        response_id_token: Final = response.get("id_token")
+        response_access_token: Final = response.get("access_token")
+        id_token: Final = (
+            response_id_token if isinstance(response_id_token, str) and response_id_token else generic_sso.id_token
+        )
+        access_token: Final = (
+            response_access_token
+            if isinstance(response_access_token, str) and response_access_token
+            else generic_sso.access_token
+        )
+        claims: Final = (
+            _merge_sso_token_claims(
+                userinfo=response,
+                id_token=id_token,
+                access_token=access_token,
+            )
+            if generic_include_token_claims
+            else response
+        )
+        received_response = {  # mutable-ok: preserve the existing dict return contract
+            key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS
+        }
         return generic_response_convertor(
-            response=response,
+            response=claims,
             jwt_handler=jwt_handler,
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
@@ -1641,13 +1646,6 @@ async def get_generic_sso_response(
             # Pass the full response so custom response_convertor implementations
             # can access all fields (including id_token for claim extraction).
             result = response_convertor(combined_response, generic_sso)
-            # Strip bearer credentials from combined_response before storing in
-            # received_response. received_response may appear in restricted-group
-            # error messages — bearer tokens (access_token, id_token, refresh_token)
-            # must not be exposed to callers.
-            # Assign directly rather than relying on nonlocal mutation so that Pyright
-            # can track that received_response is non-None from this point on.
-            received_response = {k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS}
             sso_assertion = assertion_from_sso_login(
                 combined_response.get("id_token"), combined_response.get("refresh_token")
             )

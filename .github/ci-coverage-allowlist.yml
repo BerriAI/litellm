@@ -5,24 +5,21 @@ description: >-
 
 test_paths:
   - reason: >-
-      The caching suite in tests/local_testing, which runs nowhere. Every job that globs that
-      directory either deselects it (local_testing_part1 and part2 carry `-k "... and not caching
-      and not cache"`) or keeps only another keyword (langfuse, router, assistants), and no job
-      names these files the way redis_caching_unit_tests names test_dual_cache.py. Measured
-      2026-08-20 by collecting the directory under each job's own selector: 118 tests across
-      these eight files are selected by none of them. Listed so the gap is a decision rather
-      than an accident, and so the --slices guard has a baseline to ratchet down from. Revisit
-      when tests/local_testing is ported off CircleCI, where the keyless part of this suite
-      belongs in a real job
+      What is left of the caching suite in tests/local_testing that runs nowhere. Every job that
+      globs that directory either deselects it (local_testing_part1 and part2 carry `-k "... and
+      not caching and not cache"`) or keeps only another keyword (langfuse, router, assistants),
+      and no job names these files the way redis_caching_unit_tests names test_dual_cache.py.
+      The gap was eight files and 118 tests when measured 2026-08-20; the five keyless ones now
+      run in the caching-local shard, leaving these three. Measured 2026-08-21 with no provider
+      credentials and no Redis: test_caching.py needs both (37 of 65 fail without them),
+      test_disk_cache_unit_tests.py needs OPENAI_API_KEY for 2 of its 4, and
+      test_gcs_cache_unit_tests.py needs GCS credentials for all 4. They want the keyless/live
+      split that porting tests/local_testing off CircleCI will force, not a job that is red by
+      construction
     paths:
-      - tests/local_testing/test_cache_preset_key.py
       - tests/local_testing/test_caching.py
-      - tests/local_testing/test_caching_handler.py
       - tests/local_testing/test_disk_cache_unit_tests.py
       - tests/local_testing/test_gcs_cache_unit_tests.py
-      - tests/local_testing/test_prompt_caching.py
-      - tests/local_testing/test_responses_stream_cache_keys.py
-      - tests/local_testing/test_unit_test_caching.py
   - reason: >-
       The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
       from a pull request; it needs a live gateway and provider credentials no PR job holds
@@ -48,16 +45,6 @@ test_paths:
       choice it informed is settled
     paths:
       - tests/code_coverage_tests/test_aio_http_image_conversion.py
-  - reason: >-
-      The last file of a second mirror that sat beside tests/test_litellm and ran nowhere. Its
-      other 33 files landed in the real mirror during August 2026, 30 as moves and 3 by merging
-      their bodies into the live file of the same name. This one cannot follow either route yet:
-      its live twin was rewritten from 1268 lines to 9434, and of the 19 tests here 5 have no
-      counterpart while 25 assertions fail against today's code, so what survives that rewrite
-      is a judgement about the endpoints, not a merge. Revisit by deciding which of the five
-      behaviours still hold
-    paths:
-      - tests/litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
   - reason: >-
       No job invokes this suite and its files mix pure transformation tests with ones driving live
       vendor vector stores, so assigning them needs a per-file decision
@@ -102,17 +89,6 @@ test_paths:
       - tests/integration/sandbox/test_e2b_sandbox.py
       - tests/integration/test_oci_integration.py
       - tests/integration/test_oci_proxy_integration.py
-  - reason: >-
-      A unit test for the proxy-extras package that no job invokes, while the package's other
-      tests live under tests/proxy_migration_tests. Measured 2026-08-20: 24 of its 28 tests pass
-      and the 4 in TestMigrationSQLIdempotency fail, because 13 migrations from 2026-03 onward use
-      bare CREATE TABLE, ADD COLUMN, CREATE INDEX and ADD CONSTRAINT rather than the guarded forms
-      this file requires. It also matches those keywords inside SQL comments, so two further
-      migrations are reported that are in fact fine. Wiring it up means deciding what to do about
-      the 13 first, and they cannot simply be edited: Prisma checksums an applied migration, so a
-      changed one breaks migrate deploy for existing installs
-    paths:
-      - tests/litellm-proxy-extras/test_litellm_proxy_extras_utils.py
 
 dockerfiles:
   - reason: >-
