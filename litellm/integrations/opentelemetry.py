@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import NON_INFERENCE_CALL_TYPES
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
     SpanAttributes,
@@ -22,6 +23,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
 )
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.semconv import Metric
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -236,6 +238,20 @@ def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:
     if isinstance(value, (str, int, float, bytes)) or value is None:
         return value
     return repr(value)
+
+
+def _is_unbilled_non_inference(call_type: object, litellm_params: Mapping[str, Any]) -> bool:
+    """Whether this call is a read or management route whose token counts describe an
+    earlier request rather than this one.
+
+    The call-type membership test runs first so that inference traffic, which is every
+    request in a normal workload, never pays for the metadata merge behind it.
+    """
+    if call_type not in NON_INFERENCE_CALL_TYPES:
+        return False
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    return is_unbilled_non_inference_call(call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params))
 
 
 def _shutdown_tracer_provider(provider: "_SDKTracerProvider") -> None:
@@ -1643,7 +1659,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(duration_s, attributes=common_attrs)
-            if response_obj and (usage := response_obj.get("usage")) and self._token_usage_histogram:
+            if (
+                response_obj
+                and not _is_unbilled_non_inference(kwargs.get("call_type"), params)
+                and (usage := response_obj.get("usage"))
+                and self._token_usage_histogram
+            ):
                 in_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
                 out_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
                 self._token_usage_histogram.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
@@ -2468,7 +2489,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             self._set_service_tier_attributes(span=span, standard_logging_payload=standard_logging_payload)
 
-            usage: Final = response_obj and response_obj.get("usage")
+            usage: Final = (
+                response_obj.get("usage")
+                if response_obj and not _is_unbilled_non_inference(kwargs.get("call_type"), litellm_params)
+                else None
+            )
             if usage:
                 self.safe_set_attribute(
                     span=span,
