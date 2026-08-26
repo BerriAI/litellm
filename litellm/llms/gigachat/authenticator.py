@@ -107,7 +107,7 @@ def get_access_token(
             return _token
 
     # Request new token
-    new_token, new_expires_at = _request_token_sync(effective_credentials, effective_scope, effective_auth_url)
+    new_token, new_expires_at = _request_token_sync(effective_credentials, effective_scope, effective_auth_url)  # pyright: ignore[reportArgumentType]  # credential keys may be broader than str
 
     if new_expires_at:
         # Cache token
@@ -152,7 +152,7 @@ async def get_access_token_async(
             return _token
 
     # Request new token
-    new_token, new_expires_at = await _request_token_async(effective_credentials, effective_scope, effective_auth_url)
+    new_token, new_expires_at = await _request_token_async(effective_credentials, effective_scope, effective_auth_url)  # pyright: ignore[reportArgumentType]  # credential keys may be broader than str
 
     if new_expires_at:
         # Cache token
@@ -187,7 +187,7 @@ def _request_token_sync(
         client: Final = _get_http_client()
         response: Final = client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        return _parse_token_response(response)
+        return _parse_token_response(response)  # pyright: ignore[reportArgumentType]  # httpx Response may be None at type level
     except httpx.HTTPStatusError as e:
         raise GigaChatAuthError(
             status_code=e.response.status_code,
@@ -222,7 +222,7 @@ async def _request_token_async(
         )
         response: Final = await client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        return _parse_token_response(response)
+        return _parse_token_response(response)  # pyright: ignore[reportArgumentType]  # httpx Response may be None at type level
     except httpx.HTTPStatusError as e:
         raise GigaChatAuthError(
             status_code=e.response.status_code,
