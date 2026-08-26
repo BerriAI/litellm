@@ -329,6 +329,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.healthy_model_filter import (
+    get_hidden_unhealthy_model_names,
+    is_healthy_only_listing_default,
+)
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -3483,6 +3487,13 @@ def _write_health_state_to_router_cache(
     """
     Write deployment health states to the router's health state cache
     for health-check-driven routing. No-op if the feature is disabled.
+
+    `model_list_healthy_only` reads the same cache to hide unhealthy models from
+    the listing endpoints, so it also keeps the cache populated. That is a pure
+    write: every routing-time reader is itself gated on
+    `enable_health_check_routing`, and the cooldown/failure bookkeeping below
+    stays behind that flag, so routing is untouched when only the listing filter
+    is on.
     """
     from litellm.proxy.health_check import build_deployment_health_states
     from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
@@ -3493,7 +3504,10 @@ def _write_health_state_to_router_cache(
     _exceptions: Final[dict] = exceptions_by_model_id or {}
 
     try:
-        if llm_router is None or not llm_router.enable_health_check_routing:
+        if llm_router is None:
+            return
+        health_check_routing_enabled: Final = llm_router.enable_health_check_routing
+        if not health_check_routing_enabled and not is_healthy_only_listing_default(general_settings):
             return
 
         # When health_check_ignore_transient_errors is set, treat 429/408
@@ -3515,6 +3529,9 @@ def _write_health_state_to_router_cache(
                 sum(1 for s in states.values() if s.get("is_healthy")),
                 sum(1 for s in states.values() if not s.get("is_healthy")),
             )
+
+        if not health_check_routing_enabled:
+            return
 
         for endpoint in unhealthy_endpoints:
             model_id = endpoint.get("model_id")
@@ -9760,9 +9777,13 @@ async def model_list(
              When scope=expand is passed, proxy admins, team admins, and org admins
              will receive all proxy models as if they are a proxy admin.
     - healthy_only: When true, hide models whose backing deployments are all marked
-                    unhealthy by background health checks. Requires
-                    `background_health_checks: true` in general_settings; without
-                    health state the listing is returned unfiltered (fail open).
+                    unhealthy by background health checks. Set
+                    `general_settings.model_list_healthy_only: true` to apply this
+                    to every caller without the query parameter. Requires
+                    `background_health_checks: true` in general_settings, plus
+                    either `model_list_healthy_only` or `enable_health_check_routing`
+                    to keep deployment health state cached; without health state
+                    the listing is returned unfiltered (fail open).
                     Models expanded from wildcard routes (e.g. `openai/*`) are not
                     filtered, and nothing is hidden when `allowed_fails_policy` is
                     configured (cooldown remains the sole exclusion mechanism).
@@ -9812,14 +9833,11 @@ async def model_list(
 
     # Opt-in: also hide models whose deployments are all unhealthy per background
     # health checks. Empty when health state is unavailable or stale (fail open).
-    unhealthy_names: set[str] = set()
-    if healthy_only and llm_router is not None:
-        unhealthy_names = await llm_router.async_get_fully_unhealthy_model_names()
-        if not unhealthy_names:
-            verbose_proxy_logger.debug(
-                "healthy_only=true but no unhealthy deployment state is available "
-                "(requires background_health_checks); returning unfiltered model list"
-            )
+    unhealthy_names: Final = await get_hidden_unhealthy_model_names(
+        healthy_only=healthy_only,
+        general_settings=settings,
+        llm_router=llm_router,
+    )
 
     hidden_names: Final = blocked_names | unhealthy_names
 
@@ -9982,9 +10000,11 @@ async def model_info(
     # Mirror /v1/models' visibility filter so first-occurrence resolution
     # cannot land on a deployment the listing had hidden.
     blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
-    unhealthy_names: set[str] = set()
-    if healthy_only and llm_router is not None:
-        unhealthy_names = await llm_router.async_get_fully_unhealthy_model_names()
+    unhealthy_names: Final = await get_hidden_unhealthy_model_names(
+        healthy_only=healthy_only,
+        general_settings=settings,
+        llm_router=llm_router,
+    )
     hidden_names: Final = blocked_names | unhealthy_names
     if hidden_names:
         all_models = [m for m in all_models if m not in hidden_names]
@@ -14009,6 +14029,7 @@ async def model_info_v1(
         None,
         description="Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids",
     ),
+    healthy_only: bool | None = False,
 ):
     """
     Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)
@@ -14020,6 +14041,15 @@ async def model_info_v1(
         - When litellm_model_id is not passed, it will return the info for all models
         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
         - teamId: Filter to models accessible by the given team.
+        - healthy_only: When true, hide models whose backing deployments are all marked
+          unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+          Set `general_settings.model_list_healthy_only: true` to apply this to every
+          caller without the query parameter. Requires `background_health_checks: true`,
+          plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+          deployment health state cached; without health state the listing is returned
+          unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+          is a direct lookup of one deployment rather than a listing. Hiding is
+          presentation-only: a hidden model can still be called directly.
 
     Each model in the list response includes `model_info.access_via_team_ids` and
     `model_info.direct_access` when the proxy database is connected.
@@ -14184,8 +14214,17 @@ async def model_info_v1(
             user_api_key_dict=user_api_key_dict,
         )
 
-    verbose_proxy_logger.debug("all_models: %s", all_models)
-    return {"data": all_models}
+    hidden_names: Final = await get_hidden_unhealthy_model_names(
+        healthy_only=healthy_only,
+        general_settings=general_settings,
+        llm_router=llm_router,
+    )
+    visible_models: Final = (
+        [model for model in all_models if model.get("model_name") not in hidden_names] if hidden_names else all_models
+    )
+
+    verbose_proxy_logger.debug("all_models: %s", visible_models)
+    return {"data": visible_models}
 
 
 @router.get(
