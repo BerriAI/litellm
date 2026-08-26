@@ -7,6 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
+from itertools import chain
 from typing import Any, Final, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -1331,15 +1332,13 @@ def _contains_json_schema_ref(payload: object) -> bool:
     no matching part exists. Tool results carrying JSON Schema data must therefore not be
     sent structurally. https://github.com/BerriAI/litellm/issues/38223
     """
-    stack: list[object] = [payload]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            if "$ref" in node:
-                return True
-            stack.extend(node.values())
-        elif isinstance(node, list):
-            stack.extend(node)
+    level: tuple[object, ...] = (payload,)
+    while level:
+        if any(isinstance(x, dict) and "$ref" in x for x in level):
+            return True
+        level = tuple(
+            chain.from_iterable(v.values() if isinstance(v, dict) else v for v in level if isinstance(v, (dict, list)))
+        )
     return False
 
 
