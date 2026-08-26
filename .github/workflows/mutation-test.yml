@@ -88,10 +88,10 @@ jobs:
           uv pip uninstall pytest-retry || true
 
       # Ends before the job's own deadline so a run that outlasts the budget is
-      # still followed by the report and upload steps. mutmut writes each
-      # mutant's result to mutants/mutmut-stats.json as it goes, so an
-      # interrupted run still scores the mutants it finished; a cancelled job
-      # skips those steps and publishes nothing at all.
+      # still followed by the report and upload steps. mutmut saves after every
+      # mutant result, to mutants/<source path>.meta, so an interrupted run
+      # still scores the mutants it finished and export-cicd-stats can read
+      # them; a cancelled job skips those steps and publishes nothing at all.
       - name: Run mutmut
         timeout-minutes: 300
         env:
@@ -139,6 +139,7 @@ jobs:
             mutmut-run.log
             mutants/mutmut-stats.json
             mutants/mutmut-cicd-stats.json
+            mutants/**/*.meta
             mutants/litellm/proxy/management_endpoints/**/*.py
           if-no-files-found: warn
           retention-days: 14
