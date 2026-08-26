@@ -5,14 +5,19 @@ in the proxy's own cost map that carries both capability flags. Two backends are
 pinned because the registry has no flag for what they prove: ``enable_thinking`` is a
 Qwen chat-template contract, and MiniMax-M3 is the serverless model whose template
 renders a replayed ``reasoning_content`` back into the prompt (Qwen and DeepSeek
-silently drop it). Requires TOGETHER_API_KEY on the proxy; no skip gate.
+silently drop it). MiniMax-M3 honors that replayed field on nearly every call, not
+every call (one miss in dozens of otherwise identical calls), so the replay case asks
+up to ``REPLAY_ATTEMPTS`` times and fails only when no answer carries the secret, which
+a proxy that strips the field guarantees. Requires TOGETHER_API_KEY on the proxy; no
+skip gate.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date
+from typing import Final
 
 import pytest
 from e2e_config import unique_marker
@@ -51,6 +56,7 @@ REASONING_REPLAY_BACKEND = "together_ai/MiniMaxAI/MiniMax-M3"
 SECRET_PROMPT = "Remember this for later and reply with just OK."
 SECRET_REASONING = "The user told me their favorite color is chartreuse. I must remember it."
 SECRET_QUESTION = "What is my favorite color? Answer with one word."
+REPLAY_ATTEMPTS: Final = 3
 
 ARITHMETIC_PROMPT = "What is 17 + 26? Answer with just the number."
 WEATHER_PROMPT = "What is the weather in Paris? Use the tool."
@@ -177,6 +183,18 @@ def _message(response: ChatResponse) -> OutMessage:
     message = response.choices[0].message
     assert message is not None, f"Together choice has no message: {response}"
     return message
+
+
+def _carries_secret(answer: OutMessage) -> bool:
+    return answer.content is not None and "chartreuse" in answer.content.lower()
+
+
+def _answers_until_secret(client: PassthroughClient, key: str, body: ChatBody) -> Iterator[OutMessage]:
+    answers: Final = (_message(unwrap(client.proxy.chat(key, body))) for _ in range(REPLAY_ATTEMPTS))
+    for answer in answers:
+        yield answer
+        if _carries_secret(answer):
+            return
 
 
 def _deltas(result: StreamingResponse) -> list[_StreamDelta]:
@@ -376,25 +394,19 @@ class TestTogetherChatCompletions:
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
         model, key = _register(client, resources, REASONING_REPLAY_BACKEND)
-
-        answer = _message(
-            unwrap(
-                client.proxy.chat(
-                    key,
-                    ChatBody(
-                        model=model,
-                        messages=[
-                            ChatMessage(role="user", content=SECRET_PROMPT),
-                            ChatAssistantTurn(content="OK.", reasoning_content=SECRET_REASONING),
-                            ChatMessage(role="user", content=SECRET_QUESTION),
-                        ],
-                        max_tokens=512,
-                    ),
-                )
-            )
+        body: Final = ChatBody(
+            model=model,
+            messages=[
+                ChatMessage(role="user", content=SECRET_PROMPT),
+                ChatAssistantTurn(content="OK.", reasoning_content=SECRET_REASONING),
+                ChatMessage(role="user", content=SECRET_QUESTION),
+            ],
+            max_tokens=512,
         )
-        assert answer.content and "chartreuse" in answer.content.lower(), (
-            f"the replayed reasoning_content never reached Together: {answer}"
+
+        answers: Final = tuple(_answers_until_secret(client, key, body))
+        assert any(_carries_secret(answer) for answer in answers), (
+            f"the replayed reasoning_content never reached Together in {len(answers)} attempts: {answers}"
         )
 
     @pytest.mark.covers("llm.chat_completions.together_ai.basic.nonstream.cost_logged")
