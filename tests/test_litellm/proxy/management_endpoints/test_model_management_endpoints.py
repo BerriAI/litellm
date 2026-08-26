@@ -4323,6 +4323,10 @@ class TestDeleteModelScrubsOrphanFallbacks:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
         monkeypatch.setattr(
+            "litellm.proxy.utils.invalidate_config_param",
+            AsyncMock(),
+        )
+        monkeypatch.setattr(
             "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
             AsyncMock(return_value=True),
         )

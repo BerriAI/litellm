@@ -6628,6 +6628,10 @@ class ProxyConfig:
         # For dictionary values, update only non-none values
         if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
             _deep_merge_dicts(current_config[param_name], db_param_value)
+            if param_name == "router_settings":
+                from litellm.repositories.config_repository import apply_empty_router_fallback_lists
+
+                apply_empty_router_fallback_lists(current_config[param_name], db_param_value)
         else:
             # Non-dict or mismatched types: DB value replaces config (unchanged behavior)
             current_config[param_name] = db_param_value

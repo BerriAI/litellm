@@ -30,7 +30,10 @@ else:
         # fastapi is only required for proxy, not for SDK usage
         pass
 
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import (
+    ROUTER_FALLBACK_SETTING_KEYS,
+    ConfigRepository,
+)
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -39,12 +42,6 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
 )
 
 router: Final = APIRouter()
-
-FALLBACK_SETTING_KEYS: Final[tuple[str, ...]] = (
-    "fallbacks",
-    "context_window_fallbacks",
-    "content_policy_fallbacks",
-)
 
 
 def _as_target_list(targets: object) -> list[str]:
@@ -77,7 +74,6 @@ def scrub_model_from_fallback_entries(
     existing: object,
     model_name: str,
 ) -> list[dict[str, list[str]]]:
-    """Drop mappings from ``model_name`` and leftover references to it as a target."""
     return [
         remaining
         for remaining in (
@@ -107,33 +103,27 @@ async def remove_deleted_model_from_router_fallbacks(
     prisma_client: "PrismaClient",
     llm_router: "Router | None",
 ) -> None:
-    """Persist fallback lists with ``model_name`` removed after its last deployment is deleted."""
     from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.utils import invalidate_config_param
 
     config: Final = await proxy_config.get_config()
     raw_settings: Final = config.get("router_settings", {}) if isinstance(config, dict) else {}
     router_settings: Final[dict[str, object]] = dict(raw_settings) if isinstance(raw_settings, dict) else {}
-    original_by_key: Final = {key: _fallback_entries(router_settings.get(key)) for key in FALLBACK_SETTING_KEYS}
+    original_by_key: Final = {
+        key: _fallback_entries(router_settings.get(key)) for key in ROUTER_FALLBACK_SETTING_KEYS
+    }
     cleaned_by_key: Final = {
-        key: scrub_model_from_fallback_entries(router_settings.get(key), model_name) for key in FALLBACK_SETTING_KEYS
+        key: scrub_model_from_fallback_entries(router_settings.get(key), model_name)
+        for key in ROUTER_FALLBACK_SETTING_KEYS
     }
     if cleaned_by_key == original_by_key:
         return
 
     updated_settings: Final = {**router_settings, **cleaned_by_key}
-    router_settings_json: Final = json.dumps(updated_settings)
-    await ConfigRepository(prisma_client).table.upsert(
-        where={"param_name": "router_settings"},
-        data={
-            "create": {
-                "param_name": "router_settings",
-                "param_value": router_settings_json,
-            },
-            "update": {"param_value": router_settings_json},
-        },
-    )
+    await ConfigRepository(prisma_client).set_param("router_settings", updated_settings)
+    await invalidate_config_param("router_settings")
     if llm_router is not None:
-        for key in FALLBACK_SETTING_KEYS:
+        for key in ROUTER_FALLBACK_SETTING_KEYS:
             setattr(llm_router, key, cleaned_by_key[key])
     verbose_proxy_logger.info("Removed deleted model %s from router fallbacks", model_name)
 

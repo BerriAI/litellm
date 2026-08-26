@@ -631,7 +631,13 @@ class TestRemoveDeletedModelFromRouterFallbacks:
             }
         )
 
-        with patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+            patch(
+                "litellm.proxy.utils.invalidate_config_param",
+                new_callable=AsyncMock,
+            ) as invalidate,
+        ):
             await remove_deleted_model_from_router_fallbacks(
                 model_name="gone",
                 prisma_client=prisma,
@@ -651,6 +657,7 @@ class TestRemoveDeletedModelFromRouterFallbacks:
         assert router.fallbacks == []
         assert router.context_window_fallbacks == [{"primary": ["other"]}]
         assert router.content_policy_fallbacks == []
+        invalidate.assert_awaited_once_with("router_settings")
 
     async def test_skips_persist_when_model_is_not_referenced(self):
         from litellm.proxy.management_endpoints.fallback_management_endpoints import (
@@ -664,7 +671,13 @@ class TestRemoveDeletedModelFromRouterFallbacks:
             return_value={"router_settings": {"fallbacks": [{"primary": ["other"]}]}}
         )
 
-        with patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+            patch(
+                "litellm.proxy.utils.invalidate_config_param",
+                new_callable=AsyncMock,
+            ) as invalidate,
+        ):
             await remove_deleted_model_from_router_fallbacks(
                 model_name="gone",
                 prisma_client=prisma,
@@ -672,3 +685,4 @@ class TestRemoveDeletedModelFromRouterFallbacks:
             )
 
         prisma.db.litellm_config.upsert.assert_not_called()
+        invalidate.assert_not_awaited()

@@ -6107,6 +6107,26 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     assert result["general_settings"]["nested"]["key3"] == "value3"
 
 
+def test_update_config_fields_empty_router_fallbacks_override_yaml():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    current_config = {
+        "router_settings": {
+            "num_retries": 2,
+            "fallbacks": [{"primary": ["gone"]}],
+        }
+    }
+    result = proxy_config._update_config_fields(
+        current_config,
+        "router_settings",
+        {"num_retries": 2, "fallbacks": [], "content_policy_fallbacks": []},
+    )
+    assert result["router_settings"]["fallbacks"] == []
+    assert result["router_settings"]["content_policy_fallbacks"] == []
+    assert result["router_settings"]["num_retries"] == 2
+
+
 class TestInvitationEndpoints:
     """Tests for /invitation/new and /invitation/delete endpoints."""
 
