@@ -330,6 +330,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._error_event_emitted = False
         self._last_sequence_number = 0
 
+    async def aclose(self) -> None:
+        base_aclose: Final = getattr(self.base_iterator, "aclose", None)
+        if base_aclose is not None:
+            await base_aclose()
+
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
 

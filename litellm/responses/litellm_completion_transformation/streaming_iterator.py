@@ -134,6 +134,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.responses_api_request.get("tools")
         )
 
+    async def aclose(self) -> None:
+        await self.litellm_custom_stream_wrapper.aclose()
+
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing: Final = self._tool_output_index_by_call_id.get(call_id)
         if existing is not None:

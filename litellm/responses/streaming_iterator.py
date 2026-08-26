@@ -183,6 +183,12 @@ class BaseResponsesAPIStreamingIterator:
     This class contains shared logic for both synchronous and asynchronous iterators.
     """
 
+    response: httpx.Response | None = None
+
+    async def aclose(self) -> None:
+        if self.response is not None:
+            await self.response.aclose()
+
     def __init__(
         self,
         response: httpx.Response,

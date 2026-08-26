@@ -258,3 +258,29 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_base_iterator():
+    class _ClosableStream:
+        def __init__(self):
+            self.aclose_called = False
+
+        async def aclose(self) -> None:
+            self.aclose_called = True
+
+    iterator = _make_iterator([])
+    closable = _ClosableStream()
+    iterator.base_iterator = closable
+
+    await iterator.aclose()
+
+    assert closable.aclose_called
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_a_noop_without_base_iterator():
+    iterator = _make_iterator([])
+    iterator.base_iterator = None
+
+    await iterator.aclose()
