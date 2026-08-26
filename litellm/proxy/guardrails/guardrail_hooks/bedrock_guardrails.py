@@ -699,8 +699,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         chain_tag_filtering: Final[object] = (
             _chain_tag_filtering_override(router, model, deployments) if isinstance(model, str) else None
         )
+        router_settings_override: Final[object] = request_data.get("router_settings_override")
+        override_tag_filtering: Final[object] = (
+            router_settings_override.get("enable_tag_filtering")
+            if isinstance(router_settings_override, Mapping)
+            else None
+        )
         effective_tag_filtering: Final = (
-            chain_tag_filtering
+            True
+            if override_tag_filtering is True
+            else chain_tag_filtering
             if isinstance(chain_tag_filtering, bool)
             else getattr(router, "enable_tag_filtering", False)
         )
@@ -757,6 +765,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             bool(header_strings) and has_regex_deployments and not required_set
         )
         if not has_positive_filter:
+            if required_set or excluded_set:
+                return candidate_deployments
             default_deployments: Final = [
                 deployment for deployment in candidate_deployments if "default" in _deployment_tags(deployment)
             ]
