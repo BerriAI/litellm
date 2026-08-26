@@ -20,9 +20,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
+
+SYNC_RESPONSES_HANDLER = "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.response_api_handler"
+ASYNC_RESPONSES_HANDLER = "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler"
+
+
+def _bridge_tools():
+    return [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        }
+    ]
 
 
 def _validated_kwargs():
@@ -151,3 +164,84 @@ async def test_async_completion_forwards_aws_region_name():
         except Exception:
             pass
         assert _fake_aresponses.kwargs.get("aws_region_name") == "us-east-2"
+
+
+# Forwarding `custom_llm_provider` is necessary but not sufficient: `get_llm_provider()`
+# strips a leading `provider/` off the model string whether or not a provider is passed
+# in, so the bridge must also tell `responses()` not to resolve the model a second time.
+# The tests below pin the model string that actually reaches the wire.
+
+
+@pytest.mark.parametrize(
+    "configured_model, expected_outgoing_model",
+    [
+        # litellm consumes one routing prefix; the remaining prefixes belong to the
+        # upstream model name and must survive
+        ("openai/openai/openai/gpt-5.5", "openai/openai/gpt-5.5"),
+        ("openai/gpt-5.5", "gpt-5.5"),
+        ("openai/azure/gpt-5.5", "azure/gpt-5.5"),
+    ],
+)
+def test_sync_bridge_strips_exactly_one_provider_prefix(configured_model, expected_outgoing_model):
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured["model"] = kwargs.get("model")
+        captured["custom_llm_provider"] = kwargs.get("custom_llm_provider")
+        raise RuntimeError("stop before the network call")
+
+    with patch(SYNC_RESPONSES_HANDLER, side_effect=_capture), pytest.raises(Exception):
+        litellm.completion(
+            model=configured_model,
+            messages=[{"role": "user", "content": "hi"}],
+            tools=_bridge_tools(),
+            reasoning_effort="low",
+            api_base="https://example.invalid",
+            api_key="sk-fake",
+        )
+
+    assert captured["model"] == expected_outgoing_model
+    assert captured["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_async_bridge_strips_exactly_one_provider_prefix():
+    captured = {}
+
+    async def _capture(*args, **kwargs):
+        captured["model"] = kwargs.get("model")
+        captured["custom_llm_provider"] = kwargs.get("custom_llm_provider")
+        raise RuntimeError("stop before the network call")
+
+    with patch(ASYNC_RESPONSES_HANDLER, side_effect=_capture), pytest.raises(Exception):
+        await litellm.acompletion(
+            model="openai/openai/openai/gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=_bridge_tools(),
+            reasoning_effort="low",
+            api_base="https://example.invalid",
+            api_key="sk-fake",
+        )
+
+    assert captured["model"] == "openai/openai/gpt-5.5"
+    assert captured["custom_llm_provider"] == "openai"
+
+
+def test_direct_responses_call_still_resolves_its_own_provider():
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured["model"] = kwargs.get("model")
+        captured["custom_llm_provider"] = kwargs.get("custom_llm_provider")
+        raise RuntimeError("stop before the network call")
+
+    with patch(SYNC_RESPONSES_HANDLER, side_effect=_capture), pytest.raises(Exception):
+        litellm.responses(
+            model="openai/gpt-5.5",
+            input="hi",
+            api_base="https://example.invalid",
+            api_key="sk-fake",
+        )
+
+    assert captured["model"] == "gpt-5.5"
+    assert captured["custom_llm_provider"] == "openai"

@@ -645,11 +645,12 @@ def _resolve_model_provider_for_responses(
     custom_llm_provider: Optional[str],
     litellm_params: GenericLiteLLMParams,
     local_vars: Dict[str, Any],
+    provider_already_resolved: bool = False,
 ) -> tuple[str, Optional[str]]:
     if custom_llm_provider is not None and not litellm_params.custom_llm_provider:
         litellm_params.custom_llm_provider = custom_llm_provider
     (
-        model,
+        resolved_model,
         custom_llm_provider,
         dynamic_api_key,
         dynamic_api_base,
@@ -657,6 +658,10 @@ def _resolve_model_provider_for_responses(
         model=model,
         litellm_params=litellm_params,
     )
+    # The bridge already stripped one routing prefix; keep its model so a
+    # second prefix is not stripped, but still pick up dynamic credentials.
+    if not provider_already_resolved:
+        model = resolved_model
     local_vars["custom_llm_provider"] = custom_llm_provider
     if dynamic_api_key is not None:
         litellm_params.api_key = dynamic_api_key
@@ -908,6 +913,7 @@ def responses(
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
+        provider_already_resolved = bool(kwargs.pop("_provider_already_resolved", False))
 
         # Convert text_format to text parameter if provided
         text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(text_format=text_format, text=text)
@@ -934,6 +940,7 @@ def responses(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             local_vars=local_vars,
+            provider_already_resolved=provider_already_resolved,
         )
 
         #########################################################
