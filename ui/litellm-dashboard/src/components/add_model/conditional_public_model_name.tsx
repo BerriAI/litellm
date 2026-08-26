@@ -36,19 +36,14 @@ const modelMappingsRule = {
 
 const tooltipCodeClassName = "rounded-sm bg-background/20 px-1 py-0.5 font-mono text-xs";
 
-const ANTHROPIC_1M_HEADERS = JSON.stringify(
-  { extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } },
-  null,
-  2,
-);
+const ANTHROPIC_1M_HEADERS = JSON.stringify({ extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } }, null, 2);
 
 const publicNameTooltipContent = (
   <div className="flex flex-col gap-2 text-left font-normal">
     <div>The name you specify in your API calls to LiteLLM Proxy</div>
     <div>
-      <strong>Example:</strong> If you name your public model{" "}
-      <code className={tooltipCodeClassName}>example-name</code>, and choose{" "}
-      <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
+      <strong>Example:</strong> If you name your public model <code className={tooltipCodeClassName}>example-name</code>
+      , and choose <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
     </div>
     <div>
       <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
