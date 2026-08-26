@@ -253,6 +253,26 @@ def extract_key_alias(request_kwargs: Mapping[str, object], metadata_variable_na
     return key_alias if isinstance(key_alias, str) else None
 
 
+def _active_metadata_bucket(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> Mapping[str, object]:
+    """Same fallback `_get_tags_from_request_kwargs` (tag_based_routing.py)
+    already relies on: `request_kwargs` is a flat, top-level-metadata dict at
+    admission time, but `Logging.model_call_details` (what `kwargs` actually
+    is by `async_log_success_event`/`async_log_failure_event` time) never
+    carries `metadata`/`litellm_metadata` at its own top level, only nested
+    under `request_kwargs["litellm_params"]`. Checking only the top level
+    silently finds nothing at success/failure time, exactly the same failure
+    mode that lookup already had to handle."""
+    top_level: Final = request_kwargs.get(metadata_variable_name)
+    if isinstance(top_level, Mapping):
+        return top_level
+    litellm_params: Final = request_kwargs.get("litellm_params")
+    if isinstance(litellm_params, Mapping):
+        nested: Final = litellm_params.get(metadata_variable_name)
+        if isinstance(nested, Mapping):
+            return nested
+    return EMPTY_MAPPING
+
+
 def order_tags_for_identity_resolution(
     tags: Sequence[str], request_kwargs: Mapping[str, object], metadata_variable_name: str
 ) -> tuple[str, ...]:
@@ -268,8 +288,8 @@ def order_tags_for_identity_resolution(
     litellm_pre_call_utils.py), so putting it first makes a policy-backed tag
     win over a same-prefix caller-supplied one.
     """
-    active: Final = request_kwargs.get(metadata_variable_name) or EMPTY_MAPPING
-    inherited_tags: Final = active.get("inherited_tags") if isinstance(active, Mapping) else None
+    active: Final = _active_metadata_bucket(request_kwargs, metadata_variable_name)
+    inherited_tags: Final = active.get("inherited_tags")
     if not isinstance(inherited_tags, (list, tuple)) or not inherited_tags:
         return tuple(tags)
     return tuple(dict.fromkeys((*inherited_tags, *tags)))

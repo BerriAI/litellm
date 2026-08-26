@@ -1379,6 +1379,63 @@ async def test_log_success_event_accounts_when_litellm_params_carries_a_null_lit
 
 
 @pytest.mark.asyncio
+async def test_log_success_event_accounts_the_key_backed_tag_not_a_caller_forged_one(time_controller):
+    """
+    Bugbot finding: admission (async_filter_deployments) sees a flat
+    request_kwargs where metadata.inherited_tags sits at the top level, but
+    kwargs at async_log_success_event time is Logging.model_call_details,
+    which only ever nests metadata under kwargs["litellm_params"] (see
+    test_log_success_event_accounts_when_litellm_params_carries_a_null_litellm_metadata_key).
+    order_tags_for_identity_resolution's own inherited_tags lookup only
+    checked the top level, so a caller-forged company_id tag that admission
+    correctly ignored could still get accounted against at success time,
+    charging a different bucket than the one admission actually checked.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "company_id", "limit": 500000, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "tags": ["company_id:attacker-chosen"],
+                "inherited_tags": ["company_id:real-company"],
+            },
+        },
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    real_key = _expected_bucket_key("grp", "tokens", "daily", "company_id", "real-company", 86400, now, limit=500000)
+    forged_key = _expected_bucket_key(
+        "grp", "tokens", "daily", "company_id", "attacker-chosen", 86400, now, limit=500000
+    )
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=real_key, litellm_parent_otel_span=None)) == 42.0
+    )
+    assert await limiter.internal_usage_cache.async_get_cache(key=forged_key, litellm_parent_otel_span=None) is None
+
+
+@pytest.mark.asyncio
 async def test_log_success_event_reads_nested_litellm_metadata_when_that_is_authoritative(time_controller):
     """
     kwargs here is Logging.model_call_details: on LITELLM_METADATA_ROUTES
