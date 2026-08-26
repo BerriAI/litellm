@@ -1257,7 +1257,7 @@ class HTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: Mapping[str, str] | None = None,
+        headers: Mapping[str, Any] | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
     ):

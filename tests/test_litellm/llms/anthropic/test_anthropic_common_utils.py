@@ -2664,7 +2664,11 @@ class TestWifLitellmParamsPlumbing:
         poster, _ = wif_engine
         headers = AnthropicSkillsConfig().validate_environment(
             headers={},
-            litellm_params=GenericLiteLLMParams(**WIF_PARAMS_ONLY),
+            litellm_params=GenericLiteLLMParams(
+                anthropic_federation_rule_id=WIF_PARAMS_ONLY["anthropic_federation_rule_id"],
+                anthropic_organization_id=WIF_PARAMS_ONLY["anthropic_organization_id"],
+                anthropic_identity_token=WIF_PARAMS_ONLY["anthropic_identity_token"],
+            ),
         )
 
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
@@ -2872,14 +2876,14 @@ class TestWifRespxEndToEnd:
             lambda litellm_params, api_base, model: get_anthropic_wif_token(litellm_params, api_base, model, engine),
         )
 
-        wif_kwargs = {
-            "anthropic_federation_rule_id": "fdrl_e2e",
-            "anthropic_organization_id": "org-e2e",
-            "anthropic_service_account_id": "svcacct_e2e",
-            "anthropic_workspace_id": "wrkspc_e2e",
-            "anthropic_identity_token_file": str(token_file),
-            "anthropic_identity_token": "oidc/env/UNUSED_FALLBACK",
-        }
+        wif_kwarg_names: Final = (
+            "anthropic_federation_rule_id",
+            "anthropic_organization_id",
+            "anthropic_service_account_id",
+            "anthropic_workspace_id",
+            "anthropic_identity_token_file",
+            "anthropic_identity_token",
+        )
         anthropic_response = {
             "id": "msg_01",
             "type": "message",
@@ -2903,7 +2907,12 @@ class TestWifRespxEndToEnd:
             response = litellm.completion(
                 model="anthropic/claude-sonnet-4-5",
                 messages=[{"role": "user", "content": "hi"}],
-                **wif_kwargs,
+                anthropic_federation_rule_id="fdrl_e2e",
+                anthropic_organization_id="org-e2e",
+                anthropic_service_account_id="svcacct_e2e",
+                anthropic_workspace_id="wrkspc_e2e",
+                anthropic_identity_token_file=str(token_file),
+                anthropic_identity_token="oidc/env/UNUSED_FALLBACK",
             )
 
         assert response.choices[0].message.content == "Hello from WIF"
@@ -2918,7 +2927,7 @@ class TestWifRespxEndToEnd:
         assert "x-api-key" not in data_request.headers
         assert "anthropic-dangerous-direct-browser-access" not in data_request.headers
         data_body = json.loads(data_request.content)
-        for key in wif_kwargs:
+        for key in wif_kwarg_names:
             assert key not in data_body
 
     def test_completion_with_trailing_slash_api_base_mints_at_clean_token_url(
