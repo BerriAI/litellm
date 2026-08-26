@@ -430,8 +430,8 @@ class MCPRequestHandler:
                 and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
             ):
                 (
-                    validated_user_api_key_auth,
-                    mcp_server_auth_headers,
+                    validated_user_api_key_auth,  # rebind-ok: envelope replaces the matching explicit-key admission
+                    mcp_server_auth_headers,  # rebind-ok: envelope supplies the upstream authorization header
                 ) = await MCPRequestHandler._admit_dcr_bridge_delegate(
                     server=bridge_delegate_target,
                     authorization_value=oauth2_headers["Authorization"],
