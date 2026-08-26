@@ -1476,6 +1476,59 @@ def test_string_cost_values_edge_cases():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
+def test_audio_input_tokens_fall_back_to_base_rate_when_no_audio_price():
+    """Audio input tokens must bill at input_cost_per_token when the model has no audio rate.
+
+    Regression: models like gemini-2.5-pro report audio prompt tokens separately from text
+    but ship without input_cost_per_audio_token, which previously billed those tokens at $0.
+    """
+    model_info: ModelInfo = {
+        "input_cost_per_token": 1.25e-6,
+        "output_cost_per_token": 1e-5,
+    }
+
+    usage = Usage(
+        prompt_tokens=9700,
+        completion_tokens=0,
+        total_tokens=9700,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=9600, cached_tokens=0, text_tokens=100, image_tokens=None
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-2.5-pro", usage=usage, custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    expected_prompt_cost = (100 + 9600) * 1.25e-6
+    assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
+
+
+def test_audio_input_tokens_use_audio_rate_when_present():
+    """When input_cost_per_audio_token exists it takes precedence over the base rate."""
+    model_info: ModelInfo = {
+        "input_cost_per_token": 1.25e-6,
+        "input_cost_per_audio_token": 5e-6,
+        "output_cost_per_token": 1e-5,
+    }
+
+    usage = Usage(
+        prompt_tokens=9700,
+        completion_tokens=0,
+        total_tokens=9700,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=9600, cached_tokens=0, text_tokens=100, image_tokens=None
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gemini-2.5-pro", usage=usage, custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    expected_prompt_cost = 100 * 1.25e-6 + 9600 * 5e-6
+    assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
+
+
 def test_string_cost_values_with_threshold():
     """Test that string cost values work correctly with threshold pricing."""
     from unittest.mock import patch
