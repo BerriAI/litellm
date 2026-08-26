@@ -1,9 +1,30 @@
-const AD_HOC_Z = /^(?:[\w-]+:)*-?z-(?:\d+|\[[^\]]*\]|\([^)]*\))$/;
-const POPUP_Z = /^(?:[\w-]+:)*z-popup$/;
+const AD_HOC_Z = /^-?z-(?:\d+|\[[^\]]*\]|\([^)]*\))$/;
+
+const OPENERS = { "[": "]", "(": ")" };
+
+const utilityOf = (token) => {
+  const closers = [];
+  const lastTopLevelColon = [...token].reduce((found, ch, i) => {
+    if (closers.length > 0 && ch === closers[closers.length - 1]) {
+      closers.pop();
+      return found;
+    }
+    if (ch in OPENERS) {
+      closers.push(OPENERS[ch]);
+      return found;
+    }
+    return ch === ":" && closers.length === 0 ? i : found;
+  }, -1);
+  return token
+    .slice(lastTopLevelColon + 1)
+    .replace(/^!/, "")
+    .replace(/!$/, "");
+};
 
 const classify = (token, allowPopupLayer) => {
-  if (AD_HOC_Z.test(token)) return "adHoc";
-  if (!allowPopupLayer && POPUP_Z.test(token)) return "popupReserved";
+  const utility = utilityOf(token);
+  if (AD_HOC_Z.test(utility)) return "adHoc";
+  if (!allowPopupLayer && utility === "z-popup") return "popupReserved";
   return null;
 };
 

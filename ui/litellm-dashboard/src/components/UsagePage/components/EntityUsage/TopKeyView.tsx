@@ -246,7 +246,10 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       )}
 
       {isModalOpen && selectedKey && keyData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-overlay" onClick={handleOutsideClick}>
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-overlay"
+          onClick={handleOutsideClick}
+        >
           <div className="bg-card rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
             {/* Close button */}
             <button
