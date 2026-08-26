@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -31,6 +31,7 @@ from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
+    GUARDRAIL_DEFINITION_LOCATION,
     PII_ENTITY_CATEGORIES_MAP,
     ApplyGuardrailRequest,
     ApplyGuardrailResponse,
@@ -108,6 +109,18 @@ async def _find_team_guardrail_rows(
     return rows
 
 
+def _typed_masked_params(masked_params: dict[str, object]) -> LitellmParams | None:
+    if not masked_params:
+        return None
+    try:
+        return LitellmParams(**masked_params)
+    except ValidationError as e:
+        verbose_proxy_logger.warning(
+            "Stored litellm_params failed LitellmParams validation; omitting them from the response: %s", e
+        )
+        return None
+
+
 def _get_guardrails_list_response(
     guardrails_config: list[dict],
 ) -> ListGuardrailsResponse:
@@ -119,7 +132,7 @@ def _get_guardrails_list_response(
     guardrail_configs: Final[list[GuardrailInfoResponse]] = []
     for guardrail in guardrails_config:
         litellm_params = guardrail.get("litellm_params") or {}
-        masked_params = _get_masked_values(
+        masked_params: dict[str, object] = _get_masked_values(
             litellm_params,
             unmasked_length=4,
             number_of_asterisks=4,
@@ -128,8 +141,9 @@ def _get_guardrails_list_response(
             GuardrailInfoResponse(
                 guardrail_id=guardrail.get("guardrail_id"),
                 guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=masked_params,
+                litellm_params=_typed_masked_params(masked_params),
                 guardrail_info=guardrail.get("guardrail_info"),
+                guardrail_definition_location=GUARDRAIL_DEFINITION_LOCATION.CONFIG,
             )
         )
     return ListGuardrailsResponse(guardrails=guardrail_configs)
@@ -140,6 +154,7 @@ def _get_guardrails_list_response(
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=ListGuardrailsResponse,
+    response_model_exclude_unset=True,
 )
 async def list_guardrails():
     """
@@ -192,6 +207,7 @@ async def list_guardrails():
     "/v2/guardrails/list",
     tags=["Guardrails"],
     response_model=ListGuardrailsResponse,
+    response_model_exclude_unset=True,
 )
 async def list_guardrails_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -260,7 +276,7 @@ async def list_guardrails_v2(
         for guardrail in guardrails:
             litellm_params: LitellmParams | dict | None = guardrail.get("litellm_params")
             litellm_params_dict = (
-                litellm_params.model_dump(exclude_none=True)
+                litellm_params.model_dump(exclude_unset=True)
                 if isinstance(litellm_params, LitellmParams)
                 else litellm_params
             ) or {}
@@ -269,7 +285,7 @@ async def list_guardrails_v2(
                 unmasked_length=4,
                 number_of_asterisks=4,
             )
-            masked_litellm_params = LitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+            masked_litellm_params = _typed_masked_params(masked_litellm_params_dict)
             guardrail_configs.append(
                 GuardrailInfoResponse(
                     guardrail_id=guardrail.get("guardrail_id"),
@@ -299,7 +315,7 @@ async def list_guardrails_v2(
                     continue
             in_memory_litellm_params_raw = guardrail.get("litellm_params")
             in_memory_litellm_params_dict = (
-                in_memory_litellm_params_raw.model_dump(exclude_none=True)
+                in_memory_litellm_params_raw.model_dump(exclude_unset=True)
                 if isinstance(in_memory_litellm_params_raw, LitellmParams)
                 else in_memory_litellm_params_raw
             ) or {}
@@ -308,9 +324,7 @@ async def list_guardrails_v2(
                 unmasked_length=4,
                 number_of_asterisks=4,
             )
-            masked_in_memory_litellm_params_typed = (
-                LitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
-            )
+            masked_in_memory_litellm_params_typed = _typed_masked_params(masked_in_memory_litellm_params)
             guardrail_configs.append(
                 GuardrailInfoResponse(
                     guardrail_id=guardrail.get("guardrail_id"),
@@ -1251,11 +1265,15 @@ async def patch_guardrail(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=GuardrailInfoResponse,
+    response_model_exclude_unset=True,
 )
 @router.get(
     "/guardrails/{guardrail_id}/info",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=GuardrailInfoResponse,
+    response_model_exclude_unset=True,
 )
 async def get_guardrail_info(guardrail_id: str):
     """
@@ -1293,7 +1311,6 @@ async def get_guardrail_info(guardrail_id: str):
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
     try:
         guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.DB
@@ -1316,7 +1333,7 @@ async def get_guardrail_info(guardrail_id: str):
 
         litellm_params: Final[LitellmParams | dict | None] = result.get("litellm_params")
         result_litellm_params_dict: Final = (
-            litellm_params.model_dump(exclude_none=True)
+            litellm_params.model_dump(exclude_unset=True)
             if isinstance(litellm_params, LitellmParams)
             else litellm_params
         ) or {}
@@ -1325,7 +1342,7 @@ async def get_guardrail_info(guardrail_id: str):
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = LitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+        masked_litellm_params = _typed_masked_params(masked_litellm_params_dict)
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),

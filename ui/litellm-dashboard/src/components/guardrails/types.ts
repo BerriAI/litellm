@@ -20,9 +20,12 @@ export interface PiiConfigurationProps {
   entityCategories?: PiiEntityCategory[];
 }
 
-export type Guardrail = components["schemas"]["GuardrailInfoResponse"];
-export type GuardrailLitellmParams = components["schemas"]["LitellmParams"];
-export type GuardrailMode = GuardrailLitellmParams["mode"];
+// Partial because the read endpoints serialize with response_model_exclude_unset: only stored keys reach the wire
+export type GuardrailLitellmParams = Partial<components["schemas"]["LitellmParams"]>;
+export type Guardrail = Omit<components["schemas"]["GuardrailInfoResponse"], "litellm_params"> & {
+  litellm_params?: GuardrailLitellmParams | null;
+};
+export type GuardrailMode = components["schemas"]["LitellmParams"]["mode"];
 export type GuardrailDefinitionLocation = components["schemas"]["GUARDRAIL_DEFINITION_LOCATION"];
 
 export const GuardrailDefinitionLocation = {

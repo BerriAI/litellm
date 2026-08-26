@@ -657,3 +657,27 @@ class TestScanOnlyToolResultsInitRefusal:
                     "scan_only_tool_results": True,
                 },
             )
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_to_db_stores_only_set_params():
+    """Sparse-storage regression: unset mixin defaults must not be persisted to the DB row."""
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+
+    prisma_client = MagicMock()
+    created_row = MagicMock()
+    created_row.guardrail_id = "new-id"
+    prisma_client.db.litellm_guardrailstable.create = AsyncMock(return_value=created_row)
+
+    guardrail = Guardrail(
+        guardrail_name="sparse-guard",
+        litellm_params=LitellmParams(guardrail="custom_code", mode="pre_call", custom_code="def f(): ..."),
+        guardrail_info={},
+    )
+    await GuardrailRegistry().add_guardrail_to_db(guardrail=guardrail, prisma_client=prisma_client)
+
+    stored = json.loads(prisma_client.db.litellm_guardrailstable.create.call_args.kwargs["data"]["litellm_params"])
+    assert set(stored) == {"guardrail", "mode", "custom_code", "default_on"}

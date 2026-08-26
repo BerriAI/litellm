@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailTestPlayground from "./GuardrailTestPlayground";
-import type { Guardrail, GuardrailLitellmParams } from "@/components/guardrails/types";
+import type { Guardrail } from "@/components/guardrails/types";
 
 vi.mock("@/components/networking");
 
@@ -30,7 +30,7 @@ describe("GuardrailTestPlayground", () => {
         guardrail: "presidio",
         mode: "pre_call",
         default_on: false,
-      } as GuardrailLitellmParams,
+      },
       guardrail_info: {},
       guardrail_definition_location: "db",
     },

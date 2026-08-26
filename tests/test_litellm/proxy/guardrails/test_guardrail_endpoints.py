@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
@@ -30,6 +31,9 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
 )
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.guardrail_endpoints import _get_guardrails_list_response
+from litellm.proxy.guardrails.guardrail_endpoints import router as guardrails_router
 from litellm.proxy.guardrails.guardrail_registry import (
     IN_MEMORY_GUARDRAIL_HANDLER,
     InMemoryGuardrailHandler,
@@ -158,6 +162,80 @@ async def test_list_guardrails_v2_with_db_and_config(
     assert config_guardrail.guardrail_name == "Test Config Guardrail"
     assert config_guardrail.guardrail_definition_location == "config"
     assert isinstance(config_guardrail.litellm_params, LitellmParams)
+
+
+def _guardrails_test_client() -> TestClient:
+    app = FastAPI()
+    app.include_router(guardrails_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MOCK_ADMIN_USER
+    return TestClient(app)
+
+
+def test_list_guardrails_v2_wire_response_has_only_stored_params(
+    mocker, mock_prisma_client, mock_in_memory_handler
+):
+    """exclude_unset regression: unset mixin defaults (chunk_budget_chars etc.) must not serialize."""
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = []
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = _guardrails_test_client().get("/v2/guardrails/list")
+
+    assert response.status_code == 200
+    (guardrail,) = response.json()["guardrails"]
+    assert set(guardrail["litellm_params"]) == {"guardrail", "mode", "default_on"}
+    assert guardrail["guardrail_definition_location"] == "db"
+
+
+def test_get_guardrail_info_wire_response_has_only_stored_params(mocker, mock_prisma_client):
+    """exclude_unset regression for GET /guardrails/{id}."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    response = _guardrails_test_client().get("/guardrails/test-db-guardrail")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["guardrail_name"] == "Test DB Guardrail"
+    assert set(body["litellm_params"]) == {"guardrail", "mode", "default_on"}
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_keeps_serving_when_one_row_is_invalid(
+    mocker, mock_prisma_client, mock_in_memory_handler
+):
+    """A row failing LitellmParams validation must yield litellm_params=None, not a 500 for the whole list."""
+    bad_row = {
+        **MOCK_DB_GUARDRAIL,
+        "guardrail_id": "bad-db-guardrail",
+        "litellm_params": {"guardrail": "test.guardrail"},
+    }
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[MOCK_DB_GUARDRAIL, bad_row]
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)
+
+    by_id = {g.guardrail_id: g for g in response.guardrails}
+    assert isinstance(by_id["test-db-guardrail"].litellm_params, LitellmParams)
+    assert by_id["bad-db-guardrail"].litellm_params is None
+
+
+def test_config_guardrails_list_sets_location_explicitly():
+    """guardrail_definition_location must stay on the wire under exclude_unset."""
+    response = _get_guardrails_list_response([MOCK_CONFIG_GUARDRAIL])
+
+    (guardrail,) = response.guardrails
+    assert guardrail.guardrail_definition_location == "config"
+    assert "guardrail_definition_location" in guardrail.model_fields_set
+    assert isinstance(guardrail.litellm_params, LitellmParams)
 
 
 @pytest.mark.asyncio

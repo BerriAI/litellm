@@ -12,7 +12,7 @@ const baseProps = {
 };
 
 type GuardrailOverrides = Partial<Omit<Guardrail, "litellm_params">> & {
-  litellm_params?: Partial<GuardrailLitellmParams>;
+  litellm_params?: GuardrailLitellmParams;
 };
 
 const makeGuardrail = ({ litellm_params, ...overrides }: GuardrailOverrides = {}): Guardrail => ({
@@ -23,7 +23,7 @@ const makeGuardrail = ({ litellm_params, ...overrides }: GuardrailOverrides = {}
     mode: "pre_call",
     default_on: true,
     ...litellm_params,
-  } as GuardrailLitellmParams,
+  },
   guardrail_info: null,
   created_at: "2021-01-01",
   updated_at: "2021-01-02",

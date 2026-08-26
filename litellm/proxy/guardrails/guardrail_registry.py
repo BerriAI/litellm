@@ -294,7 +294,7 @@ class GuardrailRegistry:
             # Properly serialize LitellmParams Pydantic model to dict
             litellm_params_obj: Final = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
-                litellm_params_dict = litellm_params_obj.model_dump()
+                litellm_params_dict = litellm_params_obj.model_dump(exclude_unset=True)
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
@@ -340,7 +340,7 @@ class GuardrailRegistry:
             # Properly serialize LitellmParams Pydantic model to dict
             litellm_params_obj: Final = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
-                litellm_params_dict = litellm_params_obj.model_dump()
+                litellm_params_dict = litellm_params_obj.model_dump(exclude_unset=True)
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)

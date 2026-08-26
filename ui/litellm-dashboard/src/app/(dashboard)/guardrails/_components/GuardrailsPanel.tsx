@@ -118,10 +118,9 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setGuardrailToDelete(null);
   };
 
-  const providerDisplayName =
-    guardrailToDelete && guardrailToDelete.litellm_params
-      ? getGuardrailLogoAndName(guardrailToDelete.litellm_params.guardrail).displayName
-      : undefined;
+  const providerDisplayName = guardrailToDelete?.litellm_params?.guardrail
+    ? getGuardrailLogoAndName(guardrailToDelete.litellm_params.guardrail).displayName
+    : undefined;
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
