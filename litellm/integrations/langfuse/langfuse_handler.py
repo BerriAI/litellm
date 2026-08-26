@@ -1,3 +1,5 @@
+import os
+
 """
 This file contains the LangFuseHandler class
 
@@ -136,8 +138,29 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_secret_key"),
             langfuse_public_key=standard_callback_dynamic_params.get("langfuse_public_key"),
             langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
-            langfuse_environment=standard_callback_dynamic_params.get("langfuse_environment"),
+            langfuse_environment=LangFuseHandler._meaningful_dynamic_environment(standard_callback_dynamic_params),
         )
+
+
+    @staticmethod
+    def _meaningful_dynamic_environment(
+        standard_callback_dynamic_params: StandardCallbackDynamicParams,
+    ) -> str | None:
+        """Return the per-request environment only when it changes behavior.
+
+        Empty/whitespace values and values equal to the deployment-wide
+        LANGFUSE_TRACING_ENVIRONMENT fallback are treated as absent so an
+        environment-only override that matches the default does not mint a
+        duplicate SDK client (each client costs threads and counts against
+        MAX_LANGFUSE_INITIALIZED_CLIENTS).
+        """
+        raw = standard_callback_dynamic_params.get("langfuse_environment")
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        if not value or value == os.getenv("LANGFUSE_TRACING_ENVIRONMENT"):
+            return None
+        return value
 
     @staticmethod
     def _dynamic_langfuse_credentials_are_passed(
@@ -155,7 +178,7 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_public_key") is not None
             or standard_callback_dynamic_params.get("langfuse_secret") is not None
             or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
-            or standard_callback_dynamic_params.get("langfuse_environment") is not None
+            or LangFuseHandler._meaningful_dynamic_environment(standard_callback_dynamic_params) is not None
         ):
             return True
         return False

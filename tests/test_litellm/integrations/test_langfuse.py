@@ -1472,3 +1472,52 @@ def test_update_trace_keys_matches_whole_keys_not_substrings():
     )
 
     assert "input" not in trace_params
+
+
+def test_langfuse_environment_is_coerced_and_validated(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment=123,  # non-string: must coerce, not crash
+        )
+    assert logger.langfuse_environment == "123"
+
+    with pytest.raises(ValueError, match="langfuse_environment"):
+        LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="Production",
+        )
+
+
+def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
+    from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
+
+    # '' falls back to the deployment env var at init
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="",
+        )
+    assert logger.langfuse_environment == "production"
+
+    # env-only params that add nothing do not select a dynamic logger
+    for redundant in ["", "  ", "production"]:
+        params = StandardCallbackDynamicParams(langfuse_environment=redundant)
+        assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is False
+
+    params = StandardCallbackDynamicParams(langfuse_environment="team-a-prod")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True

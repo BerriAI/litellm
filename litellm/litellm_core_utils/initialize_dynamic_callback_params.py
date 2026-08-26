@@ -1,3 +1,4 @@
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any, Final
 
@@ -43,6 +44,22 @@ def _raise_env_reference_error(param: str, *, source: str) -> None:
 def validate_no_callback_env_reference(param: str, value: object, *, source: str) -> None:
     if _is_env_reference(value):
         _raise_env_reference_error(param, source=source)
+
+
+# Langfuse rejects events whose environment does not match this pattern
+# (lowercase alphanumerics, hyphens, underscores; no "langfuse" prefix).
+# Validating here fails fast at config/init time instead of silently
+# dropping every trace server-side.
+LANGFUSE_ENVIRONMENT_PATTERN: Final = r"^(?!langfuse)[a-z0-9-_]+$"
+
+
+def validate_langfuse_environment_value(value: str) -> None:
+    if not re.match(LANGFUSE_ENVIRONMENT_PATTERN, value):
+        raise ValueError(
+            f"Invalid langfuse_environment {value!r}: must be lowercase "
+            "alphanumerics/hyphens/underscores and must not start with "
+            f"'langfuse' (pattern {LANGFUSE_ENVIRONMENT_PATTERN})"
+        )
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict

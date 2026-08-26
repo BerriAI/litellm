@@ -22,6 +22,9 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
     safe_deep_copy,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
+)
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
@@ -161,7 +164,12 @@ class LangFuseLogger:
         if not (self.langfuse_host.startswith("http://") or self.langfuse_host.startswith("https://")):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.langfuse_host = "http://" + self.langfuse_host
-        self.langfuse_environment = langfuse_environment or os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+        _env_override: Final = (
+            str(langfuse_environment).strip() if langfuse_environment is not None else None
+        )
+        self.langfuse_environment = _env_override or os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+        if self.langfuse_environment:
+            validate_langfuse_environment_value(self.langfuse_environment)
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
