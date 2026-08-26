@@ -174,7 +174,9 @@ class PipelineExecutor:
 
             # Use unified_guardrail path if callback implements apply_guardrail
             target: CustomLogger = callback
-            use_unified: Final = "apply_guardrail" in type(callback).__dict__
+            use_unified: Final = (
+                "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
+            )
             if use_unified:
                 data["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()

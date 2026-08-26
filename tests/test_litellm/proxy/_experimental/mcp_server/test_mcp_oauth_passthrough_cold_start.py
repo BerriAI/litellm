@@ -1,10 +1,8 @@
 """Unit tests for MCP OAuth passthrough cold-start route behavior."""
 
-import sys
 
 import pytest
 
-sys.path.insert(0, "../../../../../")
 
 from litellm.proxy._types import MCPTransport
 from litellm.types.mcp import MCPAuth
@@ -137,7 +135,7 @@ def test_is_mcp_passthrough_cold_start_false_for_empty_servers():
     [
         ("/mcp/sample_docs", ["sample_docs"]),
         # Server names may contain at most one slash (mirrors
-        # ``_extract_target_server_names_from_path``), so when more than two
+        # ``extract_target_server_names_from_path``), so when more than two
         # segments follow ``/mcp/`` the first two are treated as the name.
         ("/mcp/sample_docs/tools/list", ["sample_docs/tools"]),
         ("/mcp/custom_solutions/user_123", ["custom_solutions/user_123"]),

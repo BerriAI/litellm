@@ -5,11 +5,11 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -20,7 +20,7 @@ from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -49,6 +49,31 @@ if TYPE_CHECKING:
         ResponsesClientWebSocket,
     )
 
+    class _StreamCachingHandler(Protocol):
+        """The ``_llm_caching_handler`` attached to a logging object, as this module uses it."""
+
+        original_function: Callable[..., object]
+
+        def _should_store_result_in_cache(
+            self, original_function: Callable[..., object], kwargs: Mapping[str, object]
+        ) -> bool: ...
+
+    class PiiUnmaskingGuardrailCallback(PresidioGuardrailCallback, Protocol):
+        """Guardrail callback that can also reverse its own masking, selected by
+        ``llm_http_handler`` on exactly this attribute."""
+
+        def _unmask_pii_text(self, text: str, pii_tokens: Mapping[str, str]) -> str: ...
+
+
+class ProjectQuotaCallback(Protocol):
+    async def enforce_project_io_token_quota_for_frame(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        requested_model: str | None,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+    ) -> None: ...
+
 
 @lru_cache(maxsize=1)
 def _get_openai_response_types():
@@ -67,6 +92,16 @@ def _is_json_array(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial 
 
 def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verifies every value is str
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
+
+
+def _load_json_object(payload: str | bytes) -> dict[str, object]:
+    """Parse a JSON payload that the caller consumes as an object."""
+    return json.loads(payload)
+
+
+def _load_json_value(payload: str | bytes) -> object:
+    """Parse a JSON payload whose top-level shape the caller narrows itself."""
+    return json.loads(payload)
 
 
 def _model_id_from_metadata(litellm_metadata: dict[str, object] | None) -> str | None:
@@ -228,10 +263,10 @@ class BaseResponsesAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk: Final = json.loads(chunk)
+            parsed_chunk: Final = _load_json_value(chunk)
 
             # Format as ResponsesAPIStreamingResponse
-            if isinstance(parsed_chunk, dict):
+            if _is_json_object(parsed_chunk):
                 if self.responses_api_provider_config is None:
                     raise ValueError("responses_api_provider_config is required to process live streaming chunks")
                 openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
@@ -313,8 +348,10 @@ class BaseResponsesAPIStreamingIterator:
                             if encrypted_content and isinstance(encrypted_content, str):
                                 model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                                 if model_id:
-                                    wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-                                        encrypted_content, model_id
+                                    wrapped_content: Final = (
+                                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                                            encrypted_content, model_id
+                                        )
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
@@ -336,7 +373,9 @@ class BaseResponsesAPIStreamingIterator:
                             usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
-                                    cost: float | None = self.logging_obj._response_cost_calculator(result=response_obj)
+                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
+                                    )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
@@ -510,7 +549,7 @@ class BaseResponsesAPIStreamingIterator:
         if response_obj is None:
             return
 
-        caching_handler: Final = getattr(self.logging_obj, "_llm_caching_handler", None)
+        caching_handler: Final[_StreamCachingHandler | None] = getattr(self.logging_obj, "_llm_caching_handler", None)
         if caching_handler is None:
             return
 
@@ -528,7 +567,7 @@ class BaseResponsesAPIStreamingIterator:
         if preset_cache_key is not None:
             request_kwargs["cache_key"] = preset_cache_key
 
-        if not caching_handler._should_store_result_in_cache(
+        if not caching_handler._should_store_result_in_cache(  # pyright: ignore[reportPrivateUsage]  # no public API
             original_function=caching_handler.original_function,
             kwargs=request_kwargs,
         ):
@@ -1029,8 +1068,18 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
-def _dump_response_object(obj: Any) -> dict[str, Any]:
-    if hasattr(obj, "model_dump"):
+@runtime_checkable
+class _HasModelDump(Protocol):
+    def model_dump(self, *, exclude_none: bool = ...) -> dict[str, object]: ...
+
+
+@runtime_checkable
+class _HasModelDumpJson(Protocol):
+    def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
+
+
+def _dump_response_object(obj: object) -> dict[str, Any]:
+    if isinstance(obj, _HasModelDump):
         return obj.model_dump()
     if _is_json_object(obj):
         return obj
@@ -1120,7 +1169,8 @@ def _add_text_like_part_events(
                     delta=text[i : i + chunk_size],
                 )
             )
-        for annotation_index, annotation in enumerate(part_payload.get("annotations", []) or []):
+        annotations_payload: Final[Sequence[dict[str, object]]] = part_payload.get("annotations", []) or []
+        for annotation_index, annotation in enumerate(annotations_payload):
             events.append(
                 openai_types.OutputTextAnnotationAddedEvent(
                     type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
@@ -1186,7 +1236,8 @@ def _build_synthetic_response_events(
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
+    output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
+    for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1200,7 +1251,8 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            for content_index, part in enumerate(output_item_payload.get("content", []) or []):
+            content_parts: Sequence[object] = output_item_payload.get("content", []) or []
+            for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
                 events.append(
                     openai_types.ContentPartAddedEvent(
@@ -1247,7 +1299,8 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            for summary_index, summary in enumerate(output_item_payload.get("summary", []) or []):
+            summaries: Sequence[object] = output_item_payload.get("summary", []) or []
+            for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -1308,6 +1361,84 @@ def _build_synthetic_response_events(
 
 from litellm._logging import verbose_logger
 
+# Conservative per-frame output-token floor used when a response.create
+# frame omits max_output_tokens, so a project OTPM quota can't be bypassed
+# by simply never declaring an output cap.
+_FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR: Final = 1024
+
+# Rough chars-per-token ratio for estimating a frame's input tokens without
+# resolving a real per-model tokenizer, matching the conservative estimate
+# the proxy's own rate limiter uses for the same purpose.
+_FRAME_CHARS_PER_TOKEN_ESTIMATE: Final = 4
+
+
+def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
+    """Extract a rough input-token count and any explicit max_output_tokens
+    from a ``response.create`` frame, handling both wire shapes:
+      flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
+      nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
+    """
+    nested: Final = msg_obj.get("response")
+    params: Final[Mapping[str, object]] = (
+        nested
+        if _is_json_object(nested) and nested
+        else MappingProxyType(  # mutable-ok: immediately frozen filtered frame
+            {k: v for k, v in msg_obj.items() if k != "type"}
+        )
+    )
+    text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
+    pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
+        params.get("input"),
+        params.get("instructions"),
+    ]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            text_parts.append(value)
+        elif _is_json_array(value):
+            for item in value:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif _is_json_object(item):
+                    pending.append(item.get("content"))
+                    pending.append(item.get("text"))
+    total_chars: Final = sum(len(part) for part in text_parts)
+    estimated_input_tokens: Final = max(1, total_chars // _FRAME_CHARS_PER_TOKEN_ESTIMATE) if total_chars else 0
+
+    max_output_tokens: Final = params.get("max_output_tokens")
+    return estimated_input_tokens, max_output_tokens if isinstance(max_output_tokens, int) else None
+
+
+async def _enforce_frame_project_quota(
+    quota_callbacks: Sequence[ProjectQuotaCallback],
+    user_api_key_dict: UserAPIKeyAuth | None,
+    model: str | None,
+    raw_message: str,
+) -> None:
+    """Charge one response.create frame's estimated tokens against every
+    registered project ITPM/OTPM quota callback, in isolation from PII
+    masking / logging so a malformed frame still reaches those callbacks."""
+    if not quota_callbacks:
+        return
+    try:
+        msg_obj: Final = _load_json_value(raw_message)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
+        return
+    estimated_input_tokens, explicit_max_output_tokens = _extract_frame_quota_estimate_inputs(msg_obj)
+    estimated_output_tokens: Final = (
+        explicit_max_output_tokens if explicit_max_output_tokens is not None else _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR
+    )
+    for callback in quota_callbacks:
+        await callback.enforce_project_io_token_quota_for_frame(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=model,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+        )
+
+
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -1340,8 +1471,9 @@ class ResponsesWebSocketStreaming:
         user_api_key_dict: UserAPIKeyAuth | None = None,
         request_data: dict[str, object] | None = None,
         first_message: str | None = None,
-        guardrail_callbacks: list[Any] | None = None,
+        guardrail_callbacks: list[PiiUnmaskingGuardrailCallback] | None = None,
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
+        quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
     ):
         self.websocket = websocket
@@ -1352,13 +1484,14 @@ class ResponsesWebSocketStreaming:
         self.messages: list[dict[str, object]] = []
         self.input_messages: list[dict[str, object]] = []
         self.first_message = first_message
-        self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
+        self.guardrail_callbacks: list[PiiUnmaskingGuardrailCallback] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
+        self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
 
-    def _should_store_event(self, event_obj: dict[str, object]) -> bool:
+    def _should_store_event(self, event_obj: Mapping[str, object]) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
 
     def _store_event(self, event: str | bytes | dict[str, object]) -> None:
@@ -1366,7 +1499,7 @@ class ResponsesWebSocketStreaming:
             event = event.decode("utf-8")
         if isinstance(event, str):
             try:
-                event_obj = json.loads(event)
+                event_obj = _load_json_object(event)
             except (json.JSONDecodeError, TypeError):
                 return
         else:
@@ -1379,7 +1512,7 @@ class ResponsesWebSocketStreaming:
         """Extract user input content from response.create for logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
+                msg_obj = _load_json_object(message)
             elif _is_json_object(message):
                 msg_obj = message
             else:
@@ -1449,7 +1582,8 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_type = json.loads(response_str).get("type")
+                        _evt_payload: Mapping[str, object] = _load_json_object(response_str)
+                        _evt_type = _evt_payload.get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
                     if _evt_type in self._DELTA_EVENT_TYPES or _evt_type in self._OUTPUT_DONE_EVENT_TYPES:
@@ -1513,7 +1647,7 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final = json.loads(message)
+            msg_obj: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -1530,7 +1664,8 @@ class ResponsesWebSocketStreaming:
             self.request_data["metadata"] = {}
 
         modified = model_modified
-        for cb in self.guardrail_callbacks:
+        guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
+        for cb in guardrail_cbs:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
             # response.create carries client text in two shapes:
             #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
@@ -1636,12 +1771,12 @@ class ResponsesWebSocketStreaming:
 
         metadata: Final = self.request_data.get("metadata")
         raw_pii_tokens: Final = metadata.get("pii_tokens") if _is_json_object(metadata) else None
-        pii_tokens: Final[dict[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
+        pii_tokens: Final[Mapping[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
         if not pii_tokens:
             return response_str
 
         try:
-            evt_obj: Final = json.loads(response_str)
+            evt_obj: Final = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1665,7 +1800,9 @@ class ResponsesWebSocketStreaming:
                         continue
                     text = content_block.get("text")
                     if isinstance(text, str):
-                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        unmasked = cb._unmask_pii_text(  # pyright: ignore[reportPrivateUsage]  # no public unmasker
+                            text, pii_tokens
+                        )
                         if unmasked != text:
                             content_block["text"] = unmasked
                             modified = True
@@ -1674,7 +1811,9 @@ class ResponsesWebSocketStreaming:
         if event_type in self._DELTA_EVENT_TYPES:
             delta: Final = evt_obj.get("delta")
             if isinstance(delta, str):
-                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                unmasked = cb._unmask_pii_text(  # pyright: ignore[reportPrivateUsage]  # no public unmasker
+                    delta, pii_tokens
+                )
                 if unmasked != delta:
                     evt_obj["delta"] = unmasked
                     return json.dumps(evt_obj)
@@ -1697,7 +1836,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final[Mapping[str, object]] = json.loads(response_str)
+            evt_obj: Final[Mapping[str, object]] = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1761,10 +1900,39 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
+    async def _enforce_or_reject_frame(self, message: str) -> bool:
+        """Run the per-frame project quota check.
+
+        On rejection, sends an ``error`` event to the client and reports that
+        the frame must be dropped instead of forwarded, so the connection
+        stays open for the client to retry once the window resets.
+        """
+        try:
+            await _enforce_frame_project_quota(
+                self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
+            )
+        except RateLimitError as e:
+            try:
+                await self.websocket.send_text(
+                    json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
+                        {  # mutable-ok: WebSocket wire payload requires JSON objects
+                            "type": "error",
+                            "error": {  # mutable-ok: nested WebSocket error object
+                                "type": "rate_limit_exceeded",
+                                "message": str(e),
+                            },
+                        }
+                    )
+                )
+            except Exception:  # noqa: BLE001, S110  # client may already be gone
+                pass
+            return False
+        return True
+
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
-            if self.first_message is not None:
+            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
                 masked_first: Final = await self._mask_response_create(self.first_message)
                 self._store_input(masked_first)
                 self._store_event(masked_first)
@@ -1772,6 +1940,8 @@ class ResponsesWebSocketStreaming:
 
             while True:
                 message = await self.websocket.receive_text()
+                if not await self._enforce_or_reject_frame(message):
+                    continue
                 masked = await self._mask_response_create(message)
                 self._store_input(masked)
                 self._store_event(masked)
@@ -1851,6 +2021,7 @@ class ManagedResponsesWebSocketHandler:
         timeout: float | None = None,
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
+        quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
@@ -1867,6 +2038,7 @@ class ManagedResponsesWebSocketHandler:
         self.custom_llm_provider = custom_llm_provider
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
+        self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -1883,11 +2055,11 @@ class ManagedResponsesWebSocketHandler:
     def _serialize_chunk(chunk: Any) -> str | None:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
-            if hasattr(chunk, "model_dump_json"):
+            if isinstance(chunk, _HasModelDumpJson):
                 return chunk.model_dump_json(exclude_none=True)
-            if hasattr(chunk, "model_dump"):
+            if isinstance(chunk, _HasModelDump):
                 return json.dumps(chunk.model_dump(exclude_none=True), default=str)
-            if isinstance(chunk, dict):
+            if _is_json_object(chunk):
                 return json.dumps(chunk, default=str)
             return json.dumps(str(chunk))
         except Exception as exc:
@@ -1998,7 +2170,7 @@ class ManagedResponsesWebSocketHandler:
     async def _parse_message(self, raw_message: str) -> dict[str, object] | None:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
-            msg_obj: Final = json.loads(raw_message)
+            msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
             await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
@@ -2202,7 +2374,7 @@ class ManagedResponsesWebSocketHandler:
                 continue
             if chunk_type == "response.completed" and completed_event is None:
                 try:
-                    completed_event = json.loads(serialized)
+                    completed_event = _load_json_object(serialized)
                 except Exception:
                     pass
             try:
@@ -2272,6 +2444,14 @@ class ManagedResponsesWebSocketHandler:
                 verbose_logger.debug("ManagedResponsesWS: error sending warmup ack: %s", exc)
             return
 
+        try:
+            await _enforce_frame_project_quota(
+                self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
+            )
+        except RateLimitError as e:
+            await self._send_error(str(e), error_type="rate_limit_exceeded")
+            return
+
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
@@ -2279,11 +2459,10 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final = call_kwargs.pop("model", None)
-        if requested_model is None or requested_model == self.model_group:
-            model = self.model
-        else:
-            model = requested_model
+        requested_model: Final[str | None] = call_kwargs.pop("model", None)
+        model: Final[str] = (
+            self.model if requested_model is None or requested_model == self.model_group else requested_model
+        )
 
         previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))

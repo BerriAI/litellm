@@ -1,6 +1,5 @@
 "use client";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
 import React, { useEffect, useState } from "react";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -218,8 +217,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   return (
     <div className="mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Col numColSpan={1} className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
+        <div className="col-span-1 flex flex-col gap-2">
           <VirtualKeysTable
             headerActions={
               canCreateKey ? (
@@ -235,8 +234,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               ) : undefined
             }
           />
-        </Col>
-      </Grid>
+        </div>
+      </div>
     </div>
   );
 };

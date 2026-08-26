@@ -2,16 +2,12 @@
 #    This tests caching on the router
 import asyncio
 import os
-import sys
 import time
 import traceback
 from unittest.mock import patch
 from typing import Union
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.caching import RedisCache, RedisClusterCache

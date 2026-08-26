@@ -1,11 +1,7 @@
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system paths
 
 from base_llm_unit_tests import BaseLLMChatTest
 from litellm.llms.vertex_ai.context_caching.transformation import (
@@ -1315,7 +1311,7 @@ def test_gemini_exception_message_format():
     mock_exception.status_code = 400
 
     # Test the exception mapping for Gemini provider
-    try:
+    with pytest.raises(BadRequestError) as exc_info:
         exception_type(
             model="gemini-pro",
             original_exception=mock_exception,
@@ -1323,22 +1319,18 @@ def test_gemini_exception_message_format():
             completion_kwargs={},
             extra_kwargs={},
         )
-        # Should not reach here - exception should be raised
-        assert False, "Expected BadRequestError to be raised"
-    except BadRequestError as e:
-        # The test should FAIL initially (before fix) because it will show VertexAIException
-        # After the fix, it should show GeminiException
-        error_message = str(e)
-        print(f"Error message: {error_message}")  # For debugging
+    e = exc_info.value
+    error_message = str(e)
+    print(f"Error message: {error_message}")  # For debugging
 
-        # This assertion will initially FAIL - that's expected for TDD
-        assert "GeminiException" in error_message, (
-            f"Expected 'GeminiException' in error message, got: {error_message}. "
-            f"This test should fail before the fix is implemented."
-        )
-        assert (
-            "VertexAIException" not in error_message
-        ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+    # This assertion will initially FAIL - that's expected for TDD
+    assert "GeminiException" in error_message, (
+        f"Expected 'GeminiException' in error message, got: {error_message}. "
+        f"This test should fail before the fix is implemented."
+    )
+    assert (
+        "VertexAIException" not in error_message
+    ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
 
 
 @pytest.mark.parametrize(
@@ -1392,8 +1384,21 @@ def l(status_code, expected_exception):
     # Set message attribute for compatibility with exception mapping
     mock_exception.message = f"HTTP {status_code}"
 
+    exception_classes = {
+        "BadRequestError": BadRequestError,
+        "AuthenticationError": AuthenticationError,
+        "PermissionDeniedError": PermissionDeniedError,
+        "NotFoundError": NotFoundError,
+        "Timeout": Timeout,
+        "RateLimitError": RateLimitError,
+        "InternalServerError": InternalServerError,
+        "APIConnectionError": APIConnectionError,
+        "ServiceUnavailableError": ServiceUnavailableError,
+    }
+    expected_class = exception_classes[expected_exception]
+
     # Test the exception mapping
-    try:
+    with pytest.raises(expected_class) as exc_info:
         exception_type(
             model="gemini-pro",
             original_exception=mock_exception,
@@ -1401,35 +1406,16 @@ def l(status_code, expected_exception):
             completion_kwargs={},
             extra_kwargs={},
         )
-        assert (
-            False
-        ), f"Expected {expected_exception} to be raised for status {status_code}"
-    except Exception as e:
-        # Verify the correct exception type is raised
-        exception_classes = {
-            "BadRequestError": BadRequestError,
-            "AuthenticationError": AuthenticationError,
-            "PermissionDeniedError": PermissionDeniedError,
-            "NotFoundError": NotFoundError,
-            "Timeout": Timeout,
-            "RateLimitError": RateLimitError,
-            "InternalServerError": InternalServerError,
-            "APIConnectionError": APIConnectionError,
-            "ServiceUnavailableError": ServiceUnavailableError,
-        }
-        expected_class = exception_classes[expected_exception]
-        assert isinstance(
-            e, expected_class
-        ), f"Expected {expected_exception}, got {type(e).__name__}"
+    e = exc_info.value
 
-        # Verify the error message contains GeminiException
-        error_message = str(e)
-        assert (
-            "GeminiException" in error_message
-        ), f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
-        assert (
-            "VertexAIException" not in error_message
-        ), f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
+    # Verify the error message contains GeminiException
+    error_message = str(e)
+    assert (
+        "GeminiException" in error_message
+    ), f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
+    assert (
+        "VertexAIException" not in error_message
+    ), f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
 
 
 def test_gemini_embedding():

@@ -40,10 +40,18 @@ export const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRE
 // bundled config or a caller's actually-built config - the two need to agree, since a preset only
 // prefills once and the config is edited freely after (see AddAutoRouterTab.submitBlockedReason).
 export const getRequiredModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model" | "default_model">,
 ): Set<string> => {
-  const { tiers, classifier_llm_config: classifier, embedding_model: embedding } = config;
-  const models = [...tiers.SIMPLE, ...tiers.MEDIUM, ...tiers.COMPLEX, ...tiers.REASONING, classifier?.model, embedding];
+  const { tiers, classifier_llm_config: classifier, embedding_model: embedding, default_model: pinned } = config;
+  const models = [
+    ...tiers.SIMPLE,
+    ...tiers.MEDIUM,
+    ...tiers.COMPLEX,
+    ...tiers.REASONING,
+    classifier?.model,
+    embedding,
+    pinned,
+  ];
   // Boolean(), not != null: an empty-string placeholder (e.g. classifier_llm_config seeded before a
   // model is chosen) is never a real model reference either.
   return new Set(models.filter((model): model is string => Boolean(model)));
@@ -164,7 +172,7 @@ const resolveAvailableModel = (requiredModel: string, availability: ModelAvailab
 };
 
 export const getMissingModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Parameters<typeof getRequiredModels>[0],
   availability: ModelAvailability,
 ): string[] =>
   [...getRequiredModels(config)].filter((model) => resolveAvailableModel(model, availability) === undefined).sort();
@@ -188,12 +196,14 @@ export const getReferencedModelsError = (
     classifierLlmConfig: ClassifierLLMConfig | undefined;
     semanticMatchingEnabled: boolean;
     embeddingModel: string | undefined;
+    defaultModel?: string;
   },
   availability: ModelAvailability,
 ): string | null => {
   const missing = getMissingModels(
     {
       tiers: params.tiers,
+      default_model: params.defaultModel,
       classifier_llm_config: params.classifierType === "llm" ? params.classifierLlmConfig : undefined,
       embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
     },
@@ -258,6 +268,7 @@ export const buildPresetPrefill = (
         model: resolve(config.classifier_llm_config.model),
       },
       classifier_context_window_size: config.classifier_context_window_size,
+      classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
