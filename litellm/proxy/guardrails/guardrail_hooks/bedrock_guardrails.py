@@ -782,8 +782,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if matched_deployments:
             return matched_deployments
         if any(
-            isinstance(deployment, Mapping)
-            and (deployment.get("model_info") or {}).get("allow_fail_open") is True
+            isinstance(deployment, Mapping) and (deployment.get("model_info") or {}).get("allow_fail_open") is True
             for deployment in allowed_deployments
         ):
             return candidate_deployments or allowed_deployments
@@ -825,11 +824,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         deployment_model: Final[object] = (
             params.get("model") if isinstance(params, Mapping) else getattr(params, "model", None)
         )
-        return (
-            BedrockGuardrail._resolve_model_provider(deployment_model)
-            if isinstance(deployment_model, str)
-            else None
-        )
+        return BedrockGuardrail._resolve_model_provider(deployment_model) if isinstance(deployment_model, str) else None
 
     @staticmethod
     def _router_allows_bedrock(
@@ -1251,9 +1246,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                             )
                             if router_allows_bedrock is not None:
                                 return api_key if router_allows_bedrock else None
-                            return api_key if all(
-                                provider in ("bedrock", "bedrock_converse") for provider in providers
-                            ) else None
+                            return (
+                                api_key
+                                if all(provider in ("bedrock", "bedrock_converse") for provider in providers)
+                                else None
+                            )
                     except Exception:  # noqa: BLE001  # fall back to the sync compatibility path
                         pass
 
