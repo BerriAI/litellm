@@ -617,3 +617,40 @@ def test_request_kwargs_does_not_retain_logging_obj():
     assert "litellm_logging_obj" not in handler.request_kwargs
     assert handler.request_kwargs["messages"] == kwargs["messages"]
     assert handler.request_kwargs["model"] == "gpt-4o"
+
+
+def test_convert_args_to_kwargs_maps_positional_args_on_decorated_functions():
+    """
+    convert_args_to_kwargs must resolve positional arguments against the
+    signature litellm's public entry points actually expose, not against the
+    `client` decorator's `(*args, **kwargs)` wrapper.
+
+    litellm.completion is decorated, so wrapper.__code__.co_argcount is 0 and
+    reading __code__ directly yields no parameter names at all. Those names are
+    what turns a positional call into cache-key material, so losing them makes
+    distinct requests collide on one key instead of raising.
+    """
+    import litellm
+    from litellm.caching.caching_handler import convert_args_to_kwargs
+
+    messages = [{"role": "user", "content": "hello"}]
+
+    mapped = convert_args_to_kwargs(litellm.completion, ("gpt-4o", messages))
+
+    assert mapped["model"] == "gpt-4o"
+    assert mapped["messages"] == messages
+
+    assert convert_args_to_kwargs(litellm.completion, ()) == {}
+    assert convert_args_to_kwargs(litellm.completion, None) == {}
+
+
+def test_convert_args_to_kwargs_truncates_extra_positional_args():
+    """More positional args than parameters must not raise or invent names."""
+    from litellm.caching.caching_handler import convert_args_to_kwargs
+
+    def sample(model, messages, temperature=None):
+        return None
+
+    mapped = convert_args_to_kwargs(sample, ("gpt-4o", [], 0.5, "extra", "extra2"))
+
+    assert mapped == {"model": "gpt-4o", "messages": [], "temperature": 0.5}
