@@ -1868,7 +1868,10 @@ def test_is_setup_message_and_is_content_message():
 
 
 def test_map_openai_params_maps_stock_voice_case_insensitively():
-    """Regression: OpenAI stock voices map to Gemini prebuilt voices regardless of casing; unknown names pass through."""
+    """Regression: OpenAI stock voices map to Gemini prebuilt voices regardless of casing.
+
+    Unknown names pass through verbatim.
+    """
     cfg = GeminiRealtimeConfig()
 
     mapped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
