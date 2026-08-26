@@ -11422,11 +11422,9 @@ export interface paths {
          *         -d '{
          *             "prompt_id": "my_prompt",
          *             "litellm_params": {
-         *                 "prompt_id": "json_prompt",
+         *                 "prompt_id": "my_prompt",
          *                 "prompt_integration": "dotprompt",
-         *                 ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
-         *                 "prompt_directory": "/path/to/dotprompt/folder",
-         *                 "prompt_data": {"json_prompt": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}}
+         *                 "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
          *             },
          *             "prompt_info": {
          *                 "prompt_type": "config"
