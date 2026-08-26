@@ -2393,7 +2393,10 @@ def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) 
         litellm.model_cost.get(model_name),
         litellm.model_cost.get(f"{custom_llm_provider}/{model_name}"),
     )
-    return any(entry is not None and any("cost_per" in field for field in entry) for entry in entries)
+    return any(
+        entry is not None and any("cost_per" in field and value is not None for field, value in entry.items())
+        for entry in entries
+    )
 
 
 def _first_priced_realtime_token_costs(
