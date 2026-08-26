@@ -697,7 +697,7 @@ def _apply_managed_file_id_mapping(
         tools = cast(
             Iterable[ToolParam] | None,
             update_responses_tools_with_model_file_ids(
-                tools=cast(list[dict[str, Any]] | None, tools),
+                tools=cast(list[dict[str, object]] | None, tools),
                 model_id=model_info_id,
                 model_file_id_mapping=model_file_id_mapping,
             ),
@@ -734,7 +734,7 @@ def _responses_try_dispatch_mcp_gateway(
     extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
     _is_async: bool,
 ) -> Any | None:
     """Return a response when MCP gateway handles the call; otherwise None."""
