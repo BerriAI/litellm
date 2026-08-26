@@ -1331,7 +1331,7 @@ def _contains_json_schema_ref(payload: object) -> bool:
     no matching part exists. Tool results carrying JSON Schema data must therefore not be
     sent structurally. https://github.com/BerriAI/litellm/issues/38223
     """
-    stack: list[Any] = [payload]
+    stack: list[object] = [payload]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
