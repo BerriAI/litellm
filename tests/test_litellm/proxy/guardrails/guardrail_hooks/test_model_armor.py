@@ -625,7 +625,8 @@ async def test_model_armor_streaming_block_yields_sse_error():
 
 _ANTHROPIC_SSE_CHUNKS = (
     b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
-    b'"role":"assistant","model":"claude","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+    b'"role":"assistant","model":"claude","content":[],"usage":{"input_tokens":5,"output_tokens":0,'
+    b'"cache_read_input_tokens":4,"service_tier":"standard"}}}\n\n',
     b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
     b'"content_block":{"type":"text","text":""}}\n\n',
     b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
@@ -762,6 +763,10 @@ async def test_streaming_hook_masks_raw_anthropic_sse():
     body = b"".join(chunk for chunk in delivered if isinstance(chunk, bytes))
     assert b"[REDACTED]" in body
     assert b"123-45-6789" not in body
+    # the masked stream is a rewrite of the upstream frames, so usage the assembler does not
+    # model (cache counts, service tier) still reaches the client
+    assert b'"cache_read_input_tokens":4' in body
+    assert b'"service_tier":"standard"' in body
 
 
 @pytest.mark.asyncio

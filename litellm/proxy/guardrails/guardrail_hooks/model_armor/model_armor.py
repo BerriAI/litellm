@@ -842,10 +842,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
         from litellm.proxy.guardrails.anthropic_sse import (
-            anthropic_sse_chunks_from_response,
             anthropic_sse_error_frames,
             assemble_anthropic_sse_stream,
             is_raw_sse_stream,
+            rewrite_anthropic_sse_text,
         )
 
         # Collect all chunks
@@ -853,8 +853,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         async for chunk in response:
             all_chunks.append(chunk)
 
-        # /v1/messages arrives as raw SSE frames and /v1/responses as Responses API event
-        # objects; stream_chunk_builder can assemble neither
         raw_sse: Final = is_raw_sse_stream(all_chunks)
         chat_stream: Final = bool(all_chunks) and all(isinstance(chunk, ModelResponseStream) for chunk in all_chunks)
         assembled_response: Final = (
@@ -920,7 +918,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
                             # Return sanitized stream
                             if raw_sse:
-                                for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
+                                rewritten: Final = rewrite_anthropic_sse_text(all_chunks, sanitized_content)
+                                for sse_chunk in rewritten or anthropic_sse_error_frames(
+                                    f"{self.guardrail_name}: sanitized response could not be re-emitted, blocking it"
+                                ):
                                     yield sse_chunk
                                 return
                             mock_response: Final = MockResponseIterator(model_response=assembled_response)
