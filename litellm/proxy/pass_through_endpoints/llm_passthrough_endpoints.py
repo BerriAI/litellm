@@ -26,6 +26,7 @@ from litellm.constants import (
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.parallel_ai.common_utils import resolve_parallel_ai_credentials
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -342,6 +343,52 @@ async def cohere_proxy_route(
     )
 
     return received_value
+
+
+def _parallel_ai_extract_url(api_base: str) -> str:
+    trimmed: Final = api_base.rstrip("/")
+    if trimmed.endswith("/v1/extract"):
+        return trimmed
+    return f"{trimmed.removesuffix('/v1')}/v1/extract"
+
+
+@router.post(
+    "/parallel_ai/v1/extract",
+    tags=["Parallel AI Pass-through", "pass-through"],
+)
+async def parallel_ai_extract_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    deployment_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="parallel_ai",
+        region_name=None,
+    )
+    api_base, api_key = resolve_parallel_ai_credentials(
+        api_base=None,
+        api_key=deployment_api_key,
+    )
+    if api_key is None:
+        raise HTTPException(
+            status_code=500,
+            detail="PARALLEL_AI_API_KEY or PARALLEL_API_KEY is required for the Parallel AI Extract pass-through.",
+        )
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint="/parallel_ai/v1/extract",
+        target=_parallel_ai_extract_url(api_base),
+        custom_headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+        },
+        custom_llm_provider="parallel_ai",
+    )
+    return await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
 
 
 @router.api_route(

@@ -2,7 +2,9 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import time
+from collections.abc import Mapping
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
@@ -181,6 +183,7 @@ _SEARCH_CALL_TYPES: Final = frozenset(
 )
 
 _AREALTIME_CALL_TYPE: Final = CallTypes.arealtime.value
+EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
 
 
@@ -655,6 +658,7 @@ def cost_per_token(
         if (
             (model_info.get("input_cost_per_token") or 0.0) > 0
             or (model_info.get("output_cost_per_token") or 0.0) > 0
+            or (model_info.get("input_cost_per_request") or 0.0) > 0
             or model_info.get("tiered_pricing") is not None
         ):
             return generic_cost_per_token(
@@ -871,6 +875,20 @@ def _normalize_service_tier(service_tier: object) -> str | None:
     if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
         return None
     return service_tier
+
+
+def _parallel_ai_response_pricing_model(model: str, optional_params: Mapping[str, object] | None) -> str | None:
+    from litellm.llms.parallel_ai.responses.cost_calculator import (
+        is_parallel_ai_response_model,
+        parallel_ai_response_pricing_model,
+    )
+
+    if not is_parallel_ai_response_model(model):
+        return None
+    return parallel_ai_response_pricing_model(
+        model=model,
+        optional_params=optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS,
+    )
 
 
 def _extract_service_tier(source: object) -> str | None:
@@ -1231,12 +1249,25 @@ def completion_cost(
 
         service_tier = _normalize_service_tier(service_tier)
 
+        provider_for_cost: Final = _get_provider_for_cost_calc(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+        pricing_base_model: Final = (
+            _parallel_ai_response_pricing_model(
+                model=model or "parallel",
+                optional_params=optional_params,
+            )
+            if base_model is None and custom_pricing is not True and provider_for_cost == LlmProviders.PARALLEL_AI.value
+            else base_model
+        )
+
         selected_model: Final = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
             custom_llm_provider=custom_llm_provider,
             custom_pricing=custom_pricing,
-            base_model=base_model,
+            base_model=pricing_base_model,
             router_model_id=router_model_id,
         )
 

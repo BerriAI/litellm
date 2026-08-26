@@ -3517,3 +3517,114 @@ def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(200_000 * 4e-06 + 50_000 * 1e-06)
     assert completion_cost == pytest.approx(1_000 * 1.2e-05)
+
+
+@pytest.fixture
+def flat_per_request_model():
+    """Register a synthetic model whose only price is a flat per-request rate."""
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    model = "openai/flat-rate-test-model"
+    prev = litellm.model_cost.get(model)
+    litellm.model_cost[model] = {
+        "input_cost_per_request": 0.05,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        yield model
+    finally:
+        if prev is None:
+            litellm.model_cost.pop(model, None)
+        else:
+            litellm.model_cost[model] = prev
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_flat_per_request_cost_applies_once(flat_per_request_model):
+    """A flat per-request price bills the same regardless of token counts."""
+    from litellm.types.utils import Usage
+
+    small_usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    large_usage = Usage(prompt_tokens=10_000, completion_tokens=5_000, total_tokens=15_000)
+
+    small_prompt_cost, small_completion_cost = generic_cost_per_token(
+        model=flat_per_request_model,
+        usage=small_usage,
+        custom_llm_provider="openai",
+    )
+    large_prompt_cost, large_completion_cost = generic_cost_per_token(
+        model=flat_per_request_model,
+        usage=large_usage,
+        custom_llm_provider="openai",
+    )
+
+    assert small_prompt_cost == pytest.approx(0.05)
+    assert small_completion_cost == 0.0
+    assert large_prompt_cost == pytest.approx(0.05)
+    assert large_completion_cost == 0.0
+
+
+def test_flat_per_request_cost_is_added_to_token_cost():
+    """The flat rate stacks on top of token pricing rather than replacing it."""
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.types.utils import Usage
+
+    model = "openai/flat-plus-tokens-test-model"
+    litellm.model_cost[model] = {
+        "input_cost_per_request": 0.05,
+        "input_cost_per_token": 1e-05,
+        "output_cost_per_token": 2e-05,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider="openai",
+        )
+        assert prompt_cost == pytest.approx(0.05 + 100 * 1e-05)
+        assert completion_cost == pytest.approx(50 * 2e-05)
+    finally:
+        litellm.model_cost.pop(model, None)
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_flat_per_request_cost_routes_through_cost_per_token():
+    """The generic cost_per_token dispatch must not skip a model whose only
+    pricing is a flat per-request rate.
+
+    Uses a provider with no dedicated cost_per_token branch, so the model
+    genuinely reaches the generic fallback whose guard is under test.
+    """
+    from litellm.cost_calculator import cost_per_token
+    from litellm.types.utils import Usage
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    model = "groq/flat-rate-only-test-model"
+    litellm.model_cost[model] = {
+        "input_cost_per_request": 0.05,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "groq",
+        "mode": "chat",
+    }
+    _invalidate_model_cost_lowercase_map()
+    try:
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        prompt_cost, completion_cost = cost_per_token(
+            model=model,
+            custom_llm_provider="groq",
+            usage_object=usage,
+        )
+        assert prompt_cost == pytest.approx(0.05)
+        assert completion_cost == 0.0
+    finally:
+        litellm.model_cost.pop(model, None)
+        _invalidate_model_cost_lowercase_map()

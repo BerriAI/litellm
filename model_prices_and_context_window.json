@@ -35613,6 +35613,42 @@
         "output_cost_per_token": 1.25e-07,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
+    "parallel_ai/parallel": {
+        "input_cost_per_request": 0.05,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "parallel_ai",
+        "mode": "responses",
+        "output_cost_per_token": 0.0,
+        "supports_reasoning": true,
+        "supports_response_schema": true
+    },
+    "parallel_ai/parallel-high": {
+        "input_cost_per_request": 0.25,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "parallel_ai",
+        "mode": "responses",
+        "output_cost_per_token": 0.0,
+        "supports_reasoning": true,
+        "supports_response_schema": true
+    },
+    "parallel_ai/parallel-low": {
+        "input_cost_per_request": 0.01,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "parallel_ai",
+        "mode": "responses",
+        "output_cost_per_token": 0.0,
+        "supports_reasoning": true,
+        "supports_response_schema": true
+    },
+    "parallel_ai/parallel-medium": {
+        "input_cost_per_request": 0.05,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "parallel_ai",
+        "mode": "responses",
+        "output_cost_per_token": 0.0,
+        "supports_reasoning": true,
+        "supports_response_schema": true
+    },
     "parallel_ai/search": {
         "input_cost_per_query": 0.004,
         "litellm_provider": "parallel_ai",

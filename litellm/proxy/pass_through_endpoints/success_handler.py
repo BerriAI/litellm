@@ -27,6 +27,9 @@ from .llm_provider_handlers.cursor_passthrough_logging_handler import (
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.parallel_ai_passthrough_logging_handler import (
+    ParallelAIPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -220,6 +223,16 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = openai_passthrough_logging_handler_result["result"]
             kwargs = openai_passthrough_logging_handler_result["kwargs"]
+
+        elif ParallelAIPassthroughLoggingHandler.is_extract_route(url_route, custom_llm_provider):
+            parallel_ai_result = ParallelAIPassthroughLoggingHandler.parallel_ai_extract_handler(
+                response_body=response_body if isinstance(response_body, dict) else {},
+                logging_obj=logging_obj,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = parallel_ai_result["result"]
+            kwargs = parallel_ai_result["kwargs"]  # rebind-ok: every dispatch branch reassigns kwargs
 
         elif self.is_cursor_route(url_route, custom_llm_provider):
             cursor_passthrough_logging_handler_result = CursorPassthroughLoggingHandler.cursor_passthrough_handler(

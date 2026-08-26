@@ -9847,6 +9847,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/parallel_ai/v1/extract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Parallel Ai Extract Proxy Route */
+        post: operations["parallel_ai_extract_proxy_route_parallel_ai_v1_extract_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/plugin-proxy/{plugin_name}/{path}": {
         parameters: {
             query?: never;
@@ -27572,6 +27589,8 @@ export interface components {
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
             input_cost_per_query?: number | null;
+            /** Input Cost Per Request */
+            input_cost_per_request?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
@@ -36792,6 +36811,8 @@ export interface components {
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
             input_cost_per_query?: number | null;
+            /** Input Cost Per Request */
+            input_cost_per_request?: number | null;
             /** Input Cost Per Second */
             input_cost_per_second?: number | null;
             /** Input Cost Per Token */
@@ -49736,6 +49757,26 @@ export interface operations {
         };
     };
     get_otel_spans_otel_spans_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    parallel_ai_extract_proxy_route_parallel_ai_v1_extract_post: {
         parameters: {
             query?: never;
             header?: never;
