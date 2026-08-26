@@ -504,7 +504,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 "error": "tag_rate_limit_exceeded",
                 "type": unit,
                 "tag_id": entry.tag_id,
-                "tag_value": tag_value,
+                # tag_value deliberately excluded: it can resolve from
+                # inherited_tags (server-assigned key/team/project metadata),
+                # and echoing it back would disclose that identity to the
+                # caller. verbose_proxy_logger.debug above still logs it
+                # server-side for observability.
                 "limit_name": entry.name,
                 "limit": entry.limit,
                 "period_seconds": entry.period_seconds,
@@ -632,13 +636,36 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         self._record_admitted_model(stash, model, renewal_allowed)
         return data
 
-    async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
-        stash: Final = _stash_for_call(_call_id_from_kwargs(request_data))
+    async def _release_pending_for_call_id(self, request_kwargs: Mapping[str, object]) -> None:
+        stash: Final = _stash_for_call(_call_id_from_kwargs(request_kwargs))
         if stash is None or not stash.pending_concurrency_keys:
             return
         release_keys: Final = tuple(stash.pending_concurrency_keys)
         stash.pending_concurrency_keys.clear()
         await self._release_keys(release_keys)
+
+    async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
+        await self._release_pending_for_call_id(request_data)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,  # mutable-ok: must match CustomLogger.async_post_call_failure_hook's own base signature exactly
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        """
+        A request that never reaches Router (every fallback model also
+        rejected, or none configured) never runs the actual LLM call, so
+        neither async_log_success_event nor async_log_failure_event -- both
+        tied to that call's own wrapper -- ever fires for it. This is the
+        only remaining release path for a reservation from an earlier,
+        successful admission attempt in the same _pre_call_with_fallbacks
+        chain. litellm_call_id survives proxy/utils.py's own stripping here
+        (only litellm_logging_obj is popped), so the same ContextVar-based
+        stash lookup as the other release hooks still works.
+        """
+        await self._release_pending_for_call_id(request_data)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         # Always release regardless of which hook raised: this hook's own
@@ -646,12 +673,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # already empty in that case and the check below no-ops; a rejection
         # from model_based_tag_rate_limits_hook (same error marker) can still
         # land after this hook already reserved its own slot.
-        stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
-        if stash is None or not stash.pending_concurrency_keys:
-            return
-        release_keys: Final = tuple(stash.pending_concurrency_keys)
-        stash.pending_concurrency_keys.clear()
-        await self._release_keys(release_keys)
+        await self._release_pending_for_call_id(kwargs)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
@@ -681,7 +703,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
         tags: Final = _order_tags_for_identity_resolution(
             _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
-            kwargs,
+            litellm_params_for_metadata,
             metadata_variable_name,
         )
         if not tags:

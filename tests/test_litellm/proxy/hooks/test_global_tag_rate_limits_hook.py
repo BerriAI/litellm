@@ -967,6 +967,54 @@ async def test_concurrency_reservation_released_on_disconnect(time_controller, m
 
 
 @pytest.mark.asyncio
+async def test_concurrency_reservation_released_when_every_fallback_is_exhausted(time_controller, monkeypatch):
+    """
+    When _pre_call_with_fallbacks exhausts every fallback model (another
+    hook rejects each one) and re-raises, the request never reaches the
+    real LLM call -- neither async_log_success_event nor
+    async_log_failure_event, both tied to that call's own wrapper, ever
+    fires. async_post_call_failure_hook is the only remaining release path
+    for a reservation this hook already admitted earlier in that same
+    fallback chain.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    # This hook admits and reserves the only slot.
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "model-a"},
+        call_type="completion",
+    )
+    # _pre_call_with_fallbacks eventually gives up (every fallback rejected
+    # by some other hook) and reports the failure via post_call_failure_hook.
+    await hook.async_post_call_failure_hook(
+        request_data={"litellm_call_id": "call-1"},
+        original_exception=ProxyRateLimitError(
+            detail={"error": "some_other_hooks_limit"}, headers={}, rate_limit_type=None
+        ),
+        user_api_key_dict=_key(),
+    )
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "model-a"},
+        call_type="completion",
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
 async def test_concurrency_reservation_released_when_disconnect_runs_in_a_forked_task(time_controller, monkeypatch):
     """
     common_request_processing.py's real disconnect path runs the release call
@@ -1279,11 +1327,18 @@ async def test_success_accounting_also_resolves_identity_from_the_policy_backed_
     )
     hook = _make_hook(time_controller)
 
+    # kwargs at async_log_success_event time is Logging.model_call_details:
+    # metadata/inherited_tags live nested under kwargs["litellm_params"],
+    # never at the top level -- see
+    # test_log_success_event_accounts_when_litellm_params_carries_a_null_litellm_metadata_key
+    # for the same shape.
     kwargs = {
         "litellm_call_id": "attack-1",
-        "metadata": {
-            "tags": ["company_id:attacker-chosen", "company_id:real-company"],
-            "inherited_tags": ["company_id:real-company"],
+        "litellm_params": {
+            "metadata": {
+                "tags": ["company_id:attacker-chosen", "company_id:real-company"],
+                "inherited_tags": ["company_id:real-company"],
+            },
         },
         "standard_logging_object": {"total_tokens": 0, "response_cost": 20.0},
     }
@@ -1302,3 +1357,46 @@ async def test_success_accounting_also_resolves_identity_from_the_policy_backed_
             },
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_rejection_detail_does_not_disclose_the_resolved_tag_value(time_controller, monkeypatch):
+    """
+    tag_value can resolve from inherited_tags (server-assigned key/team/
+    project metadata via order_tags_for_identity_resolution), so echoing it
+    back in the client-facing 429 detail would disclose that identity to
+    the caller who triggered the rejection.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [{"name": "per-company", "tag_id": "company_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+    key = _key()
+
+    data = {
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["company_id:secret-internal-name"], "inherited_tags": ["company_id:secret-internal-name"]},
+    }
+    await hook.async_pre_call_hook(user_api_key_dict=key, cache=DualCache(), data=data, call_type="completion")
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await hook.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=DualCache(),
+            data={
+                "litellm_call_id": "call-2",
+                "metadata": {
+                    "tags": ["company_id:secret-internal-name"],
+                    "inherited_tags": ["company_id:secret-internal-name"],
+                },
+            },
+            call_type="completion",
+        )
+
+    assert "tag_value" not in exc_info.value.detail
