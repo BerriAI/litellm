@@ -75,6 +75,29 @@ def test_additional_current_models_are_present():
         assert entry["output_cost_per_token"] > 0
 
 
+@pytest.mark.parametrize(
+    "key, published_price_per_audio_minute",
+    [
+        ("cloudflare/@cf/openai/whisper", 0.00045),
+        ("cloudflare/@cf/openai/whisper-large-v3-turbo", 0.00051),
+    ],
+)
+def test_whisper_transcription_pricing_is_stored_per_second(key, published_price_per_audio_minute):
+    entry = litellm.model_cost[key]
+    assert entry["litellm_provider"] == "cloudflare"
+    assert entry["mode"] == "audio_transcription"
+    assert entry["supported_endpoints"] == ["/v1/audio/transcriptions"]
+    assert entry["output_cost_per_second"] == 0.0
+    assert entry["input_cost_per_second"] == pytest.approx(published_price_per_audio_minute / 60)
+
+
+def test_whisper_tiny_en_is_present_and_unpriced():
+    entry = litellm.model_cost["cloudflare/@cf/openai/whisper-tiny-en"]
+    assert entry["mode"] == "audio_transcription"
+    assert entry["input_cost_per_second"] == 0.0
+    assert entry["output_cost_per_second"] == 0.0
+
+
 def test_root_and_backup_have_identical_cloudflare_keys():
     if not os.path.exists(ROOT_MAP):
         pytest.skip("root cost map only ships in source checkouts")

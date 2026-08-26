@@ -13297,6 +13297,39 @@
         "output_cost_per_token": 1e-06,
         "supports_reasoning": true
     },
+    "cloudflare/@cf/openai/whisper": {
+        "input_cost_per_second": 7.5e-06,
+        "litellm_provider": "cloudflare",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/whisper/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "cloudflare/@cf/openai/whisper-large-v3-turbo": {
+        "input_cost_per_second": 8.5e-06,
+        "litellm_provider": "cloudflare",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "cloudflare/@cf/openai/whisper-tiny-en": {
+        "input_cost_per_second": 0.0,
+        "litellm_provider": "cloudflare",
+        "metadata": {
+            "notes": "Cloudflare publishes no unit pricing for this beta model, so cost tracking reports $0 until they do"
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/whisper-tiny-en/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
     "codestral/codestral-2405": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "codestral",
