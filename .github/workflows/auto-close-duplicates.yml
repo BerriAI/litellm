@@ -23,7 +23,10 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0 (sha-pinned)
         with:
-          bun-version: latest
+          # Exact version, never latest: the next step holds an issues: write token,
+          # so a compromised Bun release would run privileged here. setup-bun exposes
+          # no checksum input, so pinning the action and the version is the ceiling.
+          bun-version: "1.4.0"
 
       - name: Auto-close duplicate issues
         run: bun run scripts/auto-close-duplicates.ts
