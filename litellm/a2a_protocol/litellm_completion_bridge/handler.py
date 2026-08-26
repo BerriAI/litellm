@@ -47,6 +47,21 @@ class A2ACompletionBridgeHandler:
     """
 
     @staticmethod
+    def _merge_stream_values(previous: object, current: object) -> object:
+        if isinstance(previous, Mapping) and isinstance(current, Mapping):
+            merged = dict(previous)
+            for key, value in current.items():
+                merged[key] = (
+                    A2ACompletionBridgeHandler._merge_stream_values(merged[key], value)
+                    if key in merged
+                    else value
+                )
+            return merged
+        if isinstance(previous, list) and isinstance(current, list):
+            return [*previous, *current]
+        return current
+
+    @staticmethod
     def _build_completion_params(
         params: dict[str, Any],
         litellm_params: Mapping[str, Any],
@@ -94,7 +109,8 @@ class A2ACompletionBridgeHandler:
         litellm_params_to_add: Final = {
             k: v
             for k, v in litellm_params.items()
-            if k not in ("model", "custom_llm_provider", "extra_headers", "headers") and k not in _AGENT_ONLY_PARAMS
+            if k not in ("model", "custom_llm_provider", "extra_headers", "headers", "api_base", "stream")
+            and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
         # Apply forward metadata AFTER the litellm_params merge so the helper
@@ -290,8 +306,9 @@ class A2ACompletionBridgeHandler:
         choice_texts: dict[int, str] = {}
         choice_tool_calls: dict[int, list[object]] = {}
         choice_delta_fields: dict[int, dict[str, object]] = {}
-        choice_logprobs: dict[int, object] = {}
+        choice_logprobs: dict[int, dict[str, object]] = {}
         choice_finish_reasons: dict[int, str] = {}
+        stream_metadata: dict[str, str] = {}
         stream_usage: object | None = None
         stream_finish_reason: str | None = None
         chunk_count = 0
@@ -314,6 +331,14 @@ class A2ACompletionBridgeHandler:
                             dumped_usage = dict_usage(exclude_none=True)
                             if isinstance(dumped_usage, Mapping):
                                 stream_usage = dumped_usage
+
+                for metadata_name in ("system_fingerprint", "service_tier"):
+                    metadata_value = getattr(chunk, metadata_name, None)
+                    if not isinstance(metadata_value, str):
+                        chunk_fields = A2ACompletionBridgeTransformation._model_dump(chunk)
+                        metadata_value = chunk_fields.get(metadata_name)
+                    if isinstance(metadata_value, str) and metadata_value:
+                        stream_metadata[metadata_name] = metadata_value
 
                 # Extract delta content
                 choices = getattr(chunk, "choices", None) if chunk is not None else None
@@ -356,7 +381,12 @@ class A2ACompletionBridgeHandler:
                         raw_logprobs = getattr(choice, "logprobs", None)
                         serialized_logprobs = A2ACompletionBridgeTransformation._model_dump(raw_logprobs)
                         if serialized_logprobs:
-                            choice_logprobs[choice_index] = serialized_logprobs
+                            previous_logprobs = choice_logprobs.get(choice_index, {})
+                            merged_logprobs = A2ACompletionBridgeHandler._merge_stream_values(
+                                previous_logprobs, serialized_logprobs
+                            )
+                            if isinstance(merged_logprobs, dict):
+                                choice_logprobs[choice_index] = merged_logprobs
 
                         if content:
                             artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
@@ -382,9 +412,18 @@ class A2ACompletionBridgeHandler:
             completed_event["result"]["finish_reason"] = stream_finish_reason
         if stream_usage is not None:
             completed_event["usage"] = stream_usage
-        if len(choice_texts) > 1:
+        for metadata_name, metadata_value in stream_metadata.items():
+            completed_event[metadata_name] = metadata_value
+        choice_indices = sorted(
+            set(choice_texts)
+            | set(choice_tool_calls)
+            | set(choice_delta_fields)
+            | set(choice_logprobs)
+            | set(choice_finish_reasons)
+        )
+        if choice_indices:
             choice_payloads: list[dict[str, object]] = []
-            for choice_index in sorted(choice_texts):
+            for choice_index in choice_indices:
                 choice_payload: dict[str, object] = {
                     "index": choice_index,
                     "message": {
@@ -408,25 +447,6 @@ class A2ACompletionBridgeHandler:
                     choice_payload["delta"] = choice_delta_fields[choice_index]
                 choice_payloads.append(choice_payload)
             completed_event["result"]["choices"] = choice_payloads
-        else:
-            metadata_indices = sorted(set(choice_delta_fields) | set(choice_logprobs))
-            if metadata_indices:
-                completed_event["result"]["choices"] = [
-                    {
-                        "index": choice_index,
-                        **(
-                            {"delta": choice_delta_fields[choice_index]}
-                            if choice_delta_fields.get(choice_index)
-                            else {}
-                        ),
-                        **(
-                            {"logprobs": choice_logprobs[choice_index]}
-                            if choice_index in choice_logprobs
-                            else {}
-                        ),
-                    }
-                    for choice_index in metadata_indices
-                ]
         yield completed_event
 
         verbose_logger.info(

@@ -3,12 +3,12 @@ A2A Streaming Response Iterator
 """
 
 from collections.abc import Mapping
-from typing import Final
+from typing import Any, Final
 
 import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import ChatCompletionToolCallChunk
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.types.utils import Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
 
 from ..common_utils import A2AError, extract_text_from_a2a_response
 
@@ -90,6 +90,13 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             )
             text: Final = "" if is_working_status else extract_text_from_a2a_response(chunk)
             provider_fields: dict[str, object] = {}
+            provider_fields.update(
+                {
+                    key: value
+                    for key, value in chunk.items()
+                    if key in {"system_fingerprint", "service_tier"} and value is not None
+                }
+            )
             if isinstance(result, Mapping) and not is_working_status:
                 control_fields = {
                     "artifacts",
@@ -135,6 +142,48 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             finish_reason: Final = self._get_finish_reason(chunk)
             tool_calls: Final = self._get_tool_calls(chunk)
             usage: Final = self._get_usage(chunk)
+
+            if isinstance(result, Mapping):
+                choices = result.get("choices")
+                if isinstance(choices, list) and choices:
+                    streaming_choices: list[StreamingChoices] = []
+                    for choice_position, raw_choice in enumerate(choices):
+                        if not isinstance(raw_choice, Mapping):
+                            continue
+                        raw_index = raw_choice.get("index", choice_position)
+                        choice_index = raw_index if isinstance(raw_index, int) else choice_position
+                        delta_fields: dict[str, Any] = {}
+                        raw_delta = raw_choice.get("delta")
+                        if isinstance(raw_delta, Mapping):
+                            delta_fields.update(raw_delta)
+                        raw_message = raw_choice.get("message")
+                        if isinstance(raw_message, Mapping):
+                            message_text = extract_text_from_a2a_response({"result": {"message": raw_message}})
+                            if message_text and "content" not in delta_fields:
+                                delta_fields["content"] = message_text
+                            message_tool_calls = raw_message.get("tool_calls")
+                            if message_tool_calls and "tool_calls" not in delta_fields:
+                                delta_fields["tool_calls"] = message_tool_calls
+                        raw_finish_reason = raw_choice.get("finish_reason")
+                        choice_finish_reason = (
+                            raw_finish_reason
+                            if isinstance(raw_finish_reason, str) and raw_finish_reason
+                            else finish_reason
+                        )
+                        streaming_choices.append(
+                            StreamingChoices(
+                                index=choice_index,
+                                delta=Delta(**delta_fields),
+                                finish_reason=choice_finish_reason,
+                                logprobs=raw_choice.get("logprobs"),
+                            )
+                        )
+                    if streaming_choices:
+                        return ModelResponseStream(
+                            choices=streaming_choices,
+                            usage=usage,
+                            provider_specific_fields=provider_fields or None,
+                        )
 
             # Return generic streaming chunk
             return GenericStreamingChunk(

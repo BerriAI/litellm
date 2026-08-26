@@ -364,7 +364,7 @@ def test_build_wxo_headers_preserves_auth_headers():
 
 
 @pytest.mark.asyncio
-async def test_wxo_config_forwards_static_headers(monkeypatch):
+async def test_wxo_config_forwards_headers_and_timeout(monkeypatch):
     captured = {}
 
     async def fake_handle_non_streaming(**kwargs):
@@ -377,10 +377,16 @@ async def test_wxo_config_forwards_static_headers(monkeypatch):
         request_id="req-1",
         params={},
         litellm_params={"model": "agent"},
+        agent_extra_headers={"x-request-id": "request-1"},
         agent_static_headers={"x-tenant-id": "tenant-1"},
+        timeout=12,
     )
 
-    assert captured["static_headers"] == {"x-tenant-id": "tenant-1"}
+    assert captured["static_headers"] == {
+        "x-request-id": "request-1",
+        "x-tenant-id": "tenant-1",
+    }
+    assert captured["timeout"] == 12
 
 
 @pytest.mark.asyncio

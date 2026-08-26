@@ -121,6 +121,37 @@ async def test_async_iterator_preserves_parallel_tool_calls():
 
 
 @pytest.mark.asyncio
+async def test_async_iterator_preserves_every_terminal_choice():
+    async def _events():
+        yield {
+            "jsonrpc": "2.0",
+            "result": {
+                "kind": "status-update",
+                "status": {"state": "completed"},
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"parts": [{"kind": "text", "text": "first"}]},
+                        "finish_reason": "stop",
+                    },
+                    {
+                        "index": 1,
+                        "message": {"parts": [{"kind": "text", "text": "second"}]},
+                        "finish_reason": "length",
+                    },
+                ],
+            },
+        }
+
+    iterator = A2AModelResponseIterator(streaming_response=_events(), sync_stream=False)
+    chunk = await iterator.__aiter__().__anext__()
+
+    assert [choice.index for choice in chunk.choices] == [0, 1]
+    assert [choice.delta.content for choice in chunk.choices] == ["first", "second"]
+    assert [choice.finish_reason for choice in chunk.choices] == ["stop", "length"]
+
+
+@pytest.mark.asyncio
 async def test_async_iterator_serializes_delta_tool_calls_and_usage():
     delta = Delta(
         tool_calls=[

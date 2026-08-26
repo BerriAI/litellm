@@ -240,6 +240,10 @@ async def test_handle_streaming_emits_proper_events():
         # Event 4: second artifact update
         assert events[3]["result"]["kind"] == "artifact-update"
         assert events[3]["result"]["artifact"]["parts"][0]["text"] == " world"
+        assert (
+            events[2]["result"]["artifact"]["artifactId"]
+            == events[3]["result"]["artifact"]["artifactId"]
+        )
 
         # Event 5: status completed
         assert events[4]["result"]["kind"] == "status-update"
@@ -247,6 +251,72 @@ async def test_handle_streaming_emits_proper_events():
         assert events[4]["result"]["final"] is True
         assert events[4]["result"]["finish_reason"] == "length"
         assert events[4]["usage"]["total_tokens"] == 5
+
+
+def test_build_completion_params_keeps_bridge_routing_fields():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    params = A2ACompletionBridgeHandler._build_completion_params(
+        params={"message": {"role": "user", "parts": []}},
+        litellm_params={
+            "custom_llm_provider": "openai",
+            "model": "agent",
+            "api_base": "https://untrusted.example",
+            "stream": False,
+        },
+        api_base="https://configured.example",
+        agent_extra_headers=None,
+        stream=True,
+    )
+
+    assert params["api_base"] == "https://configured.example"
+    assert params["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_accumulates_logprobs_and_provider_metadata():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    chunks = []
+    for token in ("a", "b"):
+        choice = MagicMock()
+        choice.index = 0
+        choice.finish_reason = None
+        choice.delta.content = token
+        choice.logprobs = {"content": [{"token": token}]}
+        chunk = MagicMock()
+        chunk.choices = [choice]
+        chunk.system_fingerprint = "fp-1"
+        chunk.service_tier = "scale"
+        chunks.append(chunk)
+    chunks[-1].choices[0].finish_reason = "stop"
+
+    async def mock_streaming_response():
+        for chunk in chunks:
+            yield chunk
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_streaming_response()
+        events = [
+            event
+            async for event in A2ACompletionBridgeHandler.handle_streaming(
+                request_id="req-metadata",
+                params={"message": {"role": "user", "parts": []}},
+                litellm_params={"custom_llm_provider": "openai", "model": "agent"},
+            )
+        ]
+
+    result = events[-1]
+    assert result["system_fingerprint"] == "fp-1"
+    assert result["service_tier"] == "scale"
+    assert result["result"]["choices"][0]["logprobs"]["content"] == [
+        {"token": "a"},
+        {"token": "b"},
+    ]
 
 
 @pytest.mark.asyncio

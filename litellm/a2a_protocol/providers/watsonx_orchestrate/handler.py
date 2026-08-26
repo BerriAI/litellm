@@ -305,10 +305,13 @@ class WatsonxOrchestrateHandler:
         params: dict[str, object],
         litellm_params: WXOLitellmParams,
         static_headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, object]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
-        client: Final = WatsonxOrchestrateHandler._http_client(timeout=90.0)
+        client: Final = WatsonxOrchestrateHandler._http_client(
+            timeout=timeout if timeout is not None else 90.0
+        )
         token: Final = await WatsonxOrchestrateHandler._get_bearer_token(
             cp4d_host=wxo.cp4d_host,
             auth_mode=wxo.auth_mode,
@@ -355,10 +358,13 @@ class WatsonxOrchestrateHandler:
         chunk_size: int = 50,
         delay_ms: int = 10,
         static_headers: Mapping[str, str] | None = None,
+        timeout: float | None = None,
     ) -> AsyncIterator[dict[str, object]]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
-        client: Final = WatsonxOrchestrateHandler._http_client(timeout=120.0)
+        client: Final = WatsonxOrchestrateHandler._http_client(
+            timeout=timeout if timeout is not None else 120.0
+        )
         token: Final = await WatsonxOrchestrateHandler._get_bearer_token(
             cp4d_host=wxo.cp4d_host,
             auth_mode=wxo.auth_mode,
@@ -396,6 +402,7 @@ class WatsonxOrchestrateHandler:
                 params=params,
                 litellm_params=litellm_params,
                 static_headers=static_headers,
+                timeout=timeout,
             )
             response_text: Final = WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(result)
             async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(

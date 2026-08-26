@@ -9,6 +9,7 @@ from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 from litellm.a2a_protocol.providers.watsonx_orchestrate.handler import (
     WatsonxOrchestrateHandler,
 )
+from litellm.interactions.agents.utils import merge_agent_headers
 
 
 class WatsonxOrchestrateA2AConfig(BaseA2AProviderConfig):
@@ -28,11 +29,16 @@ class WatsonxOrchestrateA2AConfig(BaseA2AProviderConfig):
                 "litellm_params is required for WatsonxOrchestrateA2AConfig "
                 "(must contain cp4d_host, instance_id, wxo_agent_id, api_key)"
             )
+        forwarded_headers: Final = merge_agent_headers(
+            dynamic_headers=kwargs.get("agent_extra_headers"),
+            static_headers=kwargs.get("agent_static_headers"),
+        )
         return await WatsonxOrchestrateHandler.handle_non_streaming(
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
-            static_headers=kwargs.get("agent_static_headers"),
+            static_headers=forwarded_headers,
+            timeout=kwargs.get("timeout"),
         )
 
     async def handle_streaming(
@@ -49,10 +55,15 @@ class WatsonxOrchestrateA2AConfig(BaseA2AProviderConfig):
                 "litellm_params is required for WatsonxOrchestrateA2AConfig "
                 "(must contain cp4d_host, instance_id, wxo_agent_id, api_key)"
             )
+        forwarded_headers: Final = merge_agent_headers(
+            dynamic_headers=kwargs.get("agent_extra_headers"),
+            static_headers=kwargs.get("agent_static_headers"),
+        )
         async for chunk in WatsonxOrchestrateHandler.handle_streaming(
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
-            static_headers=kwargs.get("agent_static_headers"),
+            static_headers=forwarded_headers,
+            timeout=kwargs.get("timeout"),
         ):
             yield chunk

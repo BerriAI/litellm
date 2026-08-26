@@ -34,6 +34,7 @@ class A2AStreamingContext:
         self.request_id = request_id
         self.task_id = str(uuid4())
         self.context_id = str(uuid4())
+        self.artifact_id = str(uuid4())
         self.input_message = input_message
         self.accumulated_text = ""
         self.has_emitted_task = False
@@ -368,7 +369,7 @@ class A2ACompletionBridgeTransformation:
             text: The text content for the artifact
         """
         artifact: Final[dict[str, Any]] = {
-            "artifactId": str(uuid4()),
+            "artifactId": ctx.artifact_id,
             "name": "response",
             "parts": [{"kind": "text", "text": text}],
         }
