@@ -1050,6 +1050,7 @@ def test_anthropic_messages_validate_adds_beta_header():
         messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
         optional_params={"context_management": _sample_context_management_payload()},
         litellm_params={},
+        api_key="fake-anthropic-key",
     )
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
 

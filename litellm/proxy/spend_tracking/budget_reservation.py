@@ -1267,7 +1267,7 @@ def _count_input_tokens_for_models(
 _INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
 
 
-def _approximate_input_size(request_body: dict) -> int:
+def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     """Length of the request's input text, a cheap stand-in for tokenizing cost.
 
     Every field _count_input_tokens hands the tokenizer is sized here, and

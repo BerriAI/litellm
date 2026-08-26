@@ -22703,7 +22703,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -36262,7 +36262,9 @@ export interface components {
             } | null;
             /** Model Max Budget Usage */
             model_max_budget_usage?: {
-                [key: string]: unknown;
+                [key: string]: {
+                    [key: string]: unknown;
+                };
             } | null;
             /**
              * Models

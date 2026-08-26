@@ -531,6 +531,43 @@ def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(_local_model_c
     )
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock_mantle/openai.gpt-5.5",
+        "bedrock_mantle/openai.gpt-5.4",
+    ],
+)
+def test_generic_cost_per_token_bedrock_mantle_gpt55_gpt54_long_context_flat_rate(_local_model_cost_map, model):
+    """Bedrock serves gpt-5.5 and gpt-5.4 up to its enforced 1,050,000-token prompt maximum and documents
+    no long-context tier for them, so a prompt past 272K is billed at the flat per-token rates."""
+
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["max_input_tokens"] == 1050000
+    assert [key for key in model_cost_map if "above_272k" in key] == []
+
+    served_prompt_tokens = 1030590
+    cached_tokens = 100000
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=served_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=served_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert round(prompt_cost, 10) == round(
+        model_cost_map["input_cost_per_token"] * (served_prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost"] * cached_tokens,
+        10,
+    )
+    assert round(completion_cost, 10) == round(model_cost_map["output_cost_per_token"] * completion_tokens, 10)
+
+
 def test_generic_cost_per_token_honors_non_standard_above_threshold():
     """Regression for #30344: get_model_info must keep arbitrary
     input/output_cost_per_token_above_<N>_tokens thresholds, not only the hard-coded
@@ -712,6 +749,136 @@ def test_generic_cost_per_token_tier_without_an_output_rate_bills_the_model_rate
         )
         assert round(prompt_cost, 12) == round(13 * 1e-03, 12)
         assert round(completion_cost, 12) == round((82 * 2e-06) + (100 * 5e-06), 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
+def test_generic_cost_per_token_tier_without_cache_rates_bills_cache_at_the_tier_input_rate():
+    model = "litellm-test-tiered-no-cache-rates"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "cache_read_input_token_cost": 9e-09,
+                "cache_creation_input_token_cost": 9e-06,
+                "tiered_pricing": [
+                    {
+                        "range": [0, 32000],
+                        "input_cost_per_token": 4.6e-07,
+                        "output_cost_per_token": 2.3e-06,
+                    },
+                    {
+                        "range": [32000, 128000],
+                        "input_cost_per_token": 7e-07,
+                        "output_cost_per_token": 3.5e-06,
+                    },
+                ],
+            }
+        }
+    )
+
+    try:
+        uncached = Usage(prompt_tokens=40000, completion_tokens=100, total_tokens=40100)
+        cached = Usage(
+            prompt_tokens=40000,
+            completion_tokens=100,
+            total_tokens=40100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=5000, cache_creation_tokens=15000
+            ),
+        )
+        uncached_prompt_cost, _ = generic_cost_per_token(
+            model=model,
+            usage=uncached,
+            custom_llm_provider=custom_llm_provider,
+        )
+        cached_prompt_cost, cached_completion_cost = generic_cost_per_token(
+            model=model,
+            usage=cached,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        tier_input_rate = 7e-07
+        assert round(cached_prompt_cost, 12) == round(40000 * tier_input_rate, 12)
+        assert round(cached_prompt_cost, 12) == round(uncached_prompt_cost, 12)
+        assert round(cached_completion_cost, 12) == round(100 * 3.5e-06, 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
+def test_generic_cost_per_token_tier_without_a_1hr_cache_rate_bills_the_tier_cache_creation_rate():
+    model = "litellm-test-tiered-no-1hr-cache-rate"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "cache_creation_input_token_cost_above_1hr": 9e-05,
+                "tiered_pricing": [
+                    {
+                        "range": [0, 128000],
+                        "input_cost_per_token": 7e-07,
+                        "output_cost_per_token": 3.5e-06,
+                        "cache_creation_input_token_cost": 8.75e-07,
+                    }
+                ],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=10,
+            total_tokens=1010,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cache_creation_tokens=800,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=300, ephemeral_1h_input_tokens=500
+                ),
+            ),
+        )
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        tier_cache_creation_rate = 8.75e-07
+        expected_prompt = (200 * 7e-07) + (800 * tier_cache_creation_rate)
+        assert round(prompt_cost, 12) == round(expected_prompt, 12)
+        assert round(completion_cost, 12) == round(10 * 3.5e-06, 12)
+    finally:
+        litellm.model_cost.pop(model, None)
+
+
+def test_generic_cost_per_token_tier_without_an_input_rate_is_not_a_priced_tier():
+    model = "litellm-test-tiered-no-input-rate"
+    custom_llm_provider = "openrouter"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": custom_llm_provider,
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "tiered_pricing": [{"range": [0, 128000], "output_cost_per_token": 3.5e-06}],
+            }
+        }
+    )
+
+    try:
+        usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+        )
+        assert round(prompt_cost, 12) == round(1000 * 1e-06, 12)
+        assert round(completion_cost, 12) == round(100 * 2e-06, 12)
     finally:
         litellm.model_cost.pop(model, None)
 
