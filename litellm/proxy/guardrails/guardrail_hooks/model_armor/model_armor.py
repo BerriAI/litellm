@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Union
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException
@@ -57,7 +57,7 @@ class ModelArmorAPIError(Exception):
 
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
-RedactablePayload = Union[dict, list, str, int, float, bool, None]
+RedactablePayload = dict | list | str | int | float | bool | None
 
 
 def _redact_scanned_content(payload: RedactablePayload, depth: int = 0) -> RedactablePayload:

@@ -1,25 +1,90 @@
 import { KeywordTierRule } from "./KeywordTierRules";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
+  ClassifierFallback,
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTierLabels,
   ComplexityTiers,
+  DimensionWeights,
   TIER_DESCRIPTIONS,
+  TierBoundaries,
+  TokenThresholds,
   effectiveTierLabel,
+  heuristicScoringRoleFor,
 } from "./ComplexityRouterConfig";
+
+/**
+ * Drop an empty system_prompt so the payload carries an override only when there is one. The
+ * backend rejects a blank string rather than reading it as "use the default", and sending `""`
+ * would turn an untouched editor into a validation error.
+ *
+ * A custom prompt is the classifier's whole system role, so the backend also rejects a rubric preset
+ * sent alongside one. Each branch rebuilds the object rather than spreading it, so a preset left on
+ * the form state from before the prompt was written cannot reach the wire and fail the save.
+ *
+ * An untouched picker sends no rubric at all rather than a copy of the default it displays. The
+ * backend reads absence as "use the default preset", so omitting it keeps a router the operator never
+ * configured on whatever that default becomes, and keeps routers built here behaving the same as ones
+ * written by hand in config.
+ */
+export const normalizeClassifierLlmConfig = ({
+  model,
+  timeout_ms,
+  classification_rubric,
+  system_prompt,
+}: ClassifierLLMConfig): ClassifierLLMConfig =>
+  system_prompt?.trim()
+    ? { model, timeout_ms, system_prompt }
+    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+
+interface ScorerKnobInputs {
+  classifierType: ClassifierType;
+  classifierFallback: ClassifierFallback | undefined;
+  tierBoundaries: TierBoundaries | undefined;
+  tokenThresholds: TokenThresholds | undefined;
+  dimensionWeights: DimensionWeights | undefined;
+  reasoningOverrideMinScore: number | undefined;
+}
+
+/**
+ * The scorer knobs to persist, which is none of them on a router that never scores: an LLM classifier
+ * falling back to the default model would otherwise carry settings that can only mislead the next reader.
+ * Each is omitted while untouched, so the router keeps tracking the backend defaults.
+ */
+const scorerKnobPayload = ({
+  classifierType,
+  classifierFallback,
+  tierBoundaries,
+  tokenThresholds,
+  dimensionWeights,
+  reasoningOverrideMinScore,
+}: ScorerKnobInputs) =>
+  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+    ? {}
+    : {
+        ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
+        ...(tokenThresholds && { token_thresholds: tokenThresholds }),
+        ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
+      };
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  defaultModel: string | undefined;
+  planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfig | undefined;
   classifierContextWindowSize: number | undefined;
-  classifierContextPerTurnChars: number | undefined;
+  classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
+  classifierFallback: ClassifierFallback | undefined;
   sessionAffinity: boolean;
+  deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
   semanticMatchingEnabled: boolean;
@@ -31,17 +96,27 @@ export interface BuildComplexityRouterConfigParams {
   tierDistancePenalty: number;
   adaptiveEligible: AdaptiveEligible;
   returnRawModelName: boolean;
+  tierBoundaries?: TierBoundaries;
+  tokenThresholds?: TokenThresholds;
+  dimensionWeights?: DimensionWeights;
+  reasoningOverrideMinScore?: number;
+  tierModelParams?: TierModelParamsByTier;
 }
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers;
+  default_model?: string;
+  plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
   classifier_context_window_size?: number;
+  classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
+  classifier_fallback?: ClassifierFallback;
   session_affinity: boolean;
+  deployment_affinity: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -53,6 +128,11 @@ export interface ComplexityRouterConfigPayload {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  tier_boundaries?: TierBoundaries;
+  token_thresholds?: TokenThresholds;
+  dimension_weights?: DimensionWeights;
+  reasoning_override_min_score?: number;
+  tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
 const TIER_KEYS: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
@@ -91,10 +171,26 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
   return null;
 };
 
+// Requires all 4 tiers non-empty, so the create form can never reach the
+// resolveComplexityDefaultModel(tiers, ...) === undefined case — MEDIUM (or SIMPLE) is always
+// populated. The edit modal has no equivalent of this check (it allows saving with only some
+// tiers filled), which is why it needs its own explicit `!defaultModel` guard after deriving —
+// see edit_auto_router_modal.tsx's save handler. A future contributor copying this form's submit
+// handler elsewhere should not assume the same guarantee holds without this check.
 export const getMissingTiersError = (tiers: ComplexityTiers): string | null => {
   const missing = TIER_KEYS.filter((tier) => tiers[tier].length === 0);
   if (missing.length === 0) return null;
   return `Select a model for the following tier(s): ${missing.join(", ")}`;
+};
+
+// The backend rejects a plan-mode floor naming a tier with no models. The create form's
+// getMissingTiersError makes this unreachable there; the edit modal allows partially filled
+// tiers, so both gates call this to keep the two forms symmetric.
+export const getPlanModeTierError = (planModeMinTier: string | undefined, tiers: ComplexityTiers): string | null => {
+  if (!planModeMinTier) return null;
+  const models = tiers[planModeMinTier as keyof ComplexityTiers] ?? [];
+  if (models.length > 0) return null;
+  return `The plan-mode minimum tier (${planModeMinTier}) has no models. Add one or turn the override off.`;
 };
 
 export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
@@ -118,13 +214,17 @@ export const getSemanticConfigError = ({
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  defaultModel,
+  planModeMinTier,
   tierLabels,
   classifierType,
   classifierLlmConfig,
   classifierContextWindowSize,
-  classifierContextPerTurnChars,
+  classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
+  classifierFallback,
   sessionAffinity,
+  deploymentAffinity,
   customTechnicalKeywords,
   keywordTierRules,
   semanticMatchingEnabled,
@@ -136,29 +236,50 @@ export const buildComplexityRouterConfig = ({
   tierDistancePenalty,
   adaptiveEligible,
   returnRawModelName,
+  tierBoundaries,
+  tokenThresholds,
+  dimensionWeights,
+  reasoningOverrideMinScore,
+  tierModelParams,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
+  const serializedTierModelConfigs = serializeTierModelConfigs(tiers, tierModelParams);
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
+  const scorerInputs = {
+    classifierType,
+    classifierFallback,
+    tierBoundaries,
+    tokenThresholds,
+    dimensionWeights,
+    reasoningOverrideMinScore,
+  };
+  const scorerKnobs = scorerKnobPayload(scorerInputs);
 
   return {
     tiers,
+    ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
+    ...(defaultModel?.trim() && { default_model: defaultModel }),
+    ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
-    ...(classifierType === "llm" && classifierLlmConfig && { classifier_llm_config: classifierLlmConfig }),
+    ...(classifierType === "llm" &&
+      classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
+    ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
     ...(classifierType === "llm" &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
       }),
     ...(classifierType === "llm" &&
-      classifierContextPerTurnChars !== undefined && {
-        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
       }),
     ...(classifierType === "llm" &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
     session_affinity: sessionAffinity,
+    deployment_affinity: deploymentAffinity,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
@@ -174,5 +295,6 @@ export const buildComplexityRouterConfig = ({
       adaptive_eligible: adaptiveEligible,
     }),
     ...(returnRawModelName && { return_raw_model_name: true }),
+    ...scorerKnobs,
   };
 };

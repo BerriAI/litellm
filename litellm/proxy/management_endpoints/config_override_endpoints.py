@@ -1,12 +1,13 @@
 import asyncio
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -38,13 +39,33 @@ from litellm.types.proxy.management_endpoints.config_overrides import (
     HashicorpVaultConfig,
 )
 
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
 router: Final = APIRouter()
+
+
+class _ConfigOverrideRow(Protocol):
+    @property
+    def config_value(self) -> str | Mapping[str, object] | None: ...
+
+
+class _ConfigOverridesTableClient(Protocol):
+    async def find_unique(self, where: Mapping[str, str]) -> _ConfigOverrideRow | None: ...
+
+    async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> object: ...
+
+    async def delete(self, where: Mapping[str, str]) -> object: ...
+
+
+def _config_overrides_table(prisma_client: "PrismaClient") -> _ConfigOverridesTableClient:
+    return ConfigOverridesRepository(prisma_client).table
 
 
 _AUDIT_REDACTED: Final = "***REDACTED***"
 
 
-def _redact_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
+def _redact_config(config: Mapping[str, object] | None) -> dict[str, str]:
     """Strip values from a config snapshot before audit-log emission.
 
     Hashicorp Vault config carries ``vault_token``, ``approle_secret_id``,
@@ -54,7 +75,7 @@ def _redact_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """
     if not config:
         return {}
-    return {k: _AUDIT_REDACTED for k in config.keys()}
+    return {k: _AUDIT_REDACTED for k in config}
 
 
 def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
@@ -68,8 +89,8 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 async def _emit_hashicorp_vault_audit_log(
     *,
     action: AUDIT_ACTIONS,
-    before_config: Mapping[str, Any] | None,
-    after_config: Mapping[str, Any] | None,
+    before_config: Mapping[str, object] | None,
+    after_config: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
 ) -> None:
@@ -80,15 +101,14 @@ async def _emit_hashicorp_vault_audit_log(
     ``LiteLLM_ConfigOverrides`` so the row co-locates with the table it
     mutates.
     """
-    import litellm
-
-    if litellm.store_audit_logs is not True:
-        return
-
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    if not is_audit_logging_enabled():
+        return
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
@@ -136,9 +156,9 @@ _sensitive_masker: Final = SensitiveDataMasker()
 # --- Shared helpers ---
 
 
-def _mask_sensitive_fields(data: dict[str, Any], sensitive_fields: set[str]) -> dict[str, Any]:
+def _mask_sensitive_fields(data: Mapping[str, object], sensitive_fields: set[str]) -> dict[str, object]:
     """Mask sensitive fields for API responses. Non-sensitive fields are left as-is."""
-    masked: Final = {}
+    masked: Final[dict[str, object]] = {}
     for key, value in data.items():
         if value is not None and key in sensitive_fields and isinstance(value, str):
             masked[key] = _sensitive_masker._mask_value(value)
@@ -147,7 +167,7 @@ def _mask_sensitive_fields(data: dict[str, Any], sensitive_fields: set[str]) -> 
     return masked
 
 
-def _get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, Any]:
+def _get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, str | None]:
     """Read current env var values as fallback when no DB record exists."""
     values: Final = {}
     for field_name, env_var_name in env_var_mapping.items():
@@ -156,7 +176,13 @@ def _get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, Any]:
     return values
 
 
-def _extract_field_type(field_info: dict[str, Any]) -> str:
+class _JsonSchemaField(TypedDict, total=False):
+    type: ReadOnly[str]
+    anyOf: ReadOnly[Sequence["_JsonSchemaField"]]
+    description: ReadOnly[str]
+
+
+def _extract_field_type(field_info: _JsonSchemaField) -> str:
     """Extract the non-null type from a Pydantic v2 JSON schema field."""
     if "type" in field_info:
         return field_info["type"]
@@ -166,11 +192,12 @@ def _extract_field_type(field_info: dict[str, Any]) -> str:
     return "string"
 
 
-def _build_field_schema(model_class: type) -> dict[str, Any]:
+def _build_field_schema(model_class: type[BaseModel]) -> dict[str, object]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
     schema: Final = TypeAdapter(model_class).json_schema(by_alias=True)
+    raw_properties: Final[Mapping[str, _JsonSchemaField]] = schema.get("properties", {})
     properties: Final = {}
-    for field_name, field_info in schema.get("properties", {}).items():
+    for field_name, field_info in raw_properties.items():
         properties[field_name] = {
             "description": field_info.get("description", ""),
             "type": _extract_field_type(field_info),
@@ -181,14 +208,14 @@ def _build_field_schema(model_class: type) -> dict[str, Any]:
     }
 
 
-def _parse_config_value(raw: Any) -> dict[str, Any]:
+def _parse_config_value(raw: str | Mapping[str, object]) -> dict[str, object]:
     """Parse a config_value from DB (may be JSON string or dict)."""
     if isinstance(raw, str):
         return safe_json_loads(raw, default={})
     return dict(raw)
 
 
-def _set_env_vars(config_data: dict[str, Any]) -> None:
+def _set_env_vars(config_data: Mapping[str, object]) -> None:
     """Set HCP_VAULT_* env vars from config data. Unsets vars for missing/None/empty fields."""
     for field_name, env_var_name in HASHICORP_ENV_VAR_MAPPING.items():
         value = config_data.get(field_name)
@@ -242,15 +269,15 @@ async def update_hashicorp_vault_config(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    config_data = config.model_dump(exclude_none=True)
+    config_data: dict[str, object] = config.model_dump(exclude_none=True)
 
     # Merge ALL fields the user didn't send: try DB first, fall back to env vars.
     # Omitted field = keep existing; empty string = clear/remove the field.
-    existing_record: Final = await ConfigOverridesRepository(prisma_client).table.find_unique(
+    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(
         where={"config_type": "hashicorp_vault"}
     )
-    existing_decrypted: dict[str, Any] | None = None
-    env_values: dict[str, Any] = {}
+    existing_decrypted: dict[str, object] | None = None
+    env_values: dict[str, str | None] = {}
     if existing_record is not None and existing_record.config_value is not None:
         existing_data: Final = _parse_config_value(existing_record.config_value)
         existing_decrypted = proxy_config._decrypt_db_variables(existing_data)
@@ -307,7 +334,7 @@ async def update_hashicorp_vault_config(
     # Only persist to DB after successful init
     encrypted_data: Final = proxy_config._encrypt_env_variables(config_data)
     config_value: Final = safe_dumps(encrypted_data)
-    await ConfigOverridesRepository(prisma_client).table.upsert(
+    await _config_overrides_table(prisma_client).upsert(
         where={"config_type": "hashicorp_vault"},
         data={
             "create": {
@@ -377,7 +404,7 @@ async def get_hashicorp_vault_config(
     field_schema: Final = _build_field_schema(HashicorpVaultConfig)
 
     # Try to load from DB
-    db_record: Final = await ConfigOverridesRepository(prisma_client).table.find_unique(
+    db_record: Final = await _config_overrides_table(prisma_client).find_unique(
         where={"config_type": "hashicorp_vault"}
     )
 
@@ -385,7 +412,7 @@ async def get_hashicorp_vault_config(
         config_data: Final = _parse_config_value(db_record.config_value)
 
         # Decrypt then mask sensitive fields so plaintext secrets are never sent to the UI
-        decrypted_data: Final = proxy_config._decrypt_db_variables(config_data)
+        decrypted_data: Final[Mapping[str, object]] = proxy_config._decrypt_db_variables(config_data)
         masked_data: Final = _mask_sensitive_fields(decrypted_data, HASHICORP_SENSITIVE_FIELDS)
 
         return ConfigOverrideSettingsResponse(
@@ -434,10 +461,10 @@ async def delete_hashicorp_vault_config(
 
     # Capture the prior config before delete so the audit-log row can
     # show *what* was removed (keys only — values get redacted).
-    existing_record: Final = await ConfigOverridesRepository(prisma_client).table.find_unique(
+    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(
         where={"config_type": "hashicorp_vault"}
     )
-    before_config: dict[str, Any] | None = None
+    before_config: dict[str, object] | None = None
     if existing_record is not None and existing_record.config_value is not None:
         try:
             before_config = proxy_config._decrypt_db_variables(_parse_config_value(existing_record.config_value))
@@ -447,7 +474,7 @@ async def delete_hashicorp_vault_config(
     # Delete DB record if it exists — ignore if not found
     deleted = False
     try:
-        await ConfigOverridesRepository(prisma_client).table.delete(where={"config_type": "hashicorp_vault"})
+        await _config_overrides_table(prisma_client).delete(where={"config_type": "hashicorp_vault"})
         deleted = True
     except RecordNotFoundError:
         verbose_proxy_logger.debug("No existing Hashicorp Vault config record to delete")
@@ -502,7 +529,7 @@ async def test_hashicorp_vault_connection(
 
     # Step 1: Authenticate (exercises AppRole login, TLS cert login, or direct token)
     try:
-        headers: Final = await asyncio.to_thread(client._get_request_headers)
+        headers: Final[dict[str, str]] = await asyncio.to_thread(client._get_request_headers)
     except Exception as e:
         raise HTTPException(
             status_code=502,

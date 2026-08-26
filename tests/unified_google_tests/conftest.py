@@ -4,7 +4,6 @@ import asyncio
 import importlib
 import os
 import socket
-import sys
 import threading
 import time
 from pathlib import Path
@@ -16,9 +15,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm  # noqa: E402,F401
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
@@ -146,11 +142,7 @@ def setup_and_teardown(request):
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
 
-    import litellm
 
     if "google_genai_proxy_url" not in request.fixturenames:
         importlib.reload(litellm)

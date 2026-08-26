@@ -1,6 +1,5 @@
 "use client";
 
-import { useKeyDetailRouting } from "@/app/(dashboard)/api-keys/detailNavigation";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -13,14 +12,15 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 
-import { Team } from "../key_team_helpers/key_list";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS } from "./keyTableColumns";
 
@@ -49,7 +49,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const { data: fetchedTeams } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
-  const { keyId: selectedKeyId, openKey, close: closeKeyDetail } = useKeyDetailRouting();
+  const [selectedKeyId, setSelectedKeyId] = useQueryState("key", parseAsString.withOptions({ history: "push" }));
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [tablePagination, setTablePagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -105,8 +105,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }, []);
 
   const columns = useMemo(
-    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => openKey(key.token) }),
-    [allTeams, organizations, openKey],
+    () => getKeyTableColumns({ allTeams, organizations, onSelectKey: (key) => void setSelectedKeyId(key.token) }),
+    [allTeams, organizations, setSelectedKeyId],
   );
 
   const selectedKeyFromList = useMemo(
@@ -139,6 +139,16 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     [organizations],
   );
 
+  const handleSelectedKeyDataUpdate = useCallback(
+    (updated: Partial<KeyResponse>) => {
+      const rotatedToken = updated.token ?? updated.token_id;
+      if (!rotatedToken || rotatedToken === selectedKeyId) return;
+      void setSelectedKeyId(rotatedToken);
+      void refetch();
+    },
+    [refetch, selectedKeyId, setSelectedKeyId],
+  );
+
   const formatFilterValue = useCallback(
     (columnId: string, value: unknown): string => {
       const raw = String(value);
@@ -161,10 +171,11 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       <div className="w-full h-full overflow-hidden">
         <KeyInfoView
           keyId={selectedKeyId}
-          onClose={closeKeyDetail}
+          onClose={() => void setSelectedKeyId(null)}
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}
+          onKeyDataUpdate={handleSelectedKeyDataUpdate}
         />
       </div>
     );
@@ -172,7 +183,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden py-2">
-      <PageHeader
+      <LegacyPageHeader
         icon={<KeyRound className="size-5" />}
         title="Virtual Keys"
         subtitle="Every key that authenticates requests to the gateway."

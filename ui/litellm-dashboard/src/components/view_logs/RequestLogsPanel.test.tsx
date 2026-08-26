@@ -1,9 +1,11 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { render, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { LogEntry } from "./columns";
 import RequestLogsPanel from "./RequestLogsPanel";
 
@@ -52,45 +54,6 @@ vi.mock("./LogDetailsDrawer", () => ({
   },
 }));
 
-vi.mock("next/navigation", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("next/navigation")>();
-  const { useSyncExternalStore } = await import("react");
-  return {
-    ...actual,
-    useSearchParams: () => {
-      const search = useSyncExternalStore(
-        (onChange: () => void) => {
-          window.addEventListener("test-locationchange", onChange);
-          window.addEventListener("popstate", onChange);
-          return () => {
-            window.removeEventListener("test-locationchange", onChange);
-            window.removeEventListener("popstate", onChange);
-          };
-        },
-        () => window.location.search,
-      );
-      return new URLSearchParams(search);
-    },
-  };
-});
-
-const originalPushState = window.history.pushState.bind(window.history);
-const originalReplaceState = window.history.replaceState.bind(window.history);
-beforeAll(() => {
-  window.history.pushState = (data, unused, url) => {
-    originalPushState(data, unused, url);
-    window.dispatchEvent(new Event("test-locationchange"));
-  };
-  window.history.replaceState = (data, unused, url) => {
-    originalReplaceState(data, unused, url);
-    window.dispatchEvent(new Event("test-locationchange"));
-  };
-});
-afterAll(() => {
-  window.history.pushState = originalPushState;
-  window.history.replaceState = originalReplaceState;
-});
-
 import { uiSpendLogsCall } from "../networking";
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
@@ -132,12 +95,46 @@ const defaultProps = {
 const row = (requestId: string) => document.querySelector(`[data-row-id="${requestId}"]`);
 const lastCall = () => vi.mocked(uiSpendLogsCall).mock.calls.at(-1)?.[0];
 
+const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+const renderPanel = (searchParams?: string) =>
+  renderWithProviders(<RequestLogsPanel {...defaultProps} />, { searchParams, onUrlUpdate });
+
+const renderPanelWithHistory = () => {
+  const stack = [""];
+  const handleUrlUpdate = (event: UrlUpdateEvent) => {
+    onUrlUpdate(event);
+    if (event.options.history === "push") {
+      stack.push(event.queryString);
+    } else {
+      stack[stack.length - 1] = event.queryString;
+    }
+  };
+  const tree = (searchParams: string) => (
+    <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={handleUrlUpdate} hasMemory>
+      <QueryClientProvider client={testQueryClient}>
+        <RequestLogsPanel {...defaultProps} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+  const view = render(tree(""));
+  return {
+    goBack: () => {
+      const current = stack[stack.length - 1] ?? "";
+      stack.pop();
+      const target = stack[stack.length - 1] ?? "";
+      view.rerender(tree(current));
+      view.rerender(tree(target));
+    },
+  };
+};
+const urlParams = () => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams ?? new URLSearchParams();
+const historyModes = () => onUrlUpdate.mock.calls.map(([event]) => event.options.history);
+
 describe("RequestLogsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
     testQueryClient.clear();
-    window.history.replaceState(null, "", "/logs/");
     respondWith([]);
   });
 
@@ -150,7 +147,7 @@ describe("RequestLogsPanel", () => {
 
     it("collapses a multi-call session to a single representative row", async () => {
       respondWith(sessionRows);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-mcp") ?? row("req-llm") ?? row("req-llm-2")).not.toBeNull());
 
@@ -160,7 +157,7 @@ describe("RequestLogsPanel", () => {
 
     it("prefers an LLM call over an MCP call as the session's representative", async () => {
       respondWith(sessionRows);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
       expect(row("req-mcp")).toBeNull();
@@ -168,7 +165,7 @@ describe("RequestLogsPanel", () => {
 
     it("shows the session's call count and composition on the representative row", async () => {
       respondWith(sessionRows);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
       expect(within(row("req-llm") as HTMLElement).getByText("3")).toBeInTheDocument();
@@ -179,7 +176,7 @@ describe("RequestLogsPanel", () => {
         logEntry({ request_id: "req-solo-a", session_id: "sess-a", session_total_count: 1 }),
         logEntry({ request_id: "req-solo-b" }),
       ]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-solo-a")).not.toBeNull());
       expect(row("req-solo-b")).not.toBeNull();
@@ -189,11 +186,11 @@ describe("RequestLogsPanel", () => {
   describe("search by request id (LIT-3981)", () => {
     it("sends the typed request id to the server on the first page instead of filtering the loaded rows", async () => {
       const user = userEvent.setup();
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
 
-      await user.type(screen.getByTestId("datatable-search"), "req-on-another-page");
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "req-on-another-page" } });
 
       await waitFor(() => {
         const call = lastCall();
@@ -207,31 +204,32 @@ describe("RequestLogsPanel", () => {
   describe("time range", () => {
     it("requests a ~15 minute window when Last 15 Minutes is picked", async () => {
       const user = userEvent.setup();
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
       await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
 
-      await waitFor(() => {
+      const windowSeconds = () => {
         const call = lastCall();
         if (!call) throw new Error("no call");
-        const diff = moment
+        return moment
           .utc(call.end_date, "YYYY-MM-DD HH:mm:ss")
           .diff(moment.utc(call.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
-        expect(diff).toBeGreaterThanOrEqual(15 * 60);
-        expect(diff).toBeLessThanOrEqual(16 * 60);
-      });
+      };
+
+      await waitFor(() => expect(windowSeconds()).toBeGreaterThanOrEqual(15 * 60));
+      expect(windowSeconds()).toBeLessThanOrEqual(16 * 60);
     });
 
     it("restores the default 24 hour window when filters are reset", async () => {
       const user = userEvent.setup();
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
       await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: /Last 15 Minutes/i })).toBeInTheDocument());
+      expect(await screen.findByRole("button", { name: /Last 15 Minutes/i })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Reset Filters" }));
 
@@ -256,42 +254,41 @@ describe("RequestLogsPanel", () => {
     it("clicking a row writes ?log_id=<request_id> to the URL and opens the drawer", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-1" })]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-1")).not.toBeNull());
       await user.click(row("req-1") as HTMLElement);
 
-      expect(new URLSearchParams(window.location.search).get("log_id")).toBe("req-1");
+      await waitFor(() => expect(urlParams().get("log_id")).toBe("req-1"));
+      expect(historyModes()).toEqual(["push"]);
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-1");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-1");
     });
 
     it("opens the drawer on load when ?log_id= matches a log in the loaded page", async () => {
-      window.history.replaceState(null, "", "/logs/?log_id=req-2");
       respondWith([logEntry({ request_id: "req-1" }), logEntry({ request_id: "req-2" })]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel("?log_id=req-2");
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-2");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-2");
     });
 
     it("fetches the log by request_id and opens the drawer when it is not in the loaded page", async () => {
-      window.history.replaceState(null, "", "/logs/?log_id=req-old");
       vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
         params?.request_id === "req-old"
           ? { data: [logEntry({ request_id: "req-old" })], total: 1, page: 1, page_size: 1, total_pages: 1 }
           : { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
       );
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel("?log_id=req-old");
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-old");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-old");
 
       const byIdCall = vi
         .mocked(uiSpendLogsCall)
@@ -304,7 +301,7 @@ describe("RequestLogsPanel", () => {
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-1" })]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-1")).not.toBeNull());
       await user.click(row("req-1") as HTMLElement);
@@ -312,14 +309,14 @@ describe("RequestLogsPanel", () => {
 
       await user.click(screen.getByRole("button", { name: "close-drawer" }));
 
-      expect(new URLSearchParams(window.location.search).get("log_id")).toBeNull();
+      await waitFor(() => expect(urlParams().get("log_id")).toBeNull());
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
     });
 
     it("switching logs inside the drawer replaces the URL, so back closes the drawer in one step", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-1" }), logEntry({ request_id: "req-2" })]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      const { goBack } = renderPanelWithHistory();
 
       await waitFor(() => expect(row("req-1")).not.toBeNull());
       await user.click(row("req-1") as HTMLElement);
@@ -327,29 +324,29 @@ describe("RequestLogsPanel", () => {
 
       await user.click(screen.getByRole("button", { name: "select-next-log" }));
       await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-2"));
-      expect(new URLSearchParams(window.location.search).get("log_id")).toBe("req-2");
+      expect(urlParams().get("log_id")).toBe("req-2");
+      expect(historyModes()).toEqual(["push", "replace"]);
 
-      window.history.back();
-
+      goBack();
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
-      expect(new URLSearchParams(window.location.search).get("log_id")).toBeNull();
+      expect(drawer()).toHaveAttribute("data-log-id", "");
     });
 
     it("clicking a session id writes ?session_id= and ?log_id= and opens the session drawer", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-solo", session_id: "sess-solo", session_total_count: 1 })]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-solo")).not.toBeNull());
       await user.click(within(row("req-solo") as HTMLElement).getByText("sess-solo"));
 
-      const params = new URLSearchParams(window.location.search);
-      expect(params.get("session_id")).toBe("sess-solo");
-      expect(params.get("log_id")).toBe("req-solo");
+      await waitFor(() => expect(urlParams().get("session_id")).toBe("sess-solo"));
+      expect(urlParams().get("log_id")).toBe("req-solo");
+      expect(historyModes()).toEqual(["push"]);
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-session-id", "sess-solo");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-solo");
     });
 
     it("clicking a log row clears a lingering ?session_id= so the drawer shows the clicked log", async () => {
@@ -358,50 +355,49 @@ describe("RequestLogsPanel", () => {
         logEntry({ request_id: "req-a", session_id: "sess-a", session_total_count: 1 }),
         logEntry({ request_id: "req-b" }),
       ]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-a")).not.toBeNull());
       await user.click(within(row("req-a") as HTMLElement).getByText("sess-a"));
-      await waitFor(() => expect(new URLSearchParams(window.location.search).get("session_id")).toBe("sess-a"));
+      await waitFor(() => expect(urlParams().get("session_id")).toBe("sess-a"));
 
       await user.click(row("req-b") as HTMLElement);
 
-      const params = new URLSearchParams(window.location.search);
-      expect(params.get("log_id")).toBe("req-b");
-      expect(params.get("session_id")).toBeNull();
+      await waitFor(() => expect(urlParams().get("log_id")).toBe("req-b"));
+      expect(urlParams().get("session_id")).toBeNull();
       await waitFor(() => {
         expect(drawer()).toHaveAttribute("data-log-id", "req-b");
-        expect(drawer()).toHaveAttribute("data-session-id", "");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "");
     });
 
-    it("browser back after opening via a session id closes the drawer", async () => {
+    it("closing a drawer opened via a session id clears both params", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-solo", session_id: "sess-solo", session_total_count: 1 })]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-solo")).not.toBeNull());
       await user.click(within(row("req-solo") as HTMLElement).getByText("sess-solo"));
       await waitFor(() => expect(drawer()).toHaveTextContent("open"));
 
-      window.history.back();
+      await user.click(screen.getByRole("button", { name: "close-drawer" }));
 
       await waitFor(() => expect(drawer()).toHaveTextContent("closed"));
-      expect(new URLSearchParams(window.location.search).get("session_id")).toBeNull();
+      expect(urlParams().get("session_id")).toBeNull();
+      expect(urlParams().get("log_id")).toBeNull();
     });
 
     it("opens a deep-linked multi-call session log in session mode", async () => {
-      window.history.replaceState(null, "", "/logs/?log_id=req-llm");
       respondWith([
         logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
       ]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel("?log_id=req-llm");
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-llm");
-        expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
+      expect(drawer()).toHaveAttribute("data-log-id", "req-llm");
     });
 
     it("clicking a multi-call session's row writes ?session_id= alongside ?log_id=", async () => {
@@ -410,32 +406,30 @@ describe("RequestLogsPanel", () => {
         logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
         logEntry({ request_id: "req-llm-2", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
       ]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
       await user.click(row("req-llm") as HTMLElement);
 
-      const params = new URLSearchParams(window.location.search);
-      expect(params.get("session_id")).toBe("sess-1");
-      expect(params.get("log_id")).toBe("req-llm");
+      await waitFor(() => expect(urlParams().get("session_id")).toBe("sess-1"));
+      expect(urlParams().get("log_id")).toBe("req-llm");
       await waitFor(() => expect(drawer()).toHaveAttribute("data-session-id", "sess-1"));
     });
 
     it("selecting another log while a session view is open keeps the session open", async () => {
       const user = userEvent.setup();
-      window.history.replaceState(null, "", "/logs/?log_id=req-llm");
       respondWith([
         logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
         logEntry({ request_id: "req-unenriched" }),
       ]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel("?log_id=req-llm");
 
       await waitFor(() => expect(drawer()).toHaveAttribute("data-session-id", "sess-1"));
 
       await user.click(screen.getByRole("button", { name: "select-next-log" }));
 
       await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-unenriched"));
-      expect(new URLSearchParams(window.location.search).get("session_id")).toBe("sess-1");
+      expect(urlParams().get("session_id")).toBe("sess-1");
       expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
     });
   });
@@ -443,13 +437,13 @@ describe("RequestLogsPanel", () => {
   describe("live tail", () => {
     it("shows the auto-refresh banner on the first page and hides it once stopped", async () => {
       const user = userEvent.setup();
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
+      renderPanel();
 
       expect(await screen.findByText("Auto-refreshing every 15 seconds")).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Stop" }));
 
-      expect(screen.queryByText("Auto-refreshing every 15 seconds")).toBeNull();
+      expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
     });
   });
 });

@@ -1,5 +1,3 @@
-from typing import List
-
 from typing_extensions import (
     Required,
     TypedDict,
@@ -19,14 +17,14 @@ class OllamaToolCall(TypedDict):
 
 class OllamaVisionModelObject(TypedDict):
     prompt: str
-    images: List[str]
+    images: list[str]
 
 
 class OllamaChatCompletionMessage(TypedDict, total=False):
     role: Required[str]
     content: str
     thinking: str
-    images: List[str]
-    tool_calls: List[OllamaToolCall]
+    images: list[str]
+    tool_calls: list[OllamaToolCall]
     tool_name: str
     tool_call_id: str

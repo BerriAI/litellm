@@ -4,11 +4,16 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Any, Final, Literal
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -25,6 +30,28 @@ from litellm.types.llms.anthropic import (
     AnthropicMcpServerTool,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.proxy.model_listing import ModelInfoResponse
+
+DROP_DISABLED_THINKING_WARNING: Final = (
+    "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
+    "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
+    "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+
+# Anthropic error `type` (both the JSON error body and SSE `event: error`
+# payloads use this field) mapped to the HTTP status code it corresponds to.
+ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
+    {
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "rate_limit_error": 429,
+        "api_error": 500,
+        "overloaded_error": 503,
+        "timeout_error": 504,
+    }
+)
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
@@ -418,6 +445,45 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         in that declarative rule, not here.
         """
         return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
+
+    @staticmethod
+    def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` always thinks and rejects ``thinking.type=disabled``
+        (Fable 5 / Mythos 5 generation). The model cost map is authoritative: an
+        explicit ``thinking_always_on`` entry resolved under ``custom_llm_provider``,
+        or a ``fallback_generalizations`` rule for unmapped ids of those families.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
+
+    @staticmethod
+    def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` is an adaptive-thinking model that still accepts legacy
+        ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
+        The model cost map is authoritative: an explicit ``supports_legacy_thinking``
+        entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
+        rule for unmapped 4.6 ids. Absent flag means the model rejects the legacy shape.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "supports_legacy_thinking", custom_llm_provider)
+
+    @staticmethod
+    def maybe_drop_disabled_thinking(
+        model: str,
+        optional_params: dict,  # mutable-ok: in-place out-param, same contract as AnthropicConfig._maybe_drop_speed_param
+        custom_llm_provider: str,
+    ) -> None:
+        """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
+        (Fable 5 / Mythos 5), which 400 on it; omission is the API-documented
+        remedy and yields the model's default adaptive thinking."""
+        thinking: Final = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "disabled":
+            return
+        if not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+            return
+        litellm.verbose_logger.warning(
+            DROP_DISABLED_THINKING_WARNING,
+            model,
+        )
+        optional_params.pop("thinking", None)
 
     def is_effort_used(
         self,
@@ -1057,6 +1123,152 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
     return out
 
 
+class _ReplayedSearchQuery(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    query: str = ""
+
+
+class _ReplayedWebSearchResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_result"]
+    url: str = ""
+    title: str = ""
+    snippet: str = ""
+    encrypted_content: str = ""
+
+
+class _ReplayedWebSearchToolResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_tool_result"]
+    tool_use_id: str
+    content: tuple[_ReplayedWebSearchResult, ...]
+
+
+class _ReplayedServerToolUse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["server_tool_use"]
+    id: str
+    input: _ReplayedSearchQuery = _ReplayedSearchQuery()
+
+
+class _TextBlock(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+_WEB_SEARCH_TOOL_RESULT_ADAPTER: Final = TypeAdapter(_ReplayedWebSearchToolResult)
+_SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_ReplayedServerToolUse)
+
+
+def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchToolResult | None:
+    """
+    The parsed block when it is a ``web_search_tool_result`` carrying no
+    ``encrypted_content``, else None for anything Anthropic itself issued.
+
+    An empty ``content`` list is flattenable too. It is what the interceptor emits
+    when a search legitimately returns nothing and when a search raises, and it
+    carries neither evidence to preserve nor an ``encrypted_content`` to respect,
+    so leaving it in place only buys the 400 this whole function exists to avoid.
+    """
+    try:
+        parsed: Final = _WEB_SEARCH_TOOL_RESULT_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+    if any(result.encrypted_content for result in parsed.content):
+        return None
+    return parsed
+
+
+def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
+    try:
+        return _SERVER_TOOL_USE_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+
+
+def _render_web_search_results(query: str, results: tuple[_ReplayedWebSearchResult, ...]) -> str:
+    header: Final = f"Web search results for '{query}':" if query else "Web search results:"
+    if not results:
+        return f"{header}\n\nNo results were returned."
+    body: Final = "\n\n".join(
+        "\n".join(
+            line
+            for line in (
+                f"Title: {result.title}" if result.title else "",
+                f"URL: {result.url}" if result.url else "",
+                f"Snippet: {result.snippet}" if result.snippet else "",
+            )
+            if line
+        )
+        for result in results
+    )
+    return f"{header}\n\n{body}" if body else header
+
+
+def _rewrite_replayed_web_search_block(
+    block: object,
+    flattenable: Mapping[str, _ReplayedWebSearchToolResult],
+    queries: Mapping[str, str],
+) -> object | None:
+    parsed_result: Final = _flattenable_web_search_tool_result(block)
+    if parsed_result is not None:
+        return _TextBlock(
+            text=_render_web_search_results(queries.get(parsed_result.tool_use_id, ""), parsed_result.content)
+        ).model_dump()
+    parsed_use: Final = _replayed_server_tool_use(block)
+    if parsed_use is not None and parsed_use.id in flattenable:
+        return None
+    return block
+
+
+def _flatten_web_search_results_in_message(message: object) -> object:
+    if not isinstance(message, Mapping) or not isinstance(message.get("content"), Sequence):
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return message
+    flattenable: Final = MappingProxyType(
+        {
+            parsed.tool_use_id: parsed
+            for parsed in (_flattenable_web_search_tool_result(block) for block in content)
+            if parsed is not None
+        }
+    )
+    if not flattenable:
+        return message
+    queries: Final = MappingProxyType(
+        {
+            parsed.id: parsed.input.query
+            for parsed in (_replayed_server_tool_use(block) for block in content)
+            if parsed is not None
+        }
+    )
+    rewritten: Final = tuple(_rewrite_replayed_web_search_block(block, flattenable, queries) for block in content)
+    return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
+
+
+def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok: as sibling sanitizers
+    messages: list[Any],
+) -> list[Any]:
+    """
+    Return a new message list with replayed ``web_search_tool_result`` blocks that
+    carry no ``encrypted_content`` rewritten into plain ``text`` blocks holding the
+    same title / url / snippet evidence.
+
+    ``encrypted_content`` is an opaque blob only Anthropic's own search backend can
+    mint, so blocks synthesized by LiteLLM (websearch interception against a search
+    provider) are rejected with ``Invalid encrypted_content in search_result block``
+    when a native client loops them back as history. Flattening them keeps the
+    evidence in the conversation instead of 400ing the follow-up turn, and leaves
+    genuine Anthropic-issued blocks untouched.
+    """
+    return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+
+
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
@@ -1072,3 +1284,37 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
 
     additional_headers: Final = {**llm_response_headers, **openai_headers}
     return additional_headers
+
+
+def _anthropic_model_entry(model: ModelInfoResponse, created_at: str) -> Mapping[str, object]:
+    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+        "type": "model",
+        "id": model["id"],
+        "display_name": model["id"],
+        "created_at": created_at,
+        "max_input_tokens": model.get("max_input_tokens"),
+        "max_tokens": model.get("max_output_tokens"),
+    }
+
+
+def create_anthropic_model_list_response(models: Sequence[ModelInfoResponse]) -> Mapping[str, object]:
+    """Build the Anthropic-native /v1/models envelope.
+
+    Clients that send an anthropic-version header parse the Anthropic Models API
+    shape (type/display_name/created_at plus has_more/first_id/last_id) and filter
+    the list themselves, so every model is returned here. The token limits carry
+    over from the OpenAI-shaped listing, named as the Messages API names them, and
+    are always present because the vendor shape declares them nullable, not optional
+    """
+    created_at: Final = (
+        datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    )
+    data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
+        _anthropic_model_entry(model, created_at) for model in models
+    ]
+    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+        "data": data,
+        "has_more": False,
+        "first_id": models[0]["id"] if models else None,
+        "last_id": models[-1]["id"] if models else None,
+    }

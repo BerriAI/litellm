@@ -1,6 +1,5 @@
 # Import types from the Google GenAI SDK
-from typing import TYPE_CHECKING, Any, Dict, Optional
-
+from typing import TYPE_CHECKING, Any
 
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
@@ -18,40 +17,39 @@ if TYPE_CHECKING:
     ToolConfigDict = _genai_types.ToolConfigDict
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):
-        generationConfig: Optional[Any]
-        tools: Optional[ToolConfigDict]
+        generationConfig: Any | None
+        tools: ToolConfigDict | None
 
     class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):
         _hidden_params: dict = {}
-        pass
 
 else:
     # Fallback types when google.genai is not available
     ContentListUnion = Any
-    ContentListUnionDict = Dict[str, Any]
-    GenerateContentConfigOrDict = Dict[str, Any]
-    GoogleGenAIGenerateContentResponse = Dict[str, Any]
-    GenerateContentContentListUnionDict = Dict[str, Any]
+    ContentListUnionDict = dict[str, Any]
+    GenerateContentConfigOrDict = dict[str, Any]
+    GoogleGenAIGenerateContentResponse = dict[str, Any]
+    GenerateContentContentListUnionDict = dict[str, Any]
 
     # Create a proper fallback class that can be instantiated
     class GenerateContentConfigDict(dict):
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs) -> None:
             super().__init__(**kwargs)
 
     class GenerateContentRequestParametersDict(dict):
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs) -> None:
             super().__init__(**kwargs)
 
-    ToolConfigDict = Dict[str, Any]
+    ToolConfigDict = dict[str, Any]
 
     class GenerateContentRequestDict(GenerateContentRequestParametersDict):
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs) -> None:
             # Extract specific fields
             self.generationConfig = kwargs.get("generationConfig")
             self.tools = kwargs.get("tools")
             super().__init__(**kwargs)
 
     class GenerateContentResponse(BaseLiteLLMOpenAIResponseObject):
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs) -> None:
             super().__init__(**kwargs)
             self._hidden_params = kwargs.get("_hidden_params", {})

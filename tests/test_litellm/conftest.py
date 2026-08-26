@@ -9,17 +9,28 @@
 
 import importlib
 import os
-import sys
 from pathlib import Path
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 
 import litellm
+from litellm import router as litellm_router_module
+from litellm import utils as litellm_utils_module
 from litellm._logging import ALL_LOGGERS
+from litellm.litellm_core_utils.cli_keyring import (
+    KeyringDiscardsWrites,
+    KeyringUnreachable,
+    KeyringUnusable,
+    SecretErase,
+    SecretErased,
+    SecretFound,
+    SecretMissing,
+    SecretRead,
+    SecretStored,
+    SecretStranded,
+    SecretWrite,
+)
 from litellm.litellm_core_utils.prompt_templates import (
     image_handling as image_handling_module,
 )
@@ -96,6 +107,100 @@ def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("AWS_REGION_NAME", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_host_proxy_base_url(monkeypatch):
+    """Prevent a host PROXY_BASE_URL from outranking request-derived URLs during unit tests."""
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_host_os_keychain(monkeypatch):
+    """Keep any code path that resolves a CLI credential out of the developer's real OS keychain.
+
+    Tests that exercise keychain behaviour inject their own vault instead.
+    """
+    monkeypatch.setenv("LITELLM_CLI_DISABLE_KEYRING", "1")
+
+
+class FakeSecretVault:
+    """In-memory stand-in for the OS keychain, injected wherever CLI credential storage is exercised.
+
+    `available=False` models a keychain that is locked or has no backend, `writable=False` one that
+    refuses to store, `erasable=False` one that will not release what it already holds, and `failure`
+    picks which unusable state those report. `discards=True` is keyring's null backend, which answers
+    reads and erases like any other yet keeps nothing it is given, so only writes report it.
+    """
+
+    def __init__(
+        self,
+        blob: str | None = None,
+        *,
+        available: bool = True,
+        writable: bool = True,
+        erasable: bool = True,
+        discards: bool = False,
+        failure: KeyringUnusable = KeyringUnreachable(),
+    ) -> None:
+        self.blob: str | None = blob
+        self.available: bool = available
+        self.writable: bool = writable
+        self.erasable: bool = erasable
+        self.discards: bool = discards
+        self.failure: KeyringUnusable = failure
+        self.reads: int = 0
+        self.writes: list[str] = []
+        self.erases: int = 0
+
+    def read(self) -> SecretRead:
+        self.reads += 1
+        if not self.available:
+            return self.failure
+        return SecretMissing() if self.blob is None else SecretFound(self.blob)
+
+    def write(self, blob: str) -> SecretWrite:
+        self.writes.append(blob)
+        if not (self.available and self.writable):
+            return self.failure
+        if self.discards:
+            return KeyringDiscardsWrites()
+        self.blob = blob
+        return SecretStored()
+
+    def erase(self) -> SecretErase:
+        self.erases += 1
+        if not self.available:
+            return self.failure
+        if not self.erasable:
+            return SecretStranded() if self.blob is not None else SecretErased()
+        self.blob = None
+        return SecretErased()
+
+
+@pytest.fixture
+def secret_vault_factory():
+    """Build FakeSecretVault instances; see its docstring for the failure modes it can model."""
+    return FakeSecretVault
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled in-repo cost map so capability and pricing assertions do not
+    depend on the network-fetched ``main`` copy, which lags this branch until merge.
+
+    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
+    own; clear on the way in and out so entries warmed against either map never leak
+    across tests."""
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 def _run_coroutine_if_needed(result):
@@ -238,6 +343,13 @@ def isolate_litellm_state():
         if hasattr(litellm, _attr):
             original_state[_attr] = getattr(litellm, _attr)
 
+    original_runtime_registered_model_cost = {
+        model_key: dict(model_value)
+        for model_key, model_value in litellm_utils_module._runtime_registered_model_cost.items()
+    }
+
+    original_live_routers = set(litellm_router_module._live_routers)
+
     # Store LiteLLM logger state. Some tests reconfigure handlers/propagation for
     # JSON logging and do not restore them, which breaks later caplog-based tests.
     logger_state = {}
@@ -304,6 +416,14 @@ def isolate_litellm_state():
         if hasattr(litellm, attr_name):
             setattr(litellm, attr_name, original_value)
 
+    litellm_utils_module._runtime_registered_model_cost.clear()
+    litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+
+    for _router in tuple(litellm_router_module._live_routers):
+        litellm_router_module._live_routers.discard(_router)
+    for _router in original_live_routers:
+        litellm_router_module._live_routers.add(_router)
+
     # Restore logger configuration mutated by logging-focused tests.
     for logger in ALL_LOGGERS:
         original_logger_state = logger_state.get(logger.name)
@@ -338,7 +458,6 @@ def setup_and_teardown():
     Use this sparingly - most state should be handled by isolate_litellm_state.
     Only reload modules here if absolutely necessary.
     """
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
 

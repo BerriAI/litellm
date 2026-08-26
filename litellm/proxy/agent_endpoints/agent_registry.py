@@ -1,8 +1,10 @@
+import asyncio
 import hashlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, Protocol, TypedDict
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -10,8 +12,12 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import AgentsRepository
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class AgentObjectPermissionRecord(Protocol):
@@ -40,11 +46,20 @@ class AgentRecordDump(TypedDict):
 
 
 class AgentRecord(Protocol):
-    agent_id: str
-    agent_name: str
-    object_permission_id: str | None
-    object_permission: AgentObjectPermissionRecord | None
-    spend: float
+    @property
+    def agent_id(self) -> str: ...
+
+    @property
+    def agent_name(self) -> str: ...
+
+    @property
+    def object_permission_id(self) -> str | None: ...
+
+    @property
+    def object_permission(self) -> AgentObjectPermissionRecord | None: ...
+
+    @property
+    def spend(self) -> float: ...
 
     def model_dump(self) -> AgentRecordDump: ...
 
@@ -55,41 +70,60 @@ class AgentTableClient(Protocol):
     async def create(
         self,
         data: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
+        include: Mapping[str, object] | None = None,
     ) -> AgentRecord: ...
 
     async def find_unique(
         self,
         where: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
+        include: Mapping[str, object] | None = None,
     ) -> AgentRecord | None: ...
 
     async def find_many(
         self,
         where: Mapping[str, object] | None = None,
         order: Mapping[str, str] | None = None,
-        include: Mapping[str, bool] | None = None,
+        include: Mapping[str, object] | None = None,
     ) -> Sequence[AgentRecord]: ...
 
     async def update(
         self,
-        where: Mapping[str, object],
         data: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
-    ) -> AgentRecord: ...
+        where: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> AgentRecord | None: ...
 
-    async def delete(self, where: Mapping[str, object]) -> AgentRecord: ...
+    async def delete(
+        self,
+        where: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> AgentRecord | None: ...
 
 
 def agents_table(prisma_client: PrismaClient) -> AgentTableClient:
-    table: Final[AgentTableClient] = AgentsRepository(prisma_client).table
+    table: Final[AgentTableClient] = AgentsRepository(prisma_client).table  # pyright: ignore[reportAssignmentType]  # prisma rows type model_dump() as dict[str, Any]
     return table
+
+
+def object_permission_table(
+    prisma_client: PrismaClient,
+) -> "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]":
+    table: Final[TableActions[prisma_models.LiteLLM_ObjectPermissionTable]] = ObjectPermissionRepository(
+        prisma_client
+    ).table
+    return table
+
+
+class GrantMigrationResult(NamedTuple):
+    rewritten: int
+    missed: int
 
 
 class AgentRegistry:
     def __init__(self):
         self.agent_list: list[AgentResponse] = []
         self.config_agents: tuple[AgentConfig, ...] = ()
+        self.config_agent_legacy_ids: Mapping[str, str] = MappingProxyType({})
 
     def reset_agent_list(self):
         self.agent_list = []
@@ -100,22 +134,32 @@ class AgentRegistry:
     def deregister_agent(self, agent_name: str):
         self.agent_list = [agent for agent in self.agent_list if agent.agent_name != agent_name]
 
-    def get_agent_list(self, agent_names: Sequence[str] | None = None):
+    def get_agent_list(self, agent_names: Sequence[str] | None = None) -> tuple[AgentResponse, ...]:
         if agent_names is not None:
-            return [agent for agent in self.agent_list if agent.agent_name in agent_names]
-        return self.agent_list
+            return tuple(agent for agent in self.agent_list if agent.agent_name in agent_names)
+        return tuple(self.agent_list)
 
-    def get_public_agent_list(self) -> list[AgentResponse]:
-        public_agent_list: Final[list[AgentResponse]] = []
-        if litellm.public_agent_groups is None:
-            return public_agent_list
-        for agent in self.agent_list:
-            if agent.agent_id in litellm.public_agent_groups:
-                public_agent_list.append(agent)
-        return public_agent_list
+    def get_public_agent_list(self) -> tuple[AgentResponse, ...]:
+        public_agent_groups: Final = litellm.public_agent_groups
+        if public_agent_groups is None:
+            return ()
+        return tuple(
+            agent for agent in self.agent_list if not self.ids_for_agent(agent.agent_id).isdisjoint(public_agent_groups)
+        )
 
     def _create_agent_id(self, agent_config: AgentConfig) -> str:
+        return hashlib.sha256(agent_config["agent_name"].encode()).hexdigest()
+
+    def _create_legacy_agent_id(self, agent_config: AgentConfig) -> str:
         return hashlib.sha256(json.dumps(agent_config, sort_keys=True).encode()).hexdigest()
+
+    def ids_for_agent(self, agent_id: str) -> frozenset[str]:
+        return frozenset(
+            {agent_id, *(legacy for legacy, stable in self.config_agent_legacy_ids.items() if stable == agent_id)}
+        )
+
+    def stable_agent_id(self, agent_id: str) -> str:
+        return self.config_agent_legacy_ids.get(agent_id, agent_id)
 
     def load_agents_from_config(self, agent_config: Sequence[AgentConfig] | None = None):
         """
@@ -131,12 +175,20 @@ class AgentRegistry:
         if agent_config is None:
             return
 
-        self.config_agents = tuple(agent_config)
-
         for agent_config_item in agent_config:
             if not isinstance(agent_config_item, dict):
                 raise ValueError("agent_config must be a list of dictionaries")
 
+        self.config_agents = tuple(agent_config)
+        self.config_agent_legacy_ids = MappingProxyType(
+            {
+                self._create_legacy_agent_id(agent_config_item): self._create_agent_id(agent_config_item)
+                for agent_config_item in agent_config
+                if agent_config_item.get("agent_name") and agent_config_item.get("agent_card_params")
+            }
+        )
+
+        for agent_config_item in agent_config:
             agent_name = agent_config_item.get("agent_name")
             agent_card_params = agent_config_item.get("agent_card_params")
             if not all([agent_name, agent_card_params]):
@@ -179,6 +231,47 @@ class AgentRegistry:
 
         self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
+
+    async def migrate_legacy_grant_ids(
+        self, table: "TableActions[prisma_models.LiteLLM_ObjectPermissionTable]"
+    ) -> GrantMigrationResult:
+        """
+        Rewrite object_permission.agents rows holding a legacy full-entry hash to the
+        stable name-derived id.
+
+        Only the running proxy can do this: the legacy hash is computed from the
+        resolved config entry (secrets included), so no SQL migration can know it.
+        Persisting the stable id here is what keeps a grant alive across a later
+        secret rotation, which re-mints the legacy hash and would otherwise orphan
+        the stored value. Idempotent; runs of it after the first find no rows.
+
+        Each write is a compare-and-swap against the agents array read above, so a
+        grant edited concurrently is left untouched; the runtime alias keeps covering
+        it and the next boot retries the rewrite.
+        """
+        legacy_ids: Final = tuple(legacy for legacy, stable in self.config_agent_legacy_ids.items() if legacy != stable)
+        if not legacy_ids:
+            return GrantMigrationResult(rewritten=0, missed=0)
+        rows: Final = await table.find_many(where={"agents": {"has_some": legacy_ids}})
+        updates: Final = tuple(
+            (
+                row.object_permission_id,
+                tuple(row.agents or ()),
+                tuple(dict.fromkeys(self.stable_agent_id(agent_id) for agent_id in row.agents or ())),
+            )
+            for row in rows
+        )
+        counts: Final = await asyncio.gather(
+            *(
+                table.update_many(
+                    where={"object_permission_id": object_permission_id, "agents": {"equals": snapshot_agents}},
+                    data={"agents": translated_agents},
+                )
+                for object_permission_id, snapshot_agents, translated_agents in updates
+            )
+        )
+        rewritten: Final = sum(counts)
+        return GrantMigrationResult(rewritten=rewritten, missed=len(updates) - rewritten)
 
     ###########################################################
     ########### DB management helpers for agents ###########
@@ -279,6 +372,8 @@ class AgentRegistry:
         """
         try:
             deleted_agent: Final = await agents_table(prisma_client).delete(where={"agent_id": agent_id})
+            if deleted_agent is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
             return dict(deleted_agent)
         except Exception as e:
             raise Exception(f"Error deleting agent from DB: {e}")
@@ -305,12 +400,12 @@ class AgentRegistry:
             The patched agent
         """
         try:
-            existing_agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
-            if existing_agent is not None:
-                existing_agent = dict(existing_agent)
-
-            if existing_agent is None:
+            existing_row: Final = await AgentsRepository(prisma_client).table.find_unique(
+                where={"agent_id": agent_id}  # mutable-ok: prisma filters are plain dicts
+            )
+            if existing_row is None:
                 raise Exception(f"Agent with ID {agent_id} not found")
+            existing_agent: Final = dict(existing_row)
 
             augment_agent: Final = {**existing_agent, **agent}
             update_data: Final[dict[str, Any]] = {}
@@ -355,6 +450,8 @@ class AgentRegistry:
                 },
                 include={"object_permission": True},
             )
+            if patched_agent is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
             patched_agent_dict: Final = patched_agent.model_dump()
             if patched_agent.object_permission is not None:
                 try:
@@ -442,6 +539,8 @@ class AgentRegistry:
                 include={"object_permission": True},
             )
 
+            if updated_agent is None:
+                raise ValueError(f"Agent not found, passed agent_id={agent_id}")
             updated_agent_dict: Final = updated_agent.model_dump()
             if updated_agent.object_permission is not None:
                 try:
@@ -492,6 +591,14 @@ class AgentRegistry:
                 if agent.agent_id == agent_id:
                     return agent
 
+            translated_id: Final = self.config_agent_legacy_ids.get(agent_id)
+            if translated_id is None:
+                return None
+
+            for agent in self.agent_list:
+                if agent.agent_id == translated_id:
+                    return agent
+
             return None
         except Exception as e:
             raise Exception(f"Error getting agent from DB: {e}")
@@ -511,3 +618,4 @@ class AgentRegistry:
 
 
 global_agent_registry: Final = AgentRegistry()
+AGENT_RECONCILE_LOCK: Final = asyncio.Lock()

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Final, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -22,7 +22,7 @@ class GCSLoggingConfig(TypedDict):
 
     bucket_name: str
     vertex_instance: VertexBase
-    path_service_account: Optional[str]
+    path_service_account: str | None
 
 
 class GCSLogQueueItem(TypedDict):
@@ -31,5 +31,5 @@ class GCSLogQueueItem(TypedDict):
     """
 
     payload: StandardLoggingPayload
-    kwargs: Dict[str, Any]
-    response_obj: Optional[Any]
+    kwargs: dict[str, Any]
+    response_obj: Any | None

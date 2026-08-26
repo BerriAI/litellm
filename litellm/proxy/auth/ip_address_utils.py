@@ -7,7 +7,7 @@ External callers (public IPs) only see servers with available_on_public_internet
 
 import ipaddress
 from dataclasses import dataclass
-from typing import Any, Final, Union
+from typing import Any, Final
 
 from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
@@ -45,7 +45,7 @@ class _HopCount:
     value: int
 
 
-_HopCountSetting = Union[_HopCountUnset, _HopCountInvalid, _HopCount]
+_HopCountSetting = _HopCountUnset | _HopCountInvalid | _HopCount
 
 
 class IPAddressUtils:

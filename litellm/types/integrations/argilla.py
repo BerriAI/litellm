@@ -1,14 +1,14 @@
-from typing import Any, Dict, Final, List
+from typing import Any, Final
 
 from typing_extensions import TypedDict
 
 
 class ArgillaItem(TypedDict):
-    fields: Dict[str, Any]
+    fields: dict[str, Any]
 
 
 class ArgillaPayload(TypedDict):
-    items: List[ArgillaItem]
+    items: list[ArgillaItem]
 
 
 class ArgillaCredentialsObject(TypedDict):

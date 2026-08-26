@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../../tests/test-utils";
 import MultiCostResults from "./multi_cost_results";
@@ -84,6 +84,14 @@ function emptyMultiResult(): MultiModelResult {
     },
   };
 }
+
+const expandToggle = (): HTMLElement => screen.getByRole("button", { name: /cost breakdown for / });
+
+const shownBreakdown = (): HTMLElement | null => {
+  const label = screen.queryByText("Total/Request");
+  if (label === null) return null;
+  return label.closest("[style*='display: none']") === null ? label : null;
+};
 
 describe("MultiCostResults", () => {
   beforeEach(() => {
@@ -200,40 +208,78 @@ describe("MultiCostResults", () => {
       expect(screen.getByRole("button", { name: /export/i })).toBeInTheDocument();
     });
 
+    it("should render a column header for each summary column", () => {
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
+
+      expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Per Request" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Margin Fee" })).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Daily" })).toBeInTheDocument();
+    });
+
+    it("should not show the model breakdown before the row is expanded", () => {
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
+      expect(shownBreakdown()).toBeNull();
+    });
+
     it("should expand the model breakdown row when the expand button is clicked", async () => {
       const user = userEvent.setup();
       renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
 
-      // The expand column renders a button (RightOutlined icon) for rows without errors
-      const expandButtons = screen.getAllByRole("button");
-      // Find the small expand button (not the Export button)
-      const expandButton = expandButtons.find((btn) => !btn.textContent?.toLowerCase().includes("export"));
-      expect(expandButton).toBeDefined();
+      await user.click(expandToggle());
 
-      await user.click(expandButton!);
-
-      // After expanding, the SingleModelBreakdown should be visible
-      expect(screen.getByText("Total/Request")).toBeInTheDocument();
+      expect(shownBreakdown()).toBeVisible();
+      expect(screen.getByText("Daily Total (100 req)")).toBeInTheDocument();
     });
 
-    it("should show the collapse icon after expanding a row", async () => {
+    it("should collapse the model breakdown again on a second click", async () => {
       const user = userEvent.setup();
       renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
 
-      const getExpandButton = () => {
-        const allButtons = screen.getAllByRole("button");
-        return allButtons.find((btn) => !btn.textContent?.toLowerCase().includes("export"));
-      };
+      await user.click(expandToggle());
+      expect(shownBreakdown()).toBeVisible();
 
-      // Before expand: button has the "down" aria-label (RightOutlined renders as down in ant icons)
-      // Just verify clicking works and the breakdown content appears
-      await user.click(getExpandButton()!);
-      expect(screen.getByText("Total/Request")).toBeInTheDocument();
+      await user.click(expandToggle());
+      expect(shownBreakdown()).toBeNull();
+    });
 
-      // After a second click, the row collapses — content may be hidden or removed
-      await user.click(getExpandButton()!);
-      // The expanded content should no longer be visible
-      expect(screen.queryByText("Total/Request")).not.toBeVisible();
+    it("should name the breakdown toggle and report its expanded state", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<MultiCostResults multiResult={makeMultiResult()} timePeriod="day" />);
+
+      const toggle = screen.getByRole("button", { name: "Show cost breakdown for gpt-4" });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+      await user.click(toggle);
+
+      const collapseToggle = screen.getByRole("button", { name: "Hide cost breakdown for gpt-4" });
+      expect(collapseToggle).toHaveAttribute("aria-expanded", "true");
+    });
+
+    it("should not offer an expand toggle for a row that failed", () => {
+      renderWithProviders(
+        <MultiCostResults
+          multiResult={makeMultiResult({
+            entries: [
+              {
+                entry: { id: "e1", model: "gpt-4", input_tokens: 1000, output_tokens: 500 },
+                result: makeCostResponse(),
+                loading: false,
+                error: null,
+              },
+              {
+                entry: { id: "e2", model: "bad-model", input_tokens: 0, output_tokens: 0 },
+                result: null,
+                loading: false,
+                error: "Pricing not found",
+              },
+            ],
+          })}
+          timePeriod="day"
+        />,
+      );
+
+      expect(screen.getAllByRole("button", { name: /cost breakdown for / })).toHaveLength(1);
     });
   });
 

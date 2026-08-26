@@ -101,7 +101,11 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
     foreign key. Mirrors how spend is joined into the agent response so the UI
     never has to cross-reference a full key dump client-side. Only non-secret
     fields are exposed (alias, masked key_name, hashed token)."""
-    agent_ids: Final = [agent.agent_id for agent in agents]
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    agent_ids: Final = tuple(
+        alias_id for agent in agents for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+    )
     if not agent_ids:
         return
     key_rows: Final = await prisma_client.db.litellm_verificationtoken.find_many(
@@ -117,7 +121,12 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
             )
         )
     for agent in agents:
-        agent.keys = keys_by_agent.get(agent.agent_id)
+        matched_keys = [
+            key_summary
+            for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+            for key_summary in keys_by_agent.get(alias_id) or ()
+        ]
+        agent.keys = matched_keys or None
 
 
 def _redact_sensitive_agent_fields(
@@ -239,10 +248,12 @@ async def get_agents(
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
+        RestrictedAgentAccess,
+        UnrestrictedAgentAccess,
     )
 
     try:
-        returned_agents: list[AgentResponse] = []
+        returned_agents: Sequence[AgentResponse] = ()
 
         # Admin users get all agents
         if (
@@ -252,37 +263,45 @@ async def get_agents(
             returned_agents = global_agent_registry.get_agent_list()
         else:
             # Get allowed agents from object_permission (key/team level)
-            allowed_agent_ids: Final = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
+            agent_access: Final = await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict)
+            all_agents: Final = global_agent_registry.get_agent_list()
 
-            # If no restrictions (empty list), return all agents
-            if len(allowed_agent_ids) == 0:
-                returned_agents = global_agent_registry.get_agent_list()
-            else:
-                # Filter agents by allowed IDs
-                all_agents: Final = global_agent_registry.get_agent_list()
-                returned_agents = [agent for agent in all_agents if agent.agent_id in allowed_agent_ids]
+            match agent_access:
+                case UnrestrictedAgentAccess():
+                    returned_agents = all_agents
+                case RestrictedAgentAccess(allowed_agent_ids):
+                    returned_agents = [agent for agent in all_agents if agent.agent_id in allowed_agent_ids]
 
         # Fetch current spend from DB for all returned agents
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is not None:
-            agent_ids: Final = [agent.agent_id for agent in returned_agents]
+            agent_ids: Final = tuple(
+                alias_id
+                for agent in returned_agents
+                for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+            )
             if agent_ids:
                 db_agents: Final = await agents_table(prisma_client).find_many(
                     where={"agent_id": {"in": agent_ids}},
                 )
                 spend_map: Final = {a.agent_id: a.spend for a in db_agents}
                 for agent in returned_agents:
-                    if agent.agent_id in spend_map:
-                        agent.spend = spend_map[agent.agent_id]
+                    matched_spends = tuple(
+                        spend_map[alias_id]
+                        for alias_id in global_agent_registry.ids_for_agent(agent.agent_id)
+                        if alias_id in spend_map
+                    )
+                    if matched_spends:
+                        agent.spend = sum(matched_spends)
                 await _attach_keys_to_agents(returned_agents, prisma_client)
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = litellm.public_agent_groups is not None and (
-                agent.agent_id in litellm.public_agent_groups
+            agent.litellm_params["is_public"] = litellm.public_agent_groups is not None and not (
+                global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
             )
 
         # Redact sensitive fields for non-admin users
@@ -863,7 +882,7 @@ async def make_agent_public(
         if litellm.public_agent_groups is None:
             litellm.public_agent_groups = []
         # handle duplicates
-        if agent.agent_id in litellm.public_agent_groups:
+        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups):
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",
@@ -1043,27 +1062,29 @@ async def get_agent_daily_activity(
     # intersect their explicit `agent_ids` filter with the same allowlist.
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
+        RestrictedAgentAccess,
+        UnrestrictedAgentAccess,
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
     where_condition: Final[dict[str, object]] = {}
     if not _user_has_admin_view(user_api_key_dict):
-        permitted_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
-        # `get_allowed_agents` returns an empty list when the caller's key
-        # and team carry no agent restrictions. For activity scoping that's
-        # not "see everything" — fall back to the agents the caller
-        # created so they cannot enumerate other tenants' agents.
+        permitted_agent_ids: list[str] = []
+        # An unrestricted caller is not "see everything" for activity scoping. Fall
+        # back to the agents the caller created so they cannot enumerate other
+        # tenants' agents.
         # Guard against `user_id is None`: a literal None in Prisma
         # `where={"created_by": None}` resolves to ``created_by IS NULL``
         # and would expose every ownerless agent's rows.
-        if not permitted_agent_ids:
-            if user_api_key_dict.user_id is None:
-                permitted_agent_ids = []
-            else:
-                owned_records: Final = await agents_table(prisma_client).find_many(
-                    where={"created_by": user_api_key_dict.user_id}
-                )
-                permitted_agent_ids = [a.agent_id for a in owned_records]
+        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict):
+            case RestrictedAgentAccess(allowed_agent_ids):
+                permitted_agent_ids = list(allowed_agent_ids)
+            case UnrestrictedAgentAccess():
+                if user_api_key_dict.user_id is not None:
+                    owned_records: Final = await agents_table(prisma_client).find_many(
+                        where={"created_by": user_api_key_dict.user_id}
+                    )
+                    permitted_agent_ids = [a.agent_id for a in owned_records]
 
         if agent_ids_list:
             permitted_agent_id_set: Final = set(permitted_agent_ids)

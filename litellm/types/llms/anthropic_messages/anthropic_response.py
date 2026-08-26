@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal, TypeAlias
 
-from typing_extensions import NotRequired, TypeAlias, TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
@@ -14,7 +14,7 @@ class AnthropicResponseTextBlock(TypedDict, total=False):
     Anthropic Response Text Block: https://docs.anthropic.com/en/api/messages
     """
 
-    citations: Optional[List[Dict[str, Any]]]
+    citations: list[dict[str, Any]] | None
     text: str
     type: Literal["text"]
 
@@ -24,9 +24,9 @@ class AnthropicResponseToolUseBlock(TypedDict, total=False):
     Anthropic Response Tool Use Block: https://docs.anthropic.com/en/api/messages
     """
 
-    id: Optional[str]
-    input: Optional[str]
-    name: Optional[str]
+    id: str | None
+    input: str | None
+    name: str | None
     type: Literal["tool_use"]
 
 
@@ -35,8 +35,8 @@ class AnthropicResponseThinkingBlock(TypedDict, total=False):
     Anthropic Response Thinking Block: https://docs.anthropic.com/en/api/messages
     """
 
-    signature: Optional[str]
-    thinking: Optional[str]
+    signature: str | None
+    thinking: str | None
     type: Literal["thinking"]
 
 
@@ -45,16 +45,16 @@ class AnthropicResponseRedactedThinkingBlock(TypedDict, total=False):
     Anthropic Response Redacted Thinking Block: https://docs.anthropic.com/en/api/messages
     """
 
-    data: Optional[str]
+    data: str | None
     type: Literal["redacted_thinking"]
 
 
-AnthropicResponseContentBlock: TypeAlias = Union[
-    AnthropicResponseTextBlock,
-    AnthropicResponseToolUseBlock,
-    AnthropicResponseThinkingBlock,
-    AnthropicResponseRedactedThinkingBlock,
-]
+AnthropicResponseContentBlock: TypeAlias = (
+    AnthropicResponseTextBlock
+    | AnthropicResponseToolUseBlock
+    | AnthropicResponseThinkingBlock
+    | AnthropicResponseRedactedThinkingBlock
+)
 
 
 class AnthropicUsage(TypedDict, total=False):
@@ -77,20 +77,15 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     Anthropic Messages API Response: https://docs.anthropic.com/en/api/messages
     """
 
-    content: Optional[
-        List[
-            Union[
-                AnthropicResponseContentBlock,
-                AnthropicResponseContentBlockText,
-                AnthropicResponseContentBlockToolUse,
-            ]
-        ]
-    ]
+    content: (
+        list[AnthropicResponseContentBlock | AnthropicResponseContentBlockText | AnthropicResponseContentBlockToolUse]
+        | None
+    )
     id: str
-    model: Optional[str]  # This represents the Model type from Anthropic
-    role: Optional[Literal["assistant"]]
-    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]]
-    stop_sequence: Optional[str]
-    type: Optional[Literal["message"]]
-    usage: Optional[AnthropicUsage]
+    model: str | None  # This represents the Model type from Anthropic
+    role: Literal["assistant"] | None
+    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None
+    stop_sequence: str | None
+    type: Literal["message"] | None
+    usage: AnthropicUsage | None
     context_management: NotRequired[ContextManagementResponse]

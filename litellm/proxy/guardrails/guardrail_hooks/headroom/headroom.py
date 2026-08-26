@@ -148,6 +148,27 @@ def _restore_protected_messages(
     ]
 
 
+def _build_compress_failure_detail(status_code: int, body: str) -> dict[str, object]:
+    """Build error details for failed /v1/compress responses.
+
+    Adds troubleshooting hints for known deployment-related errors while
+    preserving the upstream status code and response body.
+    """
+    if status_code == 404:
+        return {
+            "status_code": status_code,
+            "body": body,
+            "hint": (
+                "The Headroom compression endpoint returned HTTP 404. "
+                "Verify that the configured Headroom endpoint is correct and that "
+                "the compression endpoint is available. If you are using a "
+                "self-hosted deployment, some deployments require enabling remote "
+                "compression (for example, HEADROOM_COMPRESS_ALLOW_REMOTE=1)."
+            ),
+        }
+    return {"status_code": status_code, "body": body}
+
+
 def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
     hashes: Final[list[str]] = []
     for msg in messages:
@@ -318,6 +339,7 @@ def _build_responses_followup_items(
 
 class HeadroomGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -417,7 +439,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
-                    {"status_code": e.response.status_code, "body": e.response.text},
+                    _build_compress_failure_detail(e.response.status_code, e.response.text),
                 ),
                 False,
                 {},
@@ -449,7 +471,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
-                    {"status_code": response.status_code, "body": response.text},
+                    _build_compress_failure_detail(response.status_code, response.text),
                 ),
                 False,
                 {},

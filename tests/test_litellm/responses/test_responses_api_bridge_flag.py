@@ -6,16 +6,12 @@ Includes file_search emulation: the flag must be forwarded on inner aresponses
 calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 
 class TestUseResponsesApiBridgeFlag:
@@ -129,6 +125,44 @@ class TestUseResponsesApiBridgeFlag:
         )
 
         mock_bridge_handler.assert_called_once()
+
+    @patch("litellm.acompletion")
+    @patch(
+        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    )
+    async def test_allowed_openai_params_forwarded_through_bridge(
+        self, mock_get_config, mock_acompletion
+    ):
+        """allowed_openai_params is a named param of responses(), so it must be
+        explicitly forwarded to the bridge; otherwise litellm.acompletion raises
+        UnsupportedParamsError for params the caller explicitly allowed."""
+        mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
+        mock_acompletion.return_value = ModelResponse(
+            id="chatcmpl_123",
+            model="openai/my-custom-model",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content="Answer"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+
+        await litellm.aresponses(
+            model="openai/my-custom-model",
+            input="Hello",
+            use_chat_completions_api=True,
+            allowed_openai_params=["reasoning_effort"],
+            reasoning={"effort": "high"},
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_acompletion.assert_called_once()
+        assert mock_acompletion.call_args.kwargs.get("allowed_openai_params") == [
+            "reasoning_effort"
+        ]
 
     @patch("litellm.responses.file_search.emulated_handler._call_aresponses")
     @patch(

@@ -1,11 +1,8 @@
 import asyncio
-import os
 import random
-import sys
 from datetime import datetime, timedelta
 from typing import Optional
 
-sys.path.insert(0, os.path.abspath("../.."))
 import pytest
 import litellm
 

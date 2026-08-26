@@ -1,19 +1,42 @@
 import asyncio
+import base64
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anyio
 import httpx
 import pytest
+from mcp import McpError
+from mcp.shared.message import SessionMessage
+from mcp.types import (
+    LATEST_PROTOCOL_VERSION,
+    ErrorData,
+    Implementation,
+    InitializeResult,
+    JSONRPCError,
+    JSONRPCMessage,
+    JSONRPCResponse,
+    ServerCapabilities,
+)
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../")
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
     MCPClient,
+    _as_read_timeout,
     _first_non_cancelled_cause,
+    strip_auth_scheme,
 )
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    classify_list_exception,
+    list_fault_http_status,
+)
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    _format_byok_openapi_auth_header,
+)
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
 
@@ -51,11 +74,10 @@ class TestMCPClient:
         # Test missing stdio_config
         client = MCPClient(transport_type=MCPTransport.stdio)
 
+        async def _noop(session):
+            return None
+
         with pytest.raises(ValueError, match="stdio_config is required for stdio transport"):
-
-            async def _noop(session):
-                return None
-
             await client.run_with_session(_noop)
 
     @pytest.mark.asyncio
@@ -701,3 +723,327 @@ async def test_run_with_session_quiet_on_error_demotes_warning_to_debug():
                 assert any("run_with_session failed" in m for m in warning_msgs), (
                     "the default path must keep the operator-visible warning"
                 )
+
+
+class _ScriptedUpstream:
+    """An in-memory MCP upstream that answers ``initialize`` and then follows one script for
+    ``tools/list``.
+
+    ``answer=None`` ends the response stream without a JSON-RPC reply, which is what a
+    streamable-HTTP upstream does when its SSE stream closes early: the SDK drops the message and
+    the request is never resolved and never fails. Anything else is sent back as that JSON-RPC
+    error, the shape an upstream application uses to report its own failure.
+    """
+
+    def __init__(self, tools_list_error: ErrorData | None = None):
+        self._tools_list_error = tools_list_error
+        self._to_client_tx, self._to_client_rx = anyio.create_memory_object_stream(10)
+        self._from_client_tx, self._from_client_rx = anyio.create_memory_object_stream(10)
+        self._task_group = None
+
+    async def __aenter__(self):
+        self._task_group = anyio.create_task_group()
+        await self._task_group.__aenter__()
+        self._task_group.start_soon(self._serve)
+        return self._to_client_rx, self._from_client_tx
+
+    async def __aexit__(self, *_exc_info):
+        self._task_group.cancel_scope.cancel()
+        return await self._task_group.__aexit__(None, None, None)
+
+    async def _send(self, message):
+        await self._to_client_tx.send(SessionMessage(JSONRPCMessage(message)))
+
+    async def _serve(self):
+        async for session_message in self._from_client_rx:
+            request = session_message.message.root
+            method = getattr(request, "method", None)
+            if method == "initialize":
+                result = InitializeResult(
+                    protocolVersion=LATEST_PROTOCOL_VERSION,
+                    capabilities=ServerCapabilities(),
+                    serverInfo=Implementation(name="scripted-upstream", version="1.0.0"),
+                )
+                await self._send(
+                    JSONRPCResponse(
+                        jsonrpc="2.0",
+                        id=request.id,
+                        result=result.model_dump(by_alias=True, mode="json", exclude_none=True),
+                    )
+                )
+            elif method == "tools/list" and self._tools_list_error is not None:
+                await self._send(JSONRPCError(jsonrpc="2.0", id=request.id, error=self._tools_list_error))
+
+
+class _ScriptedClient(MCPClient):
+    """An MCPClient whose transport is a scripted in-memory upstream instead of a real connection,
+    so the real ``ClientSession`` and its real timeout machinery are what run."""
+
+    def __init__(self, *, timeout: float, tools_list_error: ErrorData | None = None):
+        super().__init__(server_url="http://upstream.local/mcp", timeout=timeout)
+        self._upstream = _ScriptedUpstream(tools_list_error=tools_list_error)
+
+    def _create_transport_context(self):
+        return self._upstream, None
+
+
+@pytest.mark.asyncio
+async def test_list_tools_fails_on_its_own_timeout_when_the_upstream_never_answers():
+    """An upstream that accepts the request and never answers must fail the client's own timeout.
+
+    Without a session read timeout the request waits forever, so discovery only ends when an outer
+    cancel scope kills it. That is the reported symptom: a cancelled list_tools, no tools, and a
+    fault that blames the gateway. The outer guard here is 20x the client timeout, so a run that
+    reaches it proves nothing bounded the request.
+
+    The classification is asserted here, off a real ``ClientSession`` running its real read timeout,
+    rather than off a hand-built exception. A hand-built fixture encodes what we currently believe
+    the SDK raises and would keep passing after the SDK stopped raising it, at which point the
+    translation would quietly stop matching and the fault would silently downgrade to ``internal``.
+    Driving the real path makes an SDK bump that breaks the discriminator fail loudly instead.
+    """
+    client = _ScriptedClient(timeout=0.5)
+
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(TimeoutError) as exc_info:
+        await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 5, f"the request must end on the client's own 0.5s timeout, took {elapsed:.2f}s"
+
+    fault = classify_list_exception(exc_info.value)
+    assert fault.tag == "timeout", "an upstream that stopped answering must not be classified as the gateway's fault"
+    assert list_fault_http_status(fault) == 504
+
+
+@pytest.mark.asyncio
+async def test_upstream_json_rpc_error_408_is_not_reported_as_a_client_timeout():
+    """The SDK reports its own elapsed read timeout and relays an upstream JSON-RPC error through
+    the same exception class and the same numeric field, and JSON-RPC error codes are a different
+    namespace from HTTP status codes. An upstream answering with application code 408 must keep
+    travelling as ``McpError`` so it is never blamed on the gateway as a 504.
+
+    This is the other half of the pair: the same real transport and the same real session, so one
+    mechanism pins both directions.
+    """
+    client = _ScriptedClient(
+        timeout=30,
+        tools_list_error=ErrorData(code=int(httpx.codes.REQUEST_TIMEOUT), message="re-authenticate and retry"),
+    )
+
+    with pytest.raises(McpError) as exc_info:
+        await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+
+    assert not isinstance(exc_info.value, TimeoutError), "an upstream application error is not a gateway timeout"
+    assert exc_info.value.error.code == int(httpx.codes.REQUEST_TIMEOUT)
+
+    fault = classify_list_exception(exc_info.value)
+    assert fault.tag != "timeout", "an upstream's own application error must never be reported as a gateway timeout"
+    assert list_fault_http_status(fault) != 504
+
+
+def _raise_mcp_error_while_handling_a_timeout(code: int, message: str) -> McpError:
+    """An ``McpError`` carrying the context chain it would have if it were raised while a
+    ``TimeoutError`` was in flight, which is how the SDK raises its own read timeout."""
+    try:
+        try:
+            raise TimeoutError()
+        except TimeoutError:
+            raise McpError(ErrorData(code=code, message=message))
+    except McpError as raised:
+        return raised
+
+
+def test_as_read_timeout_separates_the_sdk_timeout_from_a_relayed_upstream_error():
+    """Neither signal alone is enough. The code alone cannot separate the SDK's own timeout from an
+    upstream JSON-RPC error that happens to use 408, and the context chain alone cannot separate it
+    from any other relayed error that surfaces while a timeout is being handled, so both must hold.
+    """
+    timeout_code = int(httpx.codes.REQUEST_TIMEOUT)
+
+    translated = _as_read_timeout(_raise_mcp_error_while_handling_a_timeout(timeout_code, "Timed out while waiting"))
+    assert isinstance(translated, TimeoutError)
+    assert str(translated) == "Timed out while waiting"
+
+    relayed_408 = McpError(ErrorData(code=timeout_code, message="upstream said 408"))
+    assert _as_read_timeout(relayed_408) is None, "an upstream 408 with no elapsed timeout is not our timeout"
+
+    relayed_other = _raise_mcp_error_while_handling_a_timeout(-32603, "upstream internal error")
+    assert _as_read_timeout(relayed_other) is None, "a non-timeout code is not our timeout, whatever the chain"
+
+    assert _as_read_timeout(McpError(ErrorData(code=-32603, message="boom"))) is None
+    assert _as_read_timeout(RuntimeError("not an McpError")) is None
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_logs_an_actionable_line_that_quiet_on_error_cannot_demote():
+    """The reported failure surfaced only as "MCP Client list_tools was cancelled", which names
+    neither the server nor the elapsed budget. An upstream that stops answering is always
+    operator-actionable, so this line stays at warning even for callers that own the exception."""
+    client = _ScriptedClient(timeout=0.5)
+
+    with patch.object(mcp_client_module, "verbose_logger") as mock_log:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+
+    warnings = [str(call.args[0]) % tuple(call.args[1:]) for call in mock_log.warning.call_args_list if call.args]
+    timeout_lines = [line for line in warnings if "timed out after" in line]
+    assert timeout_lines, f"expected an actionable timeout warning, got {warnings}"
+    assert "http://upstream.local/mcp" in timeout_lines[0], "the line must name the server that stopped answering"
+    assert "0.5s" in timeout_lines[0], "the line must name the budget that elapsed"
+
+
+class TestAuthSchemeNormalization:
+    """MCP egress must emit exactly one authorization scheme.
+
+    Callers supply both a bare credential and a complete header value (the latter whenever it is
+    passed through from ``x-mcp-auth`` / ``Authorization``), and the second shape used to be given
+    a second scheme, which upstream servers reject as a malformed token.
+    """
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value",
+        [
+            (MCPAuth.bearer_token, "bare-token"),
+            (MCPAuth.bearer_token, "Bearer bare-token"),
+            (MCPAuth.bearer_token, "bearer bare-token"),
+            (MCPAuth.bearer_token, "  BEARER   bare-token"),
+            (MCPAuth.oauth2, "bare-token"),
+            (MCPAuth.oauth2, "Bearer bare-token"),
+            (MCPAuth.oauth2_token_exchange, "bare-token"),
+            (MCPAuth.oauth2_token_exchange, "Bearer bare-token"),
+        ],
+    )
+    def test_bearer_family_emits_exactly_one_scheme(self, auth_type, auth_value):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == "Bearer bare-token"
+
+    @pytest.mark.parametrize("auth_value", ["bare-token", "token bare-token", "TOKEN bare-token"])
+    def test_token_scheme_emits_exactly_one_scheme(self, auth_value):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.token, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == "token bare-token"
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value",
+        [
+            (MCPAuth.bearer_token, "Bearertoken"),
+            (MCPAuth.oauth2, "Bearer.eyJzdWIiOiJhYmMifQ.sig"),
+            (MCPAuth.token, "tokenish"),
+        ],
+    )
+    def test_a_credential_merely_starting_with_the_scheme_text_is_left_intact(self, auth_type, auth_value):
+        """RFC 7235 requires whitespace between scheme and credential, so a token whose first
+        characters happen to spell the scheme is a credential, not a schemed value."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        scheme = "token" if auth_type == MCPAuth.token else "Bearer"
+        assert client._get_auth_headers()["Authorization"] == f"{scheme} {auth_value}"
+
+    @pytest.mark.parametrize(
+        "auth_type, auth_value, expected",
+        [
+            (MCPAuth.bearer_token, "Bearer ", "Bearer Bearer"),
+            (MCPAuth.bearer_token, "Bearer    ", "Bearer Bearer"),
+        ],
+    )
+    def test_a_scheme_with_no_credential_behind_it_still_produces_a_header(self, auth_type, auth_value, expected):
+        """Treating this as a schemed value would leave nothing to send, and a request with no
+        Authorization at all is harder to diagnose upstream than a visibly wrong one."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=auth_type, auth_value=auth_value)
+
+        assert client._get_auth_headers()["Authorization"] == expected
+
+    def test_basic_with_a_scheme_and_no_credential_still_produces_a_header(self):
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.basic, auth_value="Basic ")
+
+        assert "Authorization" in client._get_auth_headers()
+
+    def test_basic_accepts_an_already_encoded_schemed_value_without_re_encoding_it(self):
+        """Stripping the scheme at header-build time cannot fix this shape: ``to_basic_auth`` has by
+        then encoded the whole ``Basic ...`` string, leaving no prefix to find."""
+        encoded = base64.b64encode(b"user:pass").decode()
+
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.basic,
+            auth_value=f"Basic {encoded}",
+        )
+
+        header = client._get_auth_headers()["Authorization"]
+        assert header == f"Basic {encoded}"
+        assert base64.b64decode(header.split(" ", 1)[1]) == b"user:pass"
+
+    @pytest.mark.parametrize("auth_value", ["user:pass", "Basic user:pass", "basic user:pass"])
+    def test_basic_always_emits_encoded_credentials(self, auth_value):
+        """A schemed value whose remainder is raw rather than encoded is still a username/password
+        pair, so it is encoded rather than forwarded as an invalid RFC 7617 header."""
+        client = MCPClient(server_url="http://example.com/mcp", auth_type=MCPAuth.basic, auth_value=auth_value)
+
+        header = client._get_auth_headers()["Authorization"]
+        assert base64.b64decode(header.split(" ", 1)[1]) == b"user:pass"
+
+    def test_authorization_auth_type_is_passed_through_verbatim(self):
+        """``MCPAuth.authorization`` means the caller owns the whole header value."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.authorization,
+            auth_value="Bearer Bearer deliberately-doubled",
+        )
+
+        assert client._get_auth_headers()["Authorization"] == "Bearer Bearer deliberately-doubled"
+
+    def test_api_key_credential_is_not_treated_as_a_schemed_value(self):
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            auth_type=MCPAuth.api_key,
+            auth_value="Bearer looks-schemed",
+        )
+
+        assert client._get_auth_headers()["X-API-Key"] == "Bearer looks-schemed"
+
+
+@pytest.mark.parametrize(
+    "auth_value, scheme, expected",
+    [
+        ("Bearer abc", "Bearer", "abc"),
+        ("bearer abc", "Bearer", "abc"),
+        ("  Bearer   abc  ", "Bearer", "abc  "),
+        ("abc", "Bearer", "abc"),
+        ("Bearerabc", "Bearer", "Bearerabc"),
+        ("Basic abc", "Bearer", "Basic abc"),
+        ("token abc", "token", "abc"),
+        ("Basic abc", "Basic", "abc"),
+        ("Bearer ", "Bearer", "Bearer "),
+        ("Bearer   ", "Bearer", "Bearer   "),
+    ],
+)
+def test_strip_auth_scheme(auth_value, scheme, expected):
+    assert strip_auth_scheme(auth_value, scheme) == expected
+
+
+@pytest.mark.parametrize(
+    "auth_type, auth_value, expected",
+    [
+        (MCPAuth.bearer_token, "Bearer jwt", "Bearer jwt"),
+        (MCPAuth.bearer_token, "jwt", "Bearer jwt"),
+        (MCPAuth.api_key, "ApiKey secret", "ApiKey secret"),
+        (MCPAuth.api_key, "secret", "ApiKey secret"),
+        (MCPAuth.basic, "Basic dXNlcjpwYXNz", "Basic dXNlcjpwYXNz"),
+    ],
+)
+def test_openapi_byok_auth_header_emits_exactly_one_scheme(auth_type, auth_value, expected):
+    """A non-BYOK server short-circuits ``_resolve_byok_mcp_auth_header``, so this formatter also
+    receives the deprecated global ``x-mcp-auth``, which is already a complete header value."""
+    server = MCPServer(
+        server_id="s1",
+        name="openapi-server",
+        url="http://example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        spec_path="/tmp/spec.json",
+    )
+
+    assert server.is_byok is False
+    assert _format_byok_openapi_auth_header(server, auth_value) == expected
