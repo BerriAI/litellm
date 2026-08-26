@@ -45,11 +45,34 @@ budget-checked like the request that spawned it. Everything else on the parent's
 be a lie on a sub-call that runs after it returned."""
 
 
-def is_unbilled_non_inference_call(call_type: str | None, metadata: Mapping[str, object] | None) -> bool:
-    """A read/management route priced at zero, except when the background response cost
-    poller made the read: that poll is the only place a background job's usage is ever
-    seen, so its retrieval carries the job's real spend."""
+def is_background_response(response: object) -> bool:
+    """Whether a retrieved object is a response created with ``background=true``.
+
+    Such a create returns ``status="queued"`` and no usage at all, so nothing has billed the
+    job by the time anyone reads it back. Accepts the response as a mapping or a model,
+    because the callers hold it in both shapes.
+    """
+    if isinstance(response, Mapping):
+        return response.get("background") is True
+    return getattr(response, "background", None) is True
+
+
+def is_unbilled_non_inference_call(
+    call_type: str | None,
+    metadata: Mapping[str, object] | None,
+    response: object,
+) -> bool:
+    """A read/management route priced at zero, because the usage it reports belongs to the
+    call that created the object it just read.
+
+    Retrieving a background response is the exception, and the enterprise cost poller's read
+    is the same exception seen from the other side: that job's create billed nothing, so its
+    retrieval is the only place the spend is ever visible. Pricing those at zero would lose
+    the spend rather than deduplicate it.
+    """
     if call_type not in NON_INFERENCE_CALL_TYPES:
+        return False
+    if is_background_response(response):
         return False
     if metadata is None:
         return True

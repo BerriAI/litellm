@@ -3275,7 +3275,9 @@ def test_user_traffic_carries_no_internal_call_origin():
     assert metadata["internal_call_origin"] is None
 
 
-def _spend_log_for_call_type(call_type: str, internal_call_origin: str | None = None) -> dict:
+def _spend_log_for_call_type(
+    call_type: str, internal_call_origin: str | None = None, background: bool | None = None
+) -> dict:
     from litellm.types.llms.openai import ResponsesAPIResponse
 
     return cast(
@@ -3298,6 +3300,7 @@ def _spend_log_for_call_type(call_type: str, internal_call_origin: str | None = 
                 model="gpt-4o",
                 output=[],
                 usage={"input_tokens": 4000, "output_tokens": 2000, "total_tokens": 6000},
+                background=background,
             ),
             start_time=datetime.datetime.now(timezone.utc),
             end_time=datetime.datetime.now(timezone.utc),
@@ -3322,6 +3325,23 @@ def test_spend_log_for_background_response_cost_poll_counts_tokens():
     payload = _spend_log_for_call_type("aget_responses", internal_call_origin="background_response_cost_poll")
 
     assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_background_response_retrieval_counts_tokens():
+    """A background create answers queued carrying no usage, so its retrieval is the first and only
+    place the job's tokens are ever visible. Zeroing that read bills the whole job nothing on any
+    proxy that is not running the enterprise cost poller."""
+    payload = _spend_log_for_call_type("aget_responses", background=True)
+
+    assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_foreground_response_retrieval_still_counts_nothing():
+    """Guards the test above against a blanket exemption: an explicit background=false read was
+    already billed by its create and must stay at zero."""
+    payload = _spend_log_for_call_type("aget_responses", background=False)
+
+    assert payload["total_tokens"] == 0
 
 
 def test_spend_log_for_response_creation_still_counts_tokens():

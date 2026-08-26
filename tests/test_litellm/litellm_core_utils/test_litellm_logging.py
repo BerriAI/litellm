@@ -4857,7 +4857,7 @@ class TestNonInferenceCallTypesAreNotBilled:
         )
         return obj
 
-    def _retrieved_response(self):
+    def _retrieved_response(self, background: bool | None = None):
         from litellm.types.llms.openai import ResponsesAPIResponse
 
         return ResponsesAPIResponse(
@@ -4866,6 +4866,7 @@ class TestNonInferenceCallTypesAreNotBilled:
             model="gpt-4o",
             output=[],
             usage=self.RETRIEVED_RESPONSE_USAGE,
+            background=background,
         )
 
     def test_creating_a_response_is_still_priced(self):
@@ -4952,6 +4953,47 @@ class TestNonInferenceCallTypesAreNotBilled:
 
         assert payload is not None
         assert payload["total_tokens"] == 6000
+
+    def test_reading_a_background_response_is_still_priced(self):
+        """A background create answers queued with no usage at all, so whoever reads the finished
+        job is the first and only caller to see its tokens. Zeroing that read bills the job nothing."""
+        cost = self._logging_obj("aget_responses")._response_cost_calculator(
+            result=self._retrieved_response(background=True)
+        )
+        assert cost is not None and cost > 0
+
+    def test_reading_a_background_response_reports_usage_in_standard_logging_payload(self):
+        from datetime import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
+
+        now = datetime.now()
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "litellm_call_id": "lit5602-background-payload",
+                "model": "gpt-4o",
+                "call_type": "aget_responses",
+                "litellm_params": {},
+            },
+            init_response_obj=self._retrieved_response(background=True),
+            start_time=now,
+            end_time=now,
+            logging_obj=self._logging_obj("aget_responses"),
+            status="success",
+        )
+
+        assert payload is not None
+        assert payload["total_tokens"] == 6000
+
+    def test_reading_a_foreground_response_is_still_free(self):
+        """Guards the test above against a blanket exemption: an explicit background=false read was
+        already billed by its create and must stay at zero."""
+        cost = self._logging_obj("aget_responses")._response_cost_calculator(
+            result=self._retrieved_response(background=False)
+        )
+        assert cost == 0.0
 
     def _read_call_messages(self):
         logging_obj, _ = litellm.utils.function_setup(

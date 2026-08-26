@@ -276,7 +276,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     usage: dict = {}
     if call_type in ["ocr", "aocr"]:
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
-    elif not is_unbilled_non_inference_call(call_type, metadata):
+    elif not is_unbilled_non_inference_call(call_type, metadata, response_obj_dict):
         # Use response_obj_dict instead of response_obj to avoid calling .get() on Pydantic models
         _usage: Final = response_obj_dict.get("usage", None) or {}
         if isinstance(_usage, litellm.Usage):

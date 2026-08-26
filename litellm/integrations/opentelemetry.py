@@ -240,7 +240,9 @@ def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:
     return repr(value)
 
 
-def _is_unbilled_non_inference(call_type: object, litellm_params: Mapping[str, Any]) -> bool:
+def _is_unbilled_non_inference(
+    call_type: str | None, litellm_params: Mapping[str, object] | None, response_obj: object
+) -> bool:
     """Whether this call is a read or management route whose token counts describe an
     earlier request rather than this one.
 
@@ -251,7 +253,10 @@ def _is_unbilled_non_inference(call_type: object, litellm_params: Mapping[str, A
         return False
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
-    return is_unbilled_non_inference_call(call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params))
+    metadata: Final = (
+        StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params) if litellm_params is not None else None
+    )
+    return is_unbilled_non_inference_call(call_type, metadata, response_obj)
 
 
 def _shutdown_tracer_provider(provider: "_SDKTracerProvider") -> None:
@@ -1660,10 +1665,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(duration_s, attributes=common_attrs)
             if (
-                response_obj
-                and not _is_unbilled_non_inference(kwargs.get("call_type"), params)
+                self._token_usage_histogram
+                and response_obj
+                and not _is_unbilled_non_inference(kwargs.get("call_type"), params, response_obj)
                 and (usage := response_obj.get("usage"))
-                and self._token_usage_histogram
             ):
                 in_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
                 out_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
@@ -1738,6 +1743,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         - For non-streaming: uses end_time - api_call_start_time (total generation time)
         """
         if not self._time_per_output_token_histogram:
+            return
+
+        if _is_unbilled_non_inference(kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj):
             return
 
         # Get completion tokens from response_obj
@@ -2491,7 +2499,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             usage: Final = (
                 response_obj.get("usage")
-                if response_obj and not _is_unbilled_non_inference(kwargs.get("call_type"), litellm_params)
+                if response_obj
+                and not _is_unbilled_non_inference(kwargs.get("call_type"), litellm_params, response_obj)
                 else None
             )
             if usage:
