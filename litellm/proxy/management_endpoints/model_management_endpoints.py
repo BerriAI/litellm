@@ -358,9 +358,10 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
         raise HTTPException(status_code=400, detail=error)
 
 
-# The mirrored per-token pricing fields plus the three remaining fields
-# Router._inherit_builtin_cache_pricing back-fills from the public cost map. An unset field is
-# what that back-fill targets, so a field left out here is one a PTU deployment still bills.
+# The mirrored per-token pricing fields plus the remaining rates the public cost map or a
+# provider default would otherwise supply (the cache back-fills, the Maps grounding rate). An
+# unset field falls back to those sources, so a field left out here is one a PTU deployment
+# still bills.
 # tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
 # empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
 # dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
