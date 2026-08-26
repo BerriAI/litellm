@@ -1465,9 +1465,6 @@
   "src/components/add_model/conditional_public_model_name.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
-      "count": 1
     }
   },
   "src/components/add_model/handle_add_auto_router_submit.tsx": {
