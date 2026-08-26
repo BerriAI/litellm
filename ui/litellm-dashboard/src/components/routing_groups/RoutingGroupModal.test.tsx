@@ -295,6 +295,7 @@ describe("RoutingGroupModal", () => {
 
     await typeName(user, "security");
     await pickModels(user, "gpt-4o");
+    await pickStrategy(user, "latency-based-routing");
     await save(user, "Create Group");
 
     expect(await screen.findByText(/Already claimed: gpt-4o/)).toBeInTheDocument();
