@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from typing import (
     Any,
     Final,
@@ -958,6 +958,34 @@ async def get_sso_settings():
     return result
 
 
+def _restore_masked_sso_secrets(
+    sso_data: MutableMapping[str, object],  # mutable-ok: stored secrets are restored into the caller's config in place
+    before_sso_data: Mapping[str, object] | None,
+) -> None:
+    """Keep a stored SSO secret when the client round-trips its masked value.
+
+    Secret fields are masked before they are sent to the UI (see
+    get_sso_settings), so a client that edits only unrelated fields sends the
+    masked placeholder back unchanged. A plaintext secret never contains the
+    mask character, so an incoming secret that still carries the mask is treated
+    as "unchanged" and the previously effective secret is restored. This stops a
+    partial edit from overwriting e.g. the OAuth client_secret with
+    `abcd****wxyz` and breaking SSO login. An empty value is an intentional
+    clear and a genuinely new secret has no mask, so both pass through unchanged.
+
+    The effective secret is the stored row value, falling back to the process
+    environment -- the same precedence get_sso_settings uses when it masks the
+    field -- so a secret configured via an environment variable is preserved
+    too, not only database-stored ones. See #38177.
+    """
+    for secret_field in SSO_SECRET_FIELDS:
+        db_secret = before_sso_data.get(secret_field) if before_sso_data else None
+        stored_secret = db_secret or os.environ.get(SSO_FIELD_ENV_VARS.get(secret_field, ""))
+        incoming_secret = sso_data.get(secret_field)
+        if stored_secret and isinstance(incoming_secret, str) and "*" in incoming_secret:
+            sso_data[secret_field] = stored_secret  # rebind-ok: intentional in-place restore of a masked secret
+
+
 @router.patch(
     "/update/sso_settings",
     tags=["SSO Settings"],
@@ -1021,6 +1049,8 @@ async def update_sso_settings(
 
     # Update environment variables in config and in memory
     sso_data: Final = sso_config.model_dump()
+
+    _restore_masked_sso_secrets(sso_data, before_sso_data)
     for field_name, value in sso_data.items():
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]
