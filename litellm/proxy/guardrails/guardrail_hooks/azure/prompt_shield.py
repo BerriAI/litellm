@@ -61,7 +61,7 @@ def _resolved_secret_value(value: object) -> object:
     return value
 
 
-def _updated_param(litellm_params: "LitellmParams | dict", key: str) -> object:
+def _updated_param(litellm_params: "LitellmParams | dict", key: str) -> object:  # mutable-ok: DB dict
     """Read one param from a Mapping or a pydantic object, including pydantic
     extras (cost_tier / price_per_1000_text_records live there), which the base
     class ``vars()`` loop never sees."""
