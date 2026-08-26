@@ -695,7 +695,7 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
             "object_permission_id": None,
             "object_permission": None,
             "litellm_budget_table": None,
-            "dict": lambda self=None: {
+            "model_dump": lambda self=None: {
                 "spend": 25.0,
                 "user_id": "enduser-implicit",
                 "blocked": False,

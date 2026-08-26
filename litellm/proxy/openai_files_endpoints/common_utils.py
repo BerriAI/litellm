@@ -4,7 +4,16 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, get_args, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
+    get_args,
+    runtime_checkable,
+)
 
 from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
@@ -1183,7 +1192,7 @@ async def ensure_batch_response_managed_file_ids(
     prisma_client,
     verbose_proxy_logger,
     user_api_key_dict=None,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     unified_batch_id: str | Literal[False] | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
@@ -1270,11 +1279,10 @@ async def get_batch_from_database(
             return None, None
 
         # Parse the batch object from database
-        batch_data: Final = (
-            json.loads(db_batch_object.file_object)
-            if isinstance(db_batch_object.file_object, str)
-            else db_batch_object.file_object
+        file_object: Final = cast(  # cast-ok: prisma types the Json column as str; reads return the decoded value
+            "Mapping[str, object] | str", db_batch_object.file_object
         )
+        batch_data: Final = json.loads(file_object) if isinstance(file_object, str) else file_object
         response: Final = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
@@ -1361,7 +1369,7 @@ async def update_batch_in_database(
     managed_files_obj,
     prisma_client,
     verbose_proxy_logger,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     operation: str = "update",
     user_api_key_dict=None,
     poller_owns_accounting: bool | None = None,
@@ -1428,7 +1436,7 @@ async def update_batch_in_database(
         # Normalize status for database storage
         db_status: Final = response.status if response.status != "completed" else "complete"
 
-        update_data: Final[dict] = {
+        update_data: Final[dict[str, object]] = {
             "status": db_status,
             "file_object": response.model_dump_json(),
             "updated_at": litellm.utils.get_utc_datetime(),
