@@ -60,7 +60,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
+            api_key = self.authenticator.get_api_key(access_token=api_key)
 
             if not api_key:
                 raise AuthenticationError(

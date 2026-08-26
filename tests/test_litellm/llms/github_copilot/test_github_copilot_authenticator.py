@@ -1,6 +1,5 @@
 import json
 import os
-import time
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -8,9 +7,7 @@ import pytest
 
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
-    APIKeyExpiredError,
     GetAccessTokenError,
-    GetAPIKeyError,
     GetDeviceCodeError,
     RefreshAPIKeyError,
 )
@@ -19,13 +16,8 @@ from litellm.llms.github_copilot.common_utils import (
 class TestGitHubCopilotAuthenticator:
     @pytest.fixture
     def authenticator(self):
-        with (
-            patch("os.path.exists", return_value=False),
-            patch("os.makedirs") as mock_makedirs,
-        ):
-            auth = Authenticator()
-            mock_makedirs.assert_called_once()
-            return auth
+        auth = Authenticator()
+        return auth
 
     @pytest.fixture
     def mock_http_client(self):
@@ -38,15 +30,13 @@ class TestGitHubCopilotAuthenticator:
 
     def test_init(self):
         """Test the initialization of the authenticator."""
-        with (
-            patch("os.path.exists", return_value=False),
-            patch("os.makedirs") as mock_makedirs,
-        ):
+        with patch("os.makedirs") as mock_makedirs:
             auth = Authenticator()
-            assert auth.token_dir.endswith("/github_copilot")
-            assert auth.access_token_file.endswith("/access-token")
-            assert auth.api_key_file.endswith("/api-key.json")
-            mock_makedirs.assert_called_once()
+            assert os.path.basename(auth.token_dir) == "github_copilot"
+            assert os.path.basename(auth.access_token_file) == "access-token"
+            assert os.path.basename(auth.api_key_file) == "api-key.json"
+            # Lazy init: directory is NOT created eagerly on __init__
+            mock_makedirs.assert_not_called()
 
     def test_ensure_token_dir(self):
         """Test that the token directory is created if it doesn't exist."""
@@ -55,7 +45,20 @@ class TestGitHubCopilotAuthenticator:
             patch("os.makedirs") as mock_makedirs,
         ):
             auth = Authenticator()
-            mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
+            auth._ensure_token_dir()
+            mock_makedirs.assert_called_once_with(auth.token_dir, mode=0o700, exist_ok=True)
+
+    def test_ensure_token_dir_permission_error_fallback(self):
+        """Test that _ensure_token_dir falls back to temp directory on PermissionError."""
+        auth = Authenticator()
+        original_dir = auth.token_dir
+        with (
+            patch("os.path.exists", return_value=False),
+            patch("os.makedirs", side_effect=[PermissionError("Permission denied"), None]),
+        ):
+            auth._ensure_token_dir()
+            assert auth.token_dir != original_dir
+            assert "litellm" in auth.token_dir
 
     def test_get_github_headers(self, authenticator):
         """Test that GitHub headers are correctly generated."""
@@ -82,8 +85,7 @@ class TestGitHubCopilotAuthenticator:
 
         with (
             patch.object(authenticator, "_login", return_value=mock_token),
-            patch("builtins.open", mock_open()),
-            patch("builtins.open", side_effect=IOError) as mock_read,
+            patch("builtins.open", side_effect=IOError),
         ):
             token = authenticator.get_access_token()
             assert token == mock_token
@@ -106,9 +108,7 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_key_from_file(self, authenticator):
         """Test retrieving an API key from a file."""
         future_time = (datetime.now() + timedelta(hours=1)).timestamp()
-        mock_api_key_data = json.dumps(
-            {"token": "mock-api-key", "expires_at": future_time}
-        )
+        mock_api_key_data = json.dumps({"token": "mock-api-key", "expires_at": future_time})
 
         with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
             api_key = authenticator.get_api_key()
@@ -117,9 +117,7 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_key_expired(self, authenticator):
         """Test refreshing an expired API key."""
         past_time = (datetime.now() - timedelta(hours=1)).timestamp()
-        mock_expired_data = json.dumps(
-            {"token": "expired-api-key", "expires_at": past_time}
-        )
+        mock_expired_data = json.dumps({"token": "expired-api-key", "expires_at": past_time})
         mock_new_data = {
             "token": "new-api-key",
             "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
@@ -128,7 +126,7 @@ class TestGitHubCopilotAuthenticator:
         with (
             patch("builtins.open", mock_open(read_data=mock_expired_data)),
             patch.object(authenticator, "_refresh_api_key", return_value=mock_new_data),
-            patch("json.dump") as mock_json_dump,
+            patch("json.dump"),
         ):
             api_key = authenticator.get_api_key()
             assert api_key == "new-api-key"
@@ -217,20 +215,14 @@ class TestGitHubCopilotAuthenticator:
         mock_token = "mock-access-token"
 
         with (
-            patch.object(
-                authenticator, "_get_device_code", return_value=mock_device_code_data
-            ),
-            patch.object(
-                authenticator, "_poll_for_access_token", return_value=mock_token
-            ),
+            patch.object(authenticator, "_get_device_code", return_value=mock_device_code_data),
+            patch.object(authenticator, "_poll_for_access_token", return_value=mock_token),
             patch("builtins.print") as mock_print,
         ):
             result = authenticator._login()
             assert result == mock_token
             authenticator._get_device_code.assert_called_once()
-            authenticator._poll_for_access_token.assert_called_once_with(
-                "mock-device-code"
-            )
+            authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
             mock_print.assert_called_once()
 
     def test_get_api_base_from_file(self, authenticator):
@@ -255,8 +247,10 @@ class TestGitHubCopilotAuthenticator:
             "user_code": "UC",
             "verification_uri": "https://example.com",
         }
-        with patch.dict(os.environ, {"GITHUB_COPILOT_DEVICE_CODE_URL": custom_url}), \
-             patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client):
+        with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_DEVICE_CODE_URL": custom_url}),
+            patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client),
+        ):
             authenticator._get_device_code()
             assert mock_client.post.call_args[0][0] == custom_url
 
@@ -269,8 +263,10 @@ class TestGitHubCopilotAuthenticator:
             "user_code": "UC",
             "verification_uri": "https://example.com",
         }
-        with patch.dict(os.environ, {"GITHUB_COPILOT_CLIENT_ID": custom_id}), \
-             patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client):
+        with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_CLIENT_ID": custom_id}),
+            patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client),
+        ):
             authenticator._get_device_code()
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id
 
@@ -279,9 +275,11 @@ class TestGitHubCopilotAuthenticator:
         mock_client, mock_response = mock_http_client
         custom_url = "https://custom.example.com/token"
         mock_response.json.return_value = {"access_token": "tok"}
-        with patch.dict(os.environ, {"GITHUB_COPILOT_ACCESS_TOKEN_URL": custom_url}), \
-             patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client), \
-             patch("time.sleep"):
+        with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_ACCESS_TOKEN_URL": custom_url}),
+            patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client),
+            patch("time.sleep"),
+        ):
             authenticator._poll_for_access_token("dc")
             assert mock_client.post.call_args[0][0] == custom_url
 
@@ -290,9 +288,11 @@ class TestGitHubCopilotAuthenticator:
         mock_client, mock_response = mock_http_client
         custom_id = "custom_client_id"
         mock_response.json.return_value = {"access_token": "tok"}
-        with patch.dict(os.environ, {"GITHUB_COPILOT_CLIENT_ID": custom_id}), \
-             patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client), \
-             patch("time.sleep"):
+        with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_CLIENT_ID": custom_id}),
+            patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client),
+            patch("time.sleep"),
+        ):
             authenticator._poll_for_access_token("dc")
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id
 
@@ -301,9 +301,10 @@ class TestGitHubCopilotAuthenticator:
         mock_client, mock_response = mock_http_client
         custom_url = "https://custom.example.com/api-key"
         mock_response.json.return_value = {"token": "api-tok", "expires_at": 9999999999}
-        with patch.dict(os.environ, {"GITHUB_COPILOT_API_KEY_URL": custom_url}), \
-             patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client), \
-             patch.object(authenticator, "get_access_token", return_value="access-tok"):
+        with (
+            patch.dict(os.environ, {"GITHUB_COPILOT_API_KEY_URL": custom_url}),
+            patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client),
+            patch.object(authenticator, "get_access_token", return_value="access-tok"),
+        ):
             authenticator._refresh_api_key()
             assert mock_client.get.call_args[0][0] == custom_url
-
