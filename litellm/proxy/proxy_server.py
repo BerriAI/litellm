@@ -14219,9 +14219,7 @@ async def model_info_v1(
         general_settings=general_settings,
         llm_router=llm_router,
     )
-    visible_models: Final = (
-        [model for model in all_models if model.get("model_name") not in hidden_names] if hidden_names else all_models
-    )
+    visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
     return {"data": visible_models}
