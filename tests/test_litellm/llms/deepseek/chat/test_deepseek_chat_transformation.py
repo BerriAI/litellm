@@ -108,6 +108,24 @@ def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
     assert config._thinking_mode_active(model="deepseek-reasoner", optional_params={"thinking": True}) is False
 
 
+def test_thinking_mode_active_true_by_default_for_always_on_model():
+    config = DeepSeekChatConfig()
+    assert config._thinking_mode_active(model="deepseek-v4-pro", optional_params={}) is True
+
+
+def test_thinking_mode_active_false_when_explicitly_disabled_for_always_on_model():
+    config = DeepSeekChatConfig()
+    assert (
+        config._thinking_mode_active(model="deepseek-v4-pro", optional_params={"thinking": {"type": "disabled"}})
+        is False
+    )
+
+
+def test_thinking_mode_active_false_by_default_for_opt_in_model():
+    config = DeepSeekChatConfig()
+    assert config._thinking_mode_active(model="deepseek-reasoner", optional_params={}) is False
+
+
 class TestDeepSeekThinkingParams:
     """Test thinking and reasoning_effort parameter handling for DeepSeek."""
 

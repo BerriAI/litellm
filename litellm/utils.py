@@ -2722,6 +2722,13 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
 
 
+def is_thinking_always_on(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model always runs in thinking mode by default and return a boolean value.
+    """
+    return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="thinking_always_on")
+
+
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports native structured outputs and return a boolean value.

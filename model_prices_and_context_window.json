@@ -50402,7 +50402,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "thinking_always_on": true
     },
     "deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
@@ -50428,7 +50429,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "thinking_always_on": true
     },
     "deepseek/deepseek-v4-flash": {
         "cache_creation_input_token_cost": 0.0,
@@ -50454,7 +50456,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "thinking_always_on": true
     },
     "deepseek/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
@@ -50480,7 +50483,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "thinking_always_on": true
     },
     "tencent/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
