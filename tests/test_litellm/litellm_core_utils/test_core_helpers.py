@@ -311,3 +311,26 @@ class TestIsExpectedClientError:
                 self.llm_provider = ""
 
         assert is_expected_client_error(RouterRejection()) is True
+
+    def test_budget_rejection_decorated_with_provider_is_expected(self):
+        """The auth handler stamps the requested model's provider onto the proxy's
+        own BudgetExceededError before logging it, which must not turn a key-over-budget
+        429 into a provider error that keeps its traceback."""
+        from litellm.exceptions import BudgetExceededError, RateLimitError, RateLimitErrorCategory
+        from litellm.litellm_core_utils.core_helpers import is_expected_client_error
+
+        over_budget = BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic")
+        assert over_budget.llm_provider == "anthropic"
+        assert is_expected_client_error(over_budget) is True
+
+        litellm_limit = RateLimitError(
+            message="key over rpm", llm_provider="anthropic", model="claude-haiku-4-5",
+            category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+        )
+        assert is_expected_client_error(litellm_limit) is True
+
+        vendor_limit = RateLimitError(
+            message="rate limited upstream", llm_provider="anthropic", model="claude-haiku-4-5",
+            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
+        )
+        assert is_expected_client_error(vendor_limit) is False

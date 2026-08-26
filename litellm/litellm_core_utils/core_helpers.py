@@ -58,7 +58,18 @@ def safe_divide(
     return numerator / denominator
 
 
+def _is_litellm_limit_rejection(exception: BaseException) -> bool:
+    from litellm.exceptions import RateLimitErrorCategory
+
+    litellm_limit_categories: Final = frozenset(
+        (RateLimitErrorCategory.LITELLM_RATE_LIMIT.value, RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT.value)
+    )
+    return getattr(exception, "category", None) in litellm_limit_categories
+
+
 def _is_proxy_rejection(exception: BaseException) -> bool:
+    if _is_litellm_limit_rejection(exception):
+        return True
     try:
         from starlette.exceptions import HTTPException
     except ImportError:
@@ -85,7 +96,10 @@ def is_expected_client_error(exception: BaseException | None) -> bool:
     ``llm_provider``, and the raw ``BaseLLMException`` that provider handlers
     raise before mapping (the /v1/messages route surfaces it as-is) is one too.
     The proxy's own limiters raise ``HTTPException`` subclasses that also carry
-    an ``llm_provider``, so any ``HTTPException`` stays a proxy rejection.
+    an ``llm_provider``, so any ``HTTPException`` stays a proxy rejection, and
+    so does any exception whose unified rate-limit ``category`` names litellm's
+    own limiter (``BudgetExceededError`` is a plain ``Exception`` that the auth
+    handler decorates with the requested model's provider).
 
     ProxyException stores the status on .code (as a str), HTTPException and
     litellm exceptions on .status_code.
