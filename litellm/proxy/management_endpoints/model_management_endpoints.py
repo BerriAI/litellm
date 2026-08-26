@@ -252,6 +252,38 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
+_REQUIRED_RATE_LIMIT_FIELDS: Final = ("rpm", "tpm")
+
+
+def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLMParams, enforced: bool) -> None:
+    """Require both rpm and tpm (each a positive value) when the operator opts in via config.yaml.
+
+    Off by default, so deployments keep adding models without limits. When
+    ``enforce_rpm_tpm_on_model_add: true`` is set under general_settings, a model added
+    without both rpm and tpm set to a positive value is rejected rather than stored
+    unbounded (or effectively excluded from routing by a zero/negative limit).
+    """
+    if not enforced:
+        return
+    missing: Final = tuple(
+        field
+        for field in _REQUIRED_RATE_LIMIT_FIELDS
+        if (value := getattr(litellm_params, field)) is None or value <= 0
+    )
+    if not missing:
+        return
+    raise ProxyException(
+        message=(
+            f"{' and '.join(missing)} must be set to a positive value when "
+            f"'{ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING}' is enabled in general_settings"
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param=f"litellm_params.{missing[0]}",
+    )
+
+
 _PTU_PRICED_PAIR: Final = frozenset({"ptu_count", "cost_per_ptu_per_hour"})
 
 
@@ -1746,6 +1778,11 @@ async def add_new_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
+        )
+
+        _raise_if_rate_limits_required_but_missing(
+            litellm_params=model_params.litellm_params,
+            enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
         )
 
         model_response: prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None = None
