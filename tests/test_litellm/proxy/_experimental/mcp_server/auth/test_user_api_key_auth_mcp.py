@@ -5891,6 +5891,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         ):
             _auth, new_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=self._bridge_delegate_server(server_name="bridge_name", alias="bridge_alias"),
+                requested_name="bridge_name",
                 authorization_value=f"Bearer {envelope}",
                 mcp_server_auth_headers=attacker_forwarded,
                 request=self._mcp_request(),
@@ -5927,6 +5928,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         ):
             _auth, new_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=server,
+                requested_name="bridge_delegate_server",
                 authorization_value=f"Bearer {envelope}",
                 mcp_server_auth_headers=None,
                 request=self._mcp_request(),
@@ -6073,6 +6075,47 @@ class TestMCPDcrBridgeDelegateAdmission:
             "www-authenticate": (
                 'Bearer error="invalid_token", '
                 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/bridge_delegate_server"'
+            )
+        }
+
+    @pytest.mark.parametrize("requested_name", ["bridge_name", "bridge_alias"])
+    async def test_invalid_envelope_challenge_names_the_requested_spelling(self, requested_name):
+        """A server reachable under both its server_name and a distinct alias must challenge with
+        metadata for the exact spelling the caller used, matching the per-server well-known
+        document, so the client rediscovers against the resource it actually asked for."""
+        foreign = self._mint_bridge_envelope(master_key="a-different-master-key-entirely")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": f"/mcp/{requested_name}",
+            "headers": [
+                (b"host", b"testserver"),
+                (b"authorization", f"Bearer {foreign}".encode("latin-1")),
+            ],
+        }
+
+        with (
+            patch(  # test-quality-ok: prove standard admission is never consulted for an envelope bearer
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+            ) as mock_auth,
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling challenge tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),  # test-quality-ok: envelope keys derive from the proxy master_key module global
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server(
+                server_name="bridge_name", alias="bridge_alias"
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+        mock_auth.assert_not_called()
+        assert exc_info.value.headers == {
+            "www-authenticate": (
+                'Bearer error="invalid_token", '
+                f'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/{requested_name}"'
             )
         }
 
@@ -6301,6 +6344,7 @@ class TestMCPDcrBridgeDelegateAdmission:
         ):
             auth_result, new_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=self._bridge_delegate_server(),
+                requested_name="bridge_delegate_server",
                 authorization_value=f"Bearer {envelope}",
                 mcp_server_auth_headers=existing,
                 request=self._mcp_request(),
@@ -6325,6 +6369,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler._admit_dcr_bridge_delegate(
                     server=self._bridge_delegate_server(),
+                    requested_name="bridge_delegate_server",
                     authorization_value=f"Bearer {envelope}",
                     mcp_server_auth_headers=None,
                     request=self._mcp_request(),
@@ -6343,6 +6388,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             with pytest.raises(HTTPException) as exc_info:
                 await MCPRequestHandler._admit_dcr_bridge_delegate(
                     server=self._bridge_delegate_server(),
+                    requested_name="bridge_delegate_server",
                     authorization_value=f"Bearer {envelope}",
                     mcp_server_auth_headers=None,
                     request=self._mcp_request(),

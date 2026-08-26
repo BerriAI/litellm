@@ -1,5 +1,6 @@
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
@@ -300,6 +301,16 @@ def _admission_failure_fallback(
     raise exc
 
 
+@dataclass(frozen=True, slots=True)
+class DcrBridgeTarget:
+    """The single DCR-bridge server a request targets, paired with the exact name the caller
+    used to reach it (alias or server_name, whichever they typed), which is the spelling an
+    ``invalid_token`` challenge must echo back."""
+
+    requested_name: str
+    server: MCPServer
+
+
 class MCPRequestHandler:
     """
     Class to handle MCP request processing, including:
@@ -462,7 +473,8 @@ class MCPRequestHandler:
                 validated_user_api_key_auth,
                 mcp_server_auth_headers,
             ) = await MCPRequestHandler._admit_dcr_bridge_authorization(
-                server=bridge_delegate_target,
+                server=bridge_delegate_target.server,
+                requested_name=bridge_delegate_target.requested_name,
                 authorization_value=oauth2_headers["Authorization"],
                 litellm_api_key=litellm_api_key,
                 mcp_server_auth_headers=mcp_server_auth_headers,
@@ -730,10 +742,10 @@ class MCPRequestHandler:
     @staticmethod
     def _single_dcr_bridge_delegate_target(
         path: str, mcp_servers: list[str] | None, client_ip: str | None
-    ) -> MCPServer | None:
+    ) -> DcrBridgeTarget | None:
         """The one DCR-bridge ``oauth_delegate`` server this request targets, or ``None``.
 
-        Returns the server only when EXACTLY ONE target resolves and it is both
+        Returns the target only when EXACTLY ONE name resolves and its server is both
         ``is_oauth_delegate`` and ``is_dcr_bridge``. Fails closed (``None``) on a
         multi-target request, an unresolved target, or a non-matching server, so the
         envelope admission arm never fires for an aggregate scope or a server that did not
@@ -756,11 +768,12 @@ class MCPRequestHandler:
         # neither cannot receive the forwarded token, so fail closed rather than admit-and-drop.
         if not (server.server_name or server.alias):
             return None
-        return server
+        return DcrBridgeTarget(requested_name=target_names[0], server=server)
 
     @staticmethod
     async def _admit_dcr_bridge_delegate(
         server: MCPServer,
+        requested_name: str,
         authorization_value: str,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         request: Request,
@@ -808,13 +821,16 @@ class MCPRequestHandler:
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
             case BridgeEnvelopeInvalid() | NotBridgeEnvelope():
-                raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(server=server, request=request)
+                raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
+                    requested_name=requested_name, request=request
+                )
             case _:
                 assert_never(result)
 
     @staticmethod
     async def _admit_dcr_bridge_authorization(
         server: MCPServer,
+        requested_name: str,
         authorization_value: str,
         litellm_api_key: str,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,  # mutable-ok: existing MCP sink shape
@@ -824,6 +840,7 @@ class MCPRequestHandler:
         if is_bridge_envelope_shaped(authorization_value):
             return await MCPRequestHandler._admit_dcr_bridge_delegate(
                 server=server,
+                requested_name=requested_name,
                 authorization_value=authorization_value,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 request=request,
@@ -834,17 +851,18 @@ class MCPRequestHandler:
         except (HTTPException, ProxyException) as exc:
             if not _is_litellm_auth_admission_error(exc):
                 raise
-            raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(server=server, request=request) from exc
+            raise MCPRequestHandler._dcr_bridge_invalid_token_challenge(
+                requested_name=requested_name, request=request
+            ) from exc
         return admitted, mcp_server_auth_headers
 
     @staticmethod
-    def _dcr_bridge_invalid_token_challenge(server: MCPServer, request: Request) -> HTTPException:
-        resource_name: Final = server.alias or server.server_name
-        if resource_name is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Server misconfigured: MCP server has no routable name",
-            )
+    def _dcr_bridge_invalid_token_challenge(requested_name: str, request: Request) -> HTTPException:
+        """The RFC 6750 ``invalid_token`` challenge for a failed bridge admission.
+
+        Named by the exact spelling the caller requested, matching the per-server well-known
+        document and the other challenge emitters, so ``resource_metadata`` always points at the
+        resource the client actually asked for even when alias and server_name differ."""
         return HTTPException(
             status_code=401,
             detail="Invalid or expired credential",
@@ -852,7 +870,7 @@ class MCPRequestHandler:
                 {
                     "www-authenticate": get_passthrough_www_authenticate(
                         scope=request.scope,
-                        server_name=resource_name,
+                        server_name=requested_name,
                         invalid_token=True,
                     )
                 }
