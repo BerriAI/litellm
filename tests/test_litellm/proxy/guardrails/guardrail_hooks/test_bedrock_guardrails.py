@@ -5274,3 +5274,55 @@ async def test_terminal_failure_logs_usage_and_cost_of_prior_passed_chunks(monke
     assert logged["guardrail_cost"] == pytest.approx(0.0003)
     assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
     assert "error" in logged["guardrail_response"]
+
+
+def test_load_credentials_forwards_aws_external_id_to_assume_role(monkeypatch):
+    """Regression: cross-account guardrail role assumption must send sts:ExternalId."""
+    from datetime import datetime, timedelta, timezone
+
+    import boto3
+
+    captured_params: list[dict[str, str]] = []
+
+    class FakeSTSClient:
+        def assume_role(self, **kwargs: str) -> dict:
+            captured_params.append(kwargs)
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIATESTKEY",
+                    "SecretAccessKey": "test-secret",
+                    "SessionToken": "test-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(hours=1),
+                }
+            }
+
+    real_boto3_client = boto3.client
+
+    def fake_boto3_client(service_name: str, *args, **kwargs):
+        if service_name == "sts":
+            return FakeSTSClient()
+        return real_boto3_client(service_name, *args, **kwargs)
+
+    monkeypatch.setattr(boto3, "client", fake_boto3_client)
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-cross-account-guard",
+        guardrailIdentifier="amgllac6xf3r",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="AKIATESTKEY",
+        aws_secret_access_key="test-secret",
+        aws_role_name="arn:aws:iam::999999999999:role/litellm-guardrail",
+        aws_session_name="litellm-guardrail-session",
+        aws_external_id="external-id-for-guardrail-hook",
+    )
+
+    guardrail._load_credentials()
+
+    assert captured_params == [
+        {
+            "RoleArn": "arn:aws:iam::999999999999:role/litellm-guardrail",
+            "RoleSessionName": "litellm-guardrail-session",
+            "ExternalId": "external-id-for-guardrail-hook",
+        }
+    ]
