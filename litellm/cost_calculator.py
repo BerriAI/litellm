@@ -799,7 +799,50 @@ def _select_model_name_for_cost_calc(
         else:
             return_model = f"{custom_llm_provider}/{return_model}"
 
+        # A router-facing model_name alias may itself contain a "/" (e.g. "vertex/claude-opus-5")
+        # whose leading segment is NOT a registered provider, so the alias was re-prefixed above
+        # into a non-existent key like "vertex_ai/vertex/claude-opus-5". Strip unregistered
+        # leading segments until the assembled name is a known model_cost key (or nothing
+        # strippable remains), so cost lookup resolves to the real model instead of pricing
+        # the request at $0. See #38069.
+        stripped = _strip_unregistered_leading_segments(return_model, region_name)
+        if stripped is not None:
+            return_model = stripped
+
     return return_model
+
+
+def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str | None:
+    """Find the real cost-map key hidden inside a re-prefixed alias.
+
+    After the provider (and optional region) was prepended to a router-facing alias that
+    itself contains "/" segments (e.g. "vertex_ai/vertex/claude-opus-5"), walk the
+    remaining segments: keep the provider/region head, then try successively shorter
+    tails — "vertex_ai/vertex/claude-opus-5", "vertex_ai/claude-opus-5" — returning the
+    first that exists in `litellm.model_cost`. Segments that are themselves providers or
+    regions are never dropped from the head, so "vertex_ai/us-east-1/model" keeps its region.
+
+    Returns None if no candidate resolves; the caller keeps its original assembly.
+    """
+
+    segments = model.split("/")
+    # head = leading provider (+ optional region) that must be preserved
+    head_len = 1
+    if region_name is not None and len(segments) > 1 and segments[1] == region_name:
+        head_len = 2
+
+    head = segments[:head_len]
+    tail = segments[head_len:]
+    while tail:
+        candidate = "/".join(head + tail)
+        if candidate in litellm.model_cost:
+            return candidate
+        # only strip a leading tail segment that is NOT itself meaningful:
+        # a provider/region segment inside the tail (e.g. "azure_ai/o3") stays
+        if tail[0] in LlmProvidersSet or tail[0] == region_name:
+            return None
+        tail = tail[1:]
+    return None
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
