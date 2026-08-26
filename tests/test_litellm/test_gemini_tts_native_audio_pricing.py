@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -66,13 +67,13 @@ LONG_CONTEXT_TIER_FIELDS: Final = (
 )
 
 
-def _load(path: Path) -> dict:
+def _load(path: Path) -> dict[str, dict[str, object]]:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
 @pytest.fixture
-def local_model_cost_map(monkeypatch):
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     original_model_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
