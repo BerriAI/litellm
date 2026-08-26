@@ -291,12 +291,54 @@ class TestSingulrRequestPayload:
         assert sent_payload["metadata"] == {"user_api_key_user_id": "fallback-user-id"}
 
     @pytest.mark.asyncio
-    async def test_user_api_key_alias_and_user_id_both_forwarded(self, singulr_guardrail):
+    async def test_user_api_key_user_email_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_user_email": "user@example.com"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_user_email": "user@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_organization_alias_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_org_alias": "Acme Org"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_org_alias": "Acme Org"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_team_alias_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_team_alias": "AI Content Security Team"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_team_alias": "AI Content Security Team"}
+
+    @pytest.mark.asyncio
+    async def test_all_user_metadata_fields_forwarded_together(self, singulr_guardrail):
         resp = _make_response({"should_block": False})
         request_data = {
             "litellm_metadata": {
                 "user_api_key_alias": "my-key-alias",
                 "user_api_key_user_id": "my-user-id",
+                "user_api_key_user_email": "user@example.com",
+                "user_api_key_org_alias": "Acme Org",
+                "user_api_key_team_alias": "AI Content Security Team",
             }
         }
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
@@ -309,6 +351,9 @@ class TestSingulrRequestPayload:
         assert sent_payload["metadata"] == {
             "user_api_key_alias": "my-key-alias",
             "user_api_key_user_id": "my-user-id",
+            "user_api_key_user_email": "user@example.com",
+            "user_api_key_org_alias": "Acme Org",
+            "user_api_key_team_alias": "AI Content Security Team",
         }
 
     @pytest.mark.asyncio
