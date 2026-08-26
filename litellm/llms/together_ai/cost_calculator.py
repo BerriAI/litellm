@@ -19,9 +19,10 @@ from litellm.constants import (
 from litellm.types.utils import CallTypes
 
 
-def has_together_registry_entry(model: str, cost_map: Mapping[str, object]) -> bool:
+def has_together_registry_pricing(model: str, cost_map: Mapping[str, object]) -> bool:
     stripped: Final = model.removeprefix("together_ai/")
-    return f"together_ai/{stripped}" in cost_map
+    entry: Final = cost_map.get(f"together_ai/{stripped}")
+    return isinstance(entry, Mapping) and "input_cost_per_token" in entry
 
 
 # Extract the number of billion parameters from the model name
