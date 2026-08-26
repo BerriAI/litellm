@@ -237,18 +237,15 @@ class TagRateLimitEntry(BaseModel):
         # defeats the entry; reject it at config load time instead.
         if math.isnan(self.limit):
             raise ValueError("limit must not be NaN")
+        # Positive infinity never rejects the checks that gate this limit; negative
+        # infinity always does. Both silently defeat the entry.
         if math.isinf(self.limit):
-            raise ValueError(
-                "limit must be finite -- positive infinity makes admission never reject (current + increment "
-                "> limit is always false), negative infinity makes it always reject every tagged request"
-            )
+            raise ValueError("limit must be finite")
+        # Zero or negative makes every check that gates this limit either always
+        # reject or never admit, silently blocking or admitting all matching traffic
+        # instead of the likely intended config.
         if self.limit <= 0:
-            raise ValueError(
-                "limit must be a positive number -- zero or negative makes the atomic requests/concurrency "
-                "check (current + increment > limit) reject every admission and the read-only tokens/dollars "
-                "check (current < limit) never admit, silently blocking all matching traffic instead of the "
-                "likely intended config"
-            )
+            raise ValueError("limit must be a positive number")
         return self
 
     @model_validator(mode="after")
@@ -261,11 +258,10 @@ class TagRateLimitEntry(BaseModel):
     def _validate_key_ttl_seconds(self) -> "TagRateLimitEntry":
         if self.key_ttl_seconds is not None and self.key_ttl_seconds <= 0:
             raise ValueError("key_ttl_seconds must be a positive integer when set")
+        # A shorter TTL than period_seconds expires the counter before its period
+        # elapses, letting it reset early and exceed the limit.
         if self.key_ttl_seconds is not None and self.key_ttl_seconds < self.period_seconds:
-            raise ValueError(
-                "key_ttl_seconds must be at least period_seconds when set -- a shorter TTL expires the "
-                "counter before its window rolls over, letting tagged traffic reset to zero and exceed the limit"
-            )
+            raise ValueError("key_ttl_seconds must be at least period_seconds when set")
         return self
 
     @model_validator(mode="after")

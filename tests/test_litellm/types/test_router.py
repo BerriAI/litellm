@@ -5,6 +5,7 @@ from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
     ModelInfo,
+    TagRateLimitEntry,
 )
 from litellm.types.utils import CustomPricingLiteLLMParams, MirroredPricingParams
 
@@ -89,3 +90,47 @@ def test_pricing_strings_are_coerced_to_float():
 def test_invalid_pricing_is_rejected():
     with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", input_cost_per_token="free")
+
+
+# litellm/types/router.py is imported by plain SDK users, not just the proxy, so a
+# TagRateLimitEntry validation error should read as a generic config-validation
+# message and not describe the proxy rate-limit hook's internal admission mechanics.
+_INTERNAL_ENFORCEMENT_JARGON = (
+    "admission",
+    "tagged request",
+    "tagged traffic",
+    "check-and-increment",
+    "read-only",
+    "atomic",
+    "window rolls over",
+)
+
+
+def _assert_message_has_no_internal_jargon(excinfo: pytest.ExceptionInfo) -> None:
+    message = str(excinfo.value).lower()
+    leaked = [term for term in _INTERNAL_ENFORCEMENT_JARGON if term in message]
+    assert not leaked, f"validation message leaked internal enforcement jargon: {leaked}"
+
+
+def test_limit_infinite_rejected_without_internal_enforcement_jargon():
+    with pytest.raises(ValueError, match="validation error for TagRateLimitEntry") as excinfo:
+        TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=float("inf"), period_seconds=60)
+    _assert_message_has_no_internal_jargon(excinfo)
+
+
+def test_limit_non_positive_rejected_without_internal_enforcement_jargon():
+    with pytest.raises(ValueError, match="validation error for TagRateLimitEntry") as excinfo:
+        TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=0, period_seconds=60)
+    _assert_message_has_no_internal_jargon(excinfo)
+
+
+def test_key_ttl_seconds_shorter_than_period_rejected_without_internal_enforcement_jargon():
+    with pytest.raises(ValueError, match="validation error for TagRateLimitEntry") as excinfo:
+        TagRateLimitEntry(
+            name="daily",
+            tag_id="end_user_id",
+            limit=500,
+            period_seconds=86400,
+            key_ttl_seconds=60,
+        )
+    _assert_message_has_no_internal_jargon(excinfo)
