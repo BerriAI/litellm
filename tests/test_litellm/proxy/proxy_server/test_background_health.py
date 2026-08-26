@@ -344,6 +344,72 @@ def test_write_health_state_to_router_cache_noop_when_router_none(monkeypatch):
     _write_health_state_to_router_cache([], [], {})
 
 
+def test_write_health_state_to_router_cache_noop_when_nothing_opted_in(monkeypatch):
+    """Neither health-check routing nor the listing filter: write nothing."""
+    fake_router = MagicMock()
+    fake_router.enable_health_check_routing = False
+    fake_router.health_check_ignore_transient_errors = False
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    _write_health_state_to_router_cache([{"model_id": "m1"}], [{"model_id": "m2"}], {})
+
+    fake_router.health_state_cache.set_deployment_health_states.assert_not_called()
+
+
+def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeypatch):
+    """`model_list_healthy_only` needs the health cache, but must not start
+    cooling deployments down: that stays behind enable_health_check_routing."""
+    fake_router = MagicMock()
+    fake_router.enable_health_check_routing = False
+    fake_router.health_check_ignore_transient_errors = False
+    fake_router.cooldown_time = 30
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"model_list_healthy_only": True}
+    )
+
+    fake_states = {"m1": {"is_healthy": True}, "m2": {"is_healthy": False}}
+
+    import litellm.proxy.health_check as hc
+
+    monkeypatch.setattr(hc, "build_deployment_health_states", lambda **_kw: fake_states)
+
+    cooldowns: list[str] = []
+
+    import litellm.router_utils.cooldown_handlers as cd
+
+    monkeypatch.setattr(
+        cd,
+        "_set_cooldown_deployments",
+        lambda **kw: cooldowns.append(kw.get("deployment")),
+    )
+
+    failures: list[str] = []
+
+    import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
+
+    monkeypatch.setattr(
+        tdm,
+        "increment_deployment_failures_for_current_minute",
+        lambda **kw: failures.append(kw.get("deployment_id")),
+    )
+
+    _write_health_state_to_router_cache(
+        [{"model_id": "m1"}],
+        [{"model_id": "m2"}],
+        {"m2": SimpleNamespace(status_code=500)},
+    )
+
+    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(
+        fake_states
+    )
+    assert cooldowns == []
+    assert failures == []
+
+
 def test_write_health_state_to_router_cache_swallows_internal_failures(monkeypatch):
     """The function logs and swallows exceptions so a bad cache call never crashes the loop."""
     fake_router = MagicMock()
