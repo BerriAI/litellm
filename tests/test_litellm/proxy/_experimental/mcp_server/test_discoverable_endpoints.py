@@ -79,24 +79,23 @@ def _resolved_oauth_metadata():
 
 
 @pytest.mark.asyncio
-async def test_authorize_resolves_cold_oauth_metadata():
+async def test_authorize_resolves_cold_oauth_metadata(monkeypatch):
+    """The route hands the registered server to the flow, whose deferred-discovery join resolves
+    the cold metadata; the redirect must land on the discovered authorization endpoint."""
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-lit-6255")
     server = _unresolved_oauth_server()
     global_mcp_server_manager.registry[server.server_id] = server
     global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
     request = _mock_callback_request("https://litellm.example.com/")
-    expected = MagicMock()
 
-    with (
-        patch.object(
-            global_mcp_server_manager,
-            "_discover_oauth_metadata_for_server",
-            new=AsyncMock(return_value=_resolved_oauth_metadata()),
-        ) as discovery,
-        patch.object(discoverable_endpoints, "authorize_with_server", new=AsyncMock(return_value=expected)) as relay,
-    ):
+    with patch.object(
+        global_mcp_server_manager,
+        "_discover_oauth_metadata_for_server",
+        new=AsyncMock(return_value=_resolved_oauth_metadata()),
+    ) as discovery:
         response = await discoverable_endpoints.authorize(
             request=request,
             client_id="client-id",
@@ -105,12 +104,14 @@ async def test_authorize_resolves_cold_oauth_metadata():
         )
 
     discovery.assert_awaited_once_with(server)
-    assert relay.await_args.kwargs["mcp_server"].authorization_url == "https://idp.example.com/authorize"
-    assert response is expected
+    assert response.status_code == 307
+    assert response.headers["location"].startswith("https://idp.example.com/authorize")
 
 
 @pytest.mark.asyncio
 async def test_token_resolves_cold_oauth_metadata():
+    """The route hands the registered server to the exchange, whose deferred-discovery join
+    resolves the cold metadata; the exchange must post to the discovered token endpoint."""
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
@@ -118,7 +119,11 @@ async def test_token_resolves_cold_oauth_metadata():
     global_mcp_server_manager.registry[server.server_id] = server
     global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
     request = _mock_callback_request("https://litellm.example.com/")
-    expected = MagicMock()
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"access_token": "tok", "token_type": "Bearer"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
 
     with (
         patch.object(
@@ -127,8 +132,10 @@ async def test_token_resolves_cold_oauth_metadata():
             new=AsyncMock(return_value=_resolved_oauth_metadata()),
         ) as discovery,
         patch.object(
-            discoverable_endpoints, "exchange_token_with_server", new=AsyncMock(return_value=expected)
-        ) as relay,
+            discoverable_endpoints,
+            "get_async_httpx_client",
+            new=lambda llm_provider: fake_http_client,
+        ),
     ):
         response = await discoverable_endpoints.token_endpoint(
             request=request,
@@ -139,20 +146,26 @@ async def test_token_resolves_cold_oauth_metadata():
         )
 
     discovery.assert_awaited_once_with(server)
-    assert relay.await_args.kwargs["mcp_server"].token_url == "https://idp.example.com/token"
-    assert response is expected
+    assert response.status_code == 200
+    assert fake_http_client.post.await_args.args[0] == "https://idp.example.com/token"
 
 
 @pytest.mark.asyncio
 async def test_register_resolves_cold_oauth_metadata():
+    """The route hands the registered server to the registration flow, whose deferred-discovery
+    join resolves the cold metadata; DCR must post to the discovered registration endpoint."""
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-    server = _unresolved_oauth_server()
+    server = _unresolved_oauth_server().model_copy(update={"client_id": None})
     global_mcp_server_manager.registry[server.server_id] = server
     global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
     request = _mock_callback_request("https://litellm.example.com/")
-    expected = MagicMock()
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"client_id": "generated-client", "client_secret": "generated-secret"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
 
     with (
         patch.object(
@@ -162,14 +175,16 @@ async def test_register_resolves_cold_oauth_metadata():
         ) as discovery,
         patch.object(discoverable_endpoints, "_read_request_body", new=AsyncMock(return_value={})),
         patch.object(
-            discoverable_endpoints, "register_client_with_server", new=AsyncMock(return_value=expected)
-        ) as relay,
+            discoverable_endpoints,
+            "get_async_httpx_client",
+            new=lambda llm_provider: fake_http_client,
+        ),
     ):
         response = await discoverable_endpoints.register_client(request=request, mcp_server_name=server.server_name)
 
     discovery.assert_awaited_once_with(server)
-    assert relay.await_args.kwargs["mcp_server"].registration_url == "https://idp.example.com/register"
-    assert response is expected
+    assert response.status_code == 200
+    assert fake_http_client.post.await_args.args[0] == "https://idp.example.com/register"
 
 
 @pytest.fixture
@@ -8989,6 +9004,70 @@ async def test_token_exchange_with_configured_token_url_never_joins_discovery(mo
         client_secret=None,
         code_verifier=None,
     )
+
+    assert response.status_code == 200
+    assert fake_http_client.post.await_args.args[0] == "https://idp.example.com/oauth/token"
+
+
+@pytest.mark.asyncio
+async def test_root_token_route_with_configured_token_url_never_joins_discovery(monkeypatch):
+    """A root POST /token that falls back to the sole OAuth2 server must reach the exchange's
+    endpoint-gated discovery join instead of awaiting full discovery at the route: with the
+    token url admin-entered, a failing or slow discovery must not turn the exchange into a 503."""
+    from litellm.proxy._experimental.mcp_server import (
+        discoverable_endpoints,
+        mcp_server_manager,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = mcp_server_manager.global_mcp_server_manager
+    server = MCPServer(
+        server_id="sole-token-url-only",
+        name="sole_token_url_only",
+        server_name="sole_token_url_only",
+        alias="sole_token_url_only",
+        url="https://mcp.example.com/mcp/",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        client_secret="cs",
+        issuer="https://idp.example.com",
+        issuer_is_anchored=True,
+        configured_token_url="https://idp.example.com/oauth/token",
+    )
+    saved_registry = dict(manager.registry)
+    manager.registry.clear()
+    manager.registry[server.server_id] = server
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+
+    async def fail_discovery(_srv):
+        raise AssertionError("the root token route joined deferred discovery despite a stored token url")
+
+    monkeypatch.setattr(manager, "ensure_oauth_metadata_discovered", fail_discovery)
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"access_token": "tok", "token_type": "Bearer"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+    monkeypatch.setattr(
+        discoverable_endpoints,
+        "get_async_httpx_client",
+        lambda llm_provider: fake_http_client,
+    )
+    request = _mock_callback_request("https://litellm.example.com/")
+
+    try:
+        response = await discoverable_endpoints.token_endpoint(
+            request=request,
+            grant_type="authorization_code",
+            code="upstream-code",
+            redirect_uri="http://127.0.0.1:3000/cb",
+            client_id="unregistered-dcr-client",
+        )
+    finally:
+        manager.registry.clear()
+        manager.registry.update(saved_registry)
 
     assert response.status_code == 200
     assert fake_http_client.post.await_args.args[0] == "https://idp.example.com/oauth/token"

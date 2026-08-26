@@ -6205,14 +6205,6 @@ class MCPServerManager:
                 return server
         return None
 
-    async def get_resolved_mcp_server_by_name(
-        self,
-        server_name: str,
-        client_ip: str | None = None,
-    ) -> MCPServer | None:
-        server: Final = self.get_mcp_server_by_name(server_name, client_ip=client_ip)
-        return await self.ensure_oauth_metadata_discovered(server) if server is not None else None
-
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """
         Get registry filtered by client IP access control.
