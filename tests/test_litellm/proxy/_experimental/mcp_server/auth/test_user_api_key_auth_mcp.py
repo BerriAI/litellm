@@ -5999,10 +5999,9 @@ class TestMCPDcrBridgeDelegateAdmission:
         # The envelope arm was skipped, so the oauth2 arm ran and validated the bearer.
         mock_auth.assert_called_once()
 
-    async def test_explicit_litellm_key_wins_over_envelope_arm(self):
-        """An explicit x-litellm-api-key is always a LiteLLM credential and its arm precedes the
-        envelope arm: user_api_key_auth validates the key and NO inner token is injected, even
-        though the Authorization header carries a valid envelope."""
+    async def test_bridge_envelope_preserves_delegated_token_with_litellm_key_header(self):
+        """A DCR client's configured LiteLLM key can accompany every request without replacing the
+        bridge envelope's sealed upstream token at egress."""
         envelope = self._mint_bridge_envelope()
         scope = {
             "type": "http",
@@ -6014,16 +6013,14 @@ class TestMCPDcrBridgeDelegateAdmission:
             ],
         }
 
-        async def mock_user_api_key_auth(api_key, request):
-            return UserAPIKeyAuth(api_key=api_key, user_id="litellm-key-user")
-
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                side_effect=mock_user_api_key_auth,
+                new_callable=AsyncMock,
             ) as mock_auth,
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            self._patch_key_reload(return_value=self._reloaded_key(user_id="envelope-user")),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
             (
@@ -6035,11 +6032,11 @@ class TestMCPDcrBridgeDelegateAdmission:
                 _raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
-        mock_auth.assert_called_once()
-        assert mock_auth.call_args.kwargs["api_key"] == "sk-explicit-litellm-key"
-        # The explicit-key arm admitted; the envelope arm never ran, so no inner token is injected.
-        assert auth_result.user_id == "litellm-key-user"
-        assert mcp_server_auth_headers == {}
+        mock_auth.assert_not_called()
+        assert auth_result.user_id == "envelope-user"
+        assert mcp_server_auth_headers == {
+            "bridge_delegate_server": {"Authorization": "Bearer inner-upstream-access-token"}
+        }
 
     async def test_non_bridge_oauth_delegate_server_does_not_take_envelope_arm(self):
         """An oauth_delegate server that is NOT a DCR bridge (``dcr_bridge`` unset) must not take the

@@ -412,6 +412,28 @@ class MCPRequestHandler:
         # Only OAuth metadata routes registered under /.well-known/ are public.
         if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            (
+                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                    path=request_route,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
+            is not None
+            and oauth2_headers
+            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+        ):
+            # A bridge envelope is the delegated user's credential. Some MCP clients retain the
+            # LiteLLM key needed during token exchange on every request, so it must not displace
+            # the sealed upstream token during tool discovery.
+            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=bridge_delegate_target,
+                authorization_value=oauth2_headers["Authorization"],
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=request_route,
+            )
         elif has_explicit_litellm_key:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
             # for a delegated server, so validate it: identity / spend / rate
@@ -439,29 +461,7 @@ class MCPRequestHandler:
             client_ip=IPAddressUtils.get_mcp_client_ip(request),
         ):
             validated_user_api_key_auth = UserAPIKeyAuth()
-        elif (
-            (
-                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
-                    path=request_route,
-                    mcp_servers=mcp_servers,
-                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
-                )
-            )
-            is not None
-            and oauth2_headers
-            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
-        ):
-            # A single DCR-bridge oauth_delegate target carrying an envelope-shaped
-            # Authorization: open the envelope, admit under its recovered identity, and
-            # inject the inner upstream token for egress. A non-envelope bearer on the same
-            # server is NOT admitted here — it falls through to the oauth2 arm, which 401s.
-            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
-                server=bridge_delegate_target,
-                authorization_value=oauth2_headers["Authorization"],
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                request=request,
-                route=request_route,
-            )
+
         elif oauth2_headers and is_session_bearer_shaped(oauth2_headers["Authorization"]):
             # A gateway DCR session bearer at any MCP scope: open the identity-only session
             # token and admit under the live litellm user; downstream grant resolution
