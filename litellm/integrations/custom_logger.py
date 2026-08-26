@@ -295,7 +295,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_post_call_failure_deployment_hook(
         self,
-        request_data: Mapping[str, Any],
+        request_data: Mapping[str, object],
         exception: Exception,
         call_type: CallTypes | None,
         fallback_depth: int | None = None,
