@@ -65,6 +65,7 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionMessageToolCall,
     CompletionTokensDetailsWrapper,
     Function,
@@ -1808,6 +1809,26 @@ class AmazonConverseConfig(BaseConfig):
         return thinking_blocks_list
 
     @staticmethod
+    def _parse_cache_details(usage: ConverseTokenUsageBlock) -> "CacheCreationTokenDetails | None":
+        """Split ``cacheDetails`` into 5m/1h buckets, or ``None`` unless the split fully
+        accounts for ``cacheWriteInputTokens``, since a partial or unrecognized-ttl
+        breakdown would understate the cache-write cost.
+
+        https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html
+        """
+        cache_details: Final = usage.get("cacheDetails")
+        if not cache_details:
+            return None
+        tokens_5m: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "5m")
+        tokens_1h: Final = sum(d["inputTokens"] for d in cache_details if d.get("ttl") == "1h")
+        if tokens_5m + tokens_1h != usage.get("cacheWriteInputTokens", 0):
+            return None
+        return CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=tokens_5m,
+            ephemeral_1h_input_tokens=tokens_1h,
+        )
+
+    @staticmethod
     def thinking_tokens_from_additional_fields(additional_fields: object) -> int | None:
         """Converse omits thinking tokens from its usage block; they only arrive under
         ``additionalModelResponseFields`` when ``/usage/output_tokens_details`` is requested."""
@@ -1878,6 +1899,7 @@ class AmazonConverseConfig(BaseConfig):
         prompt_tokens_details: Final = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=self._parse_cache_details(usage),
             text_tokens=raw_input_tokens,
         )
         estimated_reasoning_tokens: Final = (
