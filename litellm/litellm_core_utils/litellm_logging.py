@@ -4536,6 +4536,26 @@ def _init_custom_logger_compatible_class(
                 dynamic_rate_limiter_obj_v3.update_variables(llm_router=llm_router)
             _in_memory_loggers.append(dynamic_rate_limiter_obj_v3)
             return dynamic_rate_limiter_obj_v3
+        elif logging_integration == "model_based_tag_rate_limits_hook":
+            from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
+                _PROXY_ModelBasedTagRateLimitsHook,  # pyright: ignore[reportPrivateUsage]  # resolved by name like every other opt-in callback here
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, _PROXY_ModelBasedTagRateLimitsHook):
+                    return callback
+
+            if internal_usage_cache is None:
+                raise Exception(f"Internal Error: Cache cannot be empty - internal_usage_cache={internal_usage_cache}")
+
+            model_based_tag_rate_limits_hook_obj: Final = _PROXY_ModelBasedTagRateLimitsHook(
+                internal_usage_cache=internal_usage_cache
+            )
+
+            if llm_router is not None and isinstance(llm_router, litellm.Router):
+                model_based_tag_rate_limits_hook_obj.update_variables(llm_router=llm_router)
+            _in_memory_loggers.append(model_based_tag_rate_limits_hook_obj)
+            return model_based_tag_rate_limits_hook_obj
         elif logging_integration == "langtrace":
             if "LANGTRACE_API_KEY" not in os.environ:
                 raise ValueError("LANGTRACE_API_KEY not found in environment variables")
@@ -4974,6 +4994,15 @@ def get_custom_logger_compatible_class(
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, _PROXY_DynamicRateLimitHandlerV3):
+                    return callback
+
+        elif logging_integration == "model_based_tag_rate_limits_hook":
+            from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
+                _PROXY_ModelBasedTagRateLimitsHook,  # pyright: ignore[reportPrivateUsage]  # resolved by name like every other opt-in callback here
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, _PROXY_ModelBasedTagRateLimitsHook):
                     return callback
 
         elif logging_integration == "langtrace":
