@@ -3781,3 +3781,88 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     )
 
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
+    """A router-facing model_name alias containing "/" whose leading segment is NOT a
+    registered provider must not be double-prefixed into a non-existent cost key.
+
+    Regression test for #38069: alias "vertex/claude-opus-5" (real deployment
+    "vertex_ai/claude-opus-5") was re-prefixed into "vertex_ai/vertex/claude-opus-5",
+    silently pricing every streamed request at $0.
+    """
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/claude-opus-5"
+
+
+def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
+    """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {"custom_llm_provider": "vertex_ai"}
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert cost == pytest.approx(100 * 5e-6 + 50 * 2.5e-5, rel=1e-9)
+
+
+def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
+    """An alias that resolves to no known cost key keeps the legacy double-prefixed name."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="team/nonsense-model",
+    )
+    response._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/team/nonsense-model"
