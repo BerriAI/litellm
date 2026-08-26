@@ -3,7 +3,7 @@
 
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
-	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
+	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm test-mcp-docs \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
@@ -54,6 +54,7 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo "  make test-mcp-docs      - Run the MCP docs golden-path smoke suite"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -318,6 +319,9 @@ test-proxy-unit-a: install-test-deps
 
 test-proxy-unit-b: install-test-deps
 	$(UV_RUN) pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
+
+test-mcp-docs: install-test-deps
+	$(UV_RUN) pytest tests/mcp_tests/test_mcp_docs_golden_path.py -x -vv --durations=5
 
 test-integration: install-test-deps
 	$(UV_RUN) pytest tests/ -k "not test_litellm"
