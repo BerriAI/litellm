@@ -35,6 +35,7 @@ from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
+from types import MappingProxyType
 
 import dotenv
 import httpx
@@ -1320,7 +1321,7 @@ async def async_post_call_failure_deployment_hook(
 
     _raw_fallback_depth: Final = request_data.get("fallback_depth")
     fallback_depth: Final = _raw_fallback_depth if isinstance(_raw_fallback_depth, int) else None
-    safe_request_data: Final = {k: v for k, v in request_data.items() if k != "attempted_targets"}
+    safe_request_data: Final = MappingProxyType({k: v for k, v in request_data.items() if k != "attempted_targets"})
     safe_exception: Final = _snapshot_exception_for_hook(exception)
 
     CustomLogger: Final = _get_cached_custom_logger()
