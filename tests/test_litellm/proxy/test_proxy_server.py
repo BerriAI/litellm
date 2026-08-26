@@ -11327,6 +11327,48 @@ async def test_init_prompts_in_db_reloads_rows_patched_on_another_worker(monkeyp
         IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_sync")
 
 
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_syncs_remaining_rows_when_one_row_fails(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def db_row(prompt_id: str, integration: str) -> MagicMock:
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "prompt_id": prompt_id,
+            "version": 1,
+            "environment": "development",
+            "created_by": None,
+            "litellm_params": json.dumps(
+                {
+                    "prompt_id": prompt_id,
+                    "prompt_integration": integration,
+                    "prompt_data": {"content": "Begin every reply with AHOY", "metadata": {}},
+                }
+            ),
+            "prompt_info": json.dumps({"prompt_type": "db"}),
+            "created_at": None,
+            "updated_at": None,
+        }
+        return row
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[db_row("broken_sync", "does_not_exist"), db_row("healthy_sync", "dotprompt")]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id("broken_sync.v1") is None
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("healthy_sync.v1") is not None
+        assert litellm.callbacks == [IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("healthy_sync.v1")]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("healthy_sync")
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("broken_sync")
+
+
 class TestEmbeddingsFailureHookRequestData:
     @pytest.mark.asyncio
     async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
