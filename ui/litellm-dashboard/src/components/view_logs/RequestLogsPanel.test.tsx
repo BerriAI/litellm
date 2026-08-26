@@ -461,6 +461,15 @@ describe("RequestLogsPanel", () => {
       expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true);
       expect(toggle()).toBeChecked();
     });
+
+    it("falls back to showing health checks when the persisted value is malformed", async () => {
+      sessionStorage.setItem("excludeInternalHealthChecks", "{not json");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
+      expect(toggle()).not.toBeChecked();
+    });
   });
 
   describe("live tail", () => {
