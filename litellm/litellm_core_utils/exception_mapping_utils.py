@@ -2486,6 +2486,18 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
+            from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+            if custom_llm_provider and isinstance(original_exception, BaseLLMException):
+                _map_openai_like_exception(
+                    model=model,
+                    original_exception=mappable_exception,
+                    custom_llm_provider=custom_llm_provider,
+                    error_str=error_str,
+                    exception_type=exception_type,
+                    exception_provider=exception_provider,
+                    extra_information=extra_information,
+                )
         if "BadRequestError.__init__() missing 1 required positional argument: 'param'" in str(
             original_exception
         ):  # deal with edge-case invalid request error bug in openai-python sdk

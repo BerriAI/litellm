@@ -1286,3 +1286,56 @@ class TestMessagesStreamingSuccessLogging:
         assert payload["call_type"] == "acompletion"
         assert payload["total_tokens"] > 0
         assert payload["response_cost"] > 0
+
+
+class _FailureCapture(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.error_information: List[Dict[str, Any]] = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        payload = kwargs.get("standard_logging_object") or {}
+        self.error_information.append(payload.get("error_information") or {})
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_maps_provider_exception_before_failure_logging(monkeypatch):
+    """Regression test for LIT-6164. The async /v1/messages entrypoint awaited the
+    provider handler without exception_type mapping, so the @client failure
+    handler (and every logger behind it, e.g. OTel error spans) saw the raw
+    BaseLLMException: error.type=BaseLLMException and no llm_provider."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    capture = _FailureCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+
+    def upstream_rejects_the_key(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}},
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_rejects_the_key))
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-invalid",
+            client=upstream,
+        )
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.llm_provider == "anthropic"
+    assert "AnthropicException" in excinfo.value.message
+    assert '"authentication_error"' in excinfo.value.message
+
+    assert capture.error_information, "the failure handler must have logged the mapped exception"
+    error_information = capture.error_information[0]
+    assert error_information.get("error_class") == "AuthenticationError"
+    assert error_information.get("llm_provider") == "anthropic"
+    assert error_information.get("error_code") == "401"

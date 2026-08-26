@@ -1092,3 +1092,30 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
 
     assert excinfo.value.status_code == 400
     assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    "status_code, expected_class",
+    [(401, litellm.AuthenticationError), (429, litellm.RateLimitError)],
+)
+def test_a_base_llm_exception_without_a_provider_branch_maps_by_status_code(
+    status_code, expected_class, quiet_exception_mapping
+):
+    """Regression test for LIT-6164. Native /v1/messages handlers raise raw
+    BaseLLMException, and providers without an exception_type branch (e.g.
+    minimax) must keep the upstream status instead of collapsing every failure
+    into a 500 APIConnectionError once that route maps its exceptions."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=status_code, message="upstream rejected the call")
+
+    with pytest.raises(expected_class) as excinfo:
+        exception_type(
+            model="MiniMax-M2.5",
+            original_exception=original_exception,
+            custom_llm_provider="minimax",
+        )
+
+    assert excinfo.value.status_code == status_code
+    assert excinfo.value.llm_provider == "minimax"
+    assert "MinimaxException" in excinfo.value.message
