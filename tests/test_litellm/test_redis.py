@@ -454,37 +454,33 @@ def test_explicit_provider_wins_over_aws_iam(clean_redis_environment):
 
 
 def test_gcp_wins_over_aws_iam(clean_redis_environment):
-    with patch("litellm._redis.create_gcp_iam_redis_connect_func") as mock_gcp:
-        mock_gcp.return_value = _gcp_marker_callback()
-        redis_kwargs = _get_redis_client_logic(
-            host="cache.example.com",
-            port=6379,
-            gcp_service_account="sa@example.com",
-            aws_iam_auth=True,
-            aws_iam_user_name="iam-user",
-            aws_iam_cache_name="cache.example.com",
-            aws_iam_region="us-east-1",
-        )
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        gcp_service_account="sa@example.com",
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
 
     assert "credential_provider" not in redis_kwargs
-    assert redis_kwargs["redis_connect_func"] is mock_gcp.return_value
+    assert redis_kwargs["redis_connect_func"]._gcp_service_account == "sa@example.com"
 
 
 def test_azure_wins_over_aws_iam(clean_redis_environment):
-    with patch("litellm._redis.create_azure_ad_redis_connect_func") as mock_azure:
-        mock_azure.return_value = MagicMock()
-        redis_kwargs = _get_redis_client_logic(
-            host="cache.example.com",
-            port=6379,
-            azure_redis_ad_token="true",
-            aws_iam_auth=True,
-            aws_iam_user_name="iam-user",
-            aws_iam_cache_name="cache.example.com",
-            aws_iam_region="us-east-1",
-        )
+    redis_kwargs = _get_redis_client_logic(
+        host="cache.example.com",
+        port=6379,
+        azure_redis_ad_token="true",
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
 
     assert "credential_provider" not in redis_kwargs
-    assert redis_kwargs["redis_connect_func"] is mock_azure.return_value
+    assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
 
 
 def test_async_cluster_installs_aws_iam_provider(clean_redis_environment):
@@ -1665,11 +1661,9 @@ def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, 
         "redis_connect_func": SimpleNamespace(**markers),
     }
 
-    with (
-        patch("litellm._redis.async_redis.Sentinel") as mock_sentinel_cls,
-        patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs),
-    ):
-        get_redis_async_client()
+    with patch("litellm._redis.async_redis.Sentinel") as mock_sentinel_cls:
+        with patch("litellm._redis._get_redis_client_logic", return_value=redis_kwargs):
+            get_redis_async_client()
 
     sentinel_kwargs = mock_sentinel_cls.call_args[1]["sentinel_kwargs"]
     assert sentinel_kwargs["password"] == sentinel_password
