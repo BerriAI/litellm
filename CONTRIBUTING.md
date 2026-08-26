@@ -8,6 +8,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
 - [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+- [ ] **Pass a live-pr-risk run** - If you develop with Claude Code, it must run the repo's `live-pr-risk` skill (`.claude/skills/live-pr-risk/`) on your branch and get a pass before opening the PR. A checked-in hook in `.claude/settings.json` enforces this automatically
 
 #### Proxy (Backend) PRs
 

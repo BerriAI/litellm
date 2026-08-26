@@ -4,7 +4,10 @@ tests/e2e/.fixtures/
 .venv-typecheck
 .venv_policy_test
 .env
-.claude
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
 CLAUDE.local.md
 .newenv
 newenv/*
