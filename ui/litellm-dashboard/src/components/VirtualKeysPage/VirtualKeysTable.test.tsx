@@ -5,6 +5,7 @@ import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { resetMprConcurrencyCall } from "../networking";
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -55,8 +56,16 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   }),
 }));
 
+vi.mock("../networking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../networking")>();
+  return {
+    ...actual,
+    resetMprConcurrencyCall: vi.fn(),
+  };
+});
+
 const mockKey: KeyResponse = {
-  token: "sk-1234567890abcdef",
+  token: "sk-test-123",
   token_id: "key-1",
   key_name: "test-key",
   key_alias: "Test Key Alias",
@@ -105,7 +114,7 @@ const mockKey: KeyResponse = {
   end_user_rpm_limit: 10,
   end_user_max_budget: 10,
   last_refreshed_at: Date.now(),
-  api_key: "sk-1234567890abcdef",
+  api_key: "sk-test-123",
   user_role: "user",
   rpm_limit_per_model: {},
   tpm_limit_per_model: {},
@@ -251,7 +260,7 @@ it("should open KeyInfoView when clicking on a key ID button", async () => {
 
   expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
 
-  const keyIdButton = screen.getByText("sk-1234567890abcdef");
+  const keyIdButton = screen.getByText("sk-test-123");
   fireEvent.click(keyIdButton);
 
   await waitFor(() => {
@@ -483,5 +492,68 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
     await waitFor(() => {
       expect(screen.getByText(/Blocked by SCIM/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe("Reset MPR action", () => {
+  const mockResetMpr = resetMprConcurrencyCall as MockedFunction<typeof resetMprConcurrencyCall>;
+
+  beforeEach(() => {
+    mockResetMpr.mockReset();
+  });
+
+  it("shows the Reset MPR button when the key has a max_parallel_requests limit", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, max_parallel_requests: 10 }]));
+
+    renderWithProviders(<VirtualKeysTable accessToken="test-token" />);
+
+    expect(await screen.findByTestId(`reset-mpr-${mockKey.token_id}`)).toBeInTheDocument();
+  });
+
+  it("does not show the Reset MPR button when the key has no max_parallel_requests limit", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, max_parallel_requests: null as unknown as number }]));
+
+    renderWithProviders(<VirtualKeysTable accessToken="test-token" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId(`reset-mpr-${mockKey.token_id}`)).not.toBeInTheDocument();
+  });
+
+  it("calls resetMprConcurrencyCall with the access token and key token on confirm", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, max_parallel_requests: 10 }]));
+    mockResetMpr.mockResolvedValue({
+      api_key: mockKey.token,
+      deleted_keys: [
+        `{api_key:${mockKey.token}}:max_parallel_requests`,
+        `{api_key:${mockKey.token}}:max_parallel_requests_leases`,
+      ],
+      redis_available: true,
+    });
+
+    renderWithProviders(<VirtualKeysTable accessToken="test-token" />);
+
+    const resetButton = await screen.findByTestId(`reset-mpr-${mockKey.token_id}`);
+    fireEvent.click(resetButton);
+
+    // Confirm in the popover
+    const confirmButton = await screen.findByRole("button", { name: "Reset" });
+    await act(async () => {
+      fireEvent.click(confirmButton);
+    });
+
+    await waitFor(() => {
+      expect(mockResetMpr).toHaveBeenCalledWith("test-token", mockKey.token);
+    });
+  });
+
+  it("disables the Reset MPR button when no access token is provided", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, max_parallel_requests: 10 }]));
+
+    renderWithProviders(<VirtualKeysTable />);
+
+    const resetButton = await screen.findByTestId(`reset-mpr-${mockKey.token_id}`);
+    expect(resetButton).toBeDisabled();
   });
 });

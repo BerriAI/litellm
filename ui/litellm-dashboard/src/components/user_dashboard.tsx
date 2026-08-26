@@ -310,7 +310,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               prefillData={prefillData}
             />
           )}
-          <VirtualKeysTable />
+          <VirtualKeysTable accessToken={accessToken} />
         </Col>
       </Grid>
     </div>

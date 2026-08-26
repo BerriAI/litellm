@@ -7652,6 +7652,55 @@ export const concurrentRequestLogsCall = async (
   }
 };
 
+export interface ResetMprResponse {
+  api_key: string;
+  deleted_keys: string[];
+  redis_available: boolean;
+}
+
+/**
+ * Reset the max_parallel_requests (MPR) Redis state for a key by deleting its
+ * MPR Redis keys, immediately unblocking the key.
+ *
+ * Used by the "Reset MPR" button on the Virtual Keys tab to unblock a key
+ * that is stuck on a stale MPR counter.
+ *
+ * @param accessToken - User access token (must be a proxy admin)
+ * @param apiKey - The key token (hashed) as shown in the Virtual Keys UI
+ */
+export const resetMprConcurrencyCall = async (
+  accessToken: string,
+  apiKey: string
+): Promise<ResetMprResponse> => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/concurrent_request_logs/reset_mpr`
+      : `/concurrent_request_logs/reset_mpr`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to reset MPR counter:", error);
+    throw error;
+  }
+};
+
 export interface RateLimitHit {
   timestamp: string; // ISO 8601 (UTC)
   request_id: string;

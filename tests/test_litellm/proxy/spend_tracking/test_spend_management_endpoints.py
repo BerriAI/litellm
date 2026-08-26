@@ -4195,3 +4195,136 @@ def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
         assert cold_logger.requested_object_keys == ["k/cold.json"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+# ---------------------------------------------------------------------------
+# reset_mpr_counter endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def _make_redis_cache_mock(delete_calls=None):
+    """Build a fake redis_cache object compatible with the reset_mpr endpoint."""
+    redis_cache = MagicMock()
+    redis_cache.async_delete_cache = AsyncMock(
+        side_effect=lambda key: (
+            delete_calls.append(key) if delete_calls is not None else None
+        )
+    )
+    return redis_cache
+
+
+def _make_proxy_logging_obj_mock(redis_cache):
+    """Build a fake proxy_logging_obj with the internal_usage_cache chain."""
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache = redis_cache
+    return proxy_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_reset_mpr_counter_non_admin_forbidden(monkeypatch):
+    """Non-admin users must get a 403."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        ResetMprRequest,
+        reset_mpr_counter,
+    )
+
+    request = ResetMprRequest(api_key="some-token")
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await reset_mpr_counter(request=request, user_api_key_dict=auth)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_reset_mpr_counter_deletes_both_mpr_keys(monkeypatch):
+    """Admin reset deletes both the legacy counter and the lease ZSET keys."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        ResetMprRequest,
+        reset_mpr_counter,
+    )
+
+    token = "hashed-token-abc"
+    delete_calls = []
+    redis_cache = _make_redis_cache_mock(delete_calls=delete_calls)
+    proxy_logging_obj = _make_proxy_logging_obj_mock(redis_cache)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    request = ResetMprRequest(api_key=token)
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    result = await reset_mpr_counter(request=request, user_api_key_dict=auth)
+
+    assert result["redis_available"] is True
+    assert result["api_key"] == token
+
+    legacy_key = f"{{api_key:{token}}}:max_parallel_requests"
+    lease_key = f"{{api_key:{token}}}:max_parallel_requests_leases"
+    assert set(delete_calls) == {legacy_key, lease_key}
+    assert set(result["deleted_keys"]) == {legacy_key, lease_key}
+
+
+@pytest.mark.asyncio
+async def test_reset_mpr_counter_hashes_raw_sk_token(monkeypatch):
+    """A raw sk-... key is hashed before being used in the Redis key."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        ResetMprRequest,
+        reset_mpr_counter,
+    )
+    from litellm.proxy.utils import hash_token
+
+    # Fake test key (not a real secret) — exercises the sk- hashing branch.
+    raw_key = "sk-test123456789"
+    hashed = hash_token(raw_key)
+
+    delete_calls = []
+    redis_cache = _make_redis_cache_mock(delete_calls=delete_calls)
+    proxy_logging_obj = _make_proxy_logging_obj_mock(redis_cache)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    request = ResetMprRequest(api_key=raw_key)
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    result = await reset_mpr_counter(request=request, user_api_key_dict=auth)
+
+    # The returned api_key is the hashed token, and the redis keys use the hash.
+    assert result["api_key"] == hashed
+    assert f"{{api_key:{hashed}}}:max_parallel_requests" in delete_calls
+
+
+@pytest.mark.asyncio
+async def test_reset_mpr_counter_no_redis_available(monkeypatch):
+    """When Redis is not configured, the endpoint reports redis_available=False and deletes nothing."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        ResetMprRequest,
+        reset_mpr_counter,
+    )
+
+    token = "hashed-token-no-redis"
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache = None
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    request = ResetMprRequest(api_key=token)
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    result = await reset_mpr_counter(request=request, user_api_key_dict=auth)
+
+    assert result["redis_available"] is False
+    assert result["deleted_keys"] == []
+

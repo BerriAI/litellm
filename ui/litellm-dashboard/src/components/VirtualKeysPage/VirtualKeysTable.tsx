@@ -26,7 +26,7 @@ import {
   Text,
 } from "@tremor/react";
 import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
+import { Button as AntButton, message, Popconfirm, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
 import React, { useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
@@ -34,6 +34,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import KeyInfoView from "../templates/key_info_view";
+import { resetMprConcurrencyCall } from "../networking";
 
 type KeyFilterState = {
   "Team ID": string;
@@ -64,7 +65,7 @@ const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
   keyHash: filters["Key Hash"].trim() || undefined,
 });
 
-export function VirtualKeysTable() {
+export function VirtualKeysTable({ accessToken }: { accessToken?: string | null }) {
   const { data: fetchedOrganizations, isLoading: isOrgsLoading } = useOrganizations();
   const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
@@ -75,6 +76,8 @@ export function VirtualKeysTable() {
   });
   const [filters, setFilters] = useState<KeyFilterState>(DEFAULT_KEY_FILTERS);
   const [debouncedFilters] = useDebouncedValue(filters, { wait: 300 });
+  // Tracks which keys currently have an in-flight MPR reset (keyed by token).
+  const [resettingTokens, setResettingTokens] = useState<Record<string, boolean>>({});
 
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
@@ -121,6 +124,39 @@ export function VirtualKeysTable() {
   const handleFilterReset = () => {
     setFilters(DEFAULT_KEY_FILTERS);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
+  };
+
+  const handleResetMpr = async (key: KeyResponse) => {
+    if (!accessToken) {
+      message.error("Access token is required to reset the MPR counter.");
+      return;
+    }
+    if (!key.token) {
+      message.error("This key has no token to reset.");
+      return;
+    }
+    setResettingTokens((prev) => ({ ...prev, [key.token]: true }));
+    try {
+      const result = await resetMprConcurrencyCall(accessToken, key.token);
+      if (result.redis_available) {
+        message.success(
+          `MPR Redis keys cleared (${result.deleted_keys.length} key(s) deleted). The key is unblocked.`
+        );
+      } else {
+        message.warning(
+          "Redis was not available on the server — no keys were deleted."
+        );
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "Failed to reset MPR counter.";
+      message.error(errMsg);
+    } finally {
+      setResettingTokens((prev) => {
+        const next = { ...prev };
+        delete next[key.token];
+        return next;
+      });
+    }
   };
 
   const totalCount = keys?.total_count ?? 0;
@@ -576,8 +612,43 @@ export function VirtualKeysTable() {
           );
         },
       },
+      {
+        id: "actions",
+        header: "Actions",
+        size: 130,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const key = row.original;
+          // Only show Reset MPR when the key actually has an MPR limit configured.
+          if (key.max_parallel_requests == null) {
+            return null;
+          }
+          const isResetting = !!resettingTokens[key.token];
+          return (
+            <Popconfirm
+              title="Reset MPR counter?"
+              description="Deletes the Redis max_parallel_requests keys for this key, immediately unblocking it. Use only when a key is blocked by a stale counter."
+              okText="Reset"
+              okButtonProps={{ danger: true, loading: isResetting }}
+              cancelText="Cancel"
+              disabled={!accessToken || isResetting}
+              onConfirm={() => handleResetMpr(key)}
+            >
+              <AntButton
+                size="small"
+                danger
+                disabled={!accessToken || isResetting}
+                loading={isResetting}
+                data-testid={`reset-mpr-${key.token_id}`}
+              >
+                Reset MPR
+              </AntButton>
+            </Popconfirm>
+          );
+        },
+      },
     ],
-    [allTeams, resolvedOrganizations],
+    [allTeams, resolvedOrganizations, resettingTokens, accessToken],
   );
 
   const filterOptions: FilterOption[] = [

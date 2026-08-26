@@ -19,7 +19,7 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -4452,6 +4452,105 @@ async def concurrent_request_logs(
 
     except Exception as e:
         verbose_proxy_logger.error(f"[concurrent_request_logs] Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
+
+
+class ResetMprRequest(BaseModel):
+    api_key: str = Field(
+        description="The key token (hashed) as shown in the Virtual Keys UI, e.g. the `token` field of a key. "
+        "A raw `sk-...` key is also accepted and will be hashed server-side."
+    )
+
+
+@router.post(
+    "/concurrent_request_logs/reset_mpr",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def reset_mpr_counter(
+    request: ResetMprRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Reset the max_parallel_requests (MPR) Redis state for a key by deleting its
+    MPR Redis keys.
+
+    Use this when a key is blocked by a stale MPR counter (e.g. after a pod
+    restart an increment happened without a matching decrement). Deleting the
+    keys immediately unblocks the key — the next request recreates the counter
+    fresh starting at 1.
+
+    Requires PROXY_ADMIN.
+
+    Flow:
+      1. Hash the incoming token if a raw `sk-...` key was passed.
+      2. Delete both MPR Redis keys for descriptor ("api_key", token):
+           - legacy string counter: `{api_key:<token>}:max_parallel_requests`
+           - lease ZSET:            `{api_key:<token>}:max_parallel_requests_leases`
+    """
+    # Restrict to PROXY_ADMIN — this mutates shared Redis rate-limit state.
+    if (
+        user_api_key_dict.user_role is None
+        or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "Only proxy admins can reset the max_parallel_requests counter."
+            },
+        )
+
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        MAX_PARALLEL_REQUESTS_LEASE_KEY_SUFFIX,
+    )
+    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.utils import _hash_token_if_needed
+
+    token = _hash_token_if_needed(request.api_key)
+
+    # Build the MPR Redis keys for descriptor ("api_key", token). Both the legacy
+    # string counter and the ZSET lease key are deleted so the reset works
+    # regardless of which limiter path is active.
+    legacy_counter_key = f"{{api_key:{token}}}:max_parallel_requests"
+    lease_zset_key = f"{{api_key:{token}}}:{MAX_PARALLEL_REQUESTS_LEASE_KEY_SUFFIX}"
+    keys_to_delete = [legacy_counter_key, lease_zset_key]
+
+    deleted_keys: List[str] = []
+    redis_available = False
+
+    try:
+        redis_cache = proxy_logging_obj.internal_usage_cache.dual_cache.redis_cache
+        if redis_cache is not None:
+            redis_available = True
+            for key in keys_to_delete:
+                try:
+                    await redis_cache.async_delete_cache(key=key)
+                    deleted_keys.append(key)
+                except Exception as del_err:
+                    verbose_proxy_logger.warning(
+                        f"[reset_mpr] Failed to delete Redis key {key}: {del_err}"
+                    )
+
+        verbose_proxy_logger.info(
+            f"[reset_mpr] Reset by user_id={user_api_key_dict.user_id} "
+            f"token={token} deleted_keys={deleted_keys} "
+            f"redis_available={redis_available}"
+        )
+
+        return {
+            "api_key": token,
+            "deleted_keys": deleted_keys,
+            "redis_available": redis_available,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.error(f"[reset_mpr] Error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": str(e)},
