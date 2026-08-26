@@ -97,6 +97,32 @@ class TestLoggingWorker:
             logging.raiseExceptions = previous_raise_exceptions
             logger.removeHandler(handler)
 
+    def test_flush_on_exit_rescues_dequeued_coroutine_never_started(self):
+        """
+        Regression test for cache-hit success callbacks lost in short-lived SDK scripts:
+        the worker loop dequeues the task, then ``asyncio.run`` cancels the processing
+        task before it ever runs, so the coroutine leaves the queue without being
+        awaited and the atexit flush used to find an empty queue and rescue nothing.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        fired = []
+
+        async def marker():
+            fired.append(True)
+
+        async def short_lived_script():
+            worker.ensure_initialized_and_enqueue(marker())
+
+        asyncio.run(short_lived_script())
+
+        assert worker._queue is not None
+        assert worker._queue.qsize() == 0, "precondition: the worker loop dequeued the task before loop close"
+        assert fired == [], "precondition: the callback never ran before loop close"
+
+        worker._flush_on_exit()
+
+        assert fired == [True]
+
     def test_flush_on_exit_swallows_errors_and_drains_remaining(self):
         """A failing queued coroutine must not abort the atexit drain of later events."""
         worker = LoggingWorker(timeout=1.0, max_queue_size=10)
