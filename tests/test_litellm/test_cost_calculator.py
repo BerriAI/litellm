@@ -4116,3 +4116,94 @@ def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
     }
 
     assert deviations == {}
+
+
+def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) -> None:
+    """Regression for https://github.com/BerriAI/litellm/issues/31087: realtime sessions on the
+    GA vertex model gemini-live-2.5-flash-native-audio must bill at its published rates instead
+    of logging zero spend because only the preview-09-2025 key existed in the cost map."""
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gemini-live-2.5-flash-native-audio"}},
+    ]
+    combined_usage_object = Usage(
+        prompt_tokens=8,
+        completion_tokens=25,
+        total_tokens=33,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=8, audio_tokens=0),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=2, audio_tokens=23),
+    )
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name="vertex_ai/gemini-live-2.5-flash-native-audio",
+    )
+
+    expected_cost = 8 * 5e-07 + 2 * 2e-06 + 23 * 1.2e-05
+    assert cost == pytest.approx(expected_cost, rel=1e-9)
+
+
+def test_realtime_priceless_deployment_entry_falls_through_to_priced_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for https://github.com/BerriAI/litellm/issues/31087: the router registers every
+    deployment's backend key into litellm.model_cost without price fields, and the realtime cost
+    handler used to accept that zero-defaulted entry for the session.created model and stop, so a
+    configured base_model never priced the session."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/some-unmapped-live-model",
+        {"litellm_provider": "vertex_ai", "mode": "realtime"},
+    )
+    priced_model = "vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025"
+    priced_entry = litellm.model_cost["gemini-live-2.5-flash-preview-native-audio-09-2025"]
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "some-unmapped-live-model"}},
+    ]
+    combined_usage_object = Usage(prompt_tokens=8, completion_tokens=25, total_tokens=33)
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name=priced_model,
+    )
+
+    expected_cost = 8 * priced_entry["input_cost_per_token"] + 25 * priced_entry["output_cost_per_token"]
+    assert cost == pytest.approx(expected_cost, rel=1e-9)
+    assert cost > 0
+
+
+def test_realtime_explicitly_free_session_model_still_bills_zero(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session model whose cost map entry explicitly declares zero rates is genuinely free, so
+    the handler must keep billing it at zero instead of falling through to a priced fallback."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/free-live-model",
+        {
+            "litellm_provider": "vertex_ai",
+            "mode": "realtime",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    )
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "free-live-model"}},
+    ]
+    combined_usage_object = Usage(prompt_tokens=8, completion_tokens=25, total_tokens=33)
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name="vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025",
+    )
+
+    assert cost == 0.0

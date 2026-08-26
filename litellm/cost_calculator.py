@@ -2,6 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import time
+from collections.abc import Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -2370,6 +2371,61 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
 
 
+def _candidate_realtime_token_costs(
+    model_name: str,
+    combined_usage_object: Usage,
+    custom_llm_provider: str,
+    data_residency: str | None,
+) -> tuple[float, float] | None:
+    try:
+        return generic_cost_per_token(
+            model=model_name,
+            usage=combined_usage_object,
+            custom_llm_provider=custom_llm_provider,
+            data_residency=data_residency,
+        )
+    except Exception:
+        return None
+
+
+def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) -> bool:
+    entries: Final = (
+        litellm.model_cost.get(model_name),
+        litellm.model_cost.get(f"{custom_llm_provider}/{model_name}"),
+    )
+    return any(entry is not None and any("cost_per" in field for field in entry) for entry in entries)
+
+
+def _first_priced_realtime_token_costs(
+    potential_model_names: Sequence[str | None],
+    combined_usage_object: Usage,
+    custom_llm_provider: str,
+    data_residency: str | None,
+) -> tuple[float, float]:
+    candidate_costs: Final = (
+        (model_name, costs)
+        for model_name in potential_model_names
+        if model_name is not None
+        and (
+            costs := _candidate_realtime_token_costs(
+                model_name=model_name,
+                combined_usage_object=combined_usage_object,
+                custom_llm_provider=custom_llm_provider,
+                data_residency=data_residency,
+            )
+        )
+        is not None
+    )
+    return next(
+        (
+            costs
+            for model_name, costs in candidate_costs
+            if sum(costs) > 0 or _cost_map_entry_declares_pricing(model_name, custom_llm_provider)
+        ),
+        (0.0, 0.0),
+    )
+
+
 def handle_realtime_stream_cost_calculation(
     results: OpenAIRealtimeStreamList,
     combined_usage_object: Usage,
@@ -2394,24 +2450,12 @@ def handle_realtime_stream_cost_calculation(
             potential_model_names.append(received_model)
 
     potential_model_names.append(litellm_model_name)
-    input_cost_per_token = 0.0
-    output_cost_per_token = 0.0
-
-    for model_name in potential_model_names:
-        try:
-            if model_name is None:
-                continue
-            _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
-                model=model_name,
-                usage=combined_usage_object,
-                custom_llm_provider=custom_llm_provider,
-                data_residency=data_residency,
-            )
-        except Exception:
-            continue
-        input_cost_per_token += _input_cost_per_token
-        output_cost_per_token += _output_cost_per_token
-        break  # exit if we find a valid model
+    input_cost_per_token, output_cost_per_token = _first_priced_realtime_token_costs(
+        potential_model_names=potential_model_names,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider=custom_llm_provider,
+        data_residency=data_residency,
+    )
     transcription_cost: Final = (
         handle_realtime_transcription_cost_calculation(
             results=results,
