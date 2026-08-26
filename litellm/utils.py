@@ -1073,7 +1073,7 @@ def function_setup(
                 verbose_logger.debug("Error extracting messages from Google contents: %s", e)
                 messages = "default-message-value"
         elif call_type in NON_INFERENCE_CALL_TYPES:
-            messages = ()
+            messages = []  # mutable-ok: loggers require a list here and Logging copies it
         else:
             messages = "default-message-value"
         stream = False

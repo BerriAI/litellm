@@ -4953,15 +4953,25 @@ class TestNonInferenceCallTypesAreNotBilled:
         assert payload is not None
         assert payload["total_tokens"] == 6000
 
-    def test_read_calls_do_not_log_a_placeholder_chat_message(self):
+    def _read_call_messages(self):
         logging_obj, _ = litellm.utils.function_setup(
             original_function="aget_responses",
             rules_obj=litellm.utils.Rules(),
             start_time=time.time(),
             **{"litellm_call_id": "lit5602-setup", "response_id": "resp_lit5602"},
         )
+        return logging_obj.model_call_details["messages"]
 
-        assert logging_obj.model_call_details["messages"] == ()
+    def test_read_calls_do_not_log_a_placeholder_chat_message(self):
+        assert self._read_call_messages() == []
+
+    def test_read_call_messages_survive_a_logger_that_walks_them(self):
+        """Loggers reach into this value expecting a chat history and branch on it being a list.
+        An empty list reads as no messages; a tuple matches no branch and crashes the success hook,
+        and None is not iterable where other loggers walk it."""
+        from litellm.integrations.lunary import parse_messages
+
+        assert parse_messages(self._read_call_messages()) == []
 
 
 def _build_success_payload(logging_obj, kwargs):
