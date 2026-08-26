@@ -35,9 +35,6 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     def _include_function_response_id(self) -> bool:
         return False
 
-    def _strip_native_audio_speech_config(self) -> bool:
-        return False
-
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------

@@ -115,13 +115,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
         return True
 
-    def _strip_native_audio_speech_config(self) -> bool:
-        """Google AI Studio native-audio Live was never verified to accept ``speechConfig`` on setup.
-
-        Vertex AI accepts it and reads the requested voice.
-        """
-        return True
-
     @staticmethod
     def _usage_detail_alias(details: Any, defaults: dict[str, int]) -> dict[str, Any]:
         if not isinstance(details, dict):
@@ -391,10 +384,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return bool(entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live"))
 
     @staticmethod
-    def _is_native_audio_model(model: str) -> bool:
-        return bool(GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio"))
-
-    @staticmethod
     def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:
         """Map unsupported TEXT responseModalities to AUDIO for audio-only Live models."""
         normalized: Final = [
@@ -407,8 +396,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         without_text: Final = [modality for modality in normalized if modality != "TEXT"]
         return without_text if without_text else ["AUDIO"]
 
-    def _finalize_gemini_live_setup(self, model: str, setup: dict[str, Any]) -> dict[str, Any]:
-        """Drop fields Gemini Live native-audio rejects on ``setup``."""
+    @staticmethod
+    def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:
         generation_config: Final = setup.get("generationConfig")
         if isinstance(generation_config, dict):
             modalities: Final = generation_config.get("responseModalities")
@@ -416,8 +405,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
                     model, modalities
                 )
-            if self._strip_native_audio_speech_config() and GeminiRealtimeConfig._is_native_audio_model(model):
-                generation_config.pop("speechConfig", None)
         return setup
 
     def _handle_session_update(

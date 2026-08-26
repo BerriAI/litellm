@@ -491,8 +491,8 @@ def test_vertex_native_audio_keeps_requested_voice(patch_native_audio_cost_map_e
     assert generation_config["responseModalities"] == ["AUDIO"]
 
 
-def test_google_ai_studio_native_audio_still_strips_voice(patch_native_audio_cost_map_entry):
-    """Google AI Studio's own native-audio Live is untouched: only Vertex was verified to accept speechConfig."""
+def test_google_ai_studio_native_audio_keeps_requested_voice(patch_native_audio_cost_map_entry):
+    """Regression: AI Studio native-audio Live accepts speechConfig too, so the voice survives on both providers."""
     from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
     messages = GeminiRealtimeConfig().transform_realtime_request(
@@ -510,7 +510,7 @@ def test_google_ai_studio_native_audio_still_strips_voice(patch_native_audio_cos
     )
 
     generation_config = json.loads(messages[0])["setup"]["generationConfig"]
-    assert "speechConfig" not in generation_config
+    assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Aoede"
 
 
 def test_vertex_native_audio_drops_openai_stock_voice(patch_native_audio_cost_map_entry):
