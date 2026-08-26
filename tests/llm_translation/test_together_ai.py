@@ -23,14 +23,14 @@ class TestTogetherAI(BaseLLMChatTest):
         pass
 
     @pytest.mark.parametrize(
-        "model, expected_bool",
+        "model, supports_response_format",
         [
             ("meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", True),
             ("nvidia/Llama-3.1-Nemotron-70B-Instruct-HF", False),
         ],
     )
     def test_get_supported_response_format_together_ai(
-        self, model: str, expected_bool: bool
+        self, model: str, supports_response_format: bool
     ) -> None:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -40,9 +40,8 @@ class TestTogetherAI(BaseLLMChatTest):
         # Mapped provider
         assert isinstance(optional_params, list)
 
-        if expected_bool:
+        assert "tools" in optional_params
+        if supports_response_format:
             assert "response_format" in optional_params
-            assert "tools" in optional_params
         else:
             assert "response_format" not in optional_params
-            assert "tools" not in optional_params
