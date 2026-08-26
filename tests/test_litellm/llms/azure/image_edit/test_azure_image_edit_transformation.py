@@ -235,14 +235,6 @@ def test_api_version_in_api_base_query_is_preserved(monkeypatch):
     assert _query_params(url) == {"api-version": "2024-05-01-preview"}
 
 
-# ---------------------------------------------------------------------------
-# Azure v1 API surface (api_version in {"v1", "preview", "latest"})
-#
-# The v1 surface exposes /openai/v1/images/edits and routes by ``model`` in the
-# multipart form. Building the deployment-scoped path instead makes Azure 404.
-# ---------------------------------------------------------------------------
-
-
 def test_v1_api_version_uses_v1_route_and_keeps_model(monkeypatch):
     monkeypatch.setattr(litellm, "api_version", None, raising=False)
     monkeypatch.delenv("AZURE_API_VERSION", raising=False)
@@ -286,3 +278,17 @@ def test_dated_api_version_still_uses_deployment_route(monkeypatch):
     )
 
     assert urllib.parse.urlparse(url).path == f"/openai/deployments/{_FALLBACK_MODEL}/images/edits"
+
+
+def test_v1_api_version_replaces_deployment_scoped_api_base(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", None, raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=f"{_FALLBACK_API_BASE}/openai/deployments/{_FALLBACK_MODEL}/images/edits",
+        litellm_params={"api_version": "preview"},
+    )
+
+    assert urllib.parse.urlparse(url).path == "/openai/v1/images/edits"
+    assert _query_params(url) == {"api-version": "preview"}
