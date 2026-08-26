@@ -13,7 +13,7 @@ the JSON, then run `npm run gen:api` in ui/litellm-dashboard and commit schema.d
 import json
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -93,13 +93,13 @@ def _normalize_operation_ids(paths: dict[str, dict]) -> None:
 
 
 class SnapshotFragment(TypedDict):
-    paths: ReadOnly[dict[str, dict[str, object]]]
-    components: ReadOnly[dict[str, dict[str, object]]]
+    paths: ReadOnly[Mapping[str, Mapping[str, object]]]
+    components: ReadOnly[Mapping[str, Mapping[str, object]]]
 
 
 @dataclass(frozen=True, slots=True)
 class SnapshotResult:
-    fragments: dict[str, SnapshotFragment]
+    fragments: Mapping[str, SnapshotFragment]
     skipped: tuple[str, ...]
 
 
@@ -114,40 +114,47 @@ def _register_feature(app: "FastAPI", feat: "LazyFeature") -> str | None:
     return None
 
 
-def generate_snapshot() -> SnapshotResult:
+def _feature_fragment(app: "FastAPI", feat: "LazyFeature", used_operation_ids: set[str]) -> SnapshotFragment | None:
     from fastapi.openapi.utils import get_openapi
 
+    from litellm.proxy.proxy_server import ensure_unique_openapi_operation_ids
+
+    feat_routes: Final = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
+    if not feat_routes:
+        return None
+    _stabilize_multi_method_route_ids(feat_routes)
+    full: Final = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+    paths: Final = full.get("paths", {})
+    _normalize_operation_ids(paths)
+    # Group all of a feature's routes under one tag.
+    for path_ops in paths.values():
+        for method, op in path_ops.items():
+            if isinstance(op, dict):
+                operation_id = op.get("operationId")
+                if isinstance(operation_id, str):
+                    for suffix in HTTP_METHOD_SUFFIXES:
+                        if operation_id.endswith(f"_{suffix}"):
+                            op["operationId"] = operation_id[: -len(suffix)] + method
+                            break
+                op["tags"] = [feat.name]
+    unique: Final = ensure_unique_openapi_operation_ids(full, used_operation_ids)
+    return {
+        "paths": paths,
+        "components": {"schemas": unique.get("components", {}).get("schemas", {})},
+    }
+
+
+def generate_snapshot() -> SnapshotResult:
     from litellm.proxy._lazy_features import LAZY_FEATURES
-    from litellm.proxy.proxy_server import app, ensure_unique_openapi_operation_ids
+    from litellm.proxy.proxy_server import app
 
     skipped: Final = tuple(name for feat in LAZY_FEATURES if (name := _register_feature(app, feat)) is not None)
-
-    fragments: Final[dict[str, SnapshotFragment]] = {}
     used_operation_ids: Final[set[str]] = set()
-    for feat in LAZY_FEATURES:
-        feat_routes = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
-        if not feat_routes:
-            continue
-        _stabilize_multi_method_route_ids(feat_routes)
-        full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
-        paths = full.get("paths", {})
-        _normalize_operation_ids(paths)
-        # Group all of a feature's routes under one tag.
-        for path_ops in full.get("paths", {}).values():
-            for method, op in path_ops.items():
-                if isinstance(op, dict):
-                    operation_id = op.get("operationId")
-                    if isinstance(operation_id, str):
-                        for suffix in HTTP_METHOD_SUFFIXES:
-                            if operation_id.endswith(f"_{suffix}"):
-                                op["operationId"] = operation_id[: -len(suffix)] + method
-                                break
-                    op["tags"] = [feat.name]
-        full = ensure_unique_openapi_operation_ids(full, used_operation_ids)
-        fragments[feat.name] = {
-            "paths": paths,
-            "components": {"schemas": full.get("components", {}).get("schemas", {})},
-        }
+    fragments: Final = {
+        feat.name: fragment
+        for feat in LAZY_FEATURES
+        if (fragment := _feature_fragment(app, feat, used_operation_ids)) is not None
+    }
     return SnapshotResult(fragments=fragments, skipped=skipped)
 
 
