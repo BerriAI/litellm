@@ -74,34 +74,57 @@ async def test_fallback_preflight_strips_injected_api_key_context_when_none_auth
     assert "user_api_key_auth" not in fallback_request.get("metadata", {})
 
 
-def test_retry_scoped_deployment_exclusions_survive_router_pop_until_fallback_advances():
+def test_retry_scoped_deployment_exclusions_survive_router_pop_and_weighted_failover():
     deployments = [
         {"model_info": {"id": "validated-deployment"}},
         {"model_info": {"id": "unvalidated-deployment"}},
+        {"model_info": {"id": "failed-deployment"}},
     ]
     request_kwargs = {
+        "model": "fallback-model",
         "fallback_depth": 1,
         "_excluded_deployment_ids": ["unvalidated-deployment"],
     }
 
     first_lookup = filter_team_based_models(deployments, request_kwargs)
-    assert [item["model_info"]["id"] for item in first_lookup] == ["validated-deployment"]
+    assert [item["model_info"]["id"] for item in first_lookup] == [
+        "validated-deployment",
+        "failed-deployment",
+    ]
 
     # Router health selection consumes the public exclusion key after team
-    # filtering. A retry at the same fallback depth must restore it.
+    # filtering. A retry of the same trusted target must restore it.
     request_kwargs.pop("_excluded_deployment_ids")
     retry_lookup = filter_team_based_models(deployments, request_kwargs)
-    assert [item["model_info"]["id"] for item in retry_lookup] == ["validated-deployment"]
+    assert [item["model_info"]["id"] for item in retry_lookup] == [
+        "validated-deployment",
+        "failed-deployment",
+    ]
     assert request_kwargs["_excluded_deployment_ids"] == ["unvalidated-deployment"]
 
-    # Moving to the next trusted fallback increments fallback_depth. The old
-    # target's exclusions must no longer constrain that new fallback.
-    request_kwargs.pop("_excluded_deployment_ids")
+    # Weighted failover can increment fallback_depth while still retrying the
+    # same trusted target and provide a fresh exclusion containing only the
+    # deployment that just failed. That exclusion must be unioned with the
+    # persisted preflight boundary, not replace it.
     request_kwargs["fallback_depth"] = 2
+    request_kwargs["_excluded_deployment_ids"] = ["failed-deployment"]
+    weighted_retry_lookup = filter_team_based_models(deployments, request_kwargs)
+    assert [item["model_info"]["id"] for item in weighted_retry_lookup] == ["validated-deployment"]
+    assert request_kwargs["_excluded_deployment_ids"] == [
+        "failed-deployment",
+        "unvalidated-deployment",
+    ]
+
+    # Moving to a different trusted fallback target clears the old target's
+    # persisted preflight boundary, even if fallback_depth changes again.
+    request_kwargs.pop("_excluded_deployment_ids")
+    request_kwargs["model"] = "next-fallback-model"
+    request_kwargs["fallback_depth"] = 3
     next_fallback_lookup = filter_team_based_models(deployments, request_kwargs)
     assert [item["model_info"]["id"] for item in next_fallback_lookup] == [
         "validated-deployment",
         "unvalidated-deployment",
+        "failed-deployment",
     ]
 
 
