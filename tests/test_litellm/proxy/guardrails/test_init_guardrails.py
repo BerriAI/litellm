@@ -5,6 +5,7 @@ import pytest
 
 
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 
@@ -153,3 +154,90 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     ]
     assert initialized, "presidio guardrail was not registered as a callback"
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
+
+
+def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
+    """
+    Regression: one guardrail with an invalid litellm_params combination (Lakera's
+    on_flagged="inject_system_message" with mode="during_call", which LakeraAIGuardrail's
+    __init__ rejects with ValueError) must not take down the entire proxy at startup.
+    init_guardrails_v2 previously had no try/except around initialize_guardrail, so this
+    ValueError propagated all the way through proxy_server.py's load_config and crashed
+    the whole process, including every other, correctly-configured guardrail in the list.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "broken_lakera_advisory",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.LAKERA_V2.value,
+                "mode": "during_call",
+                "on_flagged": "inject_system_message",
+                "api_key": "fake-key",
+            },
+        },
+        {
+            "guardrail_name": "healthy_presidio",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": "pre_call",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    guardrail_names = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "broken_lakera_advisory" not in guardrail_names
+    assert "healthy_presidio" in guardrail_names
+
+
+def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
+    """
+    Regression: a malformed advisory_system_message (missing the {reason} placeholder
+    LakeraAIGuardrail's __init__ requires) is a second, independent trigger for the same
+    uncaught-ValueError-crashes-boot root cause as the during_call+inject_system_message
+    case above. Both must be caught by init_guardrails_v2, not just one.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "broken_lakera_template",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.LAKERA_V2.value,
+                "mode": "pre_call",
+                "on_flagged": "inject_system_message",
+                "advisory_system_message": "This request was flagged, no placeholder here",
+                "api_key": "fake-key",
+            },
+        },
+        {
+            "guardrail_name": "healthy_presidio",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": "pre_call",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    guardrail_names = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "broken_lakera_template" not in guardrail_names
+    assert "healthy_presidio" in guardrail_names
