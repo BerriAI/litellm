@@ -1689,7 +1689,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </FormField>
                 </FieldGroup>
 
-                <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
+                <div className="sticky z-chrome -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
                   <div className="flex items-center justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                       Cancel
@@ -1921,7 +1921,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(info.team_id, "team-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["team-id"]
                   ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent"
