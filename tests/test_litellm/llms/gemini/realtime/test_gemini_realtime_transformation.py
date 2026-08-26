@@ -1865,3 +1865,14 @@ def test_is_setup_message_and_is_content_message():
     assert config.is_content_message({"clientContent": {}}) is True
     assert config.is_content_message({"toolResponse": {}}) is True
     assert config.is_content_message({"setup": {}}) is False
+
+
+def test_map_openai_params_maps_stock_voice_case_insensitively():
+    """Regression: OpenAI stock voices map to Gemini prebuilt voices regardless of casing; unknown names pass through."""
+    cfg = GeminiRealtimeConfig()
+
+    mapped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
+    assert mapped["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Zephyr"
+
+    passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
+    assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"

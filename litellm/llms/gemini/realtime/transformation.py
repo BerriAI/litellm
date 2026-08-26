@@ -4,6 +4,8 @@ This file contains the transformation logic for the Gemini realtime API.
 
 import json
 from collections import OrderedDict
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import litellm
@@ -72,6 +74,22 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
 
 
+GEMINI_LIVE_VOICE_MAPPINGS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "alloy": "Zephyr",
+        "ash": "Charon",
+        "ballad": "Fenrir",
+        "cedar": "Charon",
+        "coral": "Aoede",
+        "echo": "Puck",
+        "marin": "Aoede",
+        "sage": "Kore",
+        "shimmer": "Leda",
+        "verse": "Orus",
+    }
+)
+
+
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
 
@@ -93,7 +111,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return True
 
     def _strip_native_audio_speech_config(self) -> bool:
-        """Google AI Studio native-audio Live rejects ``speechConfig`` on setup; Vertex AI accepts it."""
+        """Google AI Studio native-audio Live was never verified to accept ``speechConfig`` on setup; Vertex AI accepts it."""
         return True
 
     @staticmethod
@@ -291,7 +309,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
 
                 vertex_gemini_config = VertexGeminiConfig()
-                speech_config = vertex_gemini_config._map_audio_params({"voice": value})
+                gemini_voice = GEMINI_LIVE_VOICE_MAPPINGS.get(value.lower(), value) if isinstance(value, str) else value
+                speech_config = vertex_gemini_config._map_audio_params({"voice": gemini_voice})
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
