@@ -72,6 +72,15 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
 
+  const [excludeInternalHealthChecks, setExcludeInternalHealthChecks] = useState<boolean>(() => {
+    const storedValue = sessionStorage.getItem("excludeInternalHealthChecks");
+    return storedValue !== null ? JSON.parse(storedValue) : false;
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
+  }, [excludeInternalHealthChecks]);
+
   const { logsQuery, filteredLogs, allTeams } = useLogFilterLogic({
     accessToken,
     token,
@@ -80,6 +89,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     columnFilters,
     activeTab: isActive ? "request logs" : "inactive",
     isLiveTail,
+    excludeInternalHealthChecks,
     startTime,
     endTime,
     pagination,
@@ -219,6 +229,14 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
+  const handleExcludeInternalHealthChecksChange = useCallback(
+    (value: boolean) => {
+      setExcludeInternalHealthChecks(value);
+      resetToFirstPage();
+    },
+    [resetToFirstPage],
+  );
+
   const handleResetFilters = useCallback(() => {
     setColumnFilters([]);
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
@@ -313,6 +331,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
             onSelectedTimeIntervalChange={setSelectedTimeInterval}
             isLiveTail={isLiveTail}
             onIsLiveTailChange={setIsLiveTail}
+            excludeInternalHealthChecks={excludeInternalHealthChecks}
+            onExcludeInternalHealthChecksChange={handleExcludeInternalHealthChecksChange}
             onResetToFirstPage={resetToFirstPage}
             onResetFilters={handleResetFilters}
           />

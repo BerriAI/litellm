@@ -434,6 +434,35 @@ describe("RequestLogsPanel", () => {
     });
   });
 
+  describe("hide health checks", () => {
+    const toggle = () => screen.getByRole("switch", { name: "Hide Health Checks" });
+
+    it("defaults to showing health checks and refetches without them from page 1 when toggled on", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
+      expect(toggle()).not.toBeChecked();
+
+      await user.click(toggle());
+
+      await waitFor(() => expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true));
+      expect(lastCall()?.page).toBe(1);
+      expect(toggle()).toBeChecked();
+      expect(sessionStorage.getItem("excludeInternalHealthChecks")).toBe("true");
+    });
+
+    it("restores the persisted toggle from sessionStorage", async () => {
+      sessionStorage.setItem("excludeInternalHealthChecks", "true");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true);
+      expect(toggle()).toBeChecked();
+    });
+  });
+
   describe("live tail", () => {
     it("shows the auto-refresh banner on the first page and hides it once stopped", async () => {
       const user = userEvent.setup();
