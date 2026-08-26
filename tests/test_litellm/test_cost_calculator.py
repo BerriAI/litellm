@@ -4119,9 +4119,7 @@ def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
 
 
 def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) -> None:
-    """Regression for https://github.com/BerriAI/litellm/issues/31087: realtime sessions on the
-    GA vertex model gemini-live-2.5-flash-native-audio must bill at its published rates instead
-    of logging zero spend because only the preview-09-2025 key existed in the cost map."""
+    """Regression for https://github.com/BerriAI/litellm/issues/31087."""
     from litellm.types.utils import CompletionTokensDetailsWrapper
 
     results: OpenAIRealtimeStreamList = [
@@ -4163,11 +4161,7 @@ def test_gemini_live_native_audio_ga_realtime_cost(_local_model_cost_map: None) 
 def test_realtime_priceless_deployment_entry_falls_through_to_priced_model(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, priceless_entry: dict
 ) -> None:
-    """Regression for https://github.com/BerriAI/litellm/issues/31087: the router registers every
-    deployment's backend key into litellm.model_cost without price fields (and merges a None-valued
-    ModelInfo skeleton into mapped entries), and the realtime cost handler used to accept that
-    zero-defaulted entry for the session.created model and stop, so a configured base_model never
-    priced the session."""
+    """Regression for https://github.com/BerriAI/litellm/issues/31087 (router-registered priceless entries)."""
     monkeypatch.setitem(
         litellm.model_cost,
         "vertex_ai/some-unmapped-live-model",
@@ -4196,8 +4190,6 @@ def test_realtime_priceless_deployment_entry_falls_through_to_priced_model(
 def test_realtime_explicitly_free_session_model_still_bills_zero(
     _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A session model whose cost map entry explicitly declares zero rates is genuinely free, so
-    the handler must keep billing it at zero instead of falling through to a priced fallback."""
     monkeypatch.setitem(
         litellm.model_cost,
         "vertex_ai/free-live-model",
