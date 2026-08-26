@@ -4,7 +4,9 @@ import contextlib
 import copy
 import json
 import os
-from typing import Any, Final
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import pytest
@@ -2965,24 +2967,47 @@ async def test_acompletion_resolves_provider_from_api_base():
     assert response.choices[0].message.content == "resolved"
 
 
+@dataclass(frozen=True, slots=True)
+class _RecordedSpeechSuccess:
+    call_type: str | None
+    spend_metadata: Mapping[str, object]
+    response_cost: float | None
+    logged_response_cost: float | None
+
+
+def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
+    call_type: Final = payload.get("call_type")
+    response_cost: Final = payload.get("response_cost")
+    logging_payload: Final = payload.get("standard_logging_object")
+    logged_cost: Final = logging_payload.get("response_cost") if isinstance(logging_payload, dict) else None
+    return _RecordedSpeechSuccess(
+        call_type=call_type if isinstance(call_type, str) else None,
+        spend_metadata=get_litellm_metadata_from_kwargs(payload),
+        response_cost=response_cost if isinstance(response_cost, float) else None,
+        logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
+    )
+
+
 class _SuccessEventRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.events: list[dict[str, Any]] = []  # mutable-ok: test recorder of success-callback kwargs
+        self.events: list[_RecordedSpeechSuccess] = []  # mutable-ok: test recorder of success-callback events
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        self.events.append(kwargs)
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_speech_success(kwargs))
 
 
-async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: str) -> dict[str, Any]:
+async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: str) -> _RecordedSpeechSuccess:
     for _ in range(100):
-        if (event := next((e for e in recorder.events if e.get("call_type") == call_type), None)) is not None:
+        if (event := next((e for e in recorder.events if e.call_type == call_type), None)) is not None:
             return event
         await asyncio.sleep(0.05)
-    pytest.fail(f"no {call_type} success event; got {[e.get('call_type') for e in recorder.events]}")
+    pytest.fail(f"no {call_type} success event; got {[e.call_type for e in recorder.events]}")
 
 
-def _gemini_tts_generate_content_response() -> dict[str, Any]:
+def _gemini_tts_generate_content_response() -> dict[str, object]:
     return {
         "candidates": [
             {
@@ -3033,14 +3058,13 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
 
     assert mock_route.called
     speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
-    spend_metadata: Final = get_litellm_metadata_from_kwargs(speech_event)
-    assert spend_metadata["user_api_key"] == "hashed-virtual-key"
-    assert spend_metadata["user_api_key_user_id"] == "user-1"
+    assert speech_event.spend_metadata["user_api_key"] == "hashed-virtual-key"
+    assert speech_event.spend_metadata["user_api_key_user_id"] == "user-1"
     expected_prompt_cost, expected_completion_cost = litellm.cost_per_token(
         model="gemini/gemini-2.5-flash-preview-tts",
         usage_object=Usage(prompt_tokens=5, completion_tokens=60, total_tokens=65),
     )
     expected_cost: Final = expected_prompt_cost + expected_completion_cost
     assert expected_cost > 0
-    assert speech_event["response_cost"] == pytest.approx(expected_cost)
-    assert speech_event["standard_logging_object"]["response_cost"] == pytest.approx(expected_cost)
+    assert speech_event.response_cost == pytest.approx(expected_cost)
+    assert speech_event.logged_response_cost == pytest.approx(expected_cost)
