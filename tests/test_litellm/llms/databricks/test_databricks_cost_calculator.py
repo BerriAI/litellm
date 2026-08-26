@@ -61,7 +61,13 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gemini-3-1-flash-lite": ("4.464", "26.786", "4.464", "0.446"),
     "databricks/databricks-gemini-2-5-pro": ("22.321", "178.571", "22.321", "2.232"),
     "databricks/databricks-gemini-2-5-flash": ("5.357", "44.643", "5.357", "0.536"),
+    "databricks/databricks-kimi-k3": ("42.857", "214.286", "42.857", "4.286"),
+    "databricks/databricks-glm-5-2": ("20.000", "62.857", "20.000", "3.714"),
 }
+MILLION_TOKEN_CONTEXT_MODELS: Final = (
+    "databricks/databricks-kimi-k3",
+    "databricks/databricks-glm-5-2",
+)
 PROMOTIONAL_DISCOUNT: Final = 0.80
 PROMOTION_EXPIRES: Final = "2027-01-31"
 ENTRIES_STORING_PROMOTIONAL_RATE: Final = (
@@ -211,7 +217,28 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
             assert info[field] == pytest.approx(info["input_cost_per_token"]), (model, field)
 
 
-@pytest.mark.parametrize("model", NEW_MODELS)
+@pytest.mark.parametrize("model", MILLION_TOKEN_CONTEXT_MODELS)
+def test_million_token_context_models_price_and_size_at_published_values(
+    local_model_cost_map: None,
+    model: str,
+) -> None:
+    info: Final = _model_info(model)
+    input_dbu, output_dbu, _, cache_read_dbu = PUBLISHED_DBU_PER_MILLION[model]
+
+    assert info["input_cost_per_token"] == _dollars_per_token(input_dbu)
+    assert info["output_cost_per_token"] == _dollars_per_token(output_dbu)
+    assert info["cache_read_input_token_cost"] == _dollars_per_token(cache_read_dbu)
+    assert info["max_input_tokens"] == 1000000
+    assert info["mode"] == "chat"
+    assert info["supports_prompt_caching"] is True
+
+
+def test_kimi_k3_accepts_images_while_glm_5_2_is_text_only(local_model_cost_map: None) -> None:
+    assert _model_info("databricks/databricks-kimi-k3")["supports_vision"] is True
+    assert _model_info("databricks/databricks-glm-5-2")["supports_vision"] is False
+
+
+@pytest.mark.parametrize("model", NEW_MODELS + MILLION_TOKEN_CONTEXT_MODELS)
 def test_backup_price_map_matches_main(model: str) -> None:
     main_cost: Final = json.loads(MAIN_PRICES.read_text())
     backup_cost: Final = json.loads(BACKUP_PRICES.read_text())
