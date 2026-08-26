@@ -1,9 +1,11 @@
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -16,11 +18,42 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
-MODEL = "gemini-3.1-flash-image"
+MODEL = "gemini-stream-pricing-probe"
+PROMPT_TOKENS = 1000
+COMPLETION_TOKENS = 1000
+GEMINI_INPUT_RATE = 1e-07
+GEMINI_OUTPUT_RATE = 4e-07
+VERTEX_INPUT_RATE = 1.5e-07
+VERTEX_OUTPUT_RATE = 6e-07
+GEMINI_COST = PROMPT_TOKENS * GEMINI_INPUT_RATE + COMPLETION_TOKENS * GEMINI_OUTPUT_RATE
+VERTEX_COST = PROMPT_TOKENS * VERTEX_INPUT_RATE + COMPLETION_TOKENS * VERTEX_OUTPUT_RATE
 
-# gemini/ rate card: 2.5e-07 in, 1.5e-06 out. vertex_ai/ rate card is exactly 2x that.
-GEMINI_COST = 1000 * 2.5e-07 + 1000 * 1.5e-06
-VERTEX_COST = 2 * GEMINI_COST
+
+@pytest.fixture(autouse=True)
+def divergent_rate_cards(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"gemini/{MODEL}",
+        {
+            "input_cost_per_token": GEMINI_INPUT_RATE,
+            "output_cost_per_token": GEMINI_OUTPUT_RATE,
+            "litellm_provider": "gemini",
+            "mode": "chat",
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"vertex_ai/{MODEL}",
+        {
+            "input_cost_per_token": VERTEX_INPUT_RATE,
+            "output_cost_per_token": VERTEX_OUTPUT_RATE,
+            "litellm_provider": "vertex_ai",
+            "mode": "chat",
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 def _chunks() -> list[str]:
@@ -33,9 +66,9 @@ def _chunks() -> list[str]:
             }
         ],
         "usageMetadata": {
-            "promptTokenCount": 1000,
-            "candidatesTokenCount": 1000,
-            "totalTokenCount": 2000,
+            "promptTokenCount": PROMPT_TOKENS,
+            "candidatesTokenCount": COMPLETION_TOKENS,
+            "totalTokenCount": PROMPT_TOKENS + COMPLETION_TOKENS,
         },
         "modelVersion": MODEL,
     }
@@ -60,7 +93,6 @@ def _logging_obj() -> LiteLLMLoggingObj:
 def test_streaming_generate_content_bills_against_the_requested_provider(
     endpoint_type, expected_provider, expected_cost
 ):
-    """A streamed gemini/* request must not be priced off the vertex_ai/ rate card."""
     logging_obj = _logging_obj()
 
     _, kwargs = PassThroughStreamingHandler._build_passthrough_logging_result(
@@ -80,7 +112,6 @@ def test_streaming_generate_content_bills_against_the_requested_provider(
 
 
 def test_vertex_generate_content_payload_prices_gemini_urls_at_gemini_rates():
-    """The AI Studio host resolves to `gemini`, so the cost must follow it, not the vertex_ai default."""
     logging_obj = _logging_obj()
 
     result = VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
