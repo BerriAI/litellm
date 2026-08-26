@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Coroutine
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -1116,7 +1117,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         if BaseAzureLLM._is_azure_v1_api_version(api_version):
             return BaseAzureLLM._get_base_azure_url(
                 api_base=api_base,
-                litellm_params={"api_version": api_version},
+                litellm_params=MappingProxyType({"api_version": api_version}),
                 route="/openai/images/generations",
             )
 
