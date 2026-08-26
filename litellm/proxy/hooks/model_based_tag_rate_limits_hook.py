@@ -739,6 +739,17 @@ def _classify_check(
     now: float,
     key_alias: str | None,
 ) -> _ClassifiedCheck | None:
+    # A breach of a deployment-scoped check (this function's own
+    # `deployment_scope is not None` branch, and every one of its callers'
+    # `_raise_over_limit`) deliberately rejects the whole routing attempt for
+    # this hop, not just the deployment(s) that own it -- it does not filter
+    # them out of `healthy_deployments` and let a sibling in the same group
+    # serve instead. An earlier design considered filter-and-retry-sibling
+    # semantics (matching how native tag routing filters candidates rather
+    # than rejecting the hop) and deliberately did not adopt it: rejecting
+    # the whole hop is simpler, and avoids a caller silently succeeding
+    # against a deployment whose limit configuration they didn't intend to
+    # satisfy.
     if configured_limit.deployment_scope is not None and not (
         present_deployment_ids & frozenset(configured_limit.deployment_scope)
     ):
