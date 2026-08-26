@@ -219,6 +219,17 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         url,
         transport: transport === TRANSPORT.OPENAPI ? "http" : transport,
         auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
+        // Interactive (PKCE) is the create-form default for oauth2; stamp it so temp-session
+        // discovery/authorize treat the server as authorization_code rather than inferring M2M from
+        // a prefilled client_id/secret + token_url shape. Client-forwarded modes leave it unset.
+        ...(isClientForwardedTokenMode(values.auth_type)
+          ? {}
+          : {
+              oauth2_flow:
+                values.oauth_flow_type === OAUTH_FLOW.M2M
+                  ? MCP_OAUTH2_FLOW_M2M
+                  : MCP_OAUTH2_FLOW_INTERACTIVE,
+            }),
         // Mirror getCredentials: merge the ref-held DCR client for oauth2 so a re-authorize reuses the
         // registered client (useMcpOAuthFlow keys reuse off credentials.client_id) instead of re-DCRing;
         // the client-forwarded modes carry only the declared app.

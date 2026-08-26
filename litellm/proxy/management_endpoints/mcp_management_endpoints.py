@@ -841,6 +841,7 @@ if MCP_AVAILABLE:
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
+            oauth2_flow=payload.oauth2_flow,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
             timeout=payload.timeout,
@@ -1655,6 +1656,23 @@ if MCP_AVAILABLE:
                 temp_record,
                 credentials_are_encrypted=False,
             )
+            # Interactive OAuth needs authorize/token endpoints. Discovery can fail once
+            # (transient upstream / 405 without WWW-Authenticate then well-known race); retry
+            # before caching so /authorize does not inherit a permanently empty session.
+            await global_mcp_server_manager.ensure_oauth_endpoints_resolved(temporary_server)
+            # Surface discovered endpoints on the response so the UI can show what was resolved
+            # without requiring the admin to paste Authorization URL / Token URL by hand.
+            temp_record.authorization_url = temporary_server.authorization_url
+            temp_record.token_url = temporary_server.token_url
+            temp_record.registration_url = temporary_server.registration_url
+            temp_record.issuer = temporary_server.issuer
+            if temporary_server.scopes and isinstance(temp_record.credentials, dict):
+                temp_record.credentials = {
+                    **temp_record.credentials,
+                    "scopes": list(temporary_server.scopes),
+                }
+            elif temporary_server.scopes and temp_record.credentials is None:
+                temp_record.credentials = {"scopes": list(temporary_server.scopes)}
             _cache_temporary_mcp_server(
                 temporary_server,
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,

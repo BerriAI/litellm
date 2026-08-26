@@ -4244,6 +4244,15 @@ class MCPServerManager:
                 ),
             )
             if metadata is None and resource_scopes:
+                verbose_logger.warning(
+                    "MCP OAuth discovery for %s found resource scopes %s but no authorization/token "
+                    "endpoints. Attempts: %s. Interactive OAuth will fail until discovery resolves "
+                    "the authorization server (RFC 9728 / RFC 8414), or Authorization URL and Token "
+                    "URL are set manually",
+                    origin,
+                    resource_scopes,
+                    "; ".join(attempts) if attempts else "none recorded",
+                )
                 return MCPOAuthMetadata(scopes=resource_scopes), attempts
             if metadata is not None and resource_scopes:
                 metadata.scopes = resource_scopes
@@ -4329,11 +4338,71 @@ class MCPServerManager:
 
         preferred_scopes: Final = scopes or resource_scopes
         if metadata is None and preferred_scopes:
+            verbose_logger.warning(
+                "MCP OAuth discovery for %s found resource scopes %s but no authorization/token "
+                "endpoints. Attempts: %s. Interactive OAuth will fail until discovery resolves "
+                "the authorization server (RFC 9728 / RFC 8414), or Authorization URL and Token "
+                "URL are set manually",
+                origin,
+                preferred_scopes,
+                "; ".join(attempts) if attempts else "none recorded",
+            )
             return MCPOAuthMetadata(scopes=preferred_scopes), attempts
         if metadata is not None and preferred_scopes:
             metadata.scopes = preferred_scopes
 
         return metadata, attempts
+
+    def _apply_discovered_oauth_metadata(self, server: MCPServer, metadata: MCPOAuthMetadata) -> None:
+        """Fill blank OAuth fields on ``server`` from discovery without overwriting admin pins."""
+        if not server.authorization_url and metadata.authorization_url:
+            server.authorization_url = metadata.authorization_url
+        if not server.token_url and metadata.token_url:
+            server.token_url = metadata.token_url
+        if not server.registration_url and metadata.registration_url:
+            server.registration_url = metadata.registration_url
+        if not server.scopes and metadata.scopes:
+            server.scopes = list(metadata.scopes)
+        if (
+            not server.issuer
+            and metadata.discovered_issuer
+            and not metadata.from_origin_fallback
+        ):
+            server.issuer = metadata.discovered_issuer
+
+    async def ensure_oauth_endpoints_resolved(self, server: MCPServer) -> bool:
+        """Re-run OAuth discovery when interactive endpoints are missing on a live server object.
+
+        Discovery normally runs only at build/cache time (``build_mcp_server_from_table`` /
+        ``oauth/session``). A transient upstream failure leaves ``authorization_url`` /
+        ``token_url`` unset, and ``/authorize`` would otherwise hard-400 for the life of that
+        cache entry even though the upstream advertises valid well-known metadata (e.g. Figma
+        MCP returns HTTP 405 without ``WWW-Authenticate`` on GET, then resolves via
+        ``/.well-known/oauth-protected-resource``). Call this before failing authorize/register
+        so a live rediscovery can recover without the admin pasting URLs.
+        """
+        if not _oauth_endpoints_unresolved(server):
+            return True
+        if not server.url:
+            return False
+        if server.auth_type not in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES:
+            return False
+
+        if server.issuer_is_anchored and server.issuer:
+            metadata = await self._fetch_issuer_anchored_oauth_metadata(server.issuer, server.url)
+        else:
+            metadata = await self._descovery_metadata(
+                server.url,
+                allow_origin_fallback=True,
+                warn_when_no_metadata=True,
+            )
+        if metadata is None:
+            self._record_oauth_discovery_outcome(server)
+            return False
+
+        self._apply_discovered_oauth_metadata(server, metadata)
+        self._record_oauth_discovery_outcome(server)
+        return not _oauth_endpoints_unresolved(server)
 
     def _parse_www_authenticate_header(self, header_value: str | None) -> tuple[str | None, list[str] | None]:
         if not header_value:

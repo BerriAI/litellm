@@ -8661,6 +8661,79 @@ async def test_authorize_wall_names_the_fix_for_urlless_servers():
 
 
 @pytest.mark.asyncio
+async def test_authorize_rediscovers_endpoints_when_authorization_url_missing():
+    """Interactive PKCE must not require the admin to paste Authorization URL when the upstream
+    advertises it via OAuth discovery. If the session/cache build left authorization_url empty,
+    /authorize re-runs discovery once and proceeds with the discovered redirect."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="rediscover-authorize",
+        name="figma_like",
+        server_name="figma_like",
+        url="https://mcp.figma.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        authorization_url=None,
+        token_url=None,
+        client_id="figma-client",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+    mock_request.url = MagicMock()
+    mock_request.url.scheme = "https"
+    mock_request.url.netloc = "litellm.example.com"
+    mock_request.cookies = {}
+
+    async def _fake_ensure(s):
+        s.authorization_url = "https://www.figma.example/oauth/mcp"
+        s.token_url = "https://api.figma.example/v1/oauth/token"
+        s.scopes = ["mcp:connect"]
+        return True
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.ensure_oauth_endpoints_resolved",
+            new=AsyncMock(side_effect=_fake_ensure),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper",
+            return_value="mocked_encrypted_state",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.validate_trusted_redirect_uri",
+            return_value=None,
+        ),
+    ):
+        response = await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="figma-client",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="s",
+            code_challenge="chal",
+            code_challenge_method="S256",
+            scope="mcp:connect",
+        )
+
+    assert response.status_code in (302, 307)
+    location = response.headers["location"]
+    assert location.startswith("https://www.figma.example/oauth/mcp")
+    query = parse_qs(urlparse(location).query)
+    assert query["client_id"] == ["figma-client"]
+    assert query["scope"] == ["mcp:connect"]
+    assert server.authorization_url == "https://www.figma.example/oauth/mcp"
+
+
+@pytest.mark.asyncio
 async def test_token_wall_names_the_fix_for_urlless_servers():
     """The /token wall is the second stop on the same misconfiguration (LIT-4629): after an admin
     fills only the Authorization URL, the code exchange dies here; the detail must name the

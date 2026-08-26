@@ -813,6 +813,12 @@ async def authorize_with_server(
 ):
     _raise_if_not_oauth2(mcp_server)
     if mcp_server.authorization_url is None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.ensure_oauth_endpoints_resolved(mcp_server)
+    if mcp_server.authorization_url is None:
         raise HTTPException(
             status_code=400,
             detail=_endpoint_not_configured_detail(
@@ -1618,6 +1624,12 @@ async def resolve_ephemeral_dcr_client(
     if not (mcp_server.is_true_passthrough or (mcp_server.is_oauth_delegate and not mcp_server.is_dcr_bridge)):
         return None
     if mcp_server.authorization_url is None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.ensure_oauth_endpoints_resolved(mcp_server)
+    if mcp_server.authorization_url is None:
         raise HTTPException(
             status_code=400,
             detail="MCP server authorization url is not set",
@@ -1661,6 +1673,12 @@ async def register_client_with_server(
     ):
         return dummy_return
 
+    if mcp_server.authorization_url is None or mcp_server.registration_url is None:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.ensure_oauth_endpoints_resolved(mcp_server)
     if mcp_server.authorization_url is None:
         raise HTTPException(
             status_code=400,

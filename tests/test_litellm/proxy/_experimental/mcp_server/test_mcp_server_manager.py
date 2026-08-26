@@ -1960,6 +1960,119 @@ class TestMCPServerManager:
         assert built.scopes == ["read"]
 
     @pytest.mark.asyncio
+    async def test_ensure_oauth_endpoints_resolved_rediscovers_when_authorization_url_missing(self):
+        """A temp oauth/session or registry entry that was built while discovery failed must recover
+        on the next ensure call without the admin pasting Authorization URL / Token URL. This is the
+        recovery path used by /authorize for Figma-style upstreams (GET 405, well-known still works)."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="ensure-rediscover-1",
+            name="figma_like",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            authorization_url=None,
+            token_url=None,
+        )
+        metadata = MCPOAuthMetadata(
+            authorization_url="https://www.example.com/oauth/mcp",
+            token_url="https://api.example.com/v1/oauth/token",
+            registration_url="https://api.example.com/v1/oauth/mcp/register",
+            scopes=["mcp:connect"],
+            discovered_issuer="https://api.example.com",
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=metadata)) as mock_discovery:
+            ok = await manager.ensure_oauth_endpoints_resolved(server)
+
+        mock_discovery.assert_awaited_once()
+        assert ok is True
+        assert server.authorization_url == "https://www.example.com/oauth/mcp"
+        assert server.token_url == "https://api.example.com/v1/oauth/token"
+        assert server.registration_url == "https://api.example.com/v1/oauth/mcp/register"
+        assert server.scopes == ["mcp:connect"]
+        assert server.issuer == "https://api.example.com"
+
+    @pytest.mark.asyncio
+    async def test_ensure_oauth_endpoints_resolved_noops_when_endpoints_present(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="ensure-noop-1",
+            name="already_resolved",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+        )
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock()) as mock_discovery:
+            ok = await manager.ensure_oauth_endpoints_resolved(server)
+
+        mock_discovery.assert_not_awaited()
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_discover_metadata_figma_style_405_without_www_authenticate_uses_well_known(self):
+        """Figma remote MCP answers GET /mcp with HTTP 405 and no WWW-Authenticate. Discovery must
+        still resolve authorize/token/registration via protected-resource + authorization-server
+        well-known documents so interactive PKCE does not require manual endpoint paste."""
+        manager = MCPServerManager()
+        resource_payload = {
+            "resource": "https://mcp.figma.example/mcp",
+            "authorization_servers": ["https://api.figma.example"],
+            "scopes_supported": ["mcp:connect"],
+        }
+        as_payload = {
+            "issuer": "https://api.figma.example",
+            "authorization_endpoint": "https://www.figma.example/oauth/mcp",
+            "token_endpoint": "https://api.figma.example/v1/oauth/token",
+            "registration_endpoint": "https://api.figma.example/v1/oauth/mcp/register",
+            "scopes_supported": ["mcp:connect"],
+        }
+
+        def _response(url: str, status: int, payload: dict | None = None) -> httpx.Response:
+            request = httpx.Request("GET", url)
+            return httpx.Response(
+                status,
+                request=request,
+                json=payload,
+                headers={"content-type": "application/json"} if payload is not None else {},
+            )
+
+        async def fake_client_get(url: str, **kwargs):
+            if url.rstrip("/").endswith("/mcp") and "well-known" not in url:
+                return _response(url, 405)
+            raise AssertionError(f"unexpected client.get url: {url}")
+
+        async def fake_fetch_discovery(url: str, server_url: str):
+            if "oauth-protected-resource" in url:
+                return _response(url, 200, resource_payload)
+            if "oauth-authorization-server" in url or url.rstrip("/") == "https://api.figma.example":
+                return _response(url, 200, as_payload)
+            return _response(url, 404)
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=fake_client_get)
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(manager, "_fetch_oauth_discovery_url", new=AsyncMock(side_effect=fake_fetch_discovery)),
+        ):
+            metadata = await manager._descovery_metadata(
+                "https://mcp.figma.example/mcp",
+                warn_when_no_metadata=True,
+            )
+
+        assert metadata is not None
+        assert metadata.authorization_url == "https://www.figma.example/oauth/mcp"
+        assert metadata.token_url == "https://api.figma.example/v1/oauth/token"
+        assert metadata.registration_url == "https://api.figma.example/v1/oauth/mcp/register"
+        assert metadata.scopes == ["mcp:connect"]
+        assert metadata.discovered_issuer == "https://api.figma.example"
+
+    @pytest.mark.asyncio
     async def test_build_from_table_fills_endpoints_when_metadata_corroborates_manual_authorization_url(self):
         """A discovered token_url is only trusted next to a manual authorization_url when the same
         metadata document advertises that authorize endpoint, and the comparison must tolerate
