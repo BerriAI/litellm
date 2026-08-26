@@ -33,7 +33,6 @@ from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
@@ -1339,21 +1338,11 @@ async def _db_health_readiness_check():
         await prisma_client.health_check()
         db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
-    except Exception as e:
+    except Exception:
         db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
-        if PrismaDBExceptionHandler.is_database_transport_error(e):
-            try:
-                verbose_proxy_logger.warning("_db_health_readiness_check: health_check failed, attempting reconnect")
-                await prisma_client.attempt_db_reconnect(reason="health_readiness_check")
-                await prisma_client.health_check()
-                verbose_proxy_logger.info("_db_health_readiness_check: reconnect succeeded")
-                db_health_cache = {
-                    "status": "connected",
-                    "last_updated": datetime.now(),
-                }
-                return db_health_cache
-            except Exception:
-                verbose_proxy_logger.error("_db_health_readiness_check: reconnect failed")
+        verbose_proxy_logger.warning(
+            "_db_health_readiness_check: health_check failed; returning disconnected without reconnect"
+        )
         return db_health_cache
 
 

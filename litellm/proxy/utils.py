@@ -5468,7 +5468,7 @@ class PrismaClient:
 
     async def start_db_health_watchdog_task(self) -> None:
         """Start background tasks that monitor DB health:
-        - A periodic SELECT 1 probe that triggers reconnect on network/connection failure.
+        - A periodic query-engine status probe that triggers reconnect on local engine failure.
         - A process-level watcher that detects engine death via waitpid thread, pidfd, or os.kill polling.
         """
         if self._db_health_watchdog_enabled is not True:
@@ -5509,7 +5509,7 @@ class PrismaClient:
             try:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
                 await asyncio.wait_for(
-                    self.db.query_raw("SELECT 1"),
+                    self.writer_db.query_engine_status(),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
                 if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:

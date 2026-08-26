@@ -269,13 +269,15 @@ async def test_run_reconnect_cycle_timeout_should_use_single_overall_budget(
 
 
 @pytest.mark.asyncio
-async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(
+async def test_db_health_watchdog_should_trigger_reconnect_on_engine_error(
     mock_proxy_logging,
 ):
     client = PrismaClient(
         database_url="mock://test", proxy_logging_obj=mock_proxy_logging
     )
-    client.db.query_raw = AsyncMock(side_effect=Exception("db connection dropped"))
+    client.writer_db.query_engine_status = AsyncMock(
+        side_effect=Exception("query engine unavailable")
+    )
     client.attempt_db_reconnect = AsyncMock(return_value=True)
     client._db_health_watchdog_interval_seconds = 1
     client._db_watchdog_reconnect_timeout_seconds = 7.0
@@ -306,7 +308,9 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_probe_timeout(
     client = PrismaClient(
         database_url="mock://test", proxy_logging_obj=mock_proxy_logging
     )
-    client.db.query_raw = AsyncMock(side_effect=asyncio.TimeoutError())
+    client.writer_db.query_engine_status = AsyncMock(
+        side_effect=asyncio.TimeoutError()
+    )
     client.attempt_db_reconnect = AsyncMock(return_value=True)
     client._db_health_watchdog_interval_seconds = 1
     client._db_watchdog_reconnect_timeout_seconds = 9.0
@@ -563,7 +567,7 @@ async def test_db_health_watchdog_should_reconnect_degraded_writer(
     )
     writer = MagicMock()
     reader = MagicMock()
-    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    writer.query_engine_status = AsyncMock(return_value={"status": "ok"})
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
     routing._writer_unavailable = True
     client.db = routing
@@ -596,7 +600,7 @@ async def test_db_health_watchdog_should_not_reconnect_healthy_writer(
     )
     writer = MagicMock()
     reader = MagicMock()
-    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    writer.query_engine_status = AsyncMock(return_value={"status": "ok"})
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
     client.db = routing
     client.attempt_db_reconnect = AsyncMock(return_value=True)
