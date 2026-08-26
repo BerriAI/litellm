@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import json
 import os
@@ -38,6 +39,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -3448,6 +3450,13 @@ def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_bo
     assert is_passthrough_request_streaming(request_body) is expected
 
 
+def _unsigned_jwt(claims: Mapping[str, str]) -> str:
+    def segment(payload: Mapping[str, str]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(dict(payload)).encode()).rstrip(b"=").decode()
+
+    return ".".join((segment({"alg": "RS256", "typ": "JWT"}), segment(claims), "c2lnbmF0dXJl"))
+
+
 class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     """Regression coverage for LIT-5997.
 
@@ -3782,10 +3791,14 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
 
     GOOGLE_OAUTH_TOKEN = "ya29.byo-google-oauth-token"
 
-    LITELLM_JWT = (
-        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9."
-        "eyJzdWIiOiJqd3Qtc3ViamVjdCIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUuY29tIn0."
-        "c2lnbmF0dXJl"
+    LITELLM_JWT_CLAIMS = MappingProxyType({"sub": "jwt-subject", "iss": "https://idp.example.com"})
+    LITELLM_JWT = _unsigned_jwt(LITELLM_JWT_CLAIMS)
+    GOOGLE_SERVICE_ACCOUNT_JWT = _unsigned_jwt(
+        {
+            "sub": "vertex-caller@my-proj.iam.gserviceaccount.com",
+            "iss": "vertex-caller@my-proj.iam.gserviceaccount.com",
+            "aud": "https://aiplatform.googleapis.com/",
+        }
     )
 
     @pytest.mark.asyncio
@@ -3797,7 +3810,11 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                 UserAPIKeyAuth(api_key="best-api-key-ever", user_role=LitellmUserRoles.PROXY_ADMIN),
                 id="custom-auth-returning-its-own-identifier",
             ),
-            pytest.param("sk-master-1234", UserAPIKeyAuth(api_key=None, user_id="jwt-subject"), id="jwt-auth"),
+            pytest.param(
+                "sk-master-1234",
+                UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
+                id="jwt-auth",
+            ),
             pytest.param(None, UserAPIKeyAuth(api_key=GOOGLE_OAUTH_TOKEN), id="no-master-key-echoes-raw-header"),
         ],
     )
@@ -3822,7 +3839,29 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         ("credential", "authenticated"),
         [
             pytest.param("modified_key", UserAPIKeyAuth(api_key="modified_key"), id="custom-auth-echoing-opaque-credential"),
-            pytest.param(LITELLM_JWT, UserAPIKeyAuth(api_key=LITELLM_JWT, user_id="jwt-subject"), id="jwt-auth-consuming-header"),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(api_key=LITELLM_JWT, user_id="jwt-subject"),
+                id="custom-auth-echoing-jwt",
+            ),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
+                id="jwt-auth",
+            ),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(
+                    api_key=None,
+                    user_id="jwt-subject",
+                    jwt_claims={
+                        **LITELLM_JWT_CLAIMS,
+                        JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
+                        JWTHandler.LITELLM_USER_ID_CLAIM: "jwt-subject",
+                    },
+                ),
+                id="multi-issuer-jwt-auth-normalized-claims",
+            ),
         ],
     )
     async def test_non_sk_litellm_credential_that_authenticated_is_rejected_not_forwarded(
@@ -3835,6 +3874,22 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         )
         assert forwarded is None, "the credential that authenticated the caller must never reach the upstream forwarder"
         assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_jwt_authenticated_caller_keeps_a_different_byo_google_jwt(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.LITELLM_JWT.encode()),
+                (b"authorization", f"Bearer {self.GOOGLE_SERVICE_ACCOUNT_JWT}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(self.LITELLM_JWT_CLAIMS)),
+        )
+        assert raised is None, f"a Google JWT that is not the one that authenticated must keep flowing: {raised}"
+        assert forwarded is not None
+        assert forwarded.get("authorization") == f"Bearer {self.GOOGLE_SERVICE_ACCOUNT_JWT}"
+        assert "x-litellm-api-key" not in forwarded
 
     @pytest.mark.asyncio
     async def test_master_key_in_authorization_alone_is_rejected(self, monkeypatch):
