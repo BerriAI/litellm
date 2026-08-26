@@ -1502,9 +1502,9 @@ def get_openapi_schema():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs
+    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
 
-    openapi_schema = inject_lazy_stubs(openapi_schema)
+    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
@@ -1534,9 +1534,9 @@ def custom_openapi():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs
+    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
 
-    openapi_schema = inject_lazy_stubs(openapi_schema)
+    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
