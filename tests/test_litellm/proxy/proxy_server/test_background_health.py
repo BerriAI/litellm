@@ -19,14 +19,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import litellm.proxy.proxy_server as proxy_server
+from litellm.proxy import proxy_server
+from litellm.proxy._types import ConfigGeneralSettings
 from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
     _get_endpoint_exception_status,
     _get_process_rss_mb,
+    _rss_mb_for_log,
     _run_background_health_check,
     _run_direct_health_check_with_instrumentation,
-    _rss_mb_for_log,
     _schedule_background_health_check_db_save,
     _write_health_state_to_router_cache,
 )
@@ -159,6 +160,18 @@ async def test_run_direct_health_check_raises_non_kwarg_typeerror(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_background_health_check_db_persistence_config_defaults_enabled():
+    assert ConfigGeneralSettings().persist_background_health_check_results is True
+
+
+def test_background_health_check_db_persistence_config_can_be_disabled():
+    settings = ConfigGeneralSettings.model_validate(
+        {"persist_background_health_check_results": False}
+    )
+
+    assert settings.persist_background_health_check_results is False
+
+
 @pytest.mark.asyncio
 async def test_schedule_background_health_check_db_save_creates_task(monkeypatch):
     captured = {}
@@ -217,6 +230,24 @@ def test_schedule_background_health_check_db_save_noop_when_prisma_none():
         healthy_endpoints=[],
         unhealthy_endpoints=[],
     )
+
+
+def test_schedule_background_health_check_db_save_noop_when_persistence_disabled(
+    monkeypatch,
+):
+    create_task = MagicMock()
+    monkeypatch.setattr(asyncio, "create_task", create_task)
+
+    _schedule_background_health_check_db_save(
+        prisma_client=MagicMock(),
+        shared_health_manager=None,
+        model_list=[],
+        healthy_endpoints=[],
+        unhealthy_endpoints=[],
+        persist_results=False,
+    )
+
+    create_task.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -461,6 +492,11 @@ async def test_run_background_health_check_runs_one_cycle_then_cancels(monkeypat
     monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
     monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"persist_background_health_check_results": False},
+    )
     monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
     monkeypatch.setattr(
         proxy_server,
@@ -481,8 +517,9 @@ async def test_run_background_health_check_runs_one_cycle_then_cancels(monkeypat
         "_run_direct_health_check_with_instrumentation",
         _fake_direct,
     )
+    scheduled = MagicMock()
     monkeypatch.setattr(
-        proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None
+        proxy_server, "_schedule_background_health_check_db_save", scheduled
     )
     monkeypatch.setattr(
         proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None
@@ -508,10 +545,12 @@ async def test_run_background_health_check_runs_one_cycle_then_cancels(monkeypat
         {
             "healthy_count": proxy_server.health_check_results["healthy_count"],
             "unhealthy_count": proxy_server.health_check_results["unhealthy_count"],
+            "persist_results": scheduled.call_args.kwargs["persist_results"],
             "sleep_invoked": sleep_calls["n"] >= 1,
         }
     ) == {
         "healthy_count": 1,
         "unhealthy_count": 1,
+        "persist_results": False,
         "sleep_invoked": True,
     }

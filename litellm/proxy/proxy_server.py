@@ -3437,9 +3437,10 @@ def _schedule_background_health_check_db_save(
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
+    persist_results: bool = True,
 ):
     """Fire-and-forget: persist health check results to DB if prisma is available."""
-    if prisma_client is None:
+    if prisma_client is None or not persist_results:
         return
     import time as time_module
 
@@ -3608,11 +3609,12 @@ async def _run_background_health_check():
         )
     background_health_check_loop_active = True
     verbose_proxy_logger.info(
-        "background_health_check_loop_started interval_seconds=%s max_concurrency=%s shared=%s details=%s thread_count=%d rss_mb=%s",
+        "background_health_check_loop_started interval_seconds=%s max_concurrency=%s shared=%s details=%s persist_results=%s thread_count=%d rss_mb=%s",
         health_check_interval,
         health_check_concurrency,
         use_shared_health_check,
         health_check_details,
+        general_settings.get("persist_background_health_check_results", True),
         threading.active_count(),
         _rss_mb_for_log(),
     )
@@ -3744,6 +3746,7 @@ async def _run_background_health_check():
             _llm_model_list,
             healthy_endpoints,
             unhealthy_endpoints,
+            persist_results=general_settings.get("persist_background_health_check_results", True),
         )
 
         # Write health state to router cache for health-check-driven routing
