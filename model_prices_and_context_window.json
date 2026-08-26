@@ -14734,7 +14734,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 4096
     },
     "databricks/databricks-claude-opus-4": {
         "cache_creation_input_token_cost": 1.874999e-05,
@@ -14756,7 +14757,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-opus-4-1": {
         "cache_creation_input_token_cost": 1.874999e-05,
@@ -14778,7 +14780,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-opus-4-5": {
         "cache_creation_input_token_cost": 6.25002e-06,
@@ -14801,7 +14804,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "databricks/databricks-claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25002e-06,
@@ -14824,7 +14828,8 @@
         "supports_legacy_thinking": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 4096
     },
     "databricks/databricks-claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25002e-06,
@@ -14926,7 +14931,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-sonnet-4-1": {
         "cache_creation_input_token_cost": 3.74997e-06,
@@ -14970,7 +14976,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.74997e-06,
@@ -14993,7 +15000,8 @@
         "supports_legacy_thinking": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-sonnet-5": {
         "cache_creation_input_token_cost": 3.74997e-06,
@@ -33871,7 +33879,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-opus-4.1": {
         "input_cost_per_image": 0.0048,
@@ -36519,7 +36528,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 4096
     },
     "replicate/ibm-granite/granite-3.3-8b-instruct": {
         "input_cost_per_token": 3e-08,
@@ -36601,7 +36611,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 1024
     },
     "replicate/deepseek-ai/deepseek-v3": {
         "input_cost_per_token": 1.45e-06,
@@ -36676,7 +36687,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 1024
     },
     "replicate/openai/gpt-4.1": {
         "input_cost_per_token": 2e-06,
@@ -39725,7 +39737,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.1": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -50167,7 +50180,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-4-opus": {
         "max_tokens": 16384,
@@ -50183,7 +50197,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_reasoning": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-haiku-4-5": {
         "max_tokens": 16384,
