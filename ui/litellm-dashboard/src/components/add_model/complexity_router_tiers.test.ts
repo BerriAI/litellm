@@ -4,10 +4,10 @@ import {
   hydrateTierModelParams,
   normalizeTierModels,
   pruneTierModelParams,
-  resolveComplexityDefaultModel,
   serializeTierModelConfigs,
   setTierModelReasoningEffort,
 } from "./complexity_router_tiers";
+import { resolveComplexityDefaultModel } from "./tier_rows";
 
 import type { ComplexityTiers } from "./ComplexityRouterConfig";
 
@@ -50,31 +50,31 @@ describe("resolveComplexityDefaultModel", () => {
   const noTiers: ComplexityTiers = { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] };
 
   it("derives from MEDIUM first when nothing is pinned", () => {
-    expect(resolveComplexityDefaultModel(tiers)).toBe("medium-model");
+    expect(resolveComplexityDefaultModel({ tiers: tiers })).toBe("medium-model");
   });
 
   it("falls back to SIMPLE when MEDIUM is empty", () => {
-    expect(resolveComplexityDefaultModel({ ...tiers, MEDIUM: [] })).toBe("simple-model");
+    expect(resolveComplexityDefaultModel({ tiers: { ...tiers, MEDIUM: [] } })).toBe("simple-model");
   });
 
   it("derives nothing from COMPLEX or REASONING, which the backend never falls through to", () => {
-    expect(resolveComplexityDefaultModel({ ...tiers, MEDIUM: [], SIMPLE: [] })).toBeUndefined();
+    expect(resolveComplexityDefaultModel({ tiers: { ...tiers, MEDIUM: [], SIMPLE: [] } })).toBeUndefined();
   });
 
   it("lets a pin beat the tiers rather than merely filling in for them", () => {
-    expect(resolveComplexityDefaultModel(tiers, "pinned-model")).toBe("pinned-model");
+    expect(resolveComplexityDefaultModel({ tiers: tiers }, "pinned-model")).toBe("pinned-model");
   });
 
   it("stands alone as the default when no tier holds a model", () => {
-    expect(resolveComplexityDefaultModel(noTiers, "pinned-model")).toBe("pinned-model");
+    expect(resolveComplexityDefaultModel({ tiers: noTiers }, "pinned-model")).toBe("pinned-model");
   });
 
   it.each([[""], ["   "], [undefined]])("reads %o as no pin and goes back to the tiers", (pinned) => {
-    expect(resolveComplexityDefaultModel(tiers, pinned)).toBe("medium-model");
+    expect(resolveComplexityDefaultModel({ tiers: tiers }, pinned)).toBe("medium-model");
   });
 
   it("resolves to nothing when neither a pin nor a tier offers a model", () => {
-    expect(resolveComplexityDefaultModel(noTiers)).toBeUndefined();
+    expect(resolveComplexityDefaultModel({ tiers: noTiers })).toBeUndefined();
   });
 });
 
