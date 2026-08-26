@@ -1526,6 +1526,10 @@ async def delete_model(
         - Delete
         """
 
+        from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+            remove_deleted_model_from_router_fallbacks,
+            router_lost_last_deployment_for_model,
+        )
         from litellm.proxy.proxy_server import (
             MODEL_RECONCILE_LOCK,
             llm_router,
@@ -1585,6 +1589,12 @@ async def delete_model(
             if llm_router is not None:
                 async with MODEL_RECONCILE_LOCK:
                     llm_router.delete_deployment(id=model_info.id)
+                    if router_lost_last_deployment_for_model(llm_router, model_params.model_name):
+                        await remove_deleted_model_from_router_fallbacks(
+                            model_name=model_params.model_name,
+                            prisma_client=prisma_client,
+                            llm_router=llm_router,
+                        )
 
             # Runs after the row delete so the sibling check sees post-delete state.
             if model_params.model_info.team_id is not None:

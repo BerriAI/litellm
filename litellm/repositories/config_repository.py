@@ -53,6 +53,24 @@ class ConfigParam:
         self.param_value = param_value
 
 
+ROUTER_FALLBACK_SETTING_KEYS: Final[tuple[str, ...]] = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
+
+
+def apply_empty_router_fallback_lists(
+    router_settings: dict,
+    db_router_settings: Mapping[str, object],
+) -> None:
+    # _deep_merge_dicts skips empty lists so yaml lists survive; fallback deletes must still clear them
+    for key in ROUTER_FALLBACK_SETTING_KEYS:
+        value = db_router_settings.get(key)
+        if isinstance(value, list) and len(value) == 0:
+            router_settings[key] = []
+
+
 class ConfigRepository:
     """Repository for config database operations with reconciliation support."""
 
@@ -195,6 +213,8 @@ class ConfigRepository:
 
         if isinstance(current_config[param_name], dict) and isinstance(db_param_value, dict):
             self._deep_merge_dicts(current_config[param_name], db_param_value)
+            if param_name == "router_settings":
+                apply_empty_router_fallback_lists(current_config[param_name], db_param_value)
         else:
             current_config[param_name] = db_param_value
 

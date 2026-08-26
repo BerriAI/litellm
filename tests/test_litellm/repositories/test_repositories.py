@@ -1448,6 +1448,50 @@ class TestConfigRepository:
         repo._deep_merge_dicts(dst, src)
         assert dst["models"] == ["gpt-4"]
 
+    def test_update_config_fields_empty_router_fallbacks_override_yaml(self, repo):
+        current_config = {
+            "router_settings": {
+                "num_retries": 2,
+                "fallbacks": [{"primary": ["gone"]}],
+                "context_window_fallbacks": [{"primary": ["other"]}],
+                "allowed_fails": ["keep-this-empty-skip-is-unrelated"],
+            }
+        }
+        repo._update_config_fields(
+            current_config,
+            "router_settings",
+            {
+                "num_retries": 2,
+                "fallbacks": [],
+                "context_window_fallbacks": [{"primary": ["other"]}],
+                "content_policy_fallbacks": [],
+                "allowed_fails": [],
+            },
+        )
+        assert current_config["router_settings"]["fallbacks"] == []
+        assert current_config["router_settings"]["context_window_fallbacks"] == [
+            {"primary": ["other"]}
+        ]
+        assert current_config["router_settings"]["content_policy_fallbacks"] == []
+        assert current_config["router_settings"]["num_retries"] == 2
+        assert current_config["router_settings"]["allowed_fails"] == [
+            "keep-this-empty-skip-is-unrelated"
+        ]
+
+    def test_apply_empty_router_fallback_lists_only_clears_fallback_keys(self):
+        from litellm.repositories.config_repository import apply_empty_router_fallback_lists
+
+        router_settings = {
+            "fallbacks": [{"primary": ["gone"]}],
+            "models": ["gpt-4"],
+        }
+        apply_empty_router_fallback_lists(
+            router_settings,
+            {"fallbacks": [], "models": []},
+        )
+        assert router_settings["fallbacks"] == []
+        assert router_settings["models"] == ["gpt-4"]
+
     @pytest.mark.asyncio
     async def test_get_param(self, repo):
         repo._prisma_client.db.litellm_config._records["general_settings"] = {
