@@ -56,7 +56,12 @@ from litellm.proxy.guardrails.anthropic_sse import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import BedrockChecksConfigModel, GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    ChatCompletionImageUrlObject,
+    ChatCompletionUserMessage,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksMessage,
     BedrockChecksViolation,
@@ -423,6 +428,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.guardrail_name,
             reason,
         )
+
+    #: base64 magic-byte prefixes for the formats ApplyGuardrail accepts.
+    _BASE64_IMAGE_PREFIXES: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("iVBORw0KGgo", "image/png"),
+        ("/9j/", "image/jpeg"),
+    )
+
+    @staticmethod
+    def _image_content_part(url: str) -> ChatCompletionImageObject:
+        """One OpenAI-format image content part, so the payload builder handles it."""
+        return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=url))
+
+    @classmethod
+    def _normalize_image_input(cls, value: str) -> str:
+        """Return a data URI or URL that `_build_image_content_item` can consume.
+
+        `GenericGuardrailAPIInputs["images"]` is not a single shape. The OpenAI chat
+        translation appends the caller's `image_url` verbatim, so entries are already a
+        `data:` URI or an `https://` URL. The Anthropic translation's `_image_sources`
+        returns `source["data"]` only, which is bare base64 with the `media_type`
+        dropped. Sniff the format back from the base64 prefix so both shapes reach the
+        same decoder instead of the bare-base64 one failing as unreadable.
+        """
+        if value.startswith(("data:", "http://", "https://")):
+            return value
+        for prefix, media_type in cls._BASE64_IMAGE_PREFIXES:
+            if value.startswith(prefix):
+                return f"data:{media_type};base64,{value}"
+        # Unrecognized: hand it over as-is and let the decoder reject it, so the
+        # on_unscannable_image policy decides rather than this helper.
+        return value
 
     async def _build_image_content_item(self, image_url: str) -> BedrockContentItem | None:
         """Decode or fetch an image part into an ApplyGuardrail image block.
@@ -3170,7 +3206,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             logging_obj: Optional logging object
 
         Returns:
-            GenericGuardrailAPIInputs - processed_texts may be masked, images unchanged
+            GenericGuardrailAPIInputs - processed_texts may be masked, images are
+            scanned but returned unchanged (ApplyGuardrail does not rewrite images)
 
         Raises:
             Exception: If content is blocked by Bedrock guardrail
@@ -3178,8 +3215,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # NOTE: Use `or []` to handle case where inputs["texts"] is explicitly None.
         # dict.get("texts", []) would return None if the key exists with a None value.
         texts: Final = inputs.get("texts") or []
+        # Images only exist on the request side; ApplyGuardrail's OUTPUT source takes
+        # model-generated text. The endpoint translations already extract them:
+        # OpenAIChatCompletionsHandler from `image_url` parts, AnthropicMessagesHandler
+        # from `image`/`source` blocks. Five other guardrails already consume this
+        # field; Bedrock was the one that dropped it on the floor.
+        image_urls: Final = tuple(inputs.get("images") or ()) if input_type == "request" else ()
         try:
-            verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail to %s text(s)", len(texts))
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: Applying guardrail to %s text(s) and %s image(s)", len(texts), len(image_urls)
+            )
 
             if input_type == "request":
                 incremental_result: Final = await self._apply_incremental_request_scan(
@@ -3204,8 +3249,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             scanned_slice: Final = selection.scanned_slice
             scanned_role_subset: Final = selection.scanned_role_subset
 
-            # Bedrock will throw an error if there is no text to process
-            if filtered_messages:
+            # Bedrock rejects an empty content list, so only skip when there is
+            # neither text nor an image to scan.
+            if filtered_messages or image_urls:
                 _log_hook = GuardrailEventHooks.pre_call if input_type == "request" else GuardrailEventHooks.post_call
                 # Map the abstract input_type to the Bedrock source parameter.
                 # "request"  -> INPUT  (scan user-supplied content)
@@ -3238,9 +3284,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         logging_event_type=_log_hook,
                     )
                 else:
+                    # Append the images as one extra user message. Reusing the normal
+                    # message path means `_create_bedrock_input_content_request` does the
+                    # decoding, format check and on_unscannable_image handling, so the
+                    # unified and native lifecycle paths cannot drift apart.
+                    image_parts: Final = [  # mutable-ok: OpenAI message content is a list in the wire format
+                        self._image_content_part(self._normalize_image_input(url)) for url in image_urls
+                    ]
+                    image_message: Final = (
+                        (ChatCompletionUserMessage(role="user", content=image_parts),) if image_parts else ()
+                    )
+                    scan_messages: Final = [  # mutable-ok: make_bedrock_api_request takes a list of messages
+                        *filtered_messages,
+                        *image_message,
+                    ]
                     bedrock_response = await self.make_bedrock_api_request(
                         source="INPUT",
-                        messages=filtered_messages,
+                        messages=scan_messages,
                         request_data=request_data,
                         logging_event_type=_log_hook,
                     )

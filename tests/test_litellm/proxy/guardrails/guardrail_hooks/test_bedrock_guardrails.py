@@ -5467,6 +5467,77 @@ class TestBedrockGuardrailImageInput:
         get.assert_not_awaited()
         assert request["content"] == []
 
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_scans_images_from_inputs(self):
+        """The proxy reaches BedrockGuardrail through `apply_guardrail`, not the native hook.
+
+        ProxyLogging._execute_guardrail_hook routes any guardrail that defines
+        `apply_guardrail` through unified_guardrail, so a fix that only touches
+        async_pre_call_hook never runs on a real request. The endpoint translations
+        already put images in inputs["images"]; this asserts they reach the payload.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(await g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": ["what does this say?"], "images": [self._PNG_DATA_URI]},
+                request_data={},
+                input_type="request",
+            )
+
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_scans_bare_base64_images(self):
+        """Anthropic's translation drops media_type and passes bare base64.
+
+        `_image_sources` returns source["data"] only, so the entry is not a data URI.
+        Without sniffing the format back it would be rejected as unreadable and, under
+        on_unscannable_image=block, turn a legitimate /v1/messages call into a 400.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(await g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        bare_base64 = self._PNG_DATA_URI.split(",")[1]
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": [], "images": [bare_base64]},
+                request_data={},
+                input_type="request",
+            )
+
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"bare base64 image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_ignores_images_on_the_response_side(self):
+        """ApplyGuardrail's OUTPUT source scans model-generated text, not input images."""
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(kwargs)
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": ["some model output"], "images": [self._PNG_DATA_URI]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert sent and sent[0]["source"] == "OUTPUT"
+
     def test_masking_keeps_image_parts_in_the_request(self):
         """Masking rewrites text in place; the image must survive to reach the model."""
         image_part = {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}}
