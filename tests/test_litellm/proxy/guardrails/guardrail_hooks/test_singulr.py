@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from litellm.exceptions import GuardrailRaisedException
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.singulr.singulr import SingulrGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
@@ -330,15 +331,74 @@ class TestSingulrRequestPayload:
         assert sent_payload["metadata"] == {"user_api_key_team_alias": "AI Content Security Team"}
 
     @pytest.mark.asyncio
+    async def test_user_api_key_org_id_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_org_id": "org-123"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_org_id": "org-123"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_team_id_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_team_id": "team-456"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_team_id": "team-456"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_user_role_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+        request_data = {"litellm_metadata": {"user_api_key_auth": auth}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {
+            "user_api_key_user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_user_role_available_omits_role_from_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_alias": "my-key-alias"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert "user_api_key_user_role" not in sent_payload["metadata"]
+
+    @pytest.mark.asyncio
     async def test_all_user_metadata_fields_forwarded_together(self, singulr_guardrail):
         resp = _make_response({"should_block": False})
+        auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
         request_data = {
             "litellm_metadata": {
                 "user_api_key_alias": "my-key-alias",
                 "user_api_key_user_id": "my-user-id",
                 "user_api_key_user_email": "user@example.com",
+                "user_api_key_org_id": "org-123",
                 "user_api_key_org_alias": "Acme Org",
+                "user_api_key_team_id": "team-456",
                 "user_api_key_team_alias": "AI Content Security Team",
+                "user_api_key_auth": auth,
             }
         }
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
@@ -352,8 +412,11 @@ class TestSingulrRequestPayload:
             "user_api_key_alias": "my-key-alias",
             "user_api_key_user_id": "my-user-id",
             "user_api_key_user_email": "user@example.com",
+            "user_api_key_org_id": "org-123",
             "user_api_key_org_alias": "Acme Org",
+            "user_api_key_team_id": "team-456",
             "user_api_key_team_alias": "AI Content Security Team",
+            "user_api_key_user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
         }
 
     @pytest.mark.asyncio

@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
@@ -117,21 +118,33 @@ class SingulrGuardrail(CustomGuardrail):
                     return value
         return None
 
+    @staticmethod
+    def _resolve_user_role_from_request_data(request_data: Mapping[str, Any]) -> str | None:
+        for container_key in ("litellm_metadata", "metadata"):
+            container: Final = request_data.get(container_key) or _EMPTY_MAPPING
+            auth: Final = container.get("user_api_key_auth") if container else None
+            if isinstance(auth, UserAPIKeyAuth) and auth.user_role:
+                return auth.user_role.value
+        return None
+
     @classmethod
     def _build_metadata(cls, request_data: Mapping[str, Any]) -> Mapping[str, Any] | None:
         fields: Final = (
             "user_api_key_alias",
             "user_api_key_user_id",
             "user_api_key_user_email",
+            "user_api_key_org_id",
             "user_api_key_org_alias",
+            "user_api_key_team_id",
             "user_api_key_team_alias",
         )
-        resolved: Final = {  # mutable-ok: short-lived JSON payload dict
-            field: cls._resolve_metadata_value(request_data=request_data, key=field) for field in fields
-        }
-        if not any(resolved.values()):
+        resolved: Final = (
+            *((field, cls._resolve_metadata_value(request_data=request_data, key=field)) for field in fields),
+            ("user_api_key_user_role", cls._resolve_user_role_from_request_data(request_data=request_data)),
+        )
+        if not any(value for _, value in resolved):
             return None
-        return {key: value for key, value in resolved.items() if value}  # mutable-ok: short-lived JSON payload dict
+        return {key: value for key, value in resolved if value}  # mutable-ok: short-lived JSON payload dict
 
     @staticmethod
     def _build_user_message(text: str) -> Mapping[str, Any]:
