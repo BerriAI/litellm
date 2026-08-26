@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import websockets.exceptions  # registers websockets.exceptions on the websockets namespace
 
-
 import litellm
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
@@ -278,7 +277,7 @@ async def test_vertex_realtime_text_in_text_out():
         SERVER_TURN_COMPLETE,
     ]
 
-    async def _backend_recv(decode=True):  # noqa: ARG001
+    async def _backend_recv(decode=True):
         if not upstream_messages:
             # Signal normal connection close so the loop exits cleanly
             raise websockets.exceptions.ConnectionClosedOK(None, None)  # type: ignore[arg-type]
@@ -512,3 +511,47 @@ def test_google_ai_studio_native_audio_still_strips_voice(patch_native_audio_cos
 
     generation_config = json.loads(messages[0])["setup"]["generationConfig"]
     assert "speechConfig" not in generation_config
+
+
+def test_vertex_native_audio_maps_openai_stock_voice(patch_native_audio_cost_map_entry):
+    """Regression: OpenAI stock voice names must be mapped, not forwarded verbatim.
+
+    Vertex Live closes the socket with 1007 on an unknown voice name, so a
+    client sending OpenAI's default voice would lose the session entirely.
+    """
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    session_update = {
+        "type": "session.update",
+        "session": {"audio": {"output": {"voice": "alloy"}}},
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    generation_config = json.loads(messages[0])["setup"]["generationConfig"]
+    assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Zephyr"
+
+
+def test_vertex_native_audio_unmapped_voice_passes_through(patch_native_audio_cost_map_entry):
+    """A voice name outside the OpenAI stock set is forwarded verbatim so Gemini-native names keep working."""
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+    session_update = {
+        "type": "session.update",
+        "session": {"audio": {"output": {"voice": "Kore"}}},
+    }
+
+    messages = cfg.transform_realtime_request(
+        json.dumps(session_update),
+        _NATIVE_AUDIO_MODEL,
+        session_configuration_request=None,
+    )
+
+    generation_config = json.loads(messages[0])["setup"]["generationConfig"]
+    assert generation_config["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
