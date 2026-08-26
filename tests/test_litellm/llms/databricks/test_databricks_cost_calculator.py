@@ -233,6 +233,11 @@ def test_million_token_context_models_price_and_size_at_published_values(
     assert info["supports_prompt_caching"] is True
 
 
+def test_output_ceilings_match_what_each_vendor_publishes(local_model_cost_map: None) -> None:
+    assert _model_info("databricks/databricks-kimi-k3")["max_output_tokens"] == 1048576
+    assert _model_info("databricks/databricks-glm-5-2")["max_output_tokens"] == 131072
+
+
 def test_kimi_k3_accepts_images_while_glm_5_2_is_text_only(local_model_cost_map: None) -> None:
     assert _model_info("databricks/databricks-kimi-k3")["supports_vision"] is True
     assert _model_info("databricks/databricks-glm-5-2")["supports_vision"] is False
