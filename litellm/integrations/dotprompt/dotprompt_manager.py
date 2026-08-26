@@ -96,7 +96,7 @@ class DotpromptManager(CustomPromptManagement):
         if prompt_id is None:
             return False
         try:
-            return prompt_id in self.prompt_manager.list_prompts()
+            return self.prompt_manager.get_prompt(prompt_id) is not None
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
