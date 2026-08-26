@@ -663,6 +663,23 @@ def _endpoint_not_configured_detail(
     )
 
 
+async def _server_with_oauth_endpoints(mcp_server: MCPServer) -> MCPServer:
+    """Join deferred OAuth discovery only when this server still has no authorize URL.
+
+    Admin-entered endpoints live on ``configured_*`` after an anchored issuer empties the
+    resolved fields. Those already let authorize/token run, so discovery is not awaited
+    and cannot 503 over a leftover pin. A server with nothing configured still joins the
+    deferred task; no slot is a no-op and the caller 400s.
+    """
+    if mcp_server.effective_authorization_url is not None:
+        return mcp_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
+        global_mcp_server_manager,
+    )
+
+    return await global_mcp_server_manager.ensure_oauth_metadata_discovered(mcp_server)
+
+
 def _raise_unless_oauth2_discovery_server(
     mcp_server: MCPServer | None,
     mcp_server_name: str | None,
@@ -697,7 +714,7 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
     returns directly to the client's redirect URI without transiting the gateway. Gateway-side
     redirect trust and the ``/callback`` state relay therefore only apply to the short-circuit
     arm, where the upstream only knows the gateway's own callback."""
-    return mcp_server.is_dcr_bridge and bool(mcp_server.registration_url) and not mcp_server.client_id
+    return mcp_server.is_dcr_bridge and bool(mcp_server.effective_registration_url) and not mcp_server.client_id
 
 
 def _require_s256_pkce(
@@ -745,7 +762,7 @@ def _redirect_to_upstream_authorize(
         **({"scope": scope_value} if scope_value else {}),
         **({"resource": upstream_resource} if upstream_resource else {}),
     }
-    parsed_auth_url: Final = urlparse(mcp_server.authorization_url or "")
+    parsed_auth_url: Final = urlparse(mcp_server.effective_authorization_url or "")
     merged_params: Final = {**dict(parse_qsl(parsed_auth_url.query)), **passthrough_params}
     return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
 
@@ -812,11 +829,12 @@ async def authorize_with_server(
     ephemeral_dcr_client: "EphemeralDcrClient | None" = None,
 ):
     _raise_if_not_oauth2(mcp_server)
-    if mcp_server.authorization_url is None:
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server)
+    if resolved_server.effective_authorization_url is None:
         raise HTTPException(
             status_code=400,
             detail=_endpoint_not_configured_detail(
-                mcp_server,
+                resolved_server,
                 "authorization url",
                 "set Authorization URL and Token URL manually",
                 "set Issuer to discover them from the identity provider (RFC 8414)",
@@ -913,7 +931,7 @@ async def authorize_with_server(
     if upstream_resource:
         params["resource"] = upstream_resource
 
-    parsed_auth_url: Final = urlparse(mcp_server.authorization_url)
+    parsed_auth_url: Final = urlparse(resolved_server.effective_authorization_url)
     existing_params: Final = dict(parse_qsl(parsed_auth_url.query))
     existing_params.update(params)
     final_url: Final = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
@@ -946,11 +964,13 @@ async def exchange_token_with_server(
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
-    if mcp_server.token_url is None:
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server)
+    token_url: Final = resolved_server.effective_token_url
+    if token_url is None:
         raise HTTPException(
             status_code=400,
             detail=_endpoint_not_configured_detail(
-                mcp_server,
+                resolved_server,
                 "token url",
                 "set Token URL manually",
                 "set Issuer to discover it from the identity provider (RFC 8414)",
@@ -1067,7 +1087,7 @@ async def exchange_token_with_server(
     async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     try:
         response: Final = await async_client.post(
-            mcp_server.token_url,
+            token_url,
             headers={"Accept": "application/json", **token_request.headers},
             data=token_data,
         )
@@ -1551,7 +1571,8 @@ async def mint_ephemeral_dcr_client(request: Request, mcp_server: MCPServer) -> 
     bounded by the server count even when the request origin varies) so parallel authorize requests
     cannot each register an upstream client; the cache stamps nothing onto the server record and
     correctness never depends on it because the sealed state carries the client through the flow."""
-    if mcp_server.registration_url is None:
+    registration_url: Final = mcp_server.effective_registration_url
+    if registration_url is None:
         return None
     request_base_url: Final = get_request_base_url(request)
     cache_key: Final = f"mcp_ephemeral_dcr_client:{mcp_server.server_id}:{request_base_url}"
@@ -1571,7 +1592,7 @@ async def mint_ephemeral_dcr_client(request: Request, mcp_server: MCPServer) -> 
             "token_endpoint_auth_method": "none",
         }
         response: Final = await _post_dcr_registration(
-            registration_url=mcp_server.registration_url,
+            registration_url=registration_url,
             register_data=register_data,
             server_id=mcp_server.server_id,
         )
@@ -1617,7 +1638,7 @@ async def resolve_ephemeral_dcr_client(
     usable to generate orphan IdP clients)."""
     if not (mcp_server.is_true_passthrough or (mcp_server.is_oauth_delegate and not mcp_server.is_dcr_bridge)):
         return None
-    if mcp_server.authorization_url is None:
+    if mcp_server.effective_authorization_url is None:
         raise HTTPException(
             status_code=400,
             detail="MCP server authorization url is not set",
@@ -1661,21 +1682,23 @@ async def register_client_with_server(
     ):
         return dummy_return
 
-    if mcp_server.authorization_url is None:
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server)
+    if resolved_server.effective_authorization_url is None:
         raise HTTPException(
             status_code=400,
             detail=_endpoint_not_configured_detail(
-                mcp_server,
+                resolved_server,
                 "authorization url",
                 "set Authorization URL and Token URL manually",
                 "set Issuer to discover them from the identity provider (RFC 8414)",
             ),
         )
 
-    if mcp_server.registration_url is None:
+    registration_url: Final = resolved_server.effective_registration_url
+    if registration_url is None:
         return dummy_return
 
-    bridge_relay: Final = _dcr_bridge_relays_client_registration(mcp_server)
+    bridge_relay: Final = _dcr_bridge_relays_client_registration(resolved_server)
     if bridge_relay and not client_redirect_uris:
         raise HTTPException(
             status_code=400,
@@ -1690,7 +1713,7 @@ async def register_client_with_server(
         "token_endpoint_auth_method": token_endpoint_auth_method or ("none" if bridge_relay else ""),
     }
     response: Final = await _post_dcr_registration(
-        registration_url=mcp_server.registration_url,
+        registration_url=registration_url,
         register_data=register_data,
         server_id=mcp_server.server_id,
     )
