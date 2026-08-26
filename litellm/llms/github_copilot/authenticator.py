@@ -231,10 +231,8 @@ class Authenticator:
                 self.token_dir,
                 e,
             )
-            uid: Final = os.getuid() if hasattr(os, "getuid") else "user"
-            self.token_dir = os.path.join(tempfile.gettempdir(), f"litellm_{uid}", "github_copilot")
             try:
-                os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
+                self.token_dir = tempfile.mkdtemp(prefix="litellm_copilot_")
             except OSError:
                 pass
             self.access_token_file = os.path.join(

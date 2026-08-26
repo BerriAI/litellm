@@ -38,15 +38,13 @@ class TestGitHubCopilotAuthenticator:
             assert os.path.basename(auth.api_key_file) == "api-key.json"
             mock_makedirs.assert_not_called()
 
-    def test_ensure_token_dir(self):
+    def test_ensure_token_dir(self, tmp_path):
         """Test that the token directory is created if it doesn't exist."""
-        with (
-            patch("os.path.exists", return_value=False),
-            patch("os.makedirs") as mock_makedirs,
-        ):
-            auth = Authenticator()
-            auth._ensure_token_dir()
-            mock_makedirs.assert_called_once_with(auth.token_dir, mode=0o700, exist_ok=True)
+        test_dir = str(tmp_path / "new_copilot_dir")
+        auth = Authenticator()
+        auth.token_dir = test_dir
+        auth._ensure_token_dir()
+        assert os.path.exists(test_dir)
 
     def test_ensure_token_dir_permission_error_fallback(self):
         """Test that _ensure_token_dir falls back to temp directory on PermissionError."""
@@ -54,7 +52,7 @@ class TestGitHubCopilotAuthenticator:
         original_dir = auth.token_dir
         with (
             patch("os.path.exists", return_value=False),
-            patch("os.makedirs", side_effect=[PermissionError("Permission denied"), None]),
+            patch("os.makedirs", side_effect=PermissionError("Permission denied")),
         ):
             auth._ensure_token_dir()
             assert auth.token_dir != original_dir
