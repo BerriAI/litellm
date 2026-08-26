@@ -247,6 +247,65 @@ async def test_register_route_bridge_missing_registration_url_joins_discovery():
     assert json.loads(response.body.decode("utf-8"))["client_id"] == "generated-client"
 
 
+@pytest.mark.asyncio
+async def test_token_route_bridge_missing_registration_url_joins_discovery():
+    """A clientless DCR bridge rebuilt with an admin-entered token url but without its discovered
+    registration endpoint must rejoin discovery at the exchange: the relay-vs-callback arm hinges
+    on the registration url, so skipping discovery would swap the client's own redirect_uri for
+    the gateway callback and the upstream would reject the code."""
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="bridge-partial-token-metadata",
+        name="bridge_partial_token_metadata",
+        server_name="bridge_partial_token_metadata",
+        alias="bridge_partial_token_metadata",
+        url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+        dcr_bridge=True,
+        client_id=None,
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+    global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
+    request = _mock_callback_request("https://litellm.example.com/")
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"access_token": "tok", "token_type": "Bearer"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    with (
+        patch.object(  # test-quality-ok: innermost discovery seam on a module-global manager; the route-to-exchange join under test stays real
+            global_mcp_server_manager,
+            "_discover_oauth_metadata_for_server",
+            new=AsyncMock(return_value=_resolved_oauth_metadata()),
+        ) as discovery,
+        patch.object(  # test-quality-ok: keeps the upstream token POST off the network so its redirect_uri arm can be asserted
+            discoverable_endpoints,
+            "get_async_httpx_client",
+            new=lambda llm_provider: fake_http_client,
+        ),
+    ):
+        response = await discoverable_endpoints.token_endpoint(
+            request=request,
+            grant_type="authorization_code",
+            code="upstream-code",
+            redirect_uri="https://client.example.com/cb",
+            client_id="dcr-client-id",
+            mcp_server_name=server.server_name,
+        )
+
+    discovery.assert_awaited_once_with(server)
+    assert response.status_code == 200
+    assert fake_http_client.post.await_args.kwargs["data"]["redirect_uri"] == "https://client.example.com/cb"
+
+
 @pytest.fixture
 def trust_xff():
     """Force ``IPAddressUtils.is_request_from_trusted_proxy`` to True.
