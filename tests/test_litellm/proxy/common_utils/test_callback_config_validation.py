@@ -4,10 +4,6 @@ from litellm.proxy.common_utils.callback_config_validation import (
 
 
 def test_callback_config_error_rejects_invalid_langfuse_environment():
-    from litellm.proxy.common_utils.callback_config_validation import (
-        callback_config_error,
-    )
-
     for callback in ["langfuse", "langfuse_otel"]:
         error = callback_config_error(callback, {"langfuse_environment": "Production"})
         assert error is not None and "langfuse_environment" in error

@@ -226,10 +226,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params") or {}
-        langfuse_environment: Final = dynamic_params.get("langfuse_environment") or os.environ.get(
-            "LANGFUSE_TRACING_ENVIRONMENT"
-        )
+        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+        langfuse_environment: Final = (
+            dynamic_params.get("langfuse_environment") if dynamic_params else None
+        ) or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
         if langfuse_environment:
             safe_set_attribute(
                 span,

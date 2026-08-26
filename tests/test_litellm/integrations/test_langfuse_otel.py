@@ -139,7 +139,15 @@ class TestLangfuseOtelIntegration:
 
     def test_set_langfuse_environment_attribute_prefers_dynamic_param(self):
         """Per-key/team langfuse_environment beats the deployment env var."""
-        mock_span = MagicMock()
+
+        class _RecordingSpan:
+            def __init__(self):
+                self.attributes = {}
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        span = _RecordingSpan()
         mock_kwargs = {
             "standard_callback_dynamic_params": {
                 "langfuse_environment": "team-a-env"
@@ -149,16 +157,11 @@ class TestLangfuseOtelIntegration:
         with patch.dict(
             os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": "deployment-wide"}
         ):
-            with patch(
-                "litellm.integrations.arize._utils.safe_set_attribute"
-            ) as mock_safe_set_attribute:
-                LangfuseOtelLogger._set_langfuse_specific_attributes(
-                    mock_span, mock_kwargs, {}
-                )
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                span, mock_kwargs, {}
+            )
 
-                mock_safe_set_attribute.assert_called_once_with(
-                    mock_span, "langfuse.environment", "team-a-env"
-                )
+        assert span.attributes["langfuse.environment"] == "team-a-env"
 
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
