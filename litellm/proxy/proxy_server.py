@@ -6291,10 +6291,7 @@ class ProxyConfig:
         if raw_groups is None:
             return router_settings
         try:
-            parse_routing_groups(
-                TypeAdapter(list[RoutingGroup]).validate_python(raw_groups),
-                validate_strategy=Router._validate_routing_strategy,
-            )
+            parse_routing_groups(TypeAdapter(list[RoutingGroup]).validate_python(raw_groups))
         except ValueError as validation_error:
             verbose_proxy_logger.error(
                 "Ignoring invalid router_settings.routing_groups from config/DB, all other router settings still "
@@ -15790,10 +15787,7 @@ async def update_config(
 
         if config_info.router_settings is not None:
             try:
-                parse_routing_groups(
-                    config_info.router_settings.routing_groups,
-                    validate_strategy=Router._validate_routing_strategy,
-                )
+                parse_routing_groups(config_info.router_settings.routing_groups)
             except ValueError as validation_error:
                 raise HTTPException(status_code=400, detail={"error": str(validation_error)})
 

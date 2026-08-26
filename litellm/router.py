@@ -179,7 +179,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
-from litellm.router_utils.routing_groups import parse_routing_groups
+from litellm.router_utils.routing_groups import parse_routing_groups, validate_routing_strategy
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1081,19 +1081,7 @@ class Router:
 
     @staticmethod
     def _validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
-        # See: https://github.com/BerriAI/litellm/issues/11330
-        valid_strategy_strings: Final = ["simple-shuffle", "lar1"] + [s.value for s in RoutingStrategy]
-        if routing_strategy is None:
-            return
-        is_valid_string: Final = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
-        is_valid_enum: Final = isinstance(routing_strategy, RoutingStrategy)
-        if not is_valid_string and not is_valid_enum:
-            raise ValueError(
-                f"Invalid routing_strategy: '{routing_strategy}'. "
-                f"Valid options: {valid_strategy_strings}. "
-                f"Check 'router_settings.routing_strategy' in your config.yaml "
-                f"or the 'routing_strategy' parameter if using the Router SDK directly."
-            )
+        validate_routing_strategy(routing_strategy)
 
     def _build_strategy_selector(
         self,
@@ -1207,17 +1195,14 @@ class Router:
             self._replace_routing_groups(())
             return
 
-        known_model_names: Final = frozenset(m["model_name"] for m in (self.model_list or []) if m.get("model_name"))
-        groups: Final = parse_routing_groups(
-            groups_input,
-            validate_strategy=self._validate_routing_strategy,
-            known_model_names=known_model_names,
-        )
+        known_model_names: Final = frozenset(m["model_name"] for m in (self.model_list or ()) if m.get("model_name"))
+        groups: Final = parse_routing_groups(groups_input, known_model_names=known_model_names)
 
+        alias_names: Final = frozenset(self.model_group_alias or ())
         shadowed_names: Final = tuple(
             group.group_name
             for group in groups
-            if group.group_name in known_model_names or group.group_name in (self.model_group_alias or {})
+            if group.group_name in known_model_names or group.group_name in alias_names
         )
         for shadowed_name in shadowed_names:
             verbose_router_logger.warning(
@@ -1230,7 +1215,7 @@ class Router:
         failures: Final = tuple(outcome for _, outcome in built if isinstance(outcome, ValidationError))
         if failures:
             self._unregister_router_selectors(
-                [outcome for _, outcome in built if not isinstance(outcome, ValidationError)]
+                tuple(outcome for _, outcome in built if not isinstance(outcome, ValidationError))
             )
             raise failures[0]
 
@@ -1246,7 +1231,7 @@ class Router:
             self, "_group_selectors", {}
         )
         self._unregister_router_selectors(
-            [sel for selectors in previous_selectors.values() for sel in selectors.values()]
+            tuple(sel for selectors in previous_selectors.values() for sel in selectors.values())
         )
 
         self._routing_groups: dict[str, RoutingGroup] = {group.group_name: group for group, _ in built}

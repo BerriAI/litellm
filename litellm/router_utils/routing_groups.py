@@ -4,18 +4,36 @@ proxy's config-update endpoint so a config the UI saves cannot be one the
 runtime refuses to load.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Final
 
 from litellm._logging import verbose_router_logger
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
-ValidateStrategy = Callable[[RoutingStrategy | str | None], None]
+
+def validate_routing_strategy(routing_strategy: RoutingStrategy | str | None) -> None:
+    """
+    Raises `ValueError` unless `routing_strategy` is a known strategy or None.
+
+    See: https://github.com/BerriAI/litellm/issues/11330
+    """
+    if routing_strategy is None:
+        return
+
+    valid_strategy_strings: Final = ("simple-shuffle", "lar1", *(s.value for s in RoutingStrategy))
+    is_valid_string: Final = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
+    is_valid_enum: Final = isinstance(routing_strategy, RoutingStrategy)
+    if not is_valid_string and not is_valid_enum:
+        raise ValueError(
+            f"Invalid routing_strategy: '{routing_strategy}'. "
+            f"Valid options: {list(valid_strategy_strings)}. "
+            f"Check 'router_settings.routing_strategy' in your config.yaml "
+            f"or the 'routing_strategy' parameter if using the Router SDK directly."
+        )
 
 
 def parse_routing_groups(
     groups_input: Sequence[RoutingGroup | dict] | None,
-    validate_strategy: ValidateStrategy,
     known_model_names: frozenset[str] = frozenset(),
 ) -> tuple[RoutingGroup, ...]:
     """
@@ -35,21 +53,21 @@ def parse_routing_groups(
     if any(group.group_name == "default" for group in groups):
         raise ValueError("routing_groups: 'default' is reserved for the implicit fallback group.")
 
-    names: Final = [group.group_name for group in groups]
-    duplicate_names: Final = sorted({name for name in names if names.count(name) > 1})
+    names: Final = tuple(group.group_name for group in groups)
+    duplicate_names: Final = frozenset(name for name in names if names.count(name) > 1)
     if duplicate_names:
-        raise ValueError(f"routing_groups: group names must be unique, duplicate group_name '{duplicate_names[0]}'.")
+        raise ValueError(f"routing_groups: group names must be unique, duplicate group_name '{min(duplicate_names)}'.")
 
     for group in groups:
-        validate_strategy(group.routing_strategy)
+        validate_routing_strategy(group.routing_strategy)
 
-    owners_by_model: Final = {
-        model_name: tuple(group.group_name for group in groups if model_name in group.models)
+    owners_by_model: Final = tuple(
+        (model_name, tuple(group.group_name for group in groups if model_name in group.models))
         for model_name in dict.fromkeys(model_name for group in groups for model_name in group.models)
-    }
+    )
     conflicts: Final = tuple(
         f"model_name '{model_name}' appears in {' and '.join(repr(owner) for owner in owners)}"
-        for model_name, owners in owners_by_model.items()
+        for model_name, owners in owners_by_model
         if len(owners) > 1
     )
     if conflicts:

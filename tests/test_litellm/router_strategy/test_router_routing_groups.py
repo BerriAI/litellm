@@ -10,7 +10,6 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-
 import litellm
 from litellm import Router
 from litellm.types.router import RoutingGroup, RoutingStrategy
@@ -484,6 +483,45 @@ def test_build_strategy_selector_constructs_for_known_strategies(monkeypatch):
         register_callbacks=False,
     )
     assert selector is not None
+
+
+def test_replace_routing_groups_swaps_state_and_drops_old_selectors(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(
+        routing_groups=[
+            {
+                "group_name": "fast",
+                "models": ["filtered-model"],
+                "routing_strategy": "least-busy",
+            }
+        ]
+    )
+    old_selector = router._group_selectors["fast"]["least-busy"]
+
+    replacement = RoutingGroup(
+        group_name="quality",
+        models=["other-model"],
+        routing_strategy="latency-based-routing",
+    )
+    new_selector = router._build_strategy_selector(
+        strategy=replacement.routing_strategy,
+        routing_strategy_args={},
+        register_callbacks=True,
+    )
+    router._replace_routing_groups(((replacement, new_selector),))
+
+    assert set(router._routing_groups) == {"quality"}
+    assert router._model_to_group == {"other-model": "quality"}
+    assert router._group_selectors == {"quality": {"latency-based-routing": new_selector}}
+    assert all(c is not old_selector for c in litellm.callbacks)
+    assert new_selector in litellm.callbacks
+
+    router._replace_routing_groups(())
+    assert router._routing_groups == {}
+    assert router._model_to_group == {}
+    assert router._group_selectors == {}
+    assert all(c is not new_selector for c in litellm.callbacks)
 
 
 def test_unregister_router_selectors_removes_by_identity(monkeypatch):
