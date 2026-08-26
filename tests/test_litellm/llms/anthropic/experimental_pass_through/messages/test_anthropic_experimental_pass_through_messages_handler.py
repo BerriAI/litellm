@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1352,3 +1353,30 @@ async def test_anthropic_messages_maps_provider_exception_before_failure_logging
     assert error_information.get("error_class") == expected_exception.__name__
     assert error_information.get("llm_provider") == "anthropic"
     assert error_information.get("error_code") == str(upstream_status)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
+    """The mapping boundary is for provider failures only. A request rejected before
+    the provider call (here invalid metadata) must surface as the original exception,
+    not as the mapper's APIConnectionError, whose message embeds a server traceback."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    def upstream_must_not_be_called(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the provider must not be called for a request rejected locally")
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_must_not_be_called))
+
+    with pytest.raises(ValidationError) as excinfo:
+        await handler.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            api_key="sk-invalid",
+            client=upstream,
+            metadata={"user_id": 123},
+        )
+
+    assert "Traceback" not in str(excinfo.value)
