@@ -193,37 +193,28 @@ async def test_get_async_http_client_uses_per_call_ssl_verify(monkeypatch):
     result = BaseOpenAILLM._get_async_http_client(ssl_verify=False)
 
     assert result is not None
+    assert result._transport._ssl_verify is False
     await result.aclose()
 
 
-def test_openai_client_ssl_verify(monkeypatch):  # test-quality-ok: verifies per-call SSL reaches the client boundary
+def test_openai_client_uses_per_call_ssl_verify(monkeypatch):
+    from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.llms.openai.openai import OpenAIChatCompletion
 
-    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", MagicMock())
-    with (
-        patch.object(  # test-quality-ok: force the fresh-client path
-            BaseOpenAILLM, "get_cached_openai_client", return_value=None
-        ),
-        patch.object(  # test-quality-ok: avoid mutating the shared client cache
-            BaseOpenAILLM, "set_cached_openai_client"
-        ),
-        patch.object(  # test-quality-ok: observe the HTTP client boundary
-            OpenAIChatCompletion, "_get_sync_http_client"
-        ) as get_http_client,
-        patch(  # test-quality-ok: avoid constructing a provider client
-            "litellm.llms.openai.openai.OpenAI"
-        ) as openai_client,
-    ):
-        OpenAIChatCompletion()._get_openai_client(
-            is_async=False,
-            api_key="sk-test",
-            api_base="https://example.test/v1",
-            max_retries=2,
-            ssl_verify="/tmp/custom-ca.pem",
-        )
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    client = OpenAIChatCompletion()._get_openai_client(
+        is_async=False,
+        api_key="sk-test",
+        api_base="https://example.test/v1",
+        max_retries=2,
+        ssl_verify=False,
+    )
 
-    get_http_client.assert_called_once_with(ssl_verify="/tmp/custom-ca.pem")
-    assert openai_client.call_count == 1
+    assert client is not None
+    assert client._client._transport._pool._ssl_context.check_hostname is False
+    client.close()
 
 
 def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open(monkeypatch):
