@@ -2762,11 +2762,12 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_HOST = "myfoundry.services.ai.azure.com"
 AZURE_AI_BASE = f"https://{AZURE_AI_HOST}"
 
-TOOL_WITH_AN_UNSUPPORTED_FIELD = {
-    "type": "function",
-    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
-    "strict": True,
-}
+def _a_tool_with_an_unsupported_field() -> dict:
+    return {
+        "type": "function",
+        "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+        "strict": True,
+    }
 
 A_COMPLETION = {
     "id": "chatcmpl-1",
@@ -2811,7 +2812,7 @@ def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
         return litellm.completion(
             model="azure_ai/grok-3",
             messages=[{"role": "user", "content": "hi"}],
-            tools=[TOOL_WITH_AN_UNSUPPORTED_FIELD],
+            tools=[_a_tool_with_an_unsupported_field()],
             api_base=AZURE_AI_BASE,
             api_key="fake-key",
             **overrides,
@@ -2898,7 +2899,7 @@ async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_a
         response = await litellm.acompletion(
             model="azure_ai/grok-3",
             messages=[{"role": "user", "content": "hi"}],
-            tools=[TOOL_WITH_AN_UNSUPPORTED_FIELD],
+            tools=[_a_tool_with_an_unsupported_field()],
             api_base=AZURE_AI_BASE,
             api_key="fake-key",
         )
@@ -2923,7 +2924,7 @@ async def test_a_provider_that_keeps_rejecting_is_not_retried_forever_on_the_asy
             await litellm.acompletion(
                 model="azure_ai/grok-3",
                 messages=[{"role": "user", "content": "hi"}],
-                tools=[TOOL_WITH_AN_UNSUPPORTED_FIELD],
+                tools=[_a_tool_with_an_unsupported_field()],
                 api_base=AZURE_AI_BASE,
                 api_key="fake-key",
             )
