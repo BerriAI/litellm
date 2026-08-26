@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 from urllib.parse import quote
 
 from opentelemetry.sdk.trace import TracerProvider
@@ -32,6 +32,7 @@ from litellm.integrations.otel.presets import (
     dynamic_otlp_headers,
     project_routing_headers,
 )
+from litellm.types.utils import StandardCallbackDynamicParams
 
 # Exporter kinds that ignore headers — never rewritten with dynamic credentials.
 _NON_OTLP_KINDS: Final = ("console", "in_memory", "inmemory", "memory")
@@ -166,7 +167,7 @@ class TenantTracerCache:
     def route_for(
         self,
         default: Tracer,
-        dynamic_params: Any,
+        dynamic_params: StandardCallbackDynamicParams | None,
         auth_metadata: Mapping[str, str] | None = None,
     ) -> TenantRoute:
         """Return the tracer (and trace-detachment flag) for this request.

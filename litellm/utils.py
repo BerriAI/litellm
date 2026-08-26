@@ -1292,7 +1292,7 @@ async def async_post_call_success_deployment_hook(
 
 
 async def async_post_call_failure_deployment_hook(
-    request_data: Mapping[str, Any], exception: Exception, call_type: str
+    request_data: Mapping[str, object], exception: Exception, call_type: str
 ) -> None:
     """
     Notify CustomLogger callbacks that a deployment attempt failed.
