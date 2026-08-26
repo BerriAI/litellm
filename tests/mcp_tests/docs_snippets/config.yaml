@@ -1,0 +1,17 @@
+# source: https://docs.litellm.ai/docs/mcp "Adding your MCP" (config.yaml tab)
+# {{PLACES_MCP_URL}} is rendered by the test harness to a local mock MCP server
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: sk-1234
+
+mcp_servers:
+  places_api:
+    url: "{{PLACES_MCP_URL}}"
+    transport: "http"
+    description: "Places lookup MCP server (docs golden-path example)"
+    allow_all_keys: true
