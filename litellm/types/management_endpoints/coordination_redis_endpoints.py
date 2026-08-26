@@ -102,4 +102,33 @@ COORDINATION_REDIS_SETTINGS_FIELDS: Final[list[CoordinationRedisSettingsField]] 
         ui_field_name="Service Name",
         section="sentinel",
     ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_auth",
+        field_type="Boolean",
+        field_description="Enable AWS ElastiCache IAM authentication",
+        field_default=False,
+        ui_field_name="AWS IAM Authentication",
+        section="connection",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_user_name",
+        field_type="String",
+        field_description="AWS ElastiCache IAM user name",
+        ui_field_name="AWS IAM User Name",
+        section="connection",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_cache_name",
+        field_type="String",
+        field_description="AWS ElastiCache cache name",
+        ui_field_name="AWS IAM Cache Name",
+        section="connection",
+    ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_region",
+        field_type="String",
+        field_description="AWS region for ElastiCache IAM authentication",
+        ui_field_name="AWS IAM Region",
+        section="connection",
+    ),
 ]
