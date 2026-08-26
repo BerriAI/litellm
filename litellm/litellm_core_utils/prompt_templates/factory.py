@@ -7,7 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
-from typing import Any, Final, TypedDict, cast, overload
+from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -2318,7 +2318,7 @@ def _drop_unsignable_thinking_blocks(
 
 
 # mutable-ok: anthropic_messages_pt's callers have always appended to the list it returns
-_AnthropicMessageList = list[AllAnthropicPassThroughMessageValues]
+_AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
 
 
 def anthropic_messages_pt(
