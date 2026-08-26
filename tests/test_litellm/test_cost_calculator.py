@@ -3584,6 +3584,45 @@ def test_batch_cost_calculator_cache_creation_falls_back_to_input_rate():
     assert prompt_cost == pytest.approx((1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3e-6) / 2)
 
 
+def test_batch_cost_calculator_discounts_cache_tokens_with_explicit_batches_rate():
+    """
+    Regression test: when a model declares an explicit input_cost_per_token_batches
+    (e.g. gpt-4.1, gpt-4o, gemini-3-pro-preview, Claude on Bedrock/Vertex all do),
+    cached and cache-creation tokens must still get their cache discount instead of
+    being billed at the full non-cached batches rate.
+
+    Before the fix, batch_cost_calculator billed every prompt token (including the
+    8000 cached and 2000 cache-creation tokens below) at the flat batches rate,
+    overcharging by more than 2x on cache-heavy batch requests.
+    """
+    from litellm.cost_calculator import batch_cost_calculator
+
+    model_info: ModelInfo = {
+        "supported_openai_params": [],
+        "input_cost_per_token": 3e-6,
+        "input_cost_per_token_batches": 1.5e-6,  # exactly half of input_cost_per_token
+        "output_cost_per_token": 15e-6,
+        "output_cost_per_token_batches": 7.5e-6,
+        "cache_read_input_token_cost": 3e-7,
+        "cache_creation_input_token_cost": 3.75e-6,
+    }
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=_batch_cache_usage(),
+        model="claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    expected_prompt_cost = (1000 * 3e-6 + 8000 * 3e-7 + 2000 * 3.75e-6) / 2
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+    assert completion_cost_value == pytest.approx(200 * 7.5e-6)
+
+    # The bug billed every prompt token (cached ones included) at the flat batches
+    # rate, so guard against regressing back to that overcharge.
+    buggy_prompt_cost = 11000 * 1.5e-6
+    assert prompt_cost < buggy_prompt_cost
+
+
 def test_completion_cost_bills_interactions_api_response():
     from litellm.types.interactions import InteractionsAPIResponse
 

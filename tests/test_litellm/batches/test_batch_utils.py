@@ -431,7 +431,11 @@ def test_total_usage_and_cost_normalize_mixed_responses_and_chat():
     assert usage.completion_tokens == 12
     assert usage.total_tokens == 42
     assert usage.cache_read_input_tokens == 3
-    assert cost == pytest.approx((30 * 0.00125) + (12 * 0.005))
+    # model_info declares no cache_read_input_token_cost, so the 3 cached tokens
+    # are excluded from the base input_cost_per_token_batches charge (consistent
+    # with how generic_cost_per_token prices an undeclared cache rate at $0)
+    # rather than billed at the full non-cached batches rate.
+    assert cost == pytest.approx((27 * 0.00125) + (12 * 0.005))
 
 
 def test_total_usage_empty_is_zero():

@@ -2201,9 +2201,7 @@ def batch_cost_calculator(
     output_cost_per_token: Final = model_info.get("output_cost_per_token")
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
-    if input_cost_per_token_batches is not None:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
-    elif input_cost_per_token:
+    if input_cost_per_token_batches is not None or input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
         cache_creation_tokens: Final = details["cache_creation_tokens"]
@@ -2211,15 +2209,23 @@ def batch_cost_calculator(
         # Subtract cached tokens from prompt_tokens before calculating cost
         # Fixes issue where cached tokens are being charged again
         base_input_tokens: Final = get_billable_input_tokens(usage) - cache_creation_tokens
-        total_prompt_cost = (
-            base_input_tokens * (input_cost_per_token) / 2
-        )  # batch cost is usually half of the regular token cost
+        if input_cost_per_token_batches is not None:
+            # An explicit batches rate is already the discounted per-token price
+            total_prompt_cost = base_input_tokens * input_cost_per_token_batches
+        else:
+            total_prompt_cost = (
+                base_input_tokens * (input_cost_per_token) / 2
+            )  # batch cost is usually half of the regular token cost
 
-        # Add cache read cost if applicable
+        # Add cache read cost if applicable. There is no dedicated batches cache-read
+        # rate, so the standard cache_read_input_token_cost is halved like the base rate.
         cache_read_cost_key: Final = _get_service_tier_cost_key("cache_read_input_token_cost", None)
         total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
 
-        cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
+        non_batch_input_cost: Final = (
+            input_cost_per_token if input_cost_per_token else (input_cost_per_token_batches or 0.0) * 2
+        )
+        cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or non_batch_input_cost
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     if output_cost_per_token_batches is not None:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
