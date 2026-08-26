@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   cancelModelCostMapReload,
   getModelCostMapReloadStatus,
@@ -18,9 +18,6 @@ vi.mock("./networking", () => ({
   getModelCostMapSource: vi.fn(),
   reloadModelCostMap: vi.fn(),
   scheduleModelCostMapReload: vi.fn(),
-}));
-vi.mock("./molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn() },
 }));
 
 const unscheduledStatus = { scheduled: false, interval_hours: null, last_run: null, next_run: null };
@@ -66,7 +63,7 @@ describe("PriceDataReload", () => {
 
     await waitFor(() => expect(reloadModelCostMap).toHaveBeenCalledWith("sk-test"));
     expect(onReloadSuccess).toHaveBeenCalledTimes(1);
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Price data reloaded successfully! 42 models updated.");
+    expect(toast.success).toHaveBeenCalledWith("Price data reloaded successfully! 42 models updated.");
   });
 
   it("schedules periodic reloads using the selected interval", async () => {
@@ -78,11 +75,11 @@ describe("PriceDataReload", () => {
     expect(screen.getByRole("dialog", { name: "Set Up Periodic Reload" })).toBeInTheDocument();
     const hours = screen.getByRole("spinbutton", { name: "Reload interval in hours" });
     await user.clear(hours);
-    await user.type(hours, "12");
+    fireEvent.change(hours, { target: { value: "12" } });
     await user.click(screen.getByRole("button", { name: "Schedule" }));
 
     await waitFor(() => expect(scheduleModelCostMapReload).toHaveBeenCalledWith("sk-test", 12));
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Periodic reload scheduled for every 12 hours");
+    expect(toast.success).toHaveBeenCalledWith("Periodic reload scheduled for every 12 hours");
   });
 
   it.each(["-1", "1.5", "169"])("should reject an invalid periodic reload interval of %s hours", async (interval) => {
@@ -94,7 +91,7 @@ describe("PriceDataReload", () => {
     await user.click(screen.getByRole("button", { name: "Schedule" }));
 
     expect(scheduleModelCostMapReload).not.toHaveBeenCalled();
-    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Hours must be a whole number between 1 and 168");
+    expect(toast.fromError).toHaveBeenCalledWith("Hours must be a whole number between 1 and 168");
   });
 
   it.each([1, 168])("should schedule a periodic reload at the inclusive %s-hour boundary", async (interval) => {
@@ -118,6 +115,6 @@ describe("PriceDataReload", () => {
     await user.click(await screen.findByRole("button", { name: /Cancel Periodic Reload/ }));
 
     await waitFor(() => expect(cancelModelCostMapReload).toHaveBeenCalledWith("sk-test"));
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Periodic reload cancelled successfully");
+    expect(toast.success).toHaveBeenCalledWith("Periodic reload cancelled successfully");
   });
 });

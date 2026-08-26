@@ -9,6 +9,16 @@ import { ApiError } from "@/lib/http/client";
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
 vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
+vi.mock("@/components/shared/advanced_date_picker", () => ({
+  __esModule: true,
+  default: ({ onValueChange }: { onValueChange: (value: { from?: Date; to?: Date }) => void }) => (
+    <button
+      type="button"
+      data-testid="date-picker"
+      onClick={() => onValueChange({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) })}
+    />
+  ),
+}));
 
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
@@ -66,6 +76,36 @@ const totals = (overrides: Partial<Totals> = {}): Totals => ({
   ...overrides,
 });
 
+const zeroBucket = { turns: 0, hits: 0, hit_rate_pct: 0 };
+
+const zeroCache: AutoRouterCacheStats = {
+  coverage_pct: 0,
+  hit_rate_pct: 0,
+  same_model: zeroBucket,
+  first_visit: zeroBucket,
+  return_to_tier: zeroBucket,
+  unordered_turns: 0,
+  return_misses_expired: 0,
+  return_misses_within_ttl: 0,
+  return_misses_unknown: 0,
+  ttl_5m_turns: 0,
+  ttl_1h_turns: 0,
+};
+
+const zeroTotals: Totals = {
+  sessions: 0,
+  turns: 0,
+  avg_turns_per_session: 0,
+  avg_session_seconds: 0,
+  avg_tokens_per_session: 0,
+  spend: 0,
+  saved_spend: 0,
+  baseline_spend: 0,
+  saved_pct: 0,
+  saved_per_session: 0,
+  cache: zeroCache,
+};
+
 const group = (overrides: Partial<AutoRouterBenchmarkGroup> = {}): AutoRouterBenchmarkGroup => ({
   router_name: "claude-auto",
   router_type: "complexity",
@@ -82,12 +122,28 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
 });
 
 const renderTab = () => {
+  const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
+  const onDateChange = vi.fn();
+  const activity = {
+    dateValue,
+    onDateChange,
+    results: [],
+    loading: false,
+    isFetchingMore: false,
+    progress: { currentPage: 1, totalPages: 1 },
+    cancelled: false,
+    cancel: vi.fn(),
+  };
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <AutoRouterBenchmarksTab accessToken="sk-test" />
-    </QueryClientProvider>,
-  );
+  return {
+    dateValue,
+    onDateChange,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <AutoRouterBenchmarksTab accessToken="sk-test" activity={activity} />
+      </QueryClientProvider>,
+    ),
+  };
 };
 
 describe("AutoRouterBenchmarksTab", () => {
@@ -162,6 +218,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("97.7%")).toBeInTheDocument();
     expect(screen.getByText("24.3%")).toBeInTheDocument();
     expect(screen.getByText("81.6%")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).not.toHaveClass("bg-muted");
   });
 
   it("summarizes the cache column from the bucketed turns, not the session turns", () => {
@@ -252,27 +309,36 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("Auto-router usage is unavailable right now")).toBeInTheDocument();
   });
 
-  it("says so when there are no auto-router sessions at all", () => {
-    mockHook({ data: response([]) });
+  it("renders the full dashboard with zeroed stats when the window has no sessions", () => {
+    mockHook({ data: response([], zeroTotals) });
     renderTab();
 
-    expect(screen.getByText("No auto-router sessions in this window yet")).toBeInTheDocument();
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getAllByText("$0.00")).toHaveLength(4);
+    expect(screen.getByText("across 0 sessions")).toBeInTheDocument();
+    expect(screen.getByText("0s")).toBeInTheDocument();
+    expect(screen.getByText(/turns measured/)).toBeInTheDocument();
+    expect(screen.getAllByText("0.0%").length).toBeGreaterThan(0);
+    expect(screen.getByRole("img", { name: "Share of turns by bucket" })).toHaveClass("bg-muted");
   });
 
-  it("requests the default thirty day window and widens or narrows it from the picker", () => {
-    mockHook({ data: response([group()]) });
+  it("shows the savings delta as an unsigned zero when nothing was saved", () => {
+    mockHook({ data: response([], zeroTotals) });
     renderTab();
 
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "30d");
-    expect(screen.getByText("Last 30 days")).toBeInTheDocument();
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.queryByText("-0%")).not.toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("tab", { name: "7d" }));
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "7d");
-    expect(screen.getByText("Last 7 days")).toBeInTheDocument();
+  it("queries the shared picker's range and pushes picker changes back to the shared state", () => {
+    mockHook({ data: response([group()]) });
+    const { dateValue, onDateChange } = renderTab();
 
-    fireEvent.click(screen.getByRole("tab", { name: "24h" }));
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "24h");
-    expect(screen.getByText("Last 24 hours")).toBeInTheDocument();
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue);
+    expect(screen.getByText("Jul 6 – Aug 5 (UTC)")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("date-picker"));
+    expect(onDateChange).toHaveBeenCalledWith({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) });
   });
 
   it("shows usage by default and mounts shadow evals only when its sub-tab is selected", () => {
@@ -302,11 +368,11 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
   });
 
-  it("keeps the window picker reachable while a window has no sessions", () => {
-    mockHook({ data: response([]) });
+  it("keeps the range picker reachable while a window has no sessions", () => {
+    mockHook({ data: response([], zeroTotals) });
     renderTab();
 
-    expect(screen.getByRole("tab", { name: "30d" })).toBeInTheDocument();
+    expect(screen.getByTestId("date-picker")).toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
   });
 });

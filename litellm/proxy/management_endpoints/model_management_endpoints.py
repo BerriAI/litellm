@@ -16,7 +16,7 @@ import json
 from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -24,6 +24,15 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.ptu_pricing import (
+    CUSTOM_PRICING_FIELDS,
+    PTU_EMPTIED_PRICING_FIELDS,
+    PTU_MODEL_INFO_FIELDS,
+    PTU_ZEROED_PRICING_FIELDS,
+    PTU_ZEROED_TABLE_FIELDS,
+    SEARCH_CONTEXT_SIZES,
+    ptu_config_error,
+)
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -63,6 +72,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
@@ -89,8 +99,10 @@ from litellm.types.router import (
     ModelInfo,
     updateDeployment,
 )
-from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import get_utc_datetime
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 router: Final = APIRouter()
 
@@ -112,19 +124,26 @@ class UpdatePublicModelGroupsRequest(BaseModel):
 
 
 class _ProxyModelRow(Protocol):
-    model_id: str
-    model_name: str
-    model_info: Mapping[str, object] | None
+    @property
+    def model_id(self) -> str: ...
+
+    @property
+    def model_name(self) -> str: ...
+
+    @property
+    def model_info(self) -> object: ...
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
 
 
 class _ProxyModelTable(Protocol):
-    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
+    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[BaseModel | None]: ...
 
     def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_ProxyModelRow]]: ...
 
-    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[_ProxyModelRow]: ...
+    def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> Awaitable[_ProxyModelRow | None]: ...
 
     def delete(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
 
@@ -135,41 +154,35 @@ class _TxModelTables(Protocol):
     litellm_proxymodeltable: _ProxyModelTable
 
 
+class _ExistingModelRow(Protocol):
+    @property
+    def litellm_params(self) -> Mapping[str, object]: ...
+
+    def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
+
+
 class _TeamRow(Protocol):
-    models: Sequence[str]
+    @property
+    def models(self) -> Sequence[str]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _TeamTable(Protocol):
+class _TeamLookupTable(Protocol):
     def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
 
+
+class _TeamTable(_TeamLookupTable, Protocol):
     def update(
         self, *, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, bool]
     ) -> Awaitable[LiteLLM_TeamTable]: ...
-
-
-class _TeamIdRef(Protocol):
-    team_id: str
-
-
-class _ModelAliasRow(Protocol):
-    id: int
-    model_aliases: dict[str, str]
-    team: _TeamIdRef | None
-
-
-class _ModelAliasTable(Protocol):
-    def find_many(self, *, include: Mapping[str, bool]) -> Awaitable[Sequence[_ModelAliasRow]]: ...
-
-    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[object]: ...
 
 
 def _proxy_model_table(prisma_client: PrismaClient) -> _ProxyModelTable:
     return ModelRepository(prisma_client).table
 
 
-def _repo_team_table(prisma_client: PrismaClient) -> _TeamTable:
+def _repo_team_table(prisma_client: PrismaClient) -> _TeamLookupTable:
     return TeamRepository(prisma_client).table
 
 
@@ -177,15 +190,12 @@ def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
     return prisma_client.db.litellm_teamtable
 
 
-def _model_alias_table(prisma_client: PrismaClient) -> _ModelAliasTable:
+def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
     return ModelTableRepository(prisma_client).table
 
 
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
-    db_model: Final = cast(
-        BaseModel | None,
-        await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id}),
-    )
+    db_model: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_id})
 
     if not db_model:
         return None
@@ -242,7 +252,6 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
-_PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
 _PTU_PRICED_PAIR: Final = frozenset({"ptu_count", "cost_per_ptu_per_hour"})
 
 
@@ -256,7 +265,7 @@ def _explicitly_cleared_ptu_fields(model_info: ModelInfo | None) -> frozenset[st
         return frozenset()
     return frozenset(
         field
-        for field in _PTU_MODEL_INFO_FIELDS
+        for field in PTU_MODEL_INFO_FIELDS
         if field in model_info.model_fields_set and getattr(model_info, field) is None
     )
 
@@ -289,7 +298,7 @@ def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, ob
     """
     if is_ptu_cost_attribution_enabled():
         return
-    supplied: Final = tuple(field for field in _PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
+    supplied: Final = tuple(field for field in PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
     if not supplied:
         return
     raise HTTPException(
@@ -304,66 +313,62 @@ def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, ob
 def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     """Enforce the PTU cross-field invariant on the effective model_info.
 
-    ptu_count and cost_per_ptu_per_hour must be set together, and a team_id and a
-    ptu_effective_from are required when they are. The start is mandatory rather than
-    defaulted because flat cost accrues from it: inferring one would let a deployment
-    configured today be billed for days it did not exist. Per-field bounds (positive
-    count, non-negative rate) are enforced by ModelInfo itself.
+    The rules live in litellm_core_utils.ptu_pricing so that config.yaml registration
+    refuses the same deployments this endpoint does, for the same reason. Per-field bounds
+    (positive count, non-negative rate) are enforced by ModelInfo itself.
 
-    Window ordering is checked before the count/rate gate. A patch that touches only one
-    end of the window carries no count or rate, and ModelInfo sees one field at a time, so
-    leaving it to either would let an inverted window reach the row; the next load then
-    fails to parse it and drops the deployment out of the router, where no further patch
-    can repair it because each one re-parses the stored value first.
+    Registration additionally requires an operator-declared ``model_info.id``, which this
+    endpoint does not: a stored deployment already holds a stable primary key, where a
+    config-declared one is otherwise keyed by a hash of its own parameters.
     """
-    effective_from: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_from"))
-    effective_to: Final = _coerce_ptu_datetime(model_info.get("ptu_effective_to"))
-    if effective_from is not None and effective_to is not None and effective_to <= effective_from:
-        raise HTTPException(status_code=400, detail="ptu_effective_to must be after ptu_effective_from")
-
-    has_count: Final = model_info.get("ptu_count") is not None
-    has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
-    if not has_count and not has_rate:
-        return
-    if has_count != has_rate:
-        raise HTTPException(status_code=400, detail="ptu_count and cost_per_ptu_per_hour must be set together")
-    if effective_from is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "ptu_effective_from is required when PTU fields are set. Flat cost accrues from that "
-                "instant, so without it the start would have to be inferred and a deployment configured "
-                "today could be billed for days it did not exist"
-            ),
-        )
-    if not model_info.get("team_id"):
-        raise HTTPException(
-            status_code=400, detail="team_id is required when PTU fields are set (one model maps to one team)"
-        )
+    error: Final = ptu_config_error(model_info)
+    if error is not None:
+        raise HTTPException(status_code=400, detail=error)
 
 
-# The six mirrored pricing fields plus the three remaining fields
+# The mirrored per-token pricing fields plus the three remaining fields
 # Router._inherit_builtin_cache_pricing back-fills from the public cost map. An unset field is
 # what that back-fill targets, so a field left out here is one a PTU deployment still bills.
-_PTU_ZEROED_PRICING_FIELDS: Final = SPECIAL_MODEL_INFO_PARAMS + (
-    "cache_creation_input_token_cost_above_1hr",
-    "cache_creation_input_token_cost_above_200k_tokens",
-    "cache_read_input_token_cost_above_200k_tokens",
+# tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
+# empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
+# dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
+_PTU_ZEROED_PRICING_FIELDS: Final = PTU_ZEROED_PRICING_FIELDS
+_PTU_EMPTIED_PRICING_FIELDS: Final = PTU_EMPTIED_PRICING_FIELDS
+_PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()]]] = MappingProxyType(
+    {
+        **dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0),
+        **dict.fromkeys(_PTU_EMPTIED_PRICING_FIELDS, ()),
+    }
 )
-_PTU_ZEROED_PRICING: Final[Mapping[str, float]] = MappingProxyType(dict.fromkeys(_PTU_ZEROED_PRICING_FIELDS, 0.0))
-_NO_PRICING_OVERRIDE: Final[Mapping[str, float]] = MappingProxyType({})
+_NO_PRICING_OVERRIDE: Final[Mapping[str, float | tuple[()]]] = MappingProxyType({})
 _EMPTY_MODEL_INFO: Final[Mapping[str, object]] = _NO_PRICING_OVERRIDE
 # Rate fields only. CustomPricingLiteLLMParams also carries settings that are not charges
 # (an embedding's output_vector_size, the regional uplift multipliers), and zeroing one of
 # those would destroy the deployment's configuration rather than stop a charge.
-_CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
+_CUSTOM_PRICING_FIELDS: Final = CUSTOM_PRICING_FIELDS
+# search_context_cost_per_query holds its rates in a table keyed by context size, and an absent
+# table means the provider's own default rate rather than free (litellm/llms/gemini/cost_calculator
+# falls back to $0.035), so it is zeroed in place rather than emptied like tiered_pricing, and
+# written on every PTU deployment rather than only where a table is already stored.
+_PTU_ZEROED_TABLE_FIELDS: Final = PTU_ZEROED_TABLE_FIELDS
+_SEARCH_CONTEXT_SIZES: Final = SEARCH_CONTEXT_SIZES
 
 
-def _is_nonzero_price(value: object) -> bool:
+def _is_nonzero_rate(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
 
 
+def _is_nonzero_price(value: object) -> bool:
+    if isinstance(value, dict):  # an all-zero table is how a rate is expressed as free
+        return any(_is_nonzero_rate(rate) for rate in value.values())
+    return _is_nonzero_rate(value)
+
+
 def _is_zero_price(value: object) -> bool:
+    if isinstance(value, dict):
+        return bool(value) and not _is_nonzero_price(value)
+    if isinstance(value, (list, tuple)):
+        return not value
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
 
 
@@ -378,7 +383,12 @@ def _raise_if_ptu_deployment_is_priced(*, model_info: Mapping[str, object], supp
         return
     if model_info.get("ptu_count") is None or model_info.get("cost_per_ptu_per_hour") is None:
         return
-    priced: Final = tuple(sorted(field for field in _CUSTOM_PRICING_FIELDS if _is_nonzero_price(supplied.get(field))))
+    priced: Final = tuple(
+        sorted(
+            tuple(field for field in _CUSTOM_PRICING_FIELDS if _is_nonzero_price(supplied.get(field)))
+            + tuple(field for field in _PTU_EMPTIED_PRICING_FIELDS if supplied.get(field))
+        )
+    )
     if not priced:
         return
     raise HTTPException(
@@ -395,7 +405,7 @@ def _ptu_zeroed_pricing(
     model_info: Mapping[str, object],
     litellm_params: Mapping[str, object],
     supplied: Mapping[str, object],
-) -> Mapping[str, float]:
+) -> Mapping[str, float | tuple[()] | Mapping[str, float]]:
     """The pricing a PTU deployment must carry, empty unless one is being stored.
 
     Reserved capacity is already billed by the flat cost the rollup writes, so charging the
@@ -421,9 +431,13 @@ def _ptu_zeroed_pricing(
         for field in _CUSTOM_PRICING_FIELDS
         if _is_nonzero_price(model_info.get(field)) or _is_nonzero_price(litellm_params.get(field))
     )
-    if not stored:
-        return _PTU_ZEROED_PRICING
-    return MappingProxyType({**_PTU_ZEROED_PRICING, **dict.fromkeys(stored, 0.0)})
+    return MappingProxyType(
+        {
+            **_PTU_ZEROED_PRICING,
+            **dict.fromkeys(_PTU_ZEROED_TABLE_FIELDS, dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)),
+            **dict.fromkeys(stored - _PTU_ZEROED_TABLE_FIELDS, 0.0),
+        }
+    )
 
 
 def _ptu_pricing_delta(
@@ -432,7 +446,7 @@ def _ptu_pricing_delta(
     model_info: Mapping[str, object],
     litellm_params: Mapping[str, object],
     patch: updateDeployment,
-) -> tuple[Mapping[str, float], frozenset[str]]:
+) -> tuple[Mapping[str, float | tuple[()] | Mapping[str, float]], frozenset[str]]:
     """The pricing a patch must write into both blobs, and the pricing it must drop from them.
 
     A patch that takes the deployment off PTU takes the zeroed pricing with it, since the zeros
@@ -454,7 +468,7 @@ def _ptu_pricing_delta(
         return _NO_PRICING_OVERRIDE, frozenset()
     return _NO_PRICING_OVERRIDE, frozenset(
         field
-        for field in _CUSTOM_PRICING_FIELDS.union(_PTU_ZEROED_PRICING_FIELDS)
+        for field in _CUSTOM_PRICING_FIELDS.union(_PTU_ZEROED_PRICING_FIELDS, _PTU_EMPTIED_PRICING_FIELDS)
         if _is_zero_price(model_info.get(field)) or _is_zero_price(litellm_params.get(field))
     )
 
@@ -466,36 +480,19 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     override: Final = _ptu_zeroed_pricing(model_info=model_info, litellm_params=litellm_params, supplied=litellm_params)
     if not override:
         return model_params
+    # model_copy validates nothing, so the emptied tier table has to arrive as the list the field
+    # declares or Pydantic warns on every later dump of it
+    stored: Final = MappingProxyType(
+        {key: [] if isinstance(value, tuple) else value for key, value in override.items()}
+    )
     return model_params.model_copy(
         update=MappingProxyType(
             {
-                "litellm_params": model_params.litellm_params.model_copy(update=override),
-                "model_info": model_params.model_info.model_copy(update=override),
+                "litellm_params": model_params.litellm_params.model_copy(update=stored),
+                "model_info": model_params.model_info.model_copy(update=stored),
             }
         )
     )
-
-
-def _parse_ptu_datetime(value: object) -> datetime.datetime | None:
-    """``value`` as a datetime, parsing an ISO string, else None."""
-    if isinstance(value, datetime.datetime):
-        return value
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _coerce_ptu_datetime(value: object) -> datetime.datetime | None:
-    """Coerce a model_info effective-window value (datetime or ISO string) to UTC, else None."""
-    parsed: Final = _parse_ptu_datetime(value)
-    if parsed is None:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=datetime.timezone.utc)
-    return parsed.astimezone(datetime.timezone.utc)
 
 
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
@@ -684,6 +681,14 @@ async def patch_model(
             data=update_data,
         )
 
+        if updated_model is None:
+            raise ProxyException(
+                message=f"Model {model_id} not found on proxy.",
+                type=ProxyErrorTypes.not_found_error,
+                code=status.HTTP_404_NOT_FOUND,
+                param=None,
+            )
+
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         live_before_reload: Final = live_model_ids_snapshot()
         reload_outcome: Final = await clear_cache()
@@ -818,7 +823,7 @@ async def _set_model_blocked_status(
             live_after=reload_outcome.live_after,
         )
 
-        return updated_model
+        return updated_model  # pyright: ignore[reportReturnType]  # prisma row, coerced by this route's response_model
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in model %s: %s", action, e)
@@ -904,7 +909,7 @@ async def _add_model_to_db(
     prisma_client: PrismaClient,
     new_encryption_key: str | None = None,
     should_create_model_in_db: bool = True,
-) -> LiteLLM_ProxyModelTable | None:
+) -> "prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None":
     # encrypt litellm params #
     _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
     _original_litellm_model_name: Final = model_params.litellm_params.model
@@ -921,8 +926,9 @@ async def _add_model_to_db(
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
+    _create_data: Final = cast("Mapping[str, object]", _data)  # cast-ok: str-keyed json payload built just above
     if should_create_model_in_db:
-        model_response = await ModelRepository(prisma_client).table.create(data=_data)
+        model_response = await ModelRepository(prisma_client).table.create(data=_create_data)
     else:
         model_response = LiteLLM_ProxyModelTable(**_data)
     return model_response
@@ -932,7 +938,7 @@ async def _add_team_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-) -> LiteLLM_ProxyModelTable | None:
+) -> "prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None":
     """
     If 'team_id' is provided,
 
@@ -1538,7 +1544,7 @@ async def delete_model(
                 },
             )
 
-        model_in_db: Final = await ModelRepository(prisma_client).table.find_unique(where={"model_id": model_info.id})
+        model_in_db: Final = await _proxy_model_table(prisma_client).find_unique(where={"model_id": model_info.id})
         if model_in_db is None:
             raise HTTPException(
                 status_code=400,
@@ -1645,7 +1651,9 @@ async def delete_team_model_alias(
     tasks: Final = []
     removed_model_aliases: Final[list[tuple[str, str]]] = []
     for team_model_alias in team_model_aliases:
-        model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
+        model_aliases = cast(  # cast-ok: prisma types Json columns as `str`; the driver hands back the parsed dict
+            "dict[str, str]", team_model_alias.model_aliases
+        )
         id = team_model_alias.id
 
         if public_model_name in model_aliases.values():
@@ -1740,7 +1748,7 @@ async def add_new_model(
             existing_params=None,
         )
 
-        model_response: LiteLLM_ProxyModelTable | None = None
+        model_response: prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None = None
         # update DB
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
         _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
@@ -1875,7 +1883,7 @@ async def update_model(
             )
 
         _model_id: str | None = None
-        _model_info: Final = getattr(model_params, "model_info", None)
+        _model_info: Final[ModelInfo | None] = getattr(model_params, "model_info", None)
         if _model_info is None:
             raise Exception("model_info not provided")
 
@@ -1909,7 +1917,10 @@ async def update_model(
 
         # update DB
         if store_model_in_db is True:
-            _existing_litellm_params_dict: Final = dict(_existing_litellm_params.litellm_params)
+            existing_model_row: Final = cast(  # cast-ok: prisma types Json columns as `str`; the driver parses them
+                "_ExistingModelRow", _existing_litellm_params
+            )
+            _existing_litellm_params_dict: Final = dict(existing_model_row.litellm_params)
 
             if model_params.litellm_params is None:
                 raise Exception("litellm_params not provided")
@@ -1953,8 +1964,8 @@ async def update_model(
                     user_api_key_dict=user_api_key_dict,
                     table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
                     before_value=(
-                        _existing_litellm_params.model_dump_json(exclude_none=True)
-                        if isinstance(_existing_litellm_params, BaseModel)
+                        existing_model_row.model_dump_json(exclude_none=True)
+                        if isinstance(existing_model_row, BaseModel)
                         else None
                     ),
                     after_value=(

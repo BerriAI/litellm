@@ -773,6 +773,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Cognition",
+    "provider_display_name": "Cognition",
+    "litellm_provider": "cognition",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.cognition.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "cognition/swe-1.7"
+  },
+  {
     "provider": "Cohere",
     "provider_display_name": "Cohere",
     "litellm_provider": "cohere",
@@ -2699,6 +2727,34 @@
     "default_model_placeholder": "sap/gpt-4"
   },
   {
+    "provider": "SCX_AI",
+    "provider_display_name": "SCX.ai",
+    "litellm_provider": "scx-ai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.scx.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "scx-ai/GLM-5.2"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",
@@ -2980,7 +3036,7 @@
   },
   {
     "provider": "Hosted_Vllm",
-    "provider_display_name": "vllm",
+    "provider_display_name": "Hosted vLLM",
     "litellm_provider": "hosted_vllm",
     "credential_fields": [
       {
@@ -3008,7 +3064,7 @@
   },
   {
     "provider": "VLLM",
-    "provider_display_name": "Vllm",
+    "provider_display_name": "Local vLLM",
     "litellm_provider": "vllm",
     "credential_fields": [
       {

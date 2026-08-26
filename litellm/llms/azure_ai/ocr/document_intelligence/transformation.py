@@ -11,6 +11,7 @@ The operation location must be polled until the analysis completes.
 import asyncio
 import re
 import time
+from collections.abc import Mapping
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -23,15 +24,20 @@ from litellm.constants import (
     AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI,
     AZURE_OPERATION_POLLING_TIMEOUT,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin, encode_url_path_segment
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.base_llm.ocr.transformation import (
+    OCR_REQUEST_FORMAT_PARAM,
     BaseOCRConfig,
     DocumentType,
     OCRPage,
     OCRPageDimensions,
     OCRRequestData,
+    OCRRequestFormat,
     OCRResponse,
     OCRUsageInfo,
+    parse_ocr_request_format,
 )
 from litellm.secret_managers.main import get_secret_str
 
@@ -97,8 +103,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         comma-separated string. Other Mistral-specific params (e.g.
         `include_image_base64`) are not supported by Azure DI and are
         ignored during transformation.
+
+        `req_format` selects the response shape: "litellm" (default) returns
+        the normalized OCR schema, "native" returns Azure DI's own analyze
+        operation payload as-is.
         """
-        return ["pages", "features"]
+        return ["pages", "features", OCR_REQUEST_FORMAT_PARAM]
 
     def map_ocr_params(
         self,
@@ -117,13 +127,26 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         pages: Final = non_default_params.get("pages")
         features: Final = non_default_params.get("features")
+        request_format: Final = non_default_params.get(OCR_REQUEST_FORMAT_PARAM)
         normalized_pages: Final = self._normalize_pages_param(pages) if pages is not None else ""
         normalized_features: Final = self._normalize_features_param(features) if features is not None else ""
         return {
             **optional_params,
             **({"pages": normalized_pages} if normalized_pages else {}),
             **({"features": normalized_features} if normalized_features else {}),
+            **(
+                {OCR_REQUEST_FORMAT_PARAM: self._parse_request_format(request_format, model)}
+                if request_format is not None
+                else {}
+            ),
         }
+
+    @staticmethod
+    def _parse_request_format(request_format: object, model: str) -> OCRRequestFormat:
+        try:
+            return parse_ocr_request_format(request_format)
+        except ValueError as e:
+            raise UnsupportedParamsError(message=f"{e}", model=model, llm_provider="azure_ai") from e
 
     @staticmethod
     def _normalize_pages_param(pages: Any) -> str:
@@ -214,16 +237,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         Validate environment and return headers for Azure Document Intelligence.
 
-        Authentication uses Ocp-Apim-Subscription-Key header.
+        Authentication uses the Ocp-Apim-Subscription-Key header, or an Entra ID / OAuth bearer
+        token when no subscription key is set.
         """
         # Get API key from environment if not provided
         if api_key is None:
             api_key = get_secret_str(AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR)
-
-        if api_key is None:
-            raise ValueError(
-                "Missing Azure Document Intelligence API Key - Set AZURE_DOCUMENT_INTELLIGENCE_API_KEY environment variable or pass api_key parameter"
-            )
 
         # Validate API base/endpoint is provided
         if api_base is None:
@@ -235,7 +254,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             )
 
         headers = {
-            "Ocp-Apim-Subscription-Key": api_key,
+            **get_azure_ai_auth_headers(
+                api_key=api_key,
+                litellm_params=litellm_params,
+                api_key_header="Ocp-Apim-Subscription-Key",
+                api_key_env_var=AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR,
+            ),
             "Content-Type": "application/json",
             **headers,
         }
@@ -594,14 +618,33 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         poll_headers = {"Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")}
         return operation_url, poll_headers
 
-    def _transform_completed_response(self, model: str, raw_response: httpx.Response) -> OCRResponse:
+    @staticmethod
+    def _get_request_format(optional_params: object) -> OCRRequestFormat:
+        if not isinstance(optional_params, dict):
+            return "litellm"
+        request_format: Final = optional_params.get(OCR_REQUEST_FORMAT_PARAM)
+        if request_format is None:
+            return "litellm"
+        return parse_ocr_request_format(request_format)
+
+    def _transform_completed_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        request_format: OCRRequestFormat,
+    ) -> OCRResponse:
         """
         Transform a completed Azure Document Intelligence analyze operation
         into the Mistral OCR response shape, preserving Azure-native
         `analyzeResult` fields (`content`, `tables`, `keyValuePairs`) as
         top-level response fields.
+
+        When `request_format` is "native", the untouched Azure operation
+        payload is attached to the response's hidden params so the proxy can
+        return it verbatim while cost tracking still reads `usage_info`.
         """
-        operation: Final = AzureDocumentIntelligenceOperation.model_validate(raw_response.json())
+        raw_operation: Final[Mapping[str, object]] = raw_response.json()
+        operation: Final = AzureDocumentIntelligenceOperation.model_validate(raw_operation)
 
         verbose_logger.debug("Azure Document Intelligence response status: %s", operation.status)
 
@@ -614,7 +657,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         mistral_pages: Final = [self._transform_azure_page(azure_page) for azure_page in analyze_result.pages]
         usage_info: Final = OCRUsageInfo(pages_processed=len(mistral_pages), doc_size_bytes=None)
 
-        return OCRResponse(
+        response: Final = OCRResponse(
             pages=mistral_pages,
             model=model,
             usage_info=usage_info,
@@ -623,6 +666,11 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             tables=analyze_result.tables,
             keyValuePairs=analyze_result.keyValuePairs,
         )
+
+        if request_format == "native":
+            response.set_provider_native_response(raw_operation)
+
+        return response
 
     def transform_ocr_response(
         self,
@@ -681,8 +729,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns:
             OCRResponse in Mistral format
         """
+        request_format: Final = self._get_request_format(kwargs.get("optional_params"))
+
         if raw_response.status_code != 202:
-            return self._transform_completed_response(model=model, raw_response=raw_response)
+            return self._transform_completed_response(
+                model=model, raw_response=raw_response, request_format=request_format
+            )
 
         verbose_logger.debug("Azure DI returned 202 Accepted, polling operation...")
         operation_url, poll_headers = self._get_polling_target(raw_response)
@@ -691,7 +743,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             headers=poll_headers,
             timeout_secs=AZURE_OPERATION_POLLING_TIMEOUT,
         )
-        return self._transform_completed_response(model=model, raw_response=completed_response)
+        return self._transform_completed_response(
+            model=model, raw_response=completed_response, request_format=request_format
+        )
 
     async def async_transform_ocr_response(
         self,
@@ -714,8 +768,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns:
             OCRResponse in Mistral format
         """
+        request_format: Final = self._get_request_format(kwargs.get("optional_params"))
+
         if raw_response.status_code != 202:
-            return self._transform_completed_response(model=model, raw_response=raw_response)
+            return self._transform_completed_response(
+                model=model, raw_response=raw_response, request_format=request_format
+            )
 
         verbose_logger.debug("Azure DI returned 202 Accepted, polling operation (async)...")
         operation_url, poll_headers = self._get_polling_target(raw_response)
@@ -724,4 +782,6 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             headers=poll_headers,
             timeout_secs=AZURE_OPERATION_POLLING_TIMEOUT,
         )
-        return self._transform_completed_response(model=model, raw_response=completed_response)
+        return self._transform_completed_response(
+            model=model, raw_response=completed_response, request_format=request_format
+        )

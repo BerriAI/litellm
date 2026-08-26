@@ -1,11 +1,6 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -205,6 +200,7 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
                     "signature": "abc123",
                 }
             ],
+            "reasoning_content": "Let me reason about this...",
         },
         {
             "role": "user",
@@ -223,6 +219,7 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Here is my answer."
     assert "thinking_blocks" not in assistant_msg
+    assert "reasoning_content" not in assistant_msg
 
 
 def test_hosted_vllm_thinking_blocks_with_list_content():

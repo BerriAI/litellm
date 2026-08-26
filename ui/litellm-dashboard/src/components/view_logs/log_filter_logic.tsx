@@ -36,6 +36,7 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
   [LOG_FILTER_IDS.STATUS]: "Status",
   [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
+  [LOG_FILTER_IDS.USER_ID]: "User ID",
   [LOG_FILTER_IDS.END_USER]: "End User",
   [LOG_FILTER_IDS.ERROR_CODE]: "Error Code",
   [LOG_FILTER_IDS.ERROR_MESSAGE]: "Error Message",
@@ -98,7 +99,6 @@ export function useLogFilterLogic({
   userRole,
   userID,
   columnFilters,
-  filterByCurrentUser,
   activeTab,
   isLiveTail,
   startTime,
@@ -112,7 +112,6 @@ export function useLogFilterLogic({
   userRole: string | null;
   userID: string | null;
   columnFilters: ColumnFiltersState;
-  filterByCurrentUser: boolean | null;
   activeTab: string;
   isLiveTail: boolean;
   startTime: string;
@@ -136,7 +135,6 @@ export function useLogFilterLogic({
       endTime,
       isCustomDate,
       columnFilters,
-      filterByCurrentUser ? userID : null,
       sortBy,
       sortOrder,
     ],
@@ -166,7 +164,7 @@ export function useLogFilterLogic({
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
           session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
-          user_id: userIdFilter ?? (filterByCurrentUser ? userID ?? undefined : undefined),
+          user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
           status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),

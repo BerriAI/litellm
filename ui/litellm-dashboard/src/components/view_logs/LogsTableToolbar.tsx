@@ -134,9 +134,9 @@ export function LogsTableToolbar({
 
 export function LiveTailBanner({ onStop }: { onStop: () => void }) {
   return (
-    <div className="mb-4 flex items-center justify-between rounded-md border border-green-200 bg-green-50 px-4 py-2">
-      <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
-      <button type="button" onClick={onStop} className="text-sm text-green-600 hover:text-green-800">
+    <div className="mb-4 flex items-center justify-between rounded-md border border-success/20 bg-success/10 px-4 py-2">
+      <span className="text-sm text-success">Auto-refreshing every 15 seconds</span>
+      <button type="button" onClick={onStop} className="text-sm text-success hover:text-success/80">
         Stop
       </button>
     </div>

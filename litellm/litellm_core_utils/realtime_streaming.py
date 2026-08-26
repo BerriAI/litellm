@@ -1,7 +1,9 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
+
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,11 +34,50 @@ class _ClientWebSocketExceptions(Protocol):
     ConnectionClosed: type[Exception]
 
 
-class _ClientWebSocket(Protocol):
+class _ASGIScope(TypedDict, total=False):
+    """The part of an ASGI connection scope this module reads."""
+
+    headers: ReadOnly[Sequence[tuple[bytes | str, bytes | str]]]
+
+
+class _ClientEventItem(TypedDict, total=False):
+    """The ``item`` payload of a client ``conversation.item.create`` frame."""
+
+    type: ReadOnly[str]
+    role: ReadOnly[str]
+    output: ReadOnly[object]
+    content: ReadOnly[Sequence[object]]
+
+
+class _ClientEventFrame(TypedDict, total=False):
+    """The fields the proxy reads from a client realtime frame."""
+
+    type: ReadOnly[str]
+    item: ReadOnly[_ClientEventItem]
+    session: ReadOnly[Mapping[str, object]]
+
+
+class _ResponseDoneBody(TypedDict, total=False):
+    """The ``response`` body of a ``response.done`` event, as read for spend logging."""
+
+    output: ReadOnly[Sequence[Mapping[str, object]]]
+
+
+class _ScopedWebSocket(Protocol):
+    @property
+    def scope(self) -> _ASGIScope: ...
+
+
+class _ClientWebSocket(_ScopedWebSocket, Protocol):
     exceptions: _ClientWebSocketExceptions
 
     async def send_text(self, data: str) -> None: ...
     async def receive_text(self) -> str: ...
+
+
+def _decode_json_object(payload: str) -> Mapping[str, object]:
+    """Decode a realtime frame into its top-level field mapping."""
+    return json.loads(payload)
 
 
 class RealtimeEventNormalizer(Protocol):
@@ -294,7 +335,7 @@ class RealTimeStreaming:
         try:
             if event_obj.get("type") != "response.done":
                 return
-            response: Final = cast(dict[str, Any], event_obj.get("response", {}))
+            response: Final = cast(_ResponseDoneBody, event_obj.get("response", {}))
             item: Mapping[str, object]
             for item in response.get("output", []):
                 if item.get("type") == "function_call":
@@ -353,7 +394,7 @@ class RealTimeStreaming:
             sent = False
             for msg in transformed:
                 try:
-                    msg_obj = json.loads(msg)
+                    msg_obj = _decode_json_object(msg)
                 except (json.JSONDecodeError, TypeError):
                     msg_obj = None
                 if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(msg_obj):
@@ -399,7 +440,7 @@ class RealTimeStreaming:
             return message
 
         try:
-            message_obj: Final[Mapping[str, object]] = json.loads(message)
+            message_obj: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -468,7 +509,7 @@ class RealTimeStreaming:
 
         for message in messages:
             try:
-                msg_type = json.loads(message).get("type")
+                msg_type = _decode_json_object(message).get("type")
             except (json.JSONDecodeError, TypeError):
                 collapsed.extend(pending_appends)
                 pending_appends = []
@@ -502,14 +543,14 @@ class RealTimeStreaming:
         if self._backend_setup_complete and not self._flushing_pending_messages_until_setup:
             return False
         try:
-            msg_obj: Final[Mapping[str, object]] = json.loads(message)
+            msg_obj: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return False
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
     def _buffer_pending_message_until_setup(self, message: str) -> None:
         try:
-            msg_type = json.loads(message).get("type")
+            msg_type = _decode_json_object(message).get("type")
         except (json.JSONDecodeError, TypeError):
             msg_type = None
 
@@ -602,7 +643,7 @@ class RealTimeStreaming:
         ``return_new_content_delta_events`` modality lookup, ...).
         """
         try:
-            message_obj: Final = json.loads(transformed_message)
+            message_obj: Final = _decode_json_object(transformed_message)
             if "setup" in message_obj:
                 self.session_configuration_request = transformed_message
         except (json.JSONDecodeError, TypeError):
@@ -744,6 +785,8 @@ class RealTimeStreaming:
 
         for callback in litellm.callbacks:
             if not isinstance(callback, CustomGuardrail):
+                continue
+            if callback.use_native_lifecycle_hooks:
                 continue
             if id(callback) in _already_run:
                 continue
@@ -928,7 +971,7 @@ class RealTimeStreaming:
     def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
         """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
         try:
-            event: Final = json.loads(raw_response)
+            event: Final = _decode_json_object(raw_response)
         except (json.JSONDecodeError, TypeError):
             return None
         return event if isinstance(event, dict) else None
@@ -1028,14 +1071,14 @@ class RealTimeStreaming:
             await self.log_messages()
 
     @staticmethod
-    def _detect_beta_header(websocket: Any) -> bool:
+    def _detect_beta_header(websocket: _ScopedWebSocket) -> bool:
         """Return True if the client sent 'OpenAI-Beta: realtime=v1'.
 
         Checks the raw ASGI scope headers so it works for both FastAPI WebSocket
         objects and any test doubles that expose a .scope dict.
         """
         try:
-            headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = websocket.scope.get("headers", [])
+            headers: Final = websocket.scope.get("headers", [])
             for name, value in headers:
                 if isinstance(name, bytes):
                     name = name.decode("latin-1")
@@ -1181,6 +1224,7 @@ class RealTimeStreaming:
         return item
 
     async def client_ack_messages(self):
+        client_event: _ClientEventFrame
         try:
             while True:
                 message = await self.websocket.receive_text()
@@ -1192,11 +1236,12 @@ class RealTimeStreaming:
                     from litellm.types.guardrails import GuardrailEventHooks
 
                     msg_obj = json.loads(message)
-                    msg_type = msg_obj.get("type")
+                    client_event = msg_obj
+                    msg_type = client_event.get("type")
 
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
-                        item = msg_obj.get("item", {})
+                        item = client_event.get("item", {})
                         # Check function_call_output first so a client cannot
                         # bypass the tool-result guardrail by also setting
                         # role="user" on a function_call_output item.
@@ -1295,7 +1340,7 @@ class RealTimeStreaming:
                         and not self._guardrail_turn_detection_update_sent
                         and self._has_audio_transcription_guardrails()
                     ):
-                        session: object = msg_obj.setdefault("session", {})
+                        session: Mapping[str, object] | None = msg_obj.setdefault("session", {})
                         if isinstance(session, dict):
                             existing_td = session.get("turn_detection")
                             if not isinstance(existing_td, dict):
@@ -1322,7 +1367,7 @@ class RealTimeStreaming:
                         and not guardrail_turn_detection_injected
                         and self._has_audio_transcription_guardrails()
                     ):
-                        session = msg_obj.get("session")
+                        session = client_event.get("session")
                         if isinstance(session, dict):
                             td_overridden = False
                             flat_td = session.get("turn_detection")
@@ -1365,14 +1410,14 @@ class RealTimeStreaming:
                     # the upstream is in GA mode. Beta upstreams expect the flat
                     # session shape unchanged.
                     if msg_type == "session.update" and not self._backend_uses_beta_protocol:
-                        session = msg_obj.get("session", {})
+                        session = client_event.get("session", {})
                         if isinstance(session, dict):
                             session = self._remap_beta_session_to_ga(session)
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:
-                        session = msg_obj.get("session")
+                        session = client_event.get("session")
                         if isinstance(session, dict):
                             msg_obj["session"] = self._event_normalizer.patch_outgoing_session(session)
                             message = json.dumps(msg_obj)

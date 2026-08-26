@@ -1,5 +1,5 @@
 import datetime
-import os
+import json
 import sys
 import types
 import unittest
@@ -12,8 +12,6 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-sys.path.insert(0, os.path.abspath("../.."))
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
@@ -1162,7 +1160,7 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
         # Third client should fail with exception
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Max langfuse clients reached') as exc_info:
             logger3 = LangFuseLogger(
                 langfuse_public_key="test_key_3",
                 langfuse_secret="test_secret_3",
@@ -1332,34 +1330,71 @@ def test_mask_input_from_the_request_body_is_unchanged(mask_input, expect_redact
     assert (trace_params["input"] == _LANGFUSE_REDACTED) is expect_redacted
 
 
-def test_update_trace_keys_header_applies_every_key():
+@pytest.mark.parametrize("flag", [True, "true"])
+def test_update_trace_keys_header_applies_every_key_when_enabled(flag):
     logger = _steering_logger()
 
-    trace_params, _ = _emit(
-        logger,
-        headers={
-            "langfuse_existing_trace_id": "trace-1",
-            "langfuse_update_trace_keys": "trace_release, trace_tail",
-            "langfuse_trace_release": "v1.2.3",
-            "langfuse_trace_tail": "last",
-        },
-    )
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", flag):
+        trace_params, _ = _emit(
+            logger,
+            headers={
+                "langfuse_existing_trace_id": "trace-1",
+                "langfuse_update_trace_keys": "trace_release, trace_tail",
+                "langfuse_trace_release": "v1.2.3",
+                "langfuse_trace_tail": "last",
+            },
+        )
 
     assert trace_params["release"] == "v1.2.3"
     assert trace_params["tail"] == "last"
 
 
-def test_update_trace_keys_from_the_request_body_list_is_unchanged():
+def test_update_trace_keys_is_off_by_default():
+    """
+    The caller picks the key name, so while the feature is on they can name
+    user_api_key_auth and have the resolved auth object, including team callback
+    credentials, serialized onto the trace. It stays inert until an operator opts in.
+    """
     logger = _steering_logger()
 
     trace_params, _ = _emit(
         logger,
         metadata={
             "existing_trace_id": "trace-1",
-            "update_trace_keys": ["trace_release"],
+            "update_trace_keys": ["user_api_key_auth", "trace_release"],
+            "user_api_key_auth": {"team_metadata": {"logging": [{"callback_vars": {"secret": "sk-canary"}}]}},
             "trace_release": "v1.2.3",
         },
     )
+
+    assert "user_api_key_auth" not in trace_params
+    assert "release" not in trace_params
+    assert "sk-canary" not in json.dumps(trace_params, default=repr)
+
+
+def test_update_trace_keys_input_and_output_are_gated_too():
+    logger = _steering_logger()
+
+    off, _ = _emit(logger, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
+        on, _ = _emit(logger, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
+
+    assert "input" not in off and "output" not in off
+    assert "input" in on and "output" in on
+
+
+def test_update_trace_keys_from_the_request_body_list_applies_when_enabled():
+    logger = _steering_logger()
+
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
+        trace_params, _ = _emit(
+            logger,
+            metadata={
+                "existing_trace_id": "trace-1",
+                "update_trace_keys": ["trace_release"],
+                "trace_release": "v1.2.3",
+            },
+        )
 
     assert trace_params["release"] == "v1.2.3"
 

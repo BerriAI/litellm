@@ -8,10 +8,9 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
 import copy
-import os
-import sys
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
+import json
+import logging
+from pathlib import Path
 
 import pytest
 from botocore.exceptions import (
@@ -109,7 +108,7 @@ class TestBedrockMantleResponsesURL:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleResponsesAPIConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="api\\.aws\\.attacker\\.example/'\\. Region names must contain only"):
             cfg.get_complete_url(
                 api_base=None,
                 litellm_params={
@@ -624,6 +623,181 @@ class TestBedrockMantleCodexAdditionalTools:
             )
         assert mock_debug.call_count == 1
         assert "additional_tools" in str(mock_debug.call_args)
+
+
+class TestBedrockMantleCodexInputItemNormalization:
+    """Mantle 400s ("Invalid 'input': value did not match any expected variant")
+    on the Codex history item types agent_message, context_compaction, and
+    local_shell_call (verified against bedrock-mantle.us-east-1.api.aws with
+    openai.gpt-5.6-sol), so the config must rewrite them into supported
+    equivalents. agent_message is what every Codex multi-agent v2 session sends,
+    and its encrypted_content slot carries the verbatim plaintext payload when
+    the upstream model never issued encrypted args, so that slot must be
+    preserved, not dropped. Mantle also rejects assistant messages with
+    input_text content, so the rewrite must use output_text."""
+
+    _USER_MESSAGE = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Continue."}],
+    }
+
+    def _transform(self, input):
+        cfg = BedrockMantleResponsesAPIConfig()
+        return cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-sol",
+            input=input,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    def test_plaintext_agent_message_becomes_assistant_output_text_message(self):
+        body = self._transform(
+            input=[
+                self._USER_MESSAGE,
+                {
+                    "type": "agent_message",
+                    "id": "amsg_1",
+                    "author": "/root/arithmetic",
+                    "recipient": "/root",
+                    "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nPayload:\n2+2 is 4."}],
+                },
+            ]
+        )
+        assert body["input"] == [
+            self._USER_MESSAGE,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": ({"type": "output_text", "text": "Message Type: FINAL_ANSWER\nPayload:\n2+2 is 4."},),
+            },
+        ]
+
+    def test_agent_message_encrypted_content_payload_is_preserved(self):
+        body = self._transform(
+            input=[
+                {
+                    "type": "agent_message",
+                    "author": "/root",
+                    "recipient": "/root/arithmetic",
+                    "content": [
+                        {"type": "input_text", "text": "Message Type: NEW_TASK\nPayload:\n"},
+                        {"type": "encrypted_content", "encrypted_content": "Answer the question 'what is 2+2'."},
+                    ],
+                },
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"][0] == {
+            "type": "message",
+            "role": "assistant",
+            "content": (
+                {
+                    "type": "output_text",
+                    "text": "Message Type: NEW_TASK\nPayload:\nAnswer the question 'what is 2+2'.",
+                },
+            ),
+        }
+
+    def test_agent_message_without_any_text_is_dropped(self):
+        body = self._transform(
+            input=[
+                {"type": "agent_message", "author": "/root", "recipient": "/root/a", "content": []},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+
+    def test_context_compaction_becomes_compaction_with_same_ciphertext(self):
+        body = self._transform(
+            input=[
+                {"type": "context_compaction", "id": "cc_1", "encrypted_content": "smry_abc123"},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [
+            {"type": "compaction", "encrypted_content": "smry_abc123"},
+            self._USER_MESSAGE,
+        ]
+
+    def test_context_compaction_without_ciphertext_is_dropped(self):
+        body = self._transform(
+            input=[
+                {"type": "context_compaction", "id": "cc_1"},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+
+    def test_local_shell_call_becomes_function_call_keeping_call_id_pairing(self):
+        body = self._transform(
+            input=[
+                {
+                    "type": "local_shell_call",
+                    "id": "lsh_1",
+                    "call_id": "call_1",
+                    "status": "completed",
+                    "action": {"type": "exec", "command": ["echo", "hi"]},
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": "hi\n"},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "local_shell",
+                "arguments": '{"type": "exec", "command": ["echo", "hi"]}',
+            },
+            {"type": "function_call_output", "call_id": "call_1", "output": "hi\n"},
+            self._USER_MESSAGE,
+        ]
+
+    def test_local_shell_call_without_call_id_is_dropped(self):
+        body = self._transform(
+            input=[
+                {"type": "local_shell_call", "status": "completed", "action": {"type": "exec", "command": ["ls"]}},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+
+    def test_mantle_supported_item_types_pass_through_untouched(self):
+        supported_items = [
+            self._USER_MESSAGE,
+            {"type": "compaction", "encrypted_content": "smry_abc123"},
+            {"type": "function_call", "name": "shell", "arguments": "{}", "call_id": "call_2"},
+            {"type": "function_call_output", "call_id": "call_2", "output": "ok"},
+            {"type": "tool_search_call", "call_id": "call_3", "execution": "server", "arguments": {"query": "x"}},
+            {"type": "tool_search_output", "call_id": "call_3", "status": "completed", "execution": "server", "tools": []},
+            {"type": "compaction_trigger"},
+        ]
+        body = self._transform(input=copy.deepcopy(supported_items))
+        assert body["input"] == supported_items
+
+    def test_string_input_passes_through(self):
+        body = self._transform(input="Say hi.")
+        assert body["input"] == "Say hi."
+
+    def test_rewrite_is_logged_as_warning_naming_the_types(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            body = self._transform(
+                input=[
+                    {"type": "agent_message", "author": "a", "recipient": "b", "content": [{"type": "input_text", "text": "hi"}]},
+                    self._USER_MESSAGE,
+                ]
+            )
+        assert body["input"][0]["role"] == "assistant"
+        rewrite_warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "rewrote Codex input item type" in record.getMessage()
+        ]
+        assert rewrite_warnings == [
+            "Bedrock Mantle Responses API: rewrote Codex input item type(s) ['agent_message'] that Mantle rejects."
+        ]
 
 
 class TestBedrockMantleResponsesRegistry:
@@ -1418,7 +1592,7 @@ class TestBedrockMantleResponsesSigV4:
         signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -1448,7 +1622,7 @@ class TestBedrockMantleResponsesSigV4:
         signer.get_credentials = MagicMock(side_effect=cred_error)
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -1499,7 +1673,7 @@ class TestBedrockMantleResponsesPricing:
         assert info["input_cost_per_token"] == pytest.approx(5.5e-06)
         assert info["output_cost_per_token"] == pytest.approx(3.3e-05)
         assert info["cache_read_input_token_cost"] == pytest.approx(5.5e-07)
-        assert info["max_input_tokens"] == 272000
+        assert info["max_input_tokens"] == 1050000
 
     def test_gpt_5_4_pricing_and_mode(self, local_cost_map):
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.4")
@@ -1507,7 +1681,7 @@ class TestBedrockMantleResponsesPricing:
         assert info["input_cost_per_token"] == pytest.approx(2.75e-06)
         assert info["output_cost_per_token"] == pytest.approx(1.65e-05)
         assert info["cache_read_input_token_cost"] == pytest.approx(2.75e-07)
-        assert info["max_input_tokens"] == 272000
+        assert info["max_input_tokens"] == 1050000
 
     @pytest.mark.parametrize(
         "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
@@ -1526,7 +1700,7 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_creation_input_token_cost"] == pytest.approx(cache_creation_cost)
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
         assert info["output_cost_per_token"] == pytest.approx(output_cost)
-        assert info["max_input_tokens"] == 1000000
+        assert info["max_input_tokens"] == 1050000
         assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(input_cost * 2)
         assert info["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(cache_creation_cost * 2)
         assert info["cache_read_input_token_cost_above_272k_tokens"] == pytest.approx(cache_read_cost * 2)
@@ -1568,3 +1742,58 @@ class TestBedrockMantleResponsesPricing:
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
+
+
+def _repo_cost_map(map_name: str) -> dict[str, dict[str, object]]:
+    repo_root = Path(__file__).resolve().parents[4]
+    paths = {
+        "root": repo_root / "model_prices_and_context_window.json",
+        "bundled_backup": repo_root / "litellm" / "model_prices_and_context_window_backup.json",
+    }
+    return json.loads(paths[map_name].read_text())
+
+
+class TestMantleGptRegistryEntries:
+    """Locks the OpenAI GPT entries to Bedrock Mantle's live behavior.
+
+    Mantle enforces a 1,050,000-token prompt maximum for gpt-5.6 sol/terra/luna
+    and for gpt-5.5 and gpt-5.4 (oversize requests 400 with "prompt tokens (N)
+    exceed model maximum (1050000)", and a 1,030,590-token request completes
+    on every one of them), while the AWS model cards still quote 272K for
+    gpt-5.5 and gpt-5.4. mode must stay "responses": Mantle's native
+    /v1/chat/completions rejects function tools unless reasoning_effort is
+    "none", so chat traffic has to keep bridging to the Responses API
+    (see the responses_api_bridge tests above).
+    """
+
+    @pytest.mark.parametrize("map_name", ("root", "bundled_backup"))
+    @pytest.mark.parametrize(
+        "key",
+        (
+            "bedrock_mantle/openai.gpt-5.6-sol",
+            "bedrock_mantle/openai.gpt-5.6-terra",
+            "bedrock_mantle/openai.gpt-5.6-luna",
+        ),
+    )
+    def test_entry_matches_mantle_enforced_limits(self, map_name, key):
+        entry = _repo_cost_map(map_name)[key]
+        assert entry["max_input_tokens"] == 1050000
+        assert entry["max_output_tokens"] == 128000
+        assert entry["mode"] == "responses"
+        assert entry["use_openai_responses_path"] is True
+        assert entry["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses"]
+
+    @pytest.mark.parametrize("map_name", ("root", "bundled_backup"))
+    @pytest.mark.parametrize(
+        "key",
+        (
+            "bedrock_mantle/openai.gpt-5.5",
+            "bedrock_mantle/openai.gpt-5.4",
+        ),
+    )
+    def test_gpt_55_and_54_entries_match_mantle_enforced_limits(self, map_name, key):
+        entry = _repo_cost_map(map_name)[key]
+        assert entry["max_input_tokens"] == 1050000
+        assert entry["max_output_tokens"] == 128000
+        assert entry["mode"] == "responses"
+        assert entry["use_openai_responses_path"] is True

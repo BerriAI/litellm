@@ -4,7 +4,8 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 import json
 import re
-from collections.abc import Iterator, Mapping, Sequence
+import uuid
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -27,10 +28,11 @@ from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -42,8 +44,11 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -124,6 +129,30 @@ class _HasToolCalls(Protocol):
 @runtime_checkable
 class _HasId(Protocol):
     id: object
+
+
+class _ResponsesToolCallItem(Protocol):
+    name: object
+    arguments: object
+
+    def get(self, key: str, /) -> object: ...
+
+
+class _ToolFunctionDefinition(TypedDict, total=False):
+    name: ReadOnly[str]
+    description: ReadOnly[str]
+    parameters: ReadOnly[dict[str, object]]
+    strict: ReadOnly[bool | None]
+
+
+def _attribute_fields(value: object) -> dict[str, object]:
+    if not hasattr(value, "__dict__"):
+        return {}  # mutable-ok: provider_specific_fields payload
+    return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
+
+
+def _input_item_role(input_item: Mapping[str, object]) -> str:
+    return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -294,6 +323,7 @@ class LiteLLMCompletionResponsesConfig:
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
                 responses_api_request=responses_api_request,
+                replay_reasoning=True,
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -338,6 +368,7 @@ class LiteLLMCompletionResponsesConfig:
     def transform_responses_api_input_to_messages(
         input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
+        replay_reasoning: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -347,6 +378,16 @@ class LiteLLMCompletionResponsesConfig:
     ]:
         """
         Transform a Responses API input into a list of messages
+
+        ``replay_reasoning`` belongs to callers whose messages are about to be
+        sent to a model: prior-turn ``reasoning`` items are then rebuilt as
+        assistant ``reasoning_content`` and signed ``thinking_blocks`` so the
+        provider gets its own chain-of-thought back instead of reading it as
+        visible text.
+
+        Callers that only inspect the messages (token counting, rate limiting,
+        guardrail scanning) leave it off, because they need every piece of text
+        in the request to stay readable as message ``content``.
         """
         messages: list[
             AllMessageValues
@@ -365,6 +406,7 @@ class LiteLLMCompletionResponsesConfig:
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
+                replay_reasoning=replay_reasoning,
             )
         )
 
@@ -441,11 +483,15 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
         input: str | ResponseInputParam,
+        replay_reasoning: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
     ]:
         """
         Transform a ResponseInputParam into a Chat Completion message
+
+        See ``transform_responses_api_input_to_messages`` for what
+        ``replay_reasoning`` means.
         """
         messages: list[
             AllMessageValues
@@ -461,7 +507,8 @@ class LiteLLMCompletionResponsesConfig:
             for _input in input:
                 chat_completion_messages = (
                     LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-                        input_item=_input
+                        input_item=_input,
+                        replay_reasoning=replay_reasoning,
                     )
                 )
 
@@ -557,7 +604,160 @@ class LiteLLMCompletionResponsesConfig:
                     continue
 
                 messages.extend(chat_completion_messages)
-        return messages
+        if not replay_reasoning:
+            return messages
+        return LiteLLMCompletionResponsesConfig._merge_reasoning_only_assistant_messages(messages)
+
+    @staticmethod
+    def _reasoning_only_assistant_message(
+        reasoning_text: str | None,
+        thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
+    ) -> ChatCompletionResponseMessage:
+        """
+        Build the assistant message that carries a prior turn's reasoning and
+        nothing else, so a reasoning item never reaches the provider as visible
+        assistant ``content``.
+        """
+        message: Final = ChatCompletionResponseMessage(role="assistant", content=None)
+        if reasoning_text:
+            message["reasoning_content"] = reasoning_text
+        if thinking_blocks:
+            message["thinking_blocks"] = list(  # mutable-ok: thinking_blocks is a list on the message contract
+                thinking_blocks
+            )
+        return message
+
+    @staticmethod
+    def _merge_reasoning_only_assistant_messages(
+        messages: list[  # mutable-ok: input sequence
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+        ],
+    ) -> list[  # mutable-ok: fresh merged list
+        AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
+    ]:
+        """
+        Responses API emits prior-turn reasoning as its own ``reasoning`` input
+        item, which becomes a standalone assistant message with
+        ``content=None`` + ``reasoning_content``. Chat-completions providers
+        (e.g. DeepSeek V4, Kimi K2.6) expect the chain-of-thought on the
+        assistant message that carries the answer or tool calls. This pass
+        merges standalone reasoning-only assistant messages into the
+        immediately following assistant message.
+
+        Signed ``thinking_blocks`` decoded from ``encrypted_content`` travel the
+        same way and are placed ahead of any thinking blocks the target message
+        already carries, because Anthropic and Bedrock verify signatures against
+        the original block order.
+
+        If the reasoning item is not followed by an assistant message (e.g. a
+        stateless chain replays ``reasoning`` + ``user``), the standalone
+        reasoning message is preserved so the reasoning is still passed back.
+        """
+
+        def _role(msg: object) -> str:
+            if isinstance(msg, dict):
+                return str(msg.get("role") or "")
+            return str(getattr(msg, "role", "") or "")
+
+        def _reasoning_text(msg: object) -> str | None:
+            if isinstance(msg, dict):
+                value = msg.get("reasoning_content")  # rebind-ok: branch lookup
+            else:
+                value = getattr(msg, "reasoning_content", None)  # rebind-ok: branch lookup
+            return value if isinstance(value, str) and value else None
+
+        def _thinking_blocks(
+            msg: object,
+        ) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None:
+            if isinstance(msg, dict):
+                value = msg.get("thinking_blocks")  # rebind-ok: branch lookup
+            else:
+                value = getattr(msg, "thinking_blocks", None)  # rebind-ok: branch lookup
+            return tuple(value) if isinstance(value, list) and value else None
+
+        def _content(msg: object) -> object | None:
+            if isinstance(msg, dict):
+                return msg.get("content")
+            return getattr(msg, "content", None)
+
+        def _tool_calls(msg: object) -> object | None:
+            if isinstance(msg, dict):
+                return msg.get("tool_calls")
+            return getattr(msg, "tool_calls", None)
+
+        def _apply_pending(
+            msg: object,
+            pending_items: Sequence[
+                tuple[
+                    str | None,
+                    tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
+                ]
+            ],
+        ) -> None:
+            pending_texts: Final = tuple(text for text, _ in pending_items if text)
+            pending_blocks: Final = tuple(block for _, blocks in pending_items for block in blocks or ())
+            if pending_texts:
+                existing_text: Final = _reasoning_text(msg)
+                combined: Final = "\n".join(pending_texts + ((existing_text,) if existing_text else ()))
+                if isinstance(msg, dict):
+                    cast(dict[str, object], msg)["reasoning_content"] = combined  # cast-ok: mutable reasoning carrier
+                else:
+                    setattr(msg, "reasoning_content", combined)  # noqa: B010  # attribute name is fixed, not dynamic
+            if pending_blocks:
+                replayed: Final = list(  # mutable-ok: thinking_blocks is a list on the message contract
+                    pending_blocks + (_thinking_blocks(msg) or ())
+                )
+                if isinstance(msg, dict):
+                    cast(dict[str, object], msg)["thinking_blocks"] = replayed  # cast-ok: mutable reasoning carrier
+                else:
+                    setattr(msg, "thinking_blocks", replayed)  # noqa: B010  # attribute name is fixed, not dynamic
+
+        _standalone: Final = LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message
+
+        merged: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+        ] = []  # mutable-ok: accumulator
+        pending: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
+            tuple[
+                str | None,
+                tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
+            ]
+        ] = []  # mutable-ok: accumulator
+
+        for msg in messages:
+            if (
+                _role(msg) == "assistant"
+                and _content(msg) is None
+                and not _tool_calls(msg)
+                and (_reasoning_text(msg) is not None or _thinking_blocks(msg) is not None)
+            ):
+                pending.append((_reasoning_text(msg), _thinking_blocks(msg)))
+                continue
+
+            if pending and _role(msg) == "assistant":
+                _apply_pending(msg, pending)
+                pending = []  # mutable-ok: reset accumulator
+            elif pending:
+                # Not followed by an assistant message — keep the reasoning
+                # standalone instead of dropping it.
+                merged.extend(  # mutable-ok: append reasoning messages
+                    [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append reasoning messages
+                )
+                pending = []  # mutable-ok: reset accumulator
+
+            merged.append(msg)
+
+        merged.extend(  # mutable-ok: append trailing reasoning
+            [_standalone(text, blocks) for text, blocks in pending]  # mutable-ok: append trailing reasoning
+        )
+
+        return merged
 
     @staticmethod
     def _merged_trailing_assistant_message(
@@ -860,7 +1060,7 @@ class LiteLLMCompletionResponsesConfig:
     def _add_tool_call_to_assistant(assistant_message: object, tool_call_chunk: ChatCompletionToolCallChunk) -> None:
         """Add a tool_call to an assistant message."""
         if isinstance(assistant_message, dict):
-            prev_assistant_dict: Final = cast(dict[str, Any], assistant_message)
+            prev_assistant_dict: Final = cast(dict[str, object], assistant_message)
             if "tool_calls" not in prev_assistant_dict:
                 prev_assistant_dict["tool_calls"] = []
             tool_calls_list: Final = prev_assistant_dict["tool_calls"]
@@ -945,7 +1145,7 @@ class LiteLLMCompletionResponsesConfig:
                     # Type-safe way to set tool_call_id on tool message
                     if isinstance(message, dict):
                         # Cast to dict to allow setting tool_call_id
-                        message_dict = cast(dict[str, Any], message)
+                        message_dict = cast(dict[str, object], message)
                         message_dict["tool_call_id"] = tool_call_id
                     elif hasattr(message, "tool_call_id"):
                         setattr(message, "tool_call_id", tool_call_id)
@@ -997,7 +1197,8 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_responses_api_input_item_to_chat_completion_message(
-        input_item: Any,
+        input_item: Mapping[str, object],
+        replay_reasoning: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API input item into a Chat Completion message
@@ -1024,8 +1225,53 @@ class LiteLLMCompletionResponsesConfig:
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
             # handle function call input items
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
-                function_call=input_item
+                function_call=cast(  # cast-ok: callee coerces every field it reads with `or ""` / str()
+                    Mapping[str, str], input_item
+                )
             )
+        elif input_item.get("type") == "reasoning":
+            # A ResponseReasoningItemParam carries the prior-turn chain-of-thought.
+            # Chat-completions providers (DeepSeek V4, Kimi K2.6, ...) expect this
+            # to be replayed as `reasoning_content` on an assistant message, not as
+            # visible `content` (prompt pollution) and not dropped (DeepSeek V4
+            # rejects multi-turn requests with a missing `reasoning_content`).
+            # Callers that only inspect the request keep reading the text as
+            # message `content`, summary-only items included: whatever the
+            # provider-bound branch below replays must stay scannable.
+            if not replay_reasoning:
+                # `content` wins only when it is what the provider-bound branch
+                # would replay; an empty or block-only `content` falls back to
+                # the summary text, which is what that branch replays instead.
+                inspectable: Final[object] = (
+                    input_item.get("content")
+                    if LiteLLMCompletionResponsesConfig._reasoning_text_from_content(input_item) is not None
+                    else LiteLLMCompletionResponsesConfig._reasoning_text_from_summary(input_item)
+                    or input_item.get("content")
+                )
+                if inspectable is None:
+                    return []  # mutable-ok: empty drop result
+                return [  # mutable-ok: single message result
+                    GenericChatCompletionMessage(
+                        role=_input_item_role(input_item),
+                        content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                            inspectable
+                        ),
+                    )
+                ]
+            reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(  # rebind-ok: extraction result
+                input_item
+            )
+            thinking_blocks = LiteLLMCompletionResponsesConfig._decode_thinking_blocks_from_input_item(  # rebind-ok: extraction result
+                input_item
+            )
+            if not reasoning_text and not thinking_blocks:
+                return []  # mutable-ok: empty drop result
+            return [  # mutable-ok: single message result
+                LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message(
+                    reasoning_text=reasoning_text,
+                    thinking_blocks=thinking_blocks,
+                )
+            ]
         else:
             content: Final[object] = input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
@@ -1034,12 +1280,118 @@ class LiteLLMCompletionResponsesConfig:
                 return []
             return [
                 GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
+                    role=_input_item_role(input_item),
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                         content
                     ),
                 )
             ]
+
+    @staticmethod
+    def _reasoning_text_from_content(input_item: Mapping[str, object]) -> str | None:
+        """
+        Plaintext a ResponseReasoningItemParam carries in ``content``.
+
+        Handles content as a string and content as a list of blocks
+        (output_text / summary_text / text). Returns None when the item has
+        no content, or only opaque blocks (e.g. encrypted_content).
+        """
+        content: Final[object] = input_item.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+        if isinstance(content, list):
+            text_parts: Final = tuple(
+                text.strip()
+                for block in content
+                if isinstance(block, Mapping)
+                and block.get("type") not in ("encrypted_content", "redacted_thinking")
+                and isinstance(text := block.get("text"), str)
+                and text.strip()
+            )
+            if text_parts:
+                return "\n".join(text_parts)
+        return None
+
+    @staticmethod
+    def _reasoning_text_from_summary(input_item: Mapping[str, object]) -> str | None:
+        """
+        Plaintext a ResponseReasoningItemParam carries in ``summary``.
+
+        Guardrail traversal in litellm/proxy/guardrails/_content_utils.py
+        inspects and rewrites these summary blocks before they are forwarded.
+        """
+        summary: Final[object] = input_item.get("summary")
+        if not isinstance(summary, list):
+            return None
+        text_parts: Final = tuple(
+            text.strip()
+            for block in summary
+            if isinstance(block, Mapping) and isinstance(text := block.get("text"), str) and text.strip()
+        )
+        return "\n".join(text_parts) if text_parts else None
+
+    @staticmethod
+    def _extract_reasoning_text_from_input_item(input_item: Mapping[str, object]) -> str | None:
+        """
+        Extract plaintext reasoning from a ResponseReasoningItemParam.
+
+        ``content`` wins, ``summary`` is the fallback. Returns None when only
+        opaque forms (e.g. encrypted_content) are present.
+        """
+        return LiteLLMCompletionResponsesConfig._reasoning_text_from_content(
+            input_item
+        ) or LiteLLMCompletionResponsesConfig._reasoning_text_from_summary(input_item)
+
+    @staticmethod
+    def _decode_thinking_blocks_from_input_item(
+        input_item: Mapping[str, object],
+    ) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None:
+        """
+        Decode ``encrypted_content`` written by ``_encode_thinking_blocks`` back
+        into the signed thinking blocks it serialized.
+
+        LiteLLM writes this field itself for providers whose reasoning is signed
+        (Anthropic, Bedrock converse): it is a JSON array of the provider's own
+        ``thinking`` / ``redacted_thinking`` blocks, not an opaque OpenAI blob.
+        Replaying the blocks on the assistant message is what lets the provider
+        verify the signature and keep the prior chain-of-thought.
+
+        Returns None for anything this deployment did not write, so a genuinely
+        opaque blob is still skipped rather than forwarded as garbage.
+        """
+        encrypted_content: Final[object] = input_item.get("encrypted_content")
+        if not isinstance(encrypted_content, str) or not encrypted_content.strip():
+            return None
+        try:
+            decoded: Final[object] = cast(object, json.loads(encrypted_content))  # cast-ok: json.loads returns Any
+        except ValueError:
+            return None
+        if not isinstance(decoded, list):
+            return None
+
+        blocks: Final = tuple(
+            cast(  # cast-ok: shape validated by _is_replayable_thinking_block
+                ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+                block,
+            )
+            for block in decoded
+            if isinstance(block, Mapping) and LiteLLMCompletionResponsesConfig._is_replayable_thinking_block(block)
+        )
+        return blocks or None
+
+    @staticmethod
+    def _is_replayable_thinking_block(block: Mapping[str, object]) -> bool:
+        """
+        A thinking block is only worth replaying when the provider can verify
+        it: a ``thinking`` block needs its signature, a ``redacted_thinking``
+        block needs its opaque data.
+        """
+        block_type: Final[object] = block.get("type")
+        if block_type == "thinking":
+            return bool(block.get("signature"))
+        if block_type == "redacted_thinking":
+            return bool(block.get("data"))
+        return False
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Mapping[str, object]) -> bool:
@@ -1078,7 +1430,7 @@ class LiteLLMCompletionResponsesConfig:
 
         def _normalize_function_call_output_to_tool_content(
             output: object,
-        ) -> Any:
+        ) -> str | list[ChatCompletionTextObject | ChatCompletionImageObject]:
             """
             Normalize Responses API function_call_output.output into a shape that downstream
             chat adapters (esp. Gemini) can reliably consume.
@@ -1100,7 +1452,7 @@ class LiteLLMCompletionResponsesConfig:
 
             # Some adapters represent tool output as a list of "input_*" parts
             if isinstance(output, list):
-                normalized_blocks: Final[list[dict[str, object]]] = []
+                normalized_blocks: Final[list[ChatCompletionTextObject | ChatCompletionImageObject]] = []
                 text_acc: Final[list[str]] = []
                 for part in output:
                     if not isinstance(part, dict):
@@ -1223,6 +1575,9 @@ class LiteLLMCompletionResponsesConfig:
         # store their payload in "input" (raw string) rather than
         # "arguments" (JSON string), so normalize to arguments here.
         raw_arguments = function_call.get("arguments")
+        if raw_arguments == REDACTED_BY_LITELLM:
+            # redaction stores the bare sentinel (invalid JSON) in arguments
+            raw_arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
         if not raw_arguments and function_call.get("type") == "custom_tool_call":
             raw_input: Final = function_call.get("input") or ""
             raw_arguments = json.dumps({"content": raw_input}) if raw_input else ""
@@ -1571,7 +1926,7 @@ class LiteLLMCompletionResponsesConfig:
                 result.append(tool)
                 continue
             if tool.get("type") == "function":
-                fn = cast(dict[str, Any], tool.get("function") or {})
+                fn = cast(_ToolFunctionDefinition, tool.get("function") or {})
                 parameters = dict(fn.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
@@ -1767,7 +2122,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def convert_response_function_tool_call_to_chat_completion_tool_call(
-        tool_call_item: Any,
+        tool_call_item: object,
         index: int = 0,
     ) -> dict[str, object]:
         """
@@ -1780,24 +2135,25 @@ class LiteLLMCompletionResponsesConfig:
         Returns:
             Dictionary in ChatCompletionToolCallChunk format
         """
+        item: Final = cast(  # cast-ok: duck-typed tool call item, .get access guarded by hasattr below
+            _ResponsesToolCallItem, tool_call_item
+        )
         # Extract provider_specific_fields if present
-        provider_specific_fields = getattr(tool_call_item, "provider_specific_fields", None)
+        provider_specific_fields: object = getattr(tool_call_item, "provider_specific_fields", None)
         if provider_specific_fields and not isinstance(provider_specific_fields, dict):
-            provider_specific_fields = (
-                dict(provider_specific_fields) if hasattr(provider_specific_fields, "__dict__") else {}
-            )
-        elif hasattr(tool_call_item, "get") and callable(tool_call_item.get):
-            provider_fields: Final = tool_call_item.get("provider_specific_fields")
+            provider_specific_fields = _attribute_fields(provider_specific_fields)
+        elif hasattr(tool_call_item, "get") and callable(item.get):
+            provider_fields: Final = item.get("provider_specific_fields")
             if provider_fields:
                 provider_specific_fields = (
-                    provider_fields
+                    cast("dict[str, object]", provider_fields)  # cast-ok: passed through as-is, keys unvalidated
                     if isinstance(provider_fields, dict)
-                    else (dict(provider_fields) if hasattr(provider_fields, "__dict__") else {})
+                    else _attribute_fields(provider_fields)
                 )
 
         function_dict: Final[dict[str, object]] = {
-            "name": tool_call_item.name,
-            "arguments": tool_call_item.arguments,
+            "name": item.name,
+            "arguments": item.arguments,
         }
 
         if provider_specific_fields:
@@ -1978,7 +2334,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         output_items: Final[list] = []
         for choice in chat_completion_response.choices or []:
-            message = getattr(choice, "message", None)
+            message: object = getattr(choice, "message", None)
             if not message:
                 continue
             psf = getattr(message, "provider_specific_fields", None)
@@ -1997,6 +2353,12 @@ class LiteLLMCompletionResponsesConfig:
         return output_items
 
     @staticmethod
+    def _encode_thinking_blocks(message: Message) -> str | None:
+        thinking_blocks: Final[Sequence[Mapping[str, object]]] = getattr(message, "thinking_blocks", None) or ()
+        preserved: Final = tuple(block for block in thinking_blocks if block.get("signature") or block.get("data"))
+        return json.dumps(preserved, separators=(",", ":")) if preserved else None
+
+    @staticmethod
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
@@ -2004,12 +2366,14 @@ class LiteLLMCompletionResponsesConfig:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
-                if hasattr(message, "reasoning_content") and message.reasoning_content:
+                reasoning_content: str = getattr(message, "reasoning_content", None) or ""
+                encrypted_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
+                if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
                     return [
                         GenericResponseOutputItem(
                             type="reasoning",
-                            id=f"rs_{hash(str(message.reasoning_content))}",
+                            id=f"rs_{uuid.uuid4()}",
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
@@ -2017,17 +2381,19 @@ class LiteLLMCompletionResponsesConfig:
                             content=[
                                 OutputText(
                                     type="output_text",
-                                    text=message.reasoning_content,
+                                    text=text,
                                     annotations=[],
                                 )
+                                for text in (reasoning_content,)
+                                if text
                             ],
+                            encrypted_content=encrypted_content,
                         )
                     ]
         return []
 
     @staticmethod
     def _extract_image_generation_output_items(
-        chat_completion_response: ModelResponse,
         choice: Choices,
     ) -> list[OutputImageGenerationCall]:
         """
@@ -2043,7 +2409,7 @@ class LiteLLMCompletionResponsesConfig:
         To Responses API format:
         {
             'type': 'image_generation_call',
-            'id': 'img_...',
+            'id': 'ig_...',
             'status': 'completed',
             'result': 'iVBORw0...'  # Pure base64 without data: prefix
         }
@@ -2054,7 +2420,7 @@ class LiteLLMCompletionResponsesConfig:
         if not images:
             return image_generation_items
 
-        for idx, image_item in enumerate(_DICT_ITEMS_LIST_ADAPTER.validate_python(images)):
+        for image_item in _DICT_ITEMS_LIST_ADAPTER.validate_python(images):
             # Extract base64 from data URL
             image_url = _TEXT_ADAPTER.validate_python(
                 _ANY_KEY_DICT_ADAPTER.validate_python(image_item.get("image_url", {})).get("url", "")
@@ -2065,7 +2431,7 @@ class LiteLLMCompletionResponsesConfig:
                 image_generation_items.append(
                     OutputImageGenerationCall(
                         type="image_generation_call",
-                        id=f"{chat_completion_response.id}_img_{idx}",
+                        id=f"ig_{uuid.uuid4()}",
                         status=LiteLLMCompletionResponsesConfig._map_finish_reason_to_image_generation_status(
                             choice.finish_reason
                         ),
@@ -2130,7 +2496,6 @@ class LiteLLMCompletionResponsesConfig:
             if hasattr(choice.message, "images") and choice.message.images:
                 # Extract image generation output
                 image_generation_items = LiteLLMCompletionResponsesConfig._extract_image_generation_output_items(
-                    chat_completion_response=chat_completion_response,
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
@@ -2139,7 +2504,7 @@ class LiteLLMCompletionResponsesConfig:
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
-                        id=chat_completion_response.id,
+                        id=f"msg_{uuid.uuid4()}",
                         status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                             choice.finish_reason
                         ),
@@ -2292,18 +2657,19 @@ class LiteLLMCompletionResponsesConfig:
         # Translate completion_tokens_details to output_tokens_details
         if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
             completion_details: Final = usage.completion_tokens_details
-            output_details_dict: Final[dict[str, int]] = {}
-            if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
-                output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
-
-            if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
-                output_details_dict["text_tokens"] = completion_details.text_tokens
-
-            if hasattr(completion_details, "image_tokens") and completion_details.image_tokens is not None:
-                output_details_dict["image_tokens"] = completion_details.image_tokens
-
-            if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(**output_details_dict)
+            reasoning_token_count: Final = getattr(completion_details, "reasoning_tokens", None)
+            optional_output_details: Final[dict[str, int]] = {
+                field: value
+                for field, value in (
+                    ("text_tokens", getattr(completion_details, "text_tokens", None)),
+                    ("image_tokens", getattr(completion_details, "image_tokens", None)),
+                )
+                if value is not None
+            }
+            response_usage.output_tokens_details = OutputTokensDetails(
+                reasoning_tokens=reasoning_token_count if reasoning_token_count is not None else 0,
+                **optional_output_details,
+            )
 
         return response_usage
 

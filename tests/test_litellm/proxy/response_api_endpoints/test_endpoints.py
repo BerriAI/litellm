@@ -1353,6 +1353,8 @@ class TestParseCursorModelVariant:
             ("claude-opus-5-fast", "claude-opus-5", None),
             ("gpt-5.6-sol", "gpt-5.6-sol", None),
             ("foo-thinking-ultra-fast", "foo-thinking-ultra", None),
+            ("gpt-5.6-thinking-max", "gpt-5.6", "max"),
+            ("foo-thinking-mega-fast", "foo-thinking-mega", None),
             ("-thinking-high", "-thinking-high", None),
         ],
     )
@@ -1748,3 +1750,89 @@ class TestCursorGateRecognizesRoutingGroups:
         resolved = _resolve_cursor_model_variant(body, router)
         assert resolved["model"] == "grouped-thinking-high"
         assert "reasoning_effort" not in resolved
+
+
+class TestGuardrailBlockedResponsesUsage:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/36880.
+
+    The ModifyResponseException handler in responses_api hardcoded the synthetic
+    blocked reply's usage to zeros, discarding the real token counts the blocked
+    upstream call consumed. The blocked reply must carry the usage from
+    e.original_response, exactly like /v1/chat/completions already does."""
+
+    def _post_blocked_responses(self, original_response):
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        exc = ModifyResponseException(
+            message="Content flagged by policy, response withheld",
+            model="gpt-4o-mini",
+            request_data={"model": "gpt-4o-mini", "input": "hi"},
+            guardrail_name="zero-usage-regression",
+            original_response=original_response,
+        )
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="sk-test", request_route="/v1/responses"
+        )
+        try:
+            with (
+                patch(
+                    "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+                    new=AsyncMock(side_effect=exc),
+                ),
+                patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+            ):
+                client = TestClient(app)
+                return client.post(
+                    "/v1/responses",
+                    json={"model": "gpt-4o-mini", "input": "Write a haiku about token accounting"},
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+    def test_post_call_block_reports_real_upstream_usage(self):
+        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+        original = ResponsesAPIResponse(
+            id="resp_upstream",
+            created_at=1,
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            status="completed",
+            usage=ResponseAPIUsage(input_tokens=14, output_tokens=20, total_tokens=34),
+        )
+
+        response = self._post_blocked_responses(original)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["output"][0]["content"][0]["text"] == "Content flagged by policy, response withheld"
+        assert body["usage"]["input_tokens"] == 14
+        assert body["usage"]["output_tokens"] == 20
+        assert body["usage"]["total_tokens"] == 34
+
+    def test_post_call_block_maps_bridged_chat_usage(self):
+        original = litellm.ModelResponse()
+        original.usage = litellm.Usage(prompt_tokens=14, completion_tokens=18, total_tokens=32)
+
+        response = self._post_blocked_responses(original)
+
+        assert response.status_code == 200, response.text
+        usage = response.json()["usage"]
+        assert usage["input_tokens"] == 14
+        assert usage["output_tokens"] == 18
+        assert usage["total_tokens"] == 32
+
+    def test_pre_call_block_reports_zero_usage(self):
+        response = self._post_blocked_responses(None)
+
+        assert response.status_code == 200, response.text
+        usage = response.json()["usage"]
+        assert usage["input_tokens"] == 0
+        assert usage["output_tokens"] == 0
+        assert usage["total_tokens"] == 0

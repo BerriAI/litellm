@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import Any, Final, TypeVar
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
 
 def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
@@ -65,6 +65,20 @@ def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> Anthrop
     return AnthropicUsage(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
+def _blocked_usage_obj(original_response: object) -> object:
+    if isinstance(original_response, dict):
+        return original_response.get("usage")
+    if original_response is not None and not isinstance(original_response, list):
+        return getattr(original_response, "usage", None)
+    return None
+
+
+def _usage_tokens(usage_obj: object, key: str, fallback_key: str) -> int:
+    if isinstance(usage_obj, dict):
+        return int(usage_obj.get(key, usage_obj.get(fallback_key, 0)) or 0)
+    return int(getattr(usage_obj, key, getattr(usage_obj, fallback_key, 0)) or 0)
+
+
 def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
     """
     Token usage for a synthetic guardrail-blocked response.
@@ -75,24 +89,38 @@ def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
     discarding it. Pre-call blocks never invoked the LLM (no original_response),
     so usage is zero.
     """
-    usage_obj: Any = None
     if isinstance(original_response, list):
         stream_usage: Final = _usage_from_anthropic_stream_chunks(original_response)
         if stream_usage is not None:
             return stream_usage
-    elif isinstance(original_response, dict):
-        usage_obj = original_response.get("usage")
-    elif original_response is not None:
-        usage_obj = getattr(original_response, "usage", None)
 
-    def _tokens(key: str, fallback_key: str) -> int:
-        if isinstance(usage_obj, dict):
-            return int(usage_obj.get(key, usage_obj.get(fallback_key, 0)) or 0)
-        return int(getattr(usage_obj, key, getattr(usage_obj, fallback_key, 0)) or 0)
-
+    usage_obj: Final = _blocked_usage_obj(original_response)
     return AnthropicUsage(
-        input_tokens=_tokens("input_tokens", "prompt_tokens"),
-        output_tokens=_tokens("output_tokens", "completion_tokens"),
+        input_tokens=_usage_tokens(usage_obj, "input_tokens", "prompt_tokens"),
+        output_tokens=_usage_tokens(usage_obj, "output_tokens", "completion_tokens"),
+    )
+
+
+def blocked_responses_api_usage(original_response: object) -> ResponseAPIUsage:
+    """
+    Token usage for a synthetic guardrail-blocked /v1/responses reply.
+
+    Same contract as ``blocked_response_usage`` in Responses API shape: a
+    native ``ResponsesAPIResponse`` usage passes through unchanged, a bridged
+    chat ``ModelResponse`` usage maps prompt/completion tokens to input/output
+    tokens, and a pre-call block (no original_response) reports zeros.
+    """
+    usage_obj: Final = _blocked_usage_obj(original_response)
+    if isinstance(usage_obj, ResponseAPIUsage):
+        return usage_obj
+
+    input_tokens: Final = _usage_tokens(usage_obj, "input_tokens", "prompt_tokens")
+    output_tokens: Final = _usage_tokens(usage_obj, "output_tokens", "completion_tokens")
+    total_tokens: Final = _usage_tokens(usage_obj, "total_tokens", "total_tokens")
+    return ResponseAPIUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens or input_tokens + output_tokens,
     )
 
 
