@@ -35885,6 +35885,64 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** TagRateLimitEntry */
+        TagRateLimitEntry: {
+            /** Apply To Key Alias */
+            apply_to_key_alias?: string[] | null;
+            /** Apply To Models */
+            apply_to_models?: string[] | null;
+            disabled_for?: components["schemas"]["TagRateLimitScope"] | null;
+            enabled_for?: components["schemas"]["TagRateLimitScope"] | null;
+            /** Key Ttl Seconds */
+            key_ttl_seconds?: number | null;
+            /** Limit */
+            limit: number;
+            /** Max In Memory Cache Size */
+            max_in_memory_cache_size?: number | null;
+            /** Name */
+            name: string;
+            /** Period Seconds */
+            period_seconds: number;
+            /**
+             * Scope By Key Hash
+             * @default false
+             */
+            scope_by_key_hash: boolean;
+            /**
+             * Tag Id
+             * @default end_user_id
+             */
+            tag_id: string;
+        };
+        /** TagRateLimitGroup */
+        TagRateLimitGroup: {
+            /**
+             * Limits
+             * @default []
+             */
+            limits: components["schemas"]["TagRateLimitEntry"][];
+        };
+        /**
+         * TagRateLimitScope
+         * @description A gate on a tag OTHER than the entry's own `tag_id` -- e.g. scoping an
+         *     entry to `tag_id: company_id, values: ["1032"]` so it only applies to
+         *     requests tagged as belonging to company 1032, independent of whichever
+         *     tag the entry itself keys its bucket by. See `TagRateLimitEntry.enabled_for`/
+         *     `disabled_for`, which are the only two fields that construct this.
+         */
+        TagRateLimitScope: {
+            /** Tag Id */
+            tag_id: string;
+            /** Values */
+            values: string[];
+        };
+        /** TagRateLimits */
+        TagRateLimits: {
+            concurrency_limits?: components["schemas"]["TagRateLimitGroup"] | null;
+            dollar_limits?: components["schemas"]["TagRateLimitGroup"] | null;
+            request_limits?: components["schemas"]["TagRateLimitGroup"] | null;
+            token_limits?: components["schemas"]["TagRateLimitGroup"] | null;
+        };
         /**
          * TagSummaryMetrics
          * @description Summary metrics for a tag
@@ -38662,6 +38720,7 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            tag_rate_limits?: components["schemas"]["TagRateLimits"] | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
