@@ -31,13 +31,14 @@ FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 class TestOptionallyHandleAnthropicOAuth:
     """Tests for optionally_handle_anthropic_oauth function."""
 
-    def test_oauth_token_in_authorization_header(self):
+    @pytest.mark.parametrize("header_name", ["authorization", "Authorization", "AUTHORIZATION"])
+    def test_oauth_token_in_authorization_header(self, header_name):
         """OAuth token in Authorization header should be detected and headers set correctly."""
         from litellm.llms.anthropic.common_utils import (
             optionally_handle_anthropic_oauth,
         )
 
-        headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        headers = {header_name: f"Bearer {FAKE_OAUTH_TOKEN}"}
         updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
             headers, None
         )
@@ -46,6 +47,22 @@ class TestOptionallyHandleAnthropicOAuth:
         assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
         assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
         assert "x-api-key" not in updated_headers
+
+    @pytest.mark.parametrize("api_key_header_name", ["x-api-key", "X-Api-Key"])
+    def test_oauth_removes_x_api_key_any_casing(self, api_key_header_name):
+        """When OAuth wins, a client x-api-key header is removed whatever its casing."""
+        from litellm.llms.anthropic.common_utils import (
+            optionally_handle_anthropic_oauth,
+        )
+
+        headers = {api_key_header_name: FAKE_REGULAR_KEY, "Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
+            headers, None
+        )
+
+        assert extracted_api_key == FAKE_OAUTH_TOKEN
+        assert [name for name in updated_headers if name.lower() == "x-api-key"] == []
+        assert updated_headers["Authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_oauth_token_in_api_key_directly(self):
         """OAuth token passed as api_key should set Authorization: Bearer header."""
