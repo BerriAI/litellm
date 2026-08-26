@@ -330,6 +330,30 @@ def test_real_llm_failure_still_emitted():
     assert span.status.status_code is StatusCode.ERROR
 
 
+def test_provider_auth_failure_span_carries_stack_trace():
+    """Regression for LIT-6163: a 401 the provider returned is not an expected
+    client error, so the error span built from the real failure payload keeps
+    ``litellm.provider.error.stack_trace`` alongside code and llm_provider."""
+    from litellm.exceptions import AuthenticationError
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    try:
+        raise AuthenticationError(
+            message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
+        )
+    except AuthenticationError as caught:
+        error_information = StandardLoggingPayloadSetup.get_error_information(caught)
+    logger, exporter = _logger()
+    payload = _payload(status="failure", custom_llm_provider="anthropic", error_information=error_information)
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+    (span,) = exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "AuthenticationError"
+    assert span.attributes["litellm.provider.error.code"] == "401"
+    assert span.attributes["litellm.provider.error.llm_provider"] == "anthropic"
+    assert "test_otel_v2_logger" in span.attributes["litellm.provider.error.stack_trace"]
+
+
 def test_idempotent_on_repeat_callback():
     """The carrier is the dedup: once the async callback closes the span and
     clears the carrier, a second callback firing emits nothing."""

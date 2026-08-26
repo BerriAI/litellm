@@ -278,3 +278,25 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(WithCode("invalid_request_error")) is False
         assert is_expected_client_error(Exception("no status")) is False
         assert is_expected_client_error(None) is False
+
+    def test_provider_originated_4xx_is_not_expected(self):
+        """Regression for LIT-6163: a 4xx the provider returned is an upstream or
+        deployment problem, so it keeps its traceback; only the proxy's own
+        pre-call rejections (no llm_provider) are expected client errors."""
+        from litellm.exceptions import AuthenticationError, RateLimitError
+        from litellm.litellm_core_utils.core_helpers import is_expected_client_error
+
+        provider_auth_failure = AuthenticationError(
+            message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
+        )
+        assert is_expected_client_error(provider_auth_failure) is False
+
+        provider_rate_limit = RateLimitError(message="rate limited upstream", llm_provider="openai", model="gpt-4o")
+        assert is_expected_client_error(provider_rate_limit) is False
+
+        class RouterRejection(Exception):
+            def __init__(self):
+                self.status_code = 429
+                self.llm_provider = ""
+
+        assert is_expected_client_error(RouterRejection()) is True
