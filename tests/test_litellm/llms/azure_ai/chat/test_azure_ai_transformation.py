@@ -10,11 +10,8 @@ from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
 
 
 @pytest.mark.asyncio
-async def test_get_openai_compatible_provider_info():
-    """
-    Test that Azure AI requests are formatted correctly with the proper endpoint and parameters
-    for both synchronous and asynchronous calls
-    """
+async def test_azure_ai_openai_model_keeps_azure_ai_provider():
+    """OpenAI-named Azure AI deployments must retain Azure AI pricing identity."""
     config = AzureAIStudioConfig()
 
     (
@@ -22,13 +19,13 @@ async def test_get_openai_compatible_provider_info():
         dynamic_api_key,
         custom_llm_provider,
     ) = config._get_openai_compatible_provider_info(
-        model="azure_ai/gpt-4o-mini",
+        model="azure_ai/gpt-5.4-nano",
         api_base="https://my-base",
         api_key="my-key",
         custom_llm_provider="azure_ai",
     )
 
-    assert custom_llm_provider == "azure"
+    assert custom_llm_provider == "azure_ai"
 
 
 def test_azure_ai_validate_environment():

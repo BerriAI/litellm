@@ -8,7 +8,6 @@ import httpx
 from httpx import Response
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
@@ -204,21 +203,6 @@ class AzureAIStudioConfig(OpenAIConfig):
                 message["content"] = texts
         return stripped_messages
 
-    def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
-        try:
-            if "/" in model:
-                model = model.split("/", 1)[1]
-            if (
-                model in litellm.open_ai_chat_completion_models
-                or model in litellm.open_ai_text_completion_models
-                or model in litellm.open_ai_embedding_models
-            ):
-                return True
-
-        except Exception:
-            return False
-        return False
-
     def _get_openai_compatible_provider_info(
         self,
         model: str,
@@ -228,10 +212,6 @@ class AzureAIStudioConfig(OpenAIConfig):
     ) -> tuple[str | None, str | None, str]:
         api_base = api_base or get_secret_str("AZURE_AI_API_BASE")
         dynamic_api_key: Final = api_key or get_secret_str("AZURE_AI_API_KEY")
-
-        if self._is_azure_openai_model(model=model, api_base=api_base):
-            verbose_logger.debug("Model=%s is Azure OpenAI model. Setting custom_llm_provider='azure'.", model)
-            custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 
     def transform_request(
