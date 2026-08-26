@@ -15,7 +15,10 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
     filter_messages_by_skip_flags,
+    merge_guardrailed_scoped_messages,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -101,21 +104,59 @@ def _event_hook_includes_during_call(
     return any(value == GuardrailEventHooks.during_call for value in flattened if value is not None)
 
 
-_MASKABLE_MESSAGE_KEYS: Final[frozenset[str]] = frozenset({"role", "content"})
+def _pre_masking_scope_indices(
+    guardrail: "LakeraAIGuardrail",
+    messages: Sequence[object],
+) -> tuple[int, ...]:
+    """Indices into ``messages`` that mask-in-place can safely target: has
+    non-empty string content, and survives the same skip_system_message_in_guardrail
+    / skip_tool_message_in_guardrail scoping ``filter_messages_by_skip_flags``
+    applies. Content is guaranteed to already be a plain string here -- masking
+    is only attempted when ``has_non_string_content(data)`` is False.
+
+    Preserved in original order, so it lines up positionally with the
+    ``messages_for_lakera`` list _build_lakera_inspection_messages/skip-filtering
+    produces from the same input: both apply the identical "has text" and
+    "not skipped by role" predicates over the same original sequence."""
+    skip_system: Final = effective_skip_system_message_for_guardrail(guardrail)
+    skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail)
+    return tuple(
+        idx
+        for idx, message in enumerate(messages)
+        if isinstance(message, dict)
+        and isinstance(message.get("content"), str)
+        and message["content"]
+        and not (skip_system and message.get("role") == "system")
+        and not (skip_tool and message.get("role") == "tool")
+    )
 
 
-def _has_non_maskable_message_fields(data: Mapping[str, object]) -> bool:
-    """True if any message in ``data["messages"]`` carries a field besides
-    role/content (e.g. tool_call_id, name, function_call). Mask-in-place
-    rewrites data["messages"] from a synthetic {role, content}-only list built
-    by build_inspection_messages, which drops every other field -- masking a
-    tool message would silently strip its tool_call_id, producing a malformed
-    outgoing request."""
-    messages: Final = data.get("messages")
-    if not isinstance(messages, list):
-        return False
-    return any(
-        isinstance(message, dict) and any(key not in _MASKABLE_MESSAGE_KEYS for key in message) for message in messages
+def _apply_redacted_messages_back_preserving_fields(
+    guardrail: "LakeraAIGuardrail",
+    data: dict,
+    redacted_messages: Sequence[Mapping[str, str]],
+) -> None:
+    """Write masked content back to ``data["messages"]`` without losing fields
+    the synthetic role/content-only ``redacted_messages`` never carried (e.g. a
+    tool message's tool_call_id, an assistant message's tool_calls, name,
+    cache_control). Falls back to the shared, wholesale-replacing
+    apply_redacted_messages_back when ``data["messages"]`` isn't a list (a pure
+    Responses-API ``input`` string, with no chat messages to merge into)."""
+    original_messages: Final = data.get("messages")
+    if not isinstance(original_messages, list):
+        apply_redacted_messages_back(
+            data, list(redacted_messages)
+        )  # mutable-ok: apply_redacted_messages_back requires a list
+        return
+    scope_indices: Final = _pre_masking_scope_indices(guardrail, original_messages)
+    guardrailed_scoped: Final = tuple(
+        {**original_messages[original_idx], "content": redacted["content"]}
+        for original_idx, redacted in zip(scope_indices, redacted_messages, strict=True)
+    )
+    data["messages"] = merge_guardrailed_scoped_messages(
+        full_messages=original_messages,
+        scoped_indices=scope_indices,
+        guardrailed_scoped=guardrailed_scoped,  # pyright: ignore[reportArgumentType]  # plain dicts satisfy AllMessageValues's TypedDict shape at runtime
     )
 
 
@@ -438,18 +479,13 @@ class LakeraAIGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Lakera AI: not running guardrail. Guardrail is disabled.")
             return data
 
-        # Raw count before build_inspection_messages drops any message with no
-        # inspectable text — needed below to detect that drop too, not just
-        # skip-flag-driven drops.
-        raw_message_count: Final = len(data.get("messages") or ())
-
         # Covers multimodal list content + Responses-API input/instructions.
         inspection_messages: Final = _build_lakera_inspection_messages(data)
         if not inspection_messages:
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return data
 
-        new_messages, messages_were_skipped = self._filter_skipped_messages(
+        new_messages, _ = self._filter_skipped_messages(
             inspection_messages  # pyright: ignore[reportArgumentType]  # build_inspection_messages returns plain dicts, not typed message unions
         )
         if not new_messages:
@@ -459,29 +495,19 @@ class LakeraAIGuardrail(CustomGuardrail):
             )
             return data
 
-        # Mask-in-place uses offsets returned by Lakera and can only
-        # preserve non-text parts (images, audio, …) when the original
-        # content is a plain string. For multimodal/Responses-API input
-        # we degrade to block-on-detect so we never silently strip image
-        # parts while attempting to redact text. The same applies when any
-        # message was excluded from ``new_messages`` before masking — whether
-        # by the skip flags or by build_inspection_messages dropping a
-        # no-text message — since masking would rewrite data["messages"]
-        # from the shorter inspected list, silently dropping the excluded
-        # message from the actual outgoing request. Also degrade when any
-        # message carries fields beyond role/content (e.g. a tool message's
-        # tool_call_id), since masking would rewrite it from a role/content-only
-        # synthetic dict, silently stripping those fields. Also degrade when
-        # both messages and input are present, since build_inspection_messages
-        # flattens both into one list and the raw-count check above can miss a
-        # dropped no-text message when input backfills the count.
+        # Mask-in-place can only preserve non-text parts (images, audio) when
+        # the original content is a plain string, and can only merge a
+        # redacted result back into data["messages"] by position when
+        # messages and input aren't both present at once (build_inspection_messages
+        # flattens both into one list, so a position could mean either).
+        # Degrade to block-on-detect in either case. Skip-flag-excluded and
+        # no-text messages, and messages carrying fields beyond role/content
+        # (tool_call_id, name, tool_calls, cache_control), are otherwise
+        # handled safely by _apply_redacted_messages_back_preserving_fields's
+        # scope-index merge, which never touches a message outside the scope
+        # it actually redacted instead of reconstructing the list from scratch.
         is_multimodal_input: Final = (
-            has_non_string_content(data)
-            or messages_were_skipped
-            or len(new_messages) < raw_message_count
-            or _has_non_maskable_message_fields(data)
-            or _has_combined_messages_and_input(data)
-            or _has_responses_instructions(data)
+            has_non_string_content(data) or _has_combined_messages_and_input(data) or _has_responses_instructions(data)
         )
 
         #########################################################
@@ -497,7 +523,19 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 2. Handle flagged content ##########
         #########################################################
         if lakera_guardrail_response.get("flagged") is True:
-            if self.on_flagged == "inject_system_message":
+            # PII-only violations get masked in place regardless of on_flagged: there's
+            # no reason to expose raw PII to satisfy an advisory note, and masking is
+            # strictly safer than either blocking or appending an advisory message next
+            # to unredacted PII.
+            if self._is_only_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
+                redacted_messages: Final = self._mask_pii_in_messages(
+                    messages=new_messages,
+                    lakera_response=lakera_guardrail_response,
+                    masked_entity_count=masked_entity_count,
+                )
+                _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
+                verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
+            elif self.on_flagged == "inject_system_message":
                 advisory_delivered: Final = self.inject_advisory_message(
                     data, self._build_advisory_message(lakera_guardrail_response)
                 )
@@ -511,18 +549,6 @@ class LakeraAIGuardrail(CustomGuardrail):
                     # blocking rather than silently letting the flagged request
                     # through with no advisory ever reaching the model.
                     raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
-            # If only PII violations exist, mask the PII (string input only).
-            elif self._is_only_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
-                redacted_messages: Final = self._mask_pii_in_messages(
-                    messages=new_messages,
-                    lakera_response=lakera_guardrail_response,
-                    masked_entity_count=masked_entity_count,
-                )
-                # Write back to ``messages`` AND ``input``. The Responses-API
-                # backend reads ``input``; writing only to ``messages``
-                # would let unredacted PII reach the LLM for /v1/responses.
-                apply_redacted_messages_back(data, list(redacted_messages))
-                verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
             else:
                 # Check on_flagged setting
                 if self.on_flagged == "monitor":
@@ -557,15 +583,13 @@ class LakeraAIGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        raw_message_count: Final = len(data.get("messages") or ())
-
         # Covers multimodal list content + Responses-API input/instructions.
         inspection_messages: Final = _build_lakera_inspection_messages(data)
         if not inspection_messages:
             verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in data")
             return
 
-        new_messages, messages_were_skipped = self._filter_skipped_messages(
+        new_messages, _ = self._filter_skipped_messages(
             inspection_messages  # pyright: ignore[reportArgumentType]  # build_inspection_messages returns plain dicts, not typed message unions
         )
         if not new_messages:
@@ -575,22 +599,13 @@ class LakeraAIGuardrail(CustomGuardrail):
             )
             return
 
-        # See ``async_pre_call_hook`` — multimodal input degrades to
-        # block-on-detect because mask-in-place would drop image parts; the
-        # same applies to any message excluded from ``new_messages`` before
-        # masking, whether by the skip flags or by build_inspection_messages
-        # dropping a no-text message, since writing the masked (shorter) list
-        # back would drop it from the outgoing request; and to any message
-        # carrying fields beyond role/content, since masking would rewrite it
-        # from a role/content-only synthetic dict; and to both messages and
-        # input being present together, per the same reasoning.
+        # See async_pre_call_hook for the full rationale: mask-in-place
+        # degrades to block-on-detect only for multimodal content or when
+        # messages and input are both present; everything else (skipped/no-text
+        # messages, extra chat fields) is handled safely by
+        # _apply_redacted_messages_back_preserving_fields's scope-index merge.
         is_multimodal_input: Final = (
-            has_non_string_content(data)
-            or messages_were_skipped
-            or len(new_messages) < raw_message_count
-            or _has_non_maskable_message_fields(data)
-            or _has_combined_messages_and_input(data)
-            or _has_responses_instructions(data)
+            has_non_string_content(data) or _has_combined_messages_and_input(data) or _has_responses_instructions(data)
         )
 
         #########################################################
@@ -606,7 +621,17 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 2. Handle flagged content ##########
         #########################################################
         if lakera_guardrail_response.get("flagged") is True:
-            if self.on_flagged == "inject_system_message":
+            # See async_pre_call_hook: PII-only violations get masked regardless of
+            # on_flagged, including inject_system_message, before any advisory logic.
+            if self._is_only_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
+                redacted_messages: Final = self._mask_pii_in_messages(
+                    messages=new_messages,
+                    lakera_response=lakera_guardrail_response,
+                    masked_entity_count=masked_entity_count,
+                )
+                _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
+                verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
+            elif self.on_flagged == "inject_system_message":
                 # during_call runs concurrently with the LLM dispatch (see
                 # ProxyLogging.during_call_hook / common_request_processing.py),
                 # with no pre-call barrier -- mutating data["messages"] here races
@@ -619,17 +644,6 @@ class LakeraAIGuardrail(CustomGuardrail):
                     "Lakera Guardrail: Advisory mode has no effect during during_call; "
                     "violation detected but allowing request"
                 )
-            elif self._is_only_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
-                redacted_messages: Final = self._mask_pii_in_messages(
-                    messages=new_messages,
-                    lakera_response=lakera_guardrail_response,
-                    masked_entity_count=masked_entity_count,
-                )
-                # Write back to ``messages`` AND ``input``. The Responses-API
-                # backend reads ``input``; writing only to ``messages``
-                # would let unredacted PII reach the LLM for /v1/responses.
-                apply_redacted_messages_back(data, list(redacted_messages))
-                verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
             else:
                 if self.on_flagged == "monitor":
                     verbose_proxy_logger.warning(

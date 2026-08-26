@@ -342,33 +342,62 @@ class TestPiiMaskingSafetyGuard:
         assert result["messages"][0]["content"] != USER_MSG["content"]
         assert "[MASKED" in result["messages"][0]["content"]
 
-    async def test_pii_only_violation_on_tool_message_blocks_instead_of_stripping_tool_call_id(self):
+    async def test_pii_only_violation_on_tool_message_masks_while_preserving_tool_call_id(self):
         """
-        Mask-in-place rewrites data["messages"] from a synthetic {role, content}
-        list built by build_inspection_messages, which has no tool_call_id field.
-        Masking a tool message here would silently strip it, producing a
-        malformed outgoing request; this must degrade to blocking instead."""
+        Regression (maintainer finding on BerriAI/litellm#34940): mask-in-place must
+        not degrade to blocking just because the masked message carries fields beyond
+        role/content. It must patch content in place on a copy of the original message,
+        preserving tool_call_id, rather than reconstructing from a role/content-only dict."""
         guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
         data = {
             "messages": [{"role": "tool", "content": "contact me at a@b.com", "tool_call_id": "call_123"}],
             "model": "gpt-3.5-turbo",
             "metadata": {},
         }
-        with (
-            patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call,
-            patch(
-                "litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.apply_redacted_messages_back"
-            ) as mock_apply_redacted,
-        ):
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
-            with pytest.raises(HTTPException):
-                await guardrail.async_pre_call_hook(
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
-                    cache=MagicMock(),
-                    data=data,
-                    call_type="completion",
-                )
-        mock_apply_redacted.assert_not_called()
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="completion",
+            )
+        assert "[MASKED" in result["messages"][0]["content"]
+        assert result["messages"][0]["content"] != "contact me at a@b.com"
+        assert result["messages"][0]["tool_call_id"] == "call_123"
+
+    async def test_pii_only_violation_preserves_tool_calls_none_and_name_and_cache_control(self):
+        """
+        Regression (maintainer finding on BerriAI/litellm#34940): a message carrying
+        tool_calls=None, name, or cache_control must not force a hard block either --
+        those fields must survive untouched on the masked message."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        data = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "contact me at a@b.com",
+                    "tool_calls": None,
+                    "name": "assistant_1",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="completion",
+            )
+        assert "[MASKED" in result["messages"][0]["content"]
+        assert result["messages"][0]["content"] != "contact me at a@b.com"
+        assert result["messages"][0]["tool_calls"] is None
+        assert result["messages"][0]["name"] == "assistant_1"
+        assert result["messages"][0]["cache_control"] == {"type": "ephemeral"}
 
     async def test_pii_only_violation_with_combined_messages_and_input_blocks_instead_of_masking(self):
         """
@@ -434,42 +463,19 @@ class TestPiiMaskingSafetyGuard:
                 )
         mock_apply_redacted.assert_not_called()
 
-    async def test_pii_only_violation_with_skipped_system_message_blocks_instead_of_masking(self):
+    async def test_pii_only_violation_with_skipped_system_message_masks_and_leaves_system_message_untouched(self):
+        """
+        Regression (maintainer finding on BerriAI/litellm#34940): setting
+        skip_system_message_in_guardrail must not flip every Lakera request to
+        hard-block. The skipped system message is out of Lakera's scope entirely
+        and must be left untouched; only the in-scope user message gets masked."""
         guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", skip_system_message_in_guardrail=True)
         data = {
             "messages": [SYSTEM_MSG.copy(), USER_MSG.copy()],
             "model": "gpt-3.5-turbo",
             "metadata": {},
         }
-        with (
-            patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call,
-            patch(
-                "litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.apply_redacted_messages_back"
-            ) as mock_apply_redacted,
-        ):
-            mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
-            with pytest.raises(HTTPException):
-                await guardrail.async_pre_call_hook(
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
-                    cache=MagicMock(),
-                    data=data,
-                    call_type="completion",
-                )
-        mock_apply_redacted.assert_not_called()
-
-    async def test_pii_only_violation_with_skipped_system_message_monitor_mode_does_not_mask_or_raise(self):
-        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor", skip_system_message_in_guardrail=True)
-        data = {
-            "messages": [SYSTEM_MSG.copy(), USER_MSG.copy()],
-            "model": "gpt-3.5-turbo",
-            "metadata": {},
-        }
-        with (
-            patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call,
-            patch(
-                "litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.apply_redacted_messages_back"
-            ) as mock_apply_redacted,
-        ):
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
@@ -477,14 +483,35 @@ class TestPiiMaskingSafetyGuard:
                 data=data,
                 call_type="completion",
             )
-        mock_apply_redacted.assert_not_called()
-        assert result["messages"][1]["content"] == USER_MSG["content"]
+        assert result["messages"][0] == SYSTEM_MSG
+        assert "[MASKED" in result["messages"][1]["content"]
+        assert result["messages"][1]["content"] != USER_MSG["content"]
 
-    async def test_pii_only_violation_with_empty_text_message_blocks_instead_of_masking(self):
-        """build_inspection_messages drops empty-text messages before the skip filter ever
-        sees them, so messages_were_skipped alone can't detect this drop. Masking in place
-        would still overwrite data["messages"] with the (shorter) inspected list, silently
-        losing the original empty-content message from the outgoing request."""
+    async def test_pii_only_violation_with_skipped_system_message_monitor_mode_still_masks(self):
+        """on_flagged="monitor" masks PII-only violations whenever it's safely
+        possible, same as "block" -- masking is strictly safer than passing PII
+        through unmasked just because the mode is monitor rather than block."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor", skip_system_message_in_guardrail=True)
+        data = {
+            "messages": [SYSTEM_MSG.copy(), USER_MSG.copy()],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="completion",
+            )
+        assert result["messages"][0] == SYSTEM_MSG
+        assert "[MASKED" in result["messages"][1]["content"]
+
+    async def test_pii_only_violation_with_empty_text_message_masks_and_leaves_it_untouched(self):
+        """build_inspection_messages drops empty-text messages before the skip filter
+        ever sees them. The scope-index merge must leave that untouched empty message
+        exactly where it was instead of losing it or degrading to a hard block."""
         guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
         empty_system_msg = {"role": "system", "content": ""}
         data = {
@@ -492,21 +519,42 @@ class TestPiiMaskingSafetyGuard:
             "model": "gpt-3.5-turbo",
             "metadata": {},
         }
-        with (
-            patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call,
-            patch(
-                "litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.apply_redacted_messages_back"
-            ) as mock_apply_redacted,
-        ):
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
-            with pytest.raises(HTTPException):
-                await guardrail.async_pre_call_hook(
-                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
-                    cache=MagicMock(),
-                    data=data,
-                    call_type="completion",
-                )
-        mock_apply_redacted.assert_not_called()
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="completion",
+            )
+        assert result["messages"][0] == empty_system_msg
+        assert "[MASKED" in result["messages"][1]["content"]
+        assert result["messages"][1]["content"] != USER_MSG["content"]
+
+    async def test_moderation_hook_pii_only_violation_masks_while_preserving_tool_call_id(self):
+        """
+        Same regression as async_pre_call_hook's tool_call_id test, but for
+        async_moderation_hook: an earlier round's replace_all fix only patched one of
+        the two near-identical call sites, so this pins the moderation hook's write-back
+        independently of the pre_call hook's."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block")
+        data = {
+            "messages": [{"role": "tool", "content": "contact me at a@b.com", "tool_call_id": "call_123"}],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
+            result = await guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                call_type="completion",
+            )
+        assert "[MASKED" in result["messages"][0]["content"]
+        assert result["messages"][0]["content"] != "contact me at a@b.com"
+        assert result["messages"][0]["tool_call_id"] == "call_123"
+
+
 class TestHumanizeLakeraBlockReasons:
     """Tests for humanize_lakera_block_reasons: breakdown -> plain-language reason string."""
 
@@ -821,16 +869,17 @@ class TestAdvisoryModeWiring:
         assert "messages" not in data
 
     @pytest.mark.asyncio
-    async def test_pre_call_pii_only_flag_appends_advisory_instead_of_masking(self):
+    async def test_pre_call_pii_only_flag_masks_instead_of_appending_advisory(self):
         """
-        Advisory mode never rewrites messages beyond appending, so a PII-only
-        flag must NOT be masked in place; the original text must reach the LLM
-        unchanged alongside the advisory note.
+        Regression (maintainer finding on BerriAI/litellm#34940): advisory mode must
+        not ship raw unmasked PII to the model just because inject_system_message is
+        configured. A PII-only violation gets masked in place, same as block/monitor
+        mode, with no advisory note appended -- masking already resolved the concern.
         """
         lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
         mock_response = {
             "flagged": True,
-            "payload": [{"detector_type": "pii/email", "start": 11, "end": 26}],
+            "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 0}],
             "breakdown": [{"detector_type": "pii/email", "detected": True}],
         }
         original_content = "My email is test@example.com"
@@ -850,9 +899,9 @@ class TestAdvisoryModeWiring:
                 call_type="completion",
             )
 
-        assert result["messages"][0]["content"] == original_content, "PII must not be masked in advisory mode"
-        assert len(result["messages"]) == 2
-        assert result["messages"][1]["role"] == "system"
+        assert "[MASKED" in result["messages"][0]["content"]
+        assert result["messages"][0]["content"] != original_content
+        assert len(result["messages"]) == 1, "no advisory note should be appended once PII is masked"
 
     @pytest.mark.asyncio
     async def test_moderation_hook_inspects_all_message_roles_not_just_user(self):
@@ -913,6 +962,38 @@ class TestAdvisoryModeWiring:
 
         assert len(result["messages"]) == 2
         assert all(m["role"] != "system" or m["content"] == "You are a helpful assistant." for m in result["messages"])
+
+    @pytest.mark.asyncio
+    async def test_moderation_hook_pii_only_flag_masks_instead_of_letting_raw_pii_through(self):
+        """
+        Regression (maintainer finding on BerriAI/litellm#34940): before this fix, a
+        PII-only violation under on_flagged="inject_system_message" hit the during_call
+        no-op branch (advisory has no effect here) and let the raw PII through
+        completely unmasked. It must mask instead, same as async_pre_call_hook.
+        """
+        lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        mock_response = {
+            "flagged": True,
+            "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 0}],
+            "breakdown": [{"detector_type": "pii/email", "detected": True}],
+        }
+        original_content = "My email is test@example.com"
+
+        with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (mock_response, {})
+            data = {
+                "messages": [{"role": "user", "content": original_content}],
+                "model": "gpt-5-mini",
+                "metadata": {},
+            }
+            result = await lakera_guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                call_type="completion",
+            )
+
+        assert "[MASKED" in result["messages"][0]["content"]
+        assert result["messages"][0]["content"] != original_content
 
 
 class TestAdvisoryModePostCall:
