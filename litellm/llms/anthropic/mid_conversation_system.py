@@ -26,7 +26,7 @@ Anthropic wire shape is built later by ``anthropic_messages_pt``.
 
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import groupby
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from litellm.types.llms.anthropic import AnthropicMessagesSystemMessageParam, AnthropicSystemMessageContent
 from litellm.types.llms.openai import (
@@ -44,8 +44,8 @@ CONVERTED_SYSTEM_NOTE: Final = (
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 
-_MessageKind = Literal["system", "tool", "user", "other"]
-_TextPart = tuple[str, ChatCompletionCachedContent | None]
+_MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
+_TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
 
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
