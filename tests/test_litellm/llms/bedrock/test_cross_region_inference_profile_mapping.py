@@ -293,15 +293,16 @@ def test_bedrock_gpt_5_6_advertises_only_converse_supported_features(
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_offers_tools_but_not_reasoning(profile, local_model_cost_map):
-    """Converse rejects the Anthropic-shaped thinking block LiteLLM emits for
-    reasoning_effort, so neither reasoning param may be offered yet, while the tool
-    params these models do accept must be."""
+def test_bedrock_gpt_5_6_offers_tools_and_reasoning_effort_but_not_thinking(profile, local_model_cost_map):
+    """GPT-5.x on Converse maps reasoning_effort to reasoning.effort, so reasoning_effort
+    is offered while the Anthropic-only thinking/output_config are not, alongside the tool
+    params these models accept."""
     supported = AmazonConverseConfig().get_supported_openai_params(
         model=f"bedrock/{profile.model_id}"
     )
 
     assert "tools" in supported
     assert "tool_choice" in supported
-    assert "reasoning_effort" not in supported
+    assert "reasoning_effort" in supported
     assert "thinking" not in supported
+    assert "output_config" not in supported
