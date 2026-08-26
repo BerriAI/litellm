@@ -4742,6 +4742,55 @@ async def test_add_router_settings_from_db_config_merge_logic():
 
 
 @pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_config_fallbacks():
+    """
+    Regression test for DB router_settings rows carrying explicit empty lists
+    (e.g. {"fallbacks": []} written by the dashboard's delete-last-fallback flow):
+    empty lists are "no value" and must not clobber config.yaml fallbacks,
+    matching _deep_merge_dicts semantics. Non-empty DB lists still win.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {
+        "router_settings": {
+            "fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "context_window_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "content_policy_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+        }
+    }
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "fallbacks": [],
+        "context_window_fallbacks": [],
+        "content_policy_fallbacks": [{"gpt-oss-120b": ["other-model"]}],
+        "model_group_alias": {},
+        "num_retries": 3,
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["other-model"]}]
+    assert combined_settings["num_retries"] == 3
+
+
+@pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_edge_cases():
     """
     Test edge cases for _add_router_settings_from_db_config method.
