@@ -14,6 +14,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_error_info,
 )
 from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
@@ -35,6 +36,101 @@ else:
 # Status codes a generic API call's caller-supplied resource id can trigger on its own
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
 _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
+_ROUTER_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
+_TEAM_ID_METADATA_KEY: Final = "user_api_key_team_id"
+_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedMetadataContext:
+    """Proxy-authenticated metadata that fallback overrides must not replace."""
+
+    team_source_bucket: str | None = None
+    api_key_auth_source_bucket: str | None = None
+    user_api_key_auth: Any = None
+    has_user_api_key_auth: bool = False
+
+
+def get_authenticated_team_context(
+    request_kwargs: Mapping[str, Any],
+) -> tuple[str | None, AuthenticatedMetadataContext]:
+    """Return authenticated team and API-key context before fallback overrides."""
+    authenticated_team_id: str | None = None
+    team_source_bucket: str | None = None
+    api_key_auth_source_bucket: str | None = None
+    user_api_key_auth: Any = None
+    has_user_api_key_auth = False
+
+    for bucket_name in _ROUTER_METADATA_BUCKETS:
+        bucket = request_kwargs.get(bucket_name)
+        if not isinstance(bucket, Mapping):
+            continue
+        if authenticated_team_id is None:
+            team_id = bucket.get(_TEAM_ID_METADATA_KEY)
+            if isinstance(team_id, str):
+                authenticated_team_id = team_id
+                team_source_bucket = bucket_name
+        if not has_user_api_key_auth and _API_KEY_AUTH_METADATA_KEY in bucket:
+            user_api_key_auth = bucket.get(_API_KEY_AUTH_METADATA_KEY)
+            api_key_auth_source_bucket = bucket_name
+            has_user_api_key_auth = True
+
+    return authenticated_team_id, AuthenticatedMetadataContext(
+        team_source_bucket=team_source_bucket,
+        api_key_auth_source_bucket=api_key_auth_source_bucket,
+        user_api_key_auth=user_api_key_auth,
+        has_user_api_key_auth=has_user_api_key_auth,
+    )
+
+
+def preserve_authenticated_team_context(
+    request_kwargs: dict[str, Any],
+    authenticated_team_id: str | None,
+    source_bucket: AuthenticatedMetadataContext | str | None,
+) -> None:
+    """Keep proxy-authenticated team/API-key metadata authoritative across fallbacks."""
+    context = (
+        source_bucket
+        if isinstance(source_bucket, AuthenticatedMetadataContext)
+        else AuthenticatedMetadataContext(team_source_bucket=source_bucket)
+    )
+
+    for bucket_name in _ROUTER_METADATA_BUCKETS:
+        bucket = request_kwargs.get(bucket_name)
+        if not isinstance(bucket, Mapping):
+            continue
+        updated_bucket = dict(bucket)
+        if authenticated_team_id is None:
+            updated_bucket.pop(_TEAM_ID_METADATA_KEY, None)
+        else:
+            updated_bucket[_TEAM_ID_METADATA_KEY] = authenticated_team_id
+        if context.has_user_api_key_auth:
+            updated_bucket[_API_KEY_AUTH_METADATA_KEY] = context.user_api_key_auth
+        else:
+            updated_bucket.pop(_API_KEY_AUTH_METADATA_KEY, None)
+        request_kwargs[bucket_name] = updated_bucket
+
+    if authenticated_team_id is not None:
+        authoritative_bucket = (
+            context.team_source_bucket
+            if context.team_source_bucket in _ROUTER_METADATA_BUCKETS
+            else "metadata"
+        )
+        bucket = request_kwargs.get(authoritative_bucket)
+        updated_bucket = dict(bucket) if isinstance(bucket, Mapping) else {}
+        updated_bucket[_TEAM_ID_METADATA_KEY] = authenticated_team_id
+        request_kwargs[authoritative_bucket] = updated_bucket
+
+    if context.has_user_api_key_auth:
+        authoritative_bucket = (
+            context.api_key_auth_source_bucket
+            if context.api_key_auth_source_bucket in _ROUTER_METADATA_BUCKETS
+            else "metadata"
+        )
+        bucket = request_kwargs.get(authoritative_bucket)
+        updated_bucket = dict(bucket) if isinstance(bucket, Mapping) else {}
+        updated_bucket[_API_KEY_AUTH_METADATA_KEY] = context.user_api_key_auth
+        request_kwargs[authoritative_bucket] = updated_bucket
 
 
 def _trigger_cooldown_for_failed_deployment(
@@ -60,10 +156,6 @@ def _trigger_cooldown_for_failed_deployment(
 
         exception_status: Final[str | int] = getattr(exception, "status_code", "")
 
-        # Generic API calls (files, batches, threads, rerank, ...) take a caller-supplied
-        # resource id, so a 404 there usually means "that id doesn't exist" rather than
-        # "this deployment is unhealthy". Left unguarded, one bad id would 404 every
-        # deployment in the fallback chain and cool all of them down from a single request.
         if (
             kwargs.get("original_generic_function") is not None
             and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES
@@ -75,10 +167,6 @@ def _trigger_cooldown_for_failed_deployment(
             )
             return
 
-        # The proxy's `x-litellm-timeout` header lets a caller set an arbitrarily short
-        # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
-        # actual health. Left unguarded, a caller could force a 408 on every deployment in
-        # the fallback chain from a single request with a near-zero timeout.
         if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: a caller-supplied "
@@ -86,19 +174,12 @@ def _trigger_cooldown_for_failed_deployment(
             )
             return
 
-        # Only Router._set_failed_deployment_id_on_exception()'s server-stamped id is
-        # trusted here: a metadata-bucket lookup (e.g. "metadata"/"litellm_metadata")
-        # can't reliably tell a caller-supplied bucket from a router-authored one
-        # without knowing this call's function_name, so a client with permission to
-        # set metadata could otherwise get an arbitrary deployment cooled down.
         deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
 
         if deployment_id is None:
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
 
-        # Priority: deployment config > response header > router default, matching
-        # Router.deployment_callback_on_failure's precedence for the primary path.
         deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
         deployment_cooldown: Final = (
             _first_present(
@@ -170,15 +251,7 @@ def fallback_attempt_key(fallback_target: object) -> str | None:
 
 @dataclass(slots=True)
 class AttemptedFallbackTargets:
-    """
-    The fallback attempts a single request has already made.
-
-    One instance is created on the first fallback hop and shared by reference for the rest
-    of the walk, so an attempt made in one branch is not repeated in a sibling branch.
-    Without it the walk enumerates paths rather than attempts: a fallback graph containing
-    a cycle retries one deterministic failure once per path through the cycle, and a
-    client-side fallback list is re-walked at every level of the recursion.
-    """
+    """The fallback attempts a single request has already made."""
 
     keys: frozenset[str] = frozenset()
 
@@ -190,18 +263,6 @@ class AttemptedFallbackTargets:
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
-    """
-    Handles wildcard routing scenario
-
-    where fallbacks set like:
-    [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
-
-    but model_group is like:
-    "openai/gpt-3.5-turbo"
-
-    Returns:
-    - True if the stripped model group == fallback_key
-    """
     for provider in litellm.provider_list:
         if isinstance(provider, Enum):
             _provider = provider.value
@@ -215,34 +276,20 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
 
 
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
-    """
-    Returns:
-    - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
-    - generic_fallback_idx: int of the index of the generic fallback in the fallbacks list.
-
-    Checks:
-    - exact match
-    - stripped model group match
-    - generic fallback
-    """
     generic_fallback_idx: int | None = None
     stripped_model_fallback: list[str] | None = None
     fallback_model_group: list[str] | None = None
-    ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
-            if list(item.keys())[0] == model_group:  # check exact match
+            if list(item.keys())[0] == model_group:
                 fallback_model_group = item[model_group]
                 break
-            elif _check_stripped_model_group(
-                model_group=model_group, fallback_key=list(item.keys())[0]
-            ):  # check generic fallback
+            elif _check_stripped_model_group(model_group=model_group, fallback_key=list(item.keys())[0]):
                 stripped_model_fallback = item[list(item.keys())[0]]
-            elif list(item.keys())[0] == "*":  # check generic fallback
+            elif list(item.keys())[0] == "*":
                 generic_fallback_idx = idx
         elif isinstance(item, str):
             fallback_model_group = [item]
-    ## if none, check for generic fallback
     if fallback_model_group is None:
         if stripped_model_fallback is not None:
             fallback_model_group = stripped_model_fallback
@@ -264,26 +311,10 @@ def _get_fallback_target_model_group(fallback_entry: str | Mapping[str, object])
 
 
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
-    """
-    True when the request names a file that only exists under one provider's credentials.
-
-    Batch and fine-tuning jobs are created from a file the caller already uploaded, and
-    that file lives in the account of the deployment that stored it. Handing the id to a
-    different model group can only fail, and the second provider's error replaces the
-    error the caller actually needs to see.
-    """
     return any(kwargs.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS)
 
 
 def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
-    """
-    True when the request creates a resource that will live under one provider's credentials.
-
-    A file uploaded for batches or fine-tuning is stored in the account of the deployment
-    that handled it, and its id is only usable against the model group the caller named.
-    Letting the upload fall back to a different model group silently stores the file with
-    the wrong provider, and every later use of the returned id fails.
-    """
     return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
@@ -298,35 +329,6 @@ async def run_async_fallback(
     include_fallback_errors: bool = False,
     **kwargs,
 ) -> Any:
-    """
-    Loops through all the fallback model groups and calls kwargs["original_function"] with the arguments and keyword arguments provided.
-
-    If the call is successful, it logs the success and returns the response.
-    If the call fails, it logs the failure and continues to the next fallback model group.
-    If all fallback model groups fail, it raises the most recent exception.
-
-    Args:
-        litellm_router: The litellm router instance.
-        *args: Positional arguments.
-        fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
-        original_model_group: The original model group. example: "gpt-3.5-turbo"
-        original_exception: The original exception.
-        **kwargs: Keyword arguments. `attempted_targets` carries the fallback attempts
-            already made for this request, created on the first hop and shared by reference
-            for the rest of the walk. A target already in it is skipped, so neither a
-            fallback graph that loops back on itself nor a client-side fallback list
-            re-walked at each level can repeat an attempt that has already failed. Identity
-            comes from `fallback_attempt_key`, so an entry that overrides request params or
-            re-targets the failed group with a different deployment selection stays distinct
-            from a bare name.
-
-    Returns:
-        The response from the successful fallback model group.
-    Raises:
-        The most recent exception if all fallback model groups fail.
-    """
-
-    ### BASE CASE ### MAX FALLBACK DEPTH REACHED
     if fallback_depth >= max_fallbacks:
         raise original_exception
 
@@ -335,12 +337,14 @@ async def run_async_fallback(
     metadata_variable_name: Final = _get_router_metadata_variable_name(
         function_name=getattr(kwargs.get("original_function"), "__name__", None)
     )
+    authenticated_team_id, authenticated_team_bucket = get_authenticated_team_context(kwargs)
     same_model_group_only: Final = references_provider_scoped_resource(kwargs) or creates_provider_scoped_resource(
         kwargs
     )
-    # Read out of kwargs and narrowed here rather than declared as a parameter: every caller
-    # reaches this function by spreading a loosely-typed kwargs dict, so a declared parameter
-    # would carry an annotation that no call site can actually be checked against.
+    alias_map: Final = getattr(litellm_router, "model_group_alias", None)
+    canonical_original_model_group: Final = (
+        resolve_model_group_alias(alias_map, original_model_group) or original_model_group
+    )
     carried_targets: Final = kwargs.get("attempted_targets")
     attempted: Final = (
         carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
@@ -348,9 +352,15 @@ async def run_async_fallback(
     attempted.record(original_model_group)
 
     for mg in fallback_model_group:
-        if mg == original_model_group:
+        target_model_group: Final = _get_fallback_target_model_group(mg)
+        canonical_target_model_group: Final = (
+            resolve_model_group_alias(alias_map, target_model_group) or target_model_group
+            if isinstance(target_model_group, str)
+            else None
+        )
+        if isinstance(mg, str) and canonical_target_model_group == canonical_original_model_group:
             continue
-        if same_model_group_only and _get_fallback_target_model_group(mg) != original_model_group:
+        if same_model_group_only and canonical_target_model_group != canonical_original_model_group:
             verbose_router_logger.info(
                 "Skipping fallback to model_group = %s: request is pinned to model_group = %s by its uploaded file",
                 mask_sensitive_structure(mg),
@@ -367,13 +377,21 @@ async def run_async_fallback(
                 continue
             attempted.record(attempt_key)
         try:
-            # LOGGING
+            # Deployment exclusions belong to the fallback target that just failed.
+            # Keep them through that target's retries, then clear them only when
+            # advancing to a distinct trusted fallback target.
+            kwargs.pop("_excluded_deployment_ids", None)
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info("Falling back to model_group = %s", mask_sensitive_structure(mg))
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
                 kwargs.update(mg)
+            preserve_authenticated_team_context(
+                request_kwargs=kwargs,
+                authenticated_team_id=authenticated_team_id,
+                source_bucket=authenticated_team_bucket,
+            )
             fallback_depth = fallback_depth + 1
             kwargs[metadata_variable_name] = {
                 "original_model_group": original_model_group,
@@ -393,7 +411,6 @@ async def run_async_fallback(
                 attempted_fallbacks=fallback_depth,
                 fallback_errors=(list(fallback_errors) if include_fallback_errors else None),
             )
-            # callback for successfull_fallback_event():
             await log_success_fallback_event(
                 original_model_group=original_model_group,
                 kwargs=kwargs,
@@ -419,22 +436,7 @@ async def run_async_fallback(
 
 
 async def log_success_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
-    """
-    Log a successful fallback event to all registered callbacks.
-
-    Uses LoggingCallbackManager.get_custom_loggers_for_type() to get deduplicated
-    CustomLogger instances from all callback lists.
-
-    Args:
-        original_model_group (str): The original model group before fallback.
-        kwargs (dict): kwargs for the request
-
-    Note:
-        Errors during logging are caught and reported but do not interrupt the process.
-    """
-    # Get deduplicated CustomLogger instances from all callback lists
     custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
-
     for _callback_custom_logger in custom_loggers:
         try:
             await _callback_custom_logger.log_success_fallback_event(
@@ -447,22 +449,7 @@ async def log_success_fallback_event(original_model_group: str, kwargs: dict, or
 
 
 async def log_failure_fallback_event(original_model_group: str, kwargs: dict, original_exception: Exception):
-    """
-    Log a failed fallback event to all registered callbacks.
-
-    Uses LoggingCallbackManager.get_custom_loggers_for_type() to get deduplicated
-    CustomLogger instances from all callback lists.
-
-    Args:
-        original_model_group (str): The original model group before fallback.
-        kwargs (dict): kwargs for the request
-
-    Note:
-        Errors during logging are caught and reported but do not interrupt the process.
-    """
-    # Get deduplicated CustomLogger instances from all callback lists
     custom_loggers: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
-
     for _callback_custom_logger in custom_loggers:
         try:
             await _callback_custom_logger.log_failure_fallback_event(
@@ -474,30 +461,32 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
             verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
 
 
+def _is_non_standard_fallback_target(item: Any) -> bool:
+    if isinstance(item, str):
+        return True
+    if not isinstance(item, dict):
+        return False
+    return "model" in item
+
+
+def _is_unambiguous_direct_fallback_dict(item: Any) -> bool:
+    if not isinstance(item, dict) or "model" not in item:
+        return False
+    model = item.get("model")
+    if not isinstance(model, list):
+        return True
+    return any(key != "model" and not isinstance(value, list) for key, value in item.items())
+
+
 def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
-    """
-    Checks if the fallbacks list is a list of strings or a list of dictionaries.
-
-    If
-    - List[str]: e.g. ["claude-3-haiku", "openai/o-1"]
-    - List[Dict[<LiteLLMParamsTypedDict>, Any]]: e.g. [{"model": "claude-3-haiku", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]
-
-    If [{"gpt-3.5-turbo": ["claude-3-haiku"]}] then standard format.
-    """
+    """Check whether ``fallbacks`` is a direct ordered list of fallback targets."""
     if fallbacks is None or not isinstance(fallbacks, list) or len(fallbacks) == 0:
         return False
-    if all(isinstance(item, str) for item in fallbacks):
+    if not all(_is_non_standard_fallback_target(item) for item in fallbacks):
+        return False
+    if any(isinstance(item, str) for item in fallbacks):
         return True
-    elif all(isinstance(item, dict) for item in fallbacks):
-        for item in fallbacks:
-            for key in LiteLLMParamsTypedDict.__annotations__:
-                if key in item:
-                    # If the value is a list, it's likely a standard fallback model group mapping
-                    # (e.g. {"model": ["backup"]}) rather than a parameter override.
-                    if not isinstance(item[key], list):
-                        return True
-
-    return False
+    return any(_is_unambiguous_direct_fallback_dict(item) for item in fallbacks)
 
 
 def run_non_standard_fallback_format(fallbacks: list[str] | list[dict[str, Any]], model_group: str):

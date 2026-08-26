@@ -7,7 +7,15 @@ from fastapi import HTTPException, status
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.router_utils.common_utils import _is_proxy_admin_request
+from litellm.router_utils.common_utils import _is_proxy_admin_request, resolve_model_group_alias
+from litellm.router_utils.fallback_event_handlers import (
+    _check_non_standard_fallback_format,
+    creates_provider_scoped_resource,
+    get_authenticated_team_context,
+    get_fallback_model_group,
+    preserve_authenticated_team_context,
+    references_provider_scoped_resource,
+)
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -26,6 +34,22 @@ GATED_MOCK_PARAM_NAMES: Final[tuple[str, ...]] = (
 )
 
 MOCK_TESTING_CONFIG_KEY: Final = "dangerously_allow_mock_testing_request_params"
+
+EVAL_ROUTE_TYPES: Final = frozenset(
+    {
+        "acreate_eval",
+        "alist_evals",
+        "aget_eval",
+        "aupdate_eval",
+        "adelete_eval",
+        "acancel_eval",
+        "acreate_run",
+        "alist_runs",
+        "aget_run",
+        "acancel_run",
+        "adelete_run",
+    }
+)
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -55,13 +79,244 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
-def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, team_id: str | None) -> None:
+def _deployment_ids(deployments: Any) -> set[str]:
+    """Return deployment IDs from either Router healthy-deployment shape."""
+    deployment_list = [deployments] if isinstance(deployments, Mapping) else deployments
+    if not isinstance(deployment_list, list):
+        return set()
+
+    deployment_ids: set[str] = set()
+    for deployment in deployment_list:
+        if not isinstance(deployment, Mapping):
+            continue
+        model_info = deployment.get("model_info")
+        if not isinstance(model_info, Mapping):
+            continue
+        deployment_id = model_info.get("id")
+        if isinstance(deployment_id, str) and deployment_id:
+            deployment_ids.add(deployment_id)
+    return deployment_ids
+
+
+def _expand_fallback_target(fallback_target: Any) -> list[str | dict[str, Any]]:
+    """Expand a list-valued direct fallback into ordered concrete candidates."""
+    if isinstance(fallback_target, str):
+        return [fallback_target]
+    if not isinstance(fallback_target, Mapping):
+        return []
+
+    fallback_model = fallback_target.get("model")
+    if isinstance(fallback_model, str):
+        return [dict(fallback_target)]
+    if not isinstance(fallback_model, list) or not fallback_model:
+        return []
+    if not all(isinstance(candidate, str) and candidate for candidate in fallback_model):
+        return []
+
+    return [{**fallback_target, "model": candidate} for candidate in fallback_model]
+
+
+def _expand_fallback_tail(fallback_targets: list[Any]) -> list[Any]:
+    """Expand list-valued direct targets before handing the trusted tail to runtime."""
+    expanded_targets: list[Any] = []
+    for fallback_target in fallback_targets:
+        candidates = _expand_fallback_target(fallback_target)
+        if candidates:
+            expanded_targets.extend(candidates)
+        else:
+            expanded_targets.append(fallback_target)
+    return expanded_targets
+
+
+async def _get_available_fallback_request(
+    llm_router: LitellmRouter,
+    model_name: str,
+    team_id: str | None,
+    request_data: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return a trusted request targeting the first executable server fallback."""
+    if request_data.get("disable_fallbacks") is True:
+        return None
+
+    max_fallbacks: Final = request_data.get("max_fallbacks", getattr(llm_router, "max_fallbacks", None))
+    if max_fallbacks == 0:
+        return None
+
+    fallbacks: Final = getattr(llm_router, "fallbacks", None)
+    if not isinstance(fallbacks, list):
+        return None
+
+    router_model_list: Final = getattr(llm_router, "model_list", None)
+    if not isinstance(router_model_list, list):
+        return None
+    router_deployment_ids: Final = _deployment_ids(router_model_list)
+    # Runtime enforcement below is fail-closed: every Router deployment must have
+    # an ID so an unvalidated target cannot escape the exclusion boundary.
+    if len(router_deployment_ids) != len(router_model_list):
+        return None
+
+    if _check_non_standard_fallback_format(fallbacks):
+        fallback_model_group = fallbacks
+    else:
+        fallback_model_group, _ = get_fallback_model_group(
+            fallbacks=fallbacks,
+            model_group=model_name,
+        )
+    if not isinstance(fallback_model_group, list):
+        return None
+
+    same_model_group_only: Final = references_provider_scoped_resource(
+        request_data
+    ) or creates_provider_scoped_resource(request_data)
+    alias_map: Final = getattr(llm_router, "model_group_alias", None)
+    canonical_model_group: Final = resolve_model_group_alias(alias_map, model_name) or model_name
+    _, authenticated_team_bucket = get_authenticated_team_context(request_data)
+
+    for fallback_index, fallback_target in enumerate(fallback_model_group):
+        fallback_candidates = _expand_fallback_target(fallback_target)
+        for candidate_index, candidate_target in enumerate(fallback_candidates):
+            # Both copies start without caller-supplied fallbacks. ``fallback_request``
+            # is disposable preflight state; ``runtime_request`` is the trusted request
+            # we will hand to the Router if this server-configured target is eligible.
+            runtime_request: dict[str, Any] = dict(request_data)
+            runtime_request.pop("fallbacks", None)
+            fallback_request: dict[str, Any] = dict(runtime_request)
+
+            if isinstance(candidate_target, str):
+                fallback_model = candidate_target
+                canonical_fallback_model = resolve_model_group_alias(alias_map, fallback_model) or fallback_model
+                if canonical_fallback_model == canonical_model_group:
+                    continue
+            else:
+                fallback_model = candidate_target["model"]
+                canonical_fallback_model = resolve_model_group_alias(alias_map, fallback_model) or fallback_model
+                fallback_request.update(candidate_target)
+                runtime_request.update(candidate_target)
+
+            if same_model_group_only and canonical_fallback_model != canonical_model_group:
+                continue
+
+            fallback_request["model"] = fallback_model
+            runtime_request["model"] = fallback_model
+            preserve_authenticated_team_context(
+                request_kwargs=fallback_request,
+                authenticated_team_id=team_id,
+                source_bucket=authenticated_team_bucket,
+            )
+            preserve_authenticated_team_context(
+                request_kwargs=runtime_request,
+                authenticated_team_id=team_id,
+                source_bucket=authenticated_team_bucket,
+            )
+
+            try:
+                fallback_messages = fallback_request.get("messages")
+                fallback_input = fallback_request.get("input")
+                pre_routing_hook_response = await llm_router.async_pre_routing_hook(
+                    model=fallback_model,
+                    request_kwargs=fallback_request,
+                    messages=fallback_messages,
+                    input=fallback_input,
+                    specific_deployment=False,
+                )
+                if pre_routing_hook_response is not None:
+                    fallback_model = pre_routing_hook_response.model
+                    fallback_messages = pre_routing_hook_response.messages
+                    if pre_routing_hook_response.litellm_params is not None:
+                        fallback_request.update(pre_routing_hook_response.litellm_params)
+                        preserve_authenticated_team_context(
+                            request_kwargs=fallback_request,
+                            authenticated_team_id=team_id,
+                            source_bucket=authenticated_team_bucket,
+                        )
+
+                healthy_deployments = await llm_router.async_get_healthy_deployments(
+                    model=fallback_model,
+                    request_kwargs=fallback_request,
+                    messages=fallback_messages,
+                    input=fallback_input,
+                )
+            except Exception:
+                continue
+
+            validated_deployment_ids: Final = _deployment_ids(healthy_deployments)
+            if not validated_deployment_ids:
+                continue
+
+            # ``async_get_available_deployment`` invokes the pre-routing hook again at
+            # runtime. A stateful strategy can therefore return a different target on
+            # the second invocation. Router already supports a one-shot exclusion list
+            # that is consumed by the next healthy-deployment lookup; restrict that
+            # lookup to deployments that actually passed this preflight validation.
+            existing_exclusions = runtime_request.get("_excluded_deployment_ids")
+            excluded_deployment_ids = (
+                {deployment_id for deployment_id in existing_exclusions if isinstance(deployment_id, str)}
+                if isinstance(existing_exclusions, (list, tuple, set, frozenset))
+                else set()
+            )
+            excluded_deployment_ids.update(router_deployment_ids - validated_deployment_ids)
+            runtime_request["_excluded_deployment_ids"] = sorted(excluded_deployment_ids)
+
+            # We are consuming the first fallback hop here instead of letting the
+            # blocked primary enter normal Router selection. Preserve the remaining
+            # candidates from a list-valued target before later trusted fallbacks,
+            # unless the selected server-side dict supplied its own fallback chain.
+            if "fallbacks" not in runtime_request:
+                remaining_candidates = fallback_candidates[candidate_index + 1 :]
+                later_fallbacks = _expand_fallback_tail(fallback_model_group[fallback_index + 1 :])
+                runtime_request["fallbacks"] = [*remaining_candidates, *later_fallbacks]
+            fallback_depth = request_data.get("fallback_depth", 0)
+            runtime_request["fallback_depth"] = fallback_depth + 1 if isinstance(fallback_depth, int) else 1
+            return runtime_request
+
+    return None
+
+
+async def _has_available_fallback(
+    llm_router: LitellmRouter,
+    model_name: str,
+    team_id: str | None,
+    request_data: Mapping[str, Any],
+) -> bool:
+    """Return whether a server-configured fallback is eligible for this request at runtime."""
+    return (
+        await _get_available_fallback_request(
+            llm_router=llm_router,
+            model_name=model_name,
+            team_id=team_id,
+            request_data=request_data,
+        )
+        is not None
+    )
+
+
+async def _raise_if_model_fully_blocked(
+    llm_router: LitellmRouter,
+    model_name: Any,
+    team_id: str | None,
+    request_data: dict[str, Any],
+    *,
+    allow_router_fallback: bool = True,
+) -> None:
     if not isinstance(model_name, str) or not model_name:
         return
     if not isinstance(llm_router, litellm.Router):
         return
     deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
-    if llm_router._are_all_deployments_blocked(deployments):
+    if not llm_router._are_all_deployments_blocked(deployments):
+        return
+
+    fallback_request = (
+        await _get_available_fallback_request(
+            llm_router=llm_router,
+            model_name=model_name,
+            team_id=team_id,
+            request_data=request_data,
+        )
+        if allow_router_fallback
+        else None
+    )
+    if fallback_request is None:
         raise litellm.PermissionDeniedError(
             message="Model is blocked",
             model=model_name,
@@ -71,6 +326,13 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, te
                 request=httpx.Request(method="POST", url="https://github.com/BerriAI/litellm"),
             ),
         )
+
+    # Never send the fully blocked primary back through normal Router selection:
+    # a request-dependent pre-routing strategy/plugin could otherwise rewrite it
+    # into a non-fallback model that was never authorized. The request now targets
+    # the first executable server-configured fallback validated above.
+    request_data.clear()
+    request_data.update(fallback_request)
 
 
 ROUTE_ENDPOINT_MAPPING: Final = {
@@ -528,29 +790,22 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         for key in per_request_settings:
             if key in override_settings and key not in data:
                 data[key] = override_settings[key]
-
         # Use main router with overridden kwargs
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
-        _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
+        await _raise_if_model_fully_blocked(
+            llm_router=llm_router,
+            model_name=data.get("model"),
+            team_id=team_id,
+            request_data=data,
+            allow_router_fallback=route_type not in EVAL_ROUTE_TYPES,
+        )
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
-        if route_type in [
-            "acreate_eval",
-            "alist_evals",
-            "aget_eval",
-            "aupdate_eval",
-            "adelete_eval",
-            "acancel_eval",
-            "acreate_run",
-            "alist_runs",
-            "aget_run",
-            "acancel_run",
-            "adelete_run",
-        ]:
+        if route_type in EVAL_ROUTE_TYPES:
             # If a model is provided, get its credentials from the router
             model: Final = data.get("model")
             if model and llm_router:

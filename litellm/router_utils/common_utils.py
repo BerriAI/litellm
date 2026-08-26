@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+_RETRY_SCOPED_EXCLUSION_STATE_KEY: Final = "_retry_scoped_excluded_deployment_ids"
+
 
 def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
     if request_kwargs is None:
@@ -103,7 +105,11 @@ def filter_team_based_models(
     """
     If a model has a team_id
 
-    Only use if request is from that team
+    Only use if request is from that team. Router-internal deployment exclusions
+    are also enforced here so the single-dict specific-deployment shape cannot
+    bypass the same exclusion boundary applied to model-group lists. Exclusions
+    persist across retries of the same target and are cleared only when fallback
+    execution advances to the next trusted target.
     """
     if request_kwargs is None:
         return healthy_deployments
@@ -111,7 +117,56 @@ def filter_team_based_models(
     metadata: Final = request_kwargs.get("metadata") or {}
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
     request_team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
-    if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
+
+    # Router health selection consumes ``_excluded_deployment_ids`` after this
+    # filter runs. Keep a retry-scoped copy keyed by fallback depth so every
+    # retry of the same trusted target restores the preflight boundary, while
+    # advancing to the next fallback depth naturally discards the old state.
+    fallback_depth: Final = request_kwargs.get("fallback_depth")
+    raw_excluded_deployment_ids = request_kwargs.get("_excluded_deployment_ids")
+    retry_state: Final = request_kwargs.get(_RETRY_SCOPED_EXCLUSION_STATE_KEY)
+    if isinstance(raw_excluded_deployment_ids, (list, tuple, set, frozenset)):
+        persisted_ids: Final = [
+            deployment_id for deployment_id in raw_excluded_deployment_ids if isinstance(deployment_id, str)
+        ]
+        request_kwargs[_RETRY_SCOPED_EXCLUSION_STATE_KEY] = {
+            "fallback_depth": fallback_depth,
+            "deployment_ids": persisted_ids,
+        }
+    elif isinstance(retry_state, Mapping) and retry_state.get("fallback_depth") == fallback_depth:
+        persisted_ids_value: Final = retry_state.get("deployment_ids")
+        if isinstance(persisted_ids_value, (list, tuple, set, frozenset)):
+            raw_excluded_deployment_ids = [
+                deployment_id for deployment_id in persisted_ids_value if isinstance(deployment_id, str)
+            ]
+            request_kwargs["_excluded_deployment_ids"] = list(raw_excluded_deployment_ids)
+    elif retry_state is not None:
+        request_kwargs.pop(_RETRY_SCOPED_EXCLUSION_STATE_KEY, None)
+
+    excluded_deployment_ids: Final = (
+        {deployment_id for deployment_id in raw_excluded_deployment_ids if isinstance(deployment_id, str)}
+        if isinstance(raw_excluded_deployment_ids, (list, tuple, set, frozenset))
+        else set()
+    )
+
+    # A specific deployment ID is returned as a single dict instead of a list.
+    # Apply both exclusion and team isolation here rather than treating the shape
+    # as an implicit authorization bypass. Proxy admins retain their existing
+    # ability to address a team-scoped deployment directly, but cannot override
+    # an explicit Router-internal exclusion boundary.
+    if isinstance(healthy_deployments, dict):
+        model_info: Final = healthy_deployments.get("model_info") or {}
+        deployment_id: Final = model_info.get("id")
+        if deployment_id in excluded_deployment_ids:
+            return []
+        model_team_id: Final = model_info.get("team_id")
+        if model_team_id is None or model_team_id == request_team_id:
+            return healthy_deployments
+        if request_team_id is None and _is_proxy_admin_request(request_kwargs):
+            return healthy_deployments
+        return []
+
+    if request_team_id is None and _is_proxy_admin_request(request_kwargs):
         requested_model: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
         )
@@ -143,11 +198,13 @@ def filter_team_based_models(
                 llm_provider="",
             )
         if matches_requested_model:
-            return healthy_deployments
+            return [
+                deployment
+                for deployment in healthy_deployments
+                if deployment.get("model_info", {}).get("id") not in excluded_deployment_ids
+            ]
 
-    ids_to_remove: Final = set()
-    if isinstance(healthy_deployments, dict):
-        return healthy_deployments
+    ids_to_remove: Final = set(excluded_deployment_ids)
     for deployment in healthy_deployments:
         _model_info = deployment.get("model_info") or {}
         model_team_id = _model_info.get("team_id")
@@ -165,7 +222,7 @@ def filter_team_based_models(
 
 def _deployment_supports_web_search(deployment: dict) -> bool:
     """
-    Check if a deployment supports web search.
+    Check if a deployment supports web search
 
     Priority:
     1. Check config-level override in model_info.supports_web_search
@@ -208,18 +265,12 @@ def filter_web_search_deployments(
     if not is_web_search_request:
         return healthy_deployments
 
-    # Filter out deployments that don't support web search
     final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
 
 
-# Credential params that only one provider family reads, paired with the providers
-# that read them. A deployment carrying them while resolving elsewhere is almost
-# always a missing route prefix: `model: claude-sonnet-5` with `aws_region_name`
-# set resolves to the first-party Anthropic API, silently ignores the AWS
-# credentials, and 401s at request time.
 _AWS_PROVIDERS: Final = frozenset(
     provider.value for provider in LlmProviders if provider.value.startswith(("bedrock", "sagemaker"))
 )
