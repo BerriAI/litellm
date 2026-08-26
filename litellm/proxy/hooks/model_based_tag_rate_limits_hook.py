@@ -447,7 +447,20 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
     sorted_by_model_name: Final = sorted(model_list, key=lambda deployment: deployment["model_name"])
     by_model_name: Final[Mapping[str, tuple[_ConfiguredLimit, ...]]] = MappingProxyType(
         {
-            model_name: configured
+            model_name: (
+                # `Router.should_include_deployment` lets a same-team caller
+                # reach a team-owned deployment by its own internal
+                # model_name, not only its team_public_model_name alias
+                # (litellm auto-generates a name unique per (team_id, uuid),
+                # so every deployment in this group shares one team_id when
+                # any does) -- stamping the identical team_scope here as the
+                # alias entry below gets keeps both paths resolving to the
+                # same bucket, so a caller can't split its usage across two
+                # independent counters just by alternating which name it calls.
+                tuple(replace(limit, team_scope=team_scope) for limit in configured)
+                if (team_scope := next((key[0] for dep in group if (key := _team_alias_key(dep))), None)) is not None
+                else configured
+            )
             for model_name, deployment_group in groupby(
                 sorted_by_model_name, key=lambda deployment: deployment["model_name"]
             )
@@ -963,7 +976,9 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             if current + increment > limit:
                 return False, current
             new_value: Final = current + increment
-            await cache.async_set_cache(key=key, value=new_value, ttl=ttl, litellm_parent_otel_span=None)
+            await cache.async_set_cache(
+                key=key, value=new_value, ttl=ttl, refresh_ttl=refresh_ttl, litellm_parent_otel_span=None
+            )
             return True, new_value
 
     async def _decrement_floor_zero(self, cache: InternalUsageCache, key: str, delta: float) -> None:

@@ -3383,6 +3383,32 @@ async def test_redis_backed_concurrency_ttl_refreshes_on_every_admission(time_co
         await redis_cache.async_delete_cache(key=key)
 
 
+@pytest.mark.asyncio
+async def test_in_memory_concurrency_ttl_refreshes_on_every_admission(time_controller):
+    """
+    Bugbot finding: the Redis path's refresh_ttl fix above was never mirrored
+    onto the in-memory fallback, which called async_set_cache unconditionally
+    -- InMemoryCache.allow_ttl_override leaves a still-live ttl untouched, so
+    a concurrency counter's expiry stayed fixed from its first admission even
+    with refresh_ttl=True, the same silent-past-the-cap failure mode the
+    Redis fix closed.
+    """
+    limiter = _make_limiter(time_controller)
+    cache = limiter.internal_usage_cache
+    in_memory_cache = cache.dual_cache.in_memory_cache
+    key = f"tag_rl:test:in-memory-ttl-refresh:{uuid.uuid4().hex}"
+
+    admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+    assert admitted
+    ttl_after_first_admission = in_memory_cache.ttl_dict[key]
+
+    admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+    assert admitted
+    ttl_after_second_admission = in_memory_cache.ttl_dict[key]
+
+    assert ttl_after_second_admission > ttl_after_first_admission
+
+
 # ---------------------------------------------------------------------------
 # team_public_model_name alias -- index lookup must not miss
 # ---------------------------------------------------------------------------
@@ -3396,6 +3422,12 @@ def test_build_limits_index_is_also_keyed_by_team_public_model_name():
     model_group_alias). The index must resolve either name to the same
     configured limits, or a team-aliased chain's limits are silently never
     checked.
+
+    Security regression: Router.should_include_deployment also lets a
+    same-team (or team-unconstrained) caller reach this deployment by its
+    own internal model_name, not only the alias. Both paths must resolve to
+    the identical team_scope, or a caller could split its usage across two
+    independent buckets just by alternating which name it calls with.
     """
     deployment = _deployment(
         "real-model-name",
@@ -3409,10 +3441,7 @@ def test_build_limits_index_is_also_keyed_by_team_public_model_name():
     by_alias = index.resolve("team-alias-name", team_id="team-1")
     assert by_name != ()
     assert [c.entry for c in by_name] == [c.entry for c in by_alias]
-    # The alias resolution must carry the team_id into the bucket scope --
-    # see test_build_limits_index_keeps_different_teams_same_alias_separate
-    # for why (two teams can publish the identical alias string).
-    assert by_name[0].team_scope is None
+    assert by_name[0].team_scope == "team-1"
     assert by_alias[0].team_scope == "team-1"
 
 
