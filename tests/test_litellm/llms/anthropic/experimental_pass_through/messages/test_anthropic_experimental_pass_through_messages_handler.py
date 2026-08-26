@@ -1299,27 +1299,40 @@ class _FailureCapture(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_maps_provider_exception_before_failure_logging(monkeypatch):
+@pytest.mark.parametrize(
+    "upstream_status, upstream_error_type, expected_exception",
+    [
+        (401, "authentication_error", litellm.AuthenticationError),
+        (403, "permission_error", litellm.PermissionDeniedError),
+    ],
+)
+async def test_anthropic_messages_maps_provider_exception_before_failure_logging(
+    monkeypatch, upstream_status, upstream_error_type, expected_exception
+):
     """Regression test for LIT-6164. The async /v1/messages entrypoint awaited the
     provider handler without exception_type mapping, so the @client failure
     handler (and every logger behind it, e.g. OTel error spans) saw the raw
-    BaseLLMException: error.type=BaseLLMException and no llm_provider."""
+    BaseLLMException: error.type=BaseLLMException and no llm_provider.
+
+    The 403 row pins the upstream status on the way through the mapper: Anthropic's
+    documented permission_error must reach the caller as a 403, never as the mapper's
+    APIConnectionError 500 fallthrough."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
     capture = _FailureCapture()
     monkeypatch.setattr(litellm, "callbacks", [capture])
 
-    def upstream_rejects_the_key(request: httpx.Request) -> httpx.Response:
+    def upstream_rejects_the_request(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            401,
-            json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}},
+            upstream_status,
+            json={"type": "error", "error": {"type": upstream_error_type, "message": "rejected upstream"}},
             request=request,
         )
 
     upstream = AsyncHTTPHandler()
-    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_rejects_the_key))
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_rejects_the_request))
 
-    with pytest.raises(litellm.AuthenticationError) as excinfo:
+    with pytest.raises(expected_exception) as excinfo:
         await handler.anthropic_messages(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
@@ -1329,13 +1342,13 @@ async def test_anthropic_messages_maps_provider_exception_before_failure_logging
             client=upstream,
         )
 
-    assert excinfo.value.status_code == 401
+    assert excinfo.value.status_code == upstream_status
     assert excinfo.value.llm_provider == "anthropic"
     assert "AnthropicException" in excinfo.value.message
-    assert '"authentication_error"' in excinfo.value.message
+    assert f'"{upstream_error_type}"' in excinfo.value.message
 
     assert capture.error_information, "the failure handler must have logged the mapped exception"
     error_information = capture.error_information[0]
-    assert error_information.get("error_class") == "AuthenticationError"
+    assert error_information.get("error_class") == expected_exception.__name__
     assert error_information.get("llm_provider") == "anthropic"
-    assert error_information.get("error_code") == "401"
+    assert error_information.get("error_code") == str(upstream_status)
