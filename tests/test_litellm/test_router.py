@@ -10607,3 +10607,45 @@ async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_
     assert litellm_metadata["client_key"] == "client_value"
     assert metadata["attempted_fallbacks"] == 0
     assert metadata["original_model_group"] == "gpt-3.5-turbo"
+
+
+def _permission_denied_error() -> litellm.PermissionDeniedError:
+    return litellm.PermissionDeniedError(
+        message="OpenrouterException - this key has no access to the model",
+        llm_provider="openrouter",
+        model="openrouter/openai/gpt-4o",
+        response=httpx.Response(status_code=403, request=httpx.Request(method="POST", url="https://openrouter.ai")),
+    )
+
+
+def test_permission_denied_error_is_not_retried_against_a_single_deployment():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-test"}},
+        ]
+    )
+
+    with pytest.raises(litellm.PermissionDeniedError):
+        router.should_retry_this_error(
+            error=_permission_denied_error(),
+            healthy_deployments=router.model_list,
+            all_deployments=router.model_list,
+        )
+
+
+def test_permission_denied_error_is_retried_when_other_deployments_exist():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+        ]
+    )
+
+    assert (
+        router.should_retry_this_error(
+            error=_permission_denied_error(),
+            healthy_deployments=router.model_list,
+            all_deployments=router.model_list,
+        )
+        is True
+    )
