@@ -8,6 +8,7 @@ import pytest
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
     GetAccessTokenError,
+    GetAPIKeyError,
     GetDeviceCodeError,
     RefreshAPIKeyError,
 )
@@ -70,6 +71,25 @@ class TestGitHubCopilotAuthenticator:
             assert api_key == "token-b-session-key"
             mock_refresh.assert_called_once_with("user-b-custom-token")
             mock_file_open.assert_not_called()
+
+            # Second call with the same token should hit in-memory cache without calling _refresh_api_key again
+            cached_key = authenticator.get_api_key(access_token="user-b-custom-token")
+            assert cached_key == "token-b-session-key"
+            assert mock_refresh.call_count == 1
+
+    def test_get_api_key_with_explicit_token_missing_token_in_response(self, authenticator):
+        """Test that get_api_key raises GetAPIKeyError when API response lacks token."""
+        with patch.object(authenticator, "_refresh_api_key", return_value={}):
+            with pytest.raises(GetAPIKeyError):
+                authenticator.get_api_key(access_token="token-without-key")
+
+    def test_get_api_key_with_explicit_token_refresh_error(self, authenticator):
+        """Test that get_api_key handles RefreshAPIKeyError when refreshing explicit token."""
+        with patch.object(
+            authenticator, "_refresh_api_key", side_effect=RefreshAPIKeyError(message="Refresh failed", status_code=401)
+        ):
+            with pytest.raises(GetAPIKeyError):
+                authenticator.get_api_key(access_token="failing-token")
 
     def test_get_github_headers(self, authenticator):
         """Test that GitHub headers are correctly generated."""
