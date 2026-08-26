@@ -267,6 +267,36 @@ class TestDeepSeekVisionMultimodalContent:
 
         assert result[0]["content"] == "hi"
 
+    def test_image_block_empty_payload_object_collapses(self):
+        for payload in ({}, {"url": ""}, {"detail": "auto"}, None, 42):
+            messages = [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi"}, {"type": "image_url", "image_url": payload}],
+                }
+            ]
+
+            result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+            assert result[0]["content"] == "hi"
+
+    def test_image_block_string_payload_forwarded(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this?"},
+                    {"type": "image_url", "image_url": "https://example.com/image.jpg"},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert content[1]["image_url"] == {"url": "https://example.com/image.jpg"}
+
     def test_text_block_missing_text_field_collapses(self):
         messages = [
             {

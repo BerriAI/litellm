@@ -179,10 +179,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             return False
         block_type: Final = block.get("type")
         if block_type == "image_url":
-            return block.get("image_url") is not None
+            return DeepSeekChatConfig._is_image_url_payload(block.get("image_url"))
         if block_type == "text":
             return isinstance(block.get("text"), str)
         return False
+
+    @staticmethod
+    def _is_image_url_payload(payload: object) -> bool:
+        """A url string or an object carrying one, per the OpenAI image_url shape."""
+        if isinstance(payload, str):
+            return bool(payload)
+        if not isinstance(payload, Mapping):
+            return False
+        url: Final = payload.get("url")
+        return isinstance(url, str) and bool(url)
 
     def _with_search_results_text_block(self, message: AllMessageValues, content: Sequence[object]) -> AllMessageValues:
         """
