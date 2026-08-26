@@ -807,7 +807,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         resource_base: Final = str(
             base_url.copy_with(
                 path=base_url.path if openai_path_start == -1 else base_url.path[:openai_path_start],
-                params=httpx.QueryParams({k: v for k, v in base_url.params.items() if k != "api-version"}),
+                params=httpx.QueryParams(tuple((k, v) for k, v in base_url.params.multi_items() if k != "api-version")),
             )
         )
         return BaseAzureLLM._get_base_azure_url(
