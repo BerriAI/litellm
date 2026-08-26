@@ -1008,6 +1008,23 @@ def test_convert_gemini_tool_result_malformed_json_still_wrapped_as_content():
     assert result["function_response"]["response"] == {"content": "{not valid json"}
 
 
+def test_contains_json_schema_ref_contract():
+    """
+    Direct contract pin for the helper behind #38223: returns True exactly when
+    some dict at any depth carries a $ref key, across mixed dict/list/scalar
+    shapes, and False for the same shape without one.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _contains_json_schema_ref,
+    )
+
+    ref_bearing = {"a": [{"$ref": "#/$defs/x"}, "plain", 3], "b": None}
+    assert _contains_json_schema_ref(ref_bearing) is True
+
+    clean_twin = {"a": [{"refs": "#/$defs/x"}, "plain", 3], "b": None}
+    assert _contains_json_schema_ref(clean_twin) is False
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly
