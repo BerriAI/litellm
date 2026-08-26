@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from typing_extensions import ReadOnly, TypedDict
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -90,9 +92,14 @@ def _normalize_operation_ids(paths: dict[str, dict]) -> None:
                     break
 
 
+class SnapshotFragment(TypedDict):
+    paths: ReadOnly[dict[str, dict[str, object]]]
+    components: ReadOnly[dict[str, dict[str, object]]]
+
+
 @dataclass(frozen=True, slots=True)
 class SnapshotResult:
-    fragments: dict[str, dict]
+    fragments: dict[str, SnapshotFragment]
     skipped: tuple[str, ...]
 
 
@@ -115,7 +122,7 @@ def generate_snapshot() -> SnapshotResult:
 
     skipped: Final = tuple(name for feat in LAZY_FEATURES if (name := _register_feature(app, feat)) is not None)
 
-    fragments: Final[dict[str, dict]] = {}
+    fragments: Final[dict[str, SnapshotFragment]] = {}
     used_operation_ids: Final[set[str]] = set()
     for feat in LAZY_FEATURES:
         feat_routes = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
