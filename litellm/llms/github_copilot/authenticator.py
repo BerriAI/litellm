@@ -101,16 +101,16 @@ class Authenticator:
         if access_token:
             cached_info: Final = self._session_cache.get(access_token)
             if cached_info and cached_info.get("expires_at", 0) > time.time():
-                token: Final = cached_info.get("token")
-                if isinstance(token, str):
-                    return token
+                cached_token: Final = cached_info.get("token")
+                if isinstance(cached_token, str):
+                    return cached_token
 
             try:
-                api_key_info: Final = self._refresh_api_key(access_token)
-                self._session_cache[access_token] = api_key_info
-                token: Final = api_key_info.get("token")
-                if isinstance(token, str):
-                    return token
+                session_key_info: Final = self._refresh_api_key(access_token)
+                self._session_cache[access_token] = session_key_info
+                refreshed_token: Final = session_key_info.get("token")
+                if isinstance(refreshed_token, str):
+                    return refreshed_token
                 else:
                     raise GetAPIKeyError(
                         message="API key response missing token",
@@ -125,11 +125,11 @@ class Authenticator:
         # Fallback to single-user local file storage when no explicit token is passed
         try:
             with open(self.api_key_file, "r") as f:
-                api_key_info: Final = json.load(f)
-                if isinstance(api_key_info, dict) and api_key_info.get("expires_at", 0) > datetime.now().timestamp():
-                    token: Final = api_key_info.get("token")
-                    if isinstance(token, str):
-                        return token
+                file_key_info: Final = json.load(f)
+                if isinstance(file_key_info, dict) and file_key_info.get("expires_at", 0) > datetime.now().timestamp():
+                    file_token: Final = file_key_info.get("token")
+                    if isinstance(file_token, str):
+                        return file_token
                 else:
                     verbose_logger.warning("API key expired, refreshing")
                     raise APIKeyExpiredError(
@@ -144,16 +144,16 @@ class Authenticator:
             pass  # Already logged in the try block
 
         try:
-            api_key_info: Final = self._refresh_api_key()
+            refreshed_key_info: Final = self._refresh_api_key()
             try:
                 self._ensure_token_dir()
                 with open(self.api_key_file, "w") as f:
-                    json.dump(api_key_info, f)
+                    json.dump(refreshed_key_info, f)
             except OSError as e:
                 verbose_logger.warning("Error saving API key to file (continuing with in-memory token): %s", e)
-            token: Final = api_key_info.get("token")
-            if isinstance(token, str):
-                return token
+            new_key_token: Final = refreshed_key_info.get("token")
+            if isinstance(new_key_token, str):
+                return new_key_token
             else:
                 raise GetAPIKeyError(
                     message="API key response missing token",
