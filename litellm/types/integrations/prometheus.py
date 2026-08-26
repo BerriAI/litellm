@@ -92,7 +92,20 @@ class LabelValidationError:
 
     @property
     def message(self) -> str:
-        return f"Invalid labels for metric '{self.metric_name}': {self.invalid_labels}"
+        base_message: Final = f"Invalid labels for metric '{self.metric_name}': {self.invalid_labels}"
+        if self.metric_name in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS and any(
+            label in ("api_key_alias", "user_email") for label in self.invalid_labels
+        ):
+            mode: Final[object] = getattr(
+                litellm,
+                "prometheus_deployment_and_latency_caller_identity",
+                "api_key_alias",
+            )
+            return (
+                f"{base_message} (the caller-identity label on this metric is set by "
+                f"prometheus_deployment_and_latency_caller_identity={mode!r})"
+            )
+        return base_message
 
 
 @dataclass
@@ -297,6 +310,51 @@ PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES: Final[tuple[str, ...]]
 )
 
 
+def validate_prometheus_deployment_and_latency_caller_identity() -> str:
+    """Return the configured caller-identity mode, raising on an invalid value."""
+    caller_identity: Final[object] = getattr(
+        litellm,
+        "prometheus_deployment_and_latency_caller_identity",
+        "api_key_alias",
+    )
+    if isinstance(caller_identity, str) and caller_identity in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES:
+        return caller_identity
+    accepted_values: Final = ", ".join(PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES)
+    raise ValueError(
+        "Invalid prometheus_deployment_and_latency_caller_identity="
+        f"{caller_identity!r}. Accepted values: {accepted_values}."
+    )
+
+
+def validate_caller_identity_settings(litellm_settings: Mapping[str, Any]) -> None:
+    """Store the caller-identity mode from litellm_settings and validate it together
+    with prometheus_metrics_config, raising on an invalid value or on include_labels
+    that request a label the selected mode removes."""
+    if "prometheus_deployment_and_latency_caller_identity" not in litellm_settings:
+        return
+    litellm.prometheus_deployment_and_latency_caller_identity = litellm_settings[
+        "prometheus_deployment_and_latency_caller_identity"
+    ]
+    caller_identity_mode: Final = validate_prometheus_deployment_and_latency_caller_identity()
+    if caller_identity_mode != "user_email":
+        return
+    conflicting_metrics: Final = tuple(
+        metric_name
+        for metric_config in (litellm_settings.get("prometheus_metrics_config") or ())
+        if isinstance(metric_config, dict) and "api_key_alias" in (metric_config.get("include_labels") or ())
+        for metric_name in (metric_config.get("metrics") or ())
+        if metric_name in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS
+    )
+    if conflicting_metrics:
+        conflicting_names: Final = ", ".join(conflicting_metrics)
+        raise ValueError(
+            "prometheus_metrics_config include_labels contains 'api_key_alias' for "
+            f"{conflicting_names}, but prometheus_deployment_and_latency_caller_identity="
+            "'user_email' replaces that label on these metrics. Use 'user_email' in "
+            "include_labels or change the mode."
+        )
+
+
 def _resolve_deployment_and_latency_caller_identity_labels(
     metric_name: str,
     labels: Sequence[object],
@@ -308,17 +366,7 @@ def _resolve_deployment_and_latency_caller_identity_labels(
     if metric_name not in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS:
         return resolved_labels
 
-    caller_identity: Final[object] = getattr(
-        litellm,
-        "prometheus_deployment_and_latency_caller_identity",
-        "api_key_alias",
-    )
-    if caller_identity not in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES:
-        accepted_values: Final = ", ".join(PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES)
-        raise ValueError(
-            "Invalid prometheus_deployment_and_latency_caller_identity="
-            f"{caller_identity!r}. Accepted values: {accepted_values}."
-        )
+    caller_identity: Final = validate_prometheus_deployment_and_latency_caller_identity()
 
     alias_index: Final = resolved_labels.index(UserAPIKeyLabelNames.API_KEY_ALIAS.value)
     if caller_identity == "user_email":

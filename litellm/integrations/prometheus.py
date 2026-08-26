@@ -49,6 +49,7 @@ from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
+    validate_prometheus_deployment_and_latency_caller_identity,
 )
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
@@ -171,6 +172,11 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             from prometheus_client import Counter, Gauge, Histogram
+
+            # Validate the caller-identity mode before any collector registers so an
+            # invalid value cannot leave partially-registered metrics behind in the
+            # process-global registry.
+            validate_prometheus_deployment_and_latency_caller_identity()
 
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
