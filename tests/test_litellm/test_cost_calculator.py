@@ -1727,6 +1727,84 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
+AZURE_GPT_5_6_MAP_KEYS = (
+    "azure/gpt-5.6",
+    "azure/gpt-5.6-sol",
+    "azure/gpt-5.6-terra",
+    "azure/gpt-5.6-luna",
+    "azure/us/gpt-5.6",
+    "azure/us/gpt-5.6-sol",
+    "azure/us/gpt-5.6-terra",
+    "azure/us/gpt-5.6-luna",
+    "azure/eu/gpt-5.6",
+    "azure/eu/gpt-5.6-sol",
+    "azure/eu/gpt-5.6-terra",
+    "azure/eu/gpt-5.6-luna",
+)
+
+
+def test_azure_gpt_5_6_cache_write_tokens_are_billed(_local_model_cost_map):
+    """
+    Azure bills gpt-5.6 prompt cache writes at 1.25x the input rate, but the
+    azure entries carried no ``cache_creation_input_token_cost``, so
+    cache-write tokens were billed at the plain input rate instead.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        completion_tokens=100,
+        prompt_tokens=2000,
+        total_tokens=2100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, text_tokens=687),
+        cache_creation_input_tokens=1313,
+    )
+
+    input_cost, output_cost = generic_cost_per_token(
+        model="azure/gpt-5.6-luna", usage=usage, custom_llm_provider="azure"
+    )
+
+    assert input_cost == pytest.approx(687 * 2e-07 + 1313 * 2.5e-07)
+    assert output_cost == pytest.approx(100 * 1.2e-06)
+
+
+@pytest.mark.parametrize("model", AZURE_GPT_5_6_MAP_KEYS)
+def test_azure_gpt_5_6_rates_match_azure_price_page(_local_model_cost_map, model):
+    """
+    Per the Azure retail price API (2026-08-26): cache writes cost 1.25x input
+    on every published gpt-5.6 meter, and Data Zone standard and priority
+    rates cost 1.1x Global (us/eu priority rates previously sat at 1.25x).
+    Azure publishes no long-context priority meters, so the
+    ``*_above_272k_tokens_priority`` suffix is excluded.
+    """
+    entry = litellm.model_cost[model]
+    input_keys = [
+        key
+        for key in entry
+        if key.startswith("input_cost_per_token")
+        and not key.endswith("_above_272k_tokens_priority")
+    ]
+    assert input_keys
+    for key in input_keys:
+        suffix = key[len("input_cost_per_token") :]
+        assert entry["cache_creation_input_token_cost" + suffix] == pytest.approx(
+            entry[key] * 1.25
+        ), key
+
+    zone = model.split("/")[1]
+    if zone in ("us", "eu"):
+        global_entry = litellm.model_cost["azure/" + model.split("/", 2)[2]]
+        prefixes = ("input_cost_per_token", "output_cost_per_token", "cache_read", "cache_creation")
+        token_cost_keys = [
+            key
+            for key in entry
+            if key.startswith(prefixes) and not key.endswith("_above_272k_tokens_priority")
+        ]
+        assert len(token_cost_keys) >= 9
+        for key in token_cost_keys:
+            assert entry[key] == pytest.approx(global_entry[key] * 1.1), key
+
+
 def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/34393: two Vertex
