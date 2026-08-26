@@ -1324,6 +1324,25 @@ def convert_to_gemini_tool_call_invoke(
         raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
 
 
+def _contains_json_schema_ref(payload: object) -> bool:
+    """
+    Gemini interprets {"$ref": ...} objects anywhere inside function_response.response
+    as references to named parts in function_response.parts and rejects the request when
+    no matching part exists. Tool results carrying JSON Schema data must therefore not be
+    sent structurally. https://github.com/BerriAI/litellm/issues/38223
+    """
+    stack: list[Any] = [payload]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return True
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return False
+
+
 def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
@@ -1469,7 +1488,7 @@ def convert_to_gemini_tool_call_result(
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed: Final = json.loads(content_str)
-            if isinstance(parsed, dict):
+            if isinstance(parsed, dict) and not _contains_json_schema_ref(parsed):
                 response_data = parsed  # Use the parsed JSON directly
             else:
                 response_data = {"content": content_str}

@@ -905,6 +905,109 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     ), f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
 
 
+def _gemini_tool_result_fixture(
+    content: str,
+) -> tuple[ChatCompletionToolMessage, dict]:
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_schema",
+        content=content,
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_schema",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "inspect_schema", "arguments": "{}"},
+            }
+        ],
+    }
+    return message, last_message_with_tool_calls
+
+
+def test_convert_gemini_tool_result_wraps_output_containing_json_schema_ref():
+    """
+    Gemini treats {"$ref": ...} objects inside function_response.response as
+    references to named parts in function_response.parts, so schema-bearing
+    tool output must be delivered opaquely instead of structurally.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    schema_json = (
+        '{"$defs":{"humanScalar":{"type":"string"}},'
+        '"type":"object","properties":{"value":{"$ref":"#/$defs/humanScalar"}}}'
+    )
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == {"content": schema_json}
+
+
+def test_convert_gemini_tool_result_wraps_deeply_nested_json_schema_ref():
+    """
+    A $ref key at any depth must trigger opaque delivery.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    nested_json = '{"results":[{"schemas":[{"node":{"$ref":"#/$defs/deep"}}]}]}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(nested_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["response"] == {"content": nested_json}
+
+
+@pytest.mark.parametrize(
+    "schema_json",
+    [
+        '{"$defs":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"definitions":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"status":"ok","count":2,"tags":["a","b"]}',
+    ],
+)
+def test_convert_gemini_tool_result_preserves_structured_passthrough_without_refs(
+    schema_json: str,
+):
+    """
+    Tool output carrying $defs / definitions / plain data but no $ref keys
+    keeps the existing structured function-response behavior unchanged.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == json.loads(schema_json)
+
+
+def test_convert_gemini_tool_result_malformed_json_still_wrapped_as_content():
+    """Unparseable tool output keeps taking the existing content-wrapping path."""
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture("{not valid json")
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": "{not valid json"}
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly
