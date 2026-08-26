@@ -3670,21 +3670,23 @@ class Logging(LiteLLMLoggingBaseClass):
             (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
         ):
             ## return unified Usage object
-            if isinstance(result.response.usage, ResponseAPIUsage):
-                transformed_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                    result.response.usage
-                )
+            # result.response may be a dict on the streaming /v1/responses spend-log
+            # path (#29913); a bare `.usage` attribute access would raise there.
+            resp: Final = result.response
+            usage: Final = resp.get("usage") if isinstance(resp, dict) else getattr(resp, "usage", None)
+            if isinstance(usage, ResponseAPIUsage):
+                transformed_usage: Final = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
                 # Set as dict instead of Usage object so model_dump() serializes it correctly
-                setattr(
-                    result.response,
-                    "usage",
-                    (
-                        transformed_usage.model_dump()
-                        if hasattr(transformed_usage, "model_dump")
-                        else dict(transformed_usage)
-                    ),
+                new_usage: Final = (
+                    transformed_usage.model_dump()
+                    if hasattr(transformed_usage, "model_dump")
+                    else dict(transformed_usage)
                 )
-            return result.response
+                if isinstance(resp, dict):
+                    resp["usage"] = new_usage
+                else:
+                    setattr(resp, "usage", new_usage)
+            return resp
         elif isinstance(result, InteractionsAPIStreamingResponse):
             return self._assemble_completed_interaction_response(result)
         else:
