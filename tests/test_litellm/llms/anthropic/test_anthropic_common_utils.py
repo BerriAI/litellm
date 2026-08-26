@@ -18,9 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
@@ -39,14 +37,14 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {header_name: f"Bearer {FAKE_OAUTH_TOKEN}"}
-        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
-            headers, None
-        )
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert extracted_api_key == FAKE_OAUTH_TOKEN
         assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
         assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
         assert "x-api-key" not in updated_headers
+        assert [name for name in updated_headers if name.lower() == "authorization"] == ["authorization"]
+        assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     @pytest.mark.parametrize("api_key_header_name", ["x-api-key", "X-Api-Key"])
     def test_oauth_removes_x_api_key_any_casing(self, api_key_header_name):
@@ -56,13 +54,12 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {api_key_header_name: FAKE_REGULAR_KEY, "Authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
-        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(
-            headers, None
-        )
+        updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert extracted_api_key == FAKE_OAUTH_TOKEN
         assert [name for name in updated_headers if name.lower() == "x-api-key"] == []
-        assert updated_headers["Authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        assert [name for name in updated_headers if name.lower() == "authorization"] == ["authorization"]
+        assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
     def test_oauth_token_in_api_key_directly(self):
         """OAuth token passed as api_key should set Authorization: Bearer header."""
@@ -71,9 +68,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_OAUTH_TOKEN
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_OAUTH_TOKEN)
 
         assert returned_api_key == FAKE_OAUTH_TOKEN
         assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
@@ -88,9 +83,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"x-api-key": FAKE_OAUTH_TOKEN}
-        updated_headers, _ = optionally_handle_anthropic_oauth(
-            headers, FAKE_OAUTH_TOKEN
-        )
+        updated_headers, _ = optionally_handle_anthropic_oauth(headers, FAKE_OAUTH_TOKEN)
 
         assert "x-api-key" not in updated_headers
         assert updated_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
@@ -102,9 +95,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_REGULAR_KEY
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_REGULAR_KEY)
 
         assert returned_api_key == FAKE_REGULAR_KEY
         assert "authorization" not in updated_headers
@@ -118,9 +109,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {"authorization": f"Bearer {FAKE_REGULAR_KEY}"}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, FAKE_REGULAR_KEY
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, FAKE_REGULAR_KEY)
 
         assert returned_api_key == FAKE_REGULAR_KEY
         assert "anthropic-dangerous-direct-browser-access" not in updated_headers
@@ -132,9 +121,7 @@ class TestOptionallyHandleAnthropicOAuth:
         )
 
         headers = {}
-        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(
-            headers, None
-        )
+        updated_headers, returned_api_key = optionally_handle_anthropic_oauth(headers, None)
 
         assert returned_api_key is None
         assert "authorization" not in updated_headers
@@ -556,16 +543,12 @@ class TestProxyOAuthHeaderForwarding:
         )
 
         # Should preserve OAuth even with flag=False
-        cleaned_without_flag = clean_headers(
-            raw_headers, forward_llm_provider_auth_headers=False
-        )
+        cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
         assert "authorization" in cleaned_without_flag
         assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
         # Should also preserve OAuth with flag=True
-        cleaned_with_flag = clean_headers(
-            raw_headers, forward_llm_provider_auth_headers=True
-        )
+        cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
         assert "authorization" in cleaned_with_flag
         assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
@@ -949,9 +932,7 @@ class TestValidateEnvironmentAuthToken:
 
         config = AnthropicModelInfo()
         with mock_patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(
-                Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
-            ):
+            with pytest.raises(Exception, match=r"ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"):
                 config.validate_environment(
                     headers={},
                     model="claude-sonnet-4-5-20250929",
@@ -997,9 +978,7 @@ class TestGetAuthToken:
 
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        with mock_patch.dict(
-            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
-        ):
+        with mock_patch.dict("os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True):
             assert AnthropicModelInfo.get_auth_token() == FAKE_AUTH_TOKEN
 
     def test_returns_none_when_not_set(self):
@@ -1123,7 +1102,9 @@ class TestGetAuthHeader:
         """Non-standard API key and custom api_base returns Bearer when use_bearer_for_custom_base=True."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        result = AnthropicModelInfo.get_auth_header(api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True)
+        result = AnthropicModelInfo.get_auth_header(
+            api_key="my-custom-key", api_base="https://custom-gateway.com", use_bearer_for_custom_base=True
+        )
         assert result == {"authorization": "Bearer my-custom-key"}
 
     def test_custom_api_base_get_auth_header_uses_x_api_key_when_standard(self):
@@ -1141,10 +1122,7 @@ class TestGetApiBaseFallbackChain:
         """Explicit api_base param takes precedence over all env vars."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert (
-            AnthropicModelInfo.get_api_base("https://explicit.example.com")
-            == "https://explicit.example.com"
-        )
+        assert AnthropicModelInfo.get_api_base("https://explicit.example.com") == "https://explicit.example.com"
 
     def test_defaults_to_anthropic_api(self):
         """get_api_base returns the default Anthropic API base when no env vars are set."""
@@ -1197,9 +1175,7 @@ class TestPassthroughAuthToken:
         )
 
         config = AnthropicMessagesConfig()
-        with mock_patch.dict(
-            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
-        ):
+        with mock_patch.dict("os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True):
             updated_headers, _ = config.validate_anthropic_messages_environment(
                 headers={},
                 model="claude-sonnet-4-5-20250929",
@@ -1353,14 +1329,8 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
 
         assert is_anthropic_invalid_thinking_signature_error("") is False
-        assert (
-            is_anthropic_invalid_thinking_signature_error("rate limit exceeded")
-            is False
-        )
-        assert (
-            is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found")
-            is False
-        )
+        assert is_anthropic_invalid_thinking_signature_error("rate limit exceeded") is False
+        assert is_anthropic_invalid_thinking_signature_error("invalid_request_error: model not found") is False
         assert is_anthropic_invalid_thinking_signature_error("thinking signature is malformed") is False
 
     def test_strip_thinking_blocks_from_anthropic_messages(self):
@@ -1751,10 +1721,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         base = "call_abc123"
         sig = "CiIBDDnWx+/a=="
-        assert (
-            normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}")
-            == base
-        )
+        assert normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}") == base
 
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
@@ -1778,15 +1745,11 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
-        assert (
-            config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
-        )
+        assert config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
 
         resp_500 = httpx.Response(500, request=req, text=err_text)
         err_500 = httpx.HTTPStatusError("bad", request=req, response=resp_500)
-        assert (
-            config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
-        )
+        assert config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
 
         data = {
             "model": "claude-sonnet-4-20250514",
@@ -1807,7 +1770,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
-
 
 
 class TestClaudeOpus48AdaptiveThinking:
@@ -1839,9 +1801,7 @@ class TestClaudeOpus48AdaptiveThinking:
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
-    def test_resolver_reads_flag_through_bedrock_invoke_prefix(
-        self, local_model_cost_map
-    ):
+    def test_resolver_reads_flag_through_bedrock_invoke_prefix(self, local_model_cost_map):
         """The resolver fix: ``bedrock/invoke/...`` resolves to the flagged
         Bedrock entry. Pure ``_supports_factory`` without prefix-stripping
         returns False here, which is why the data-only fix alone was not enough."""
@@ -1891,9 +1851,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "claude-sonnet-4.6",
         ],
     )
-    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(self, local_model_cost_map, model):
         """Opus 4.6/4.7 and Sonnet 4.6 carry the ``supports_adaptive_thinking`` flag,
         so detection holds purely from the cost map with no version-rule
         fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
@@ -1913,9 +1871,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "claude-fable-preview",
         ],
     )
-    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(
-        self, local_model_cost_map, model
-    ):
+    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(self, local_model_cost_map, model):
         """An alias absent from the map, not matched by any ``fallback_generalizations``
         rule, and without any parseable family version stays non-adaptive. ``fable``
         without a major version matches neither the core-family 4.6+ gate nor the
@@ -1941,9 +1897,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "us.anthropic.claude-fable-5-preview",
         ],
     )
-    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(self, local_model_cost_map, model):
         """Provider-prefixed or suffixed Claude names that resolve to no mapped entry
         still resolve to adaptive when the id carries claude-<family>- at version 4.6
         or higher, bare 5+ majors included. The version gate is the declarative
@@ -1964,9 +1918,7 @@ class TestClaudeOpus48AdaptiveThinking:
             "us.anthropic.claude-opus-4-20250514",
         ],
     )
-    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(
-        self, local_model_cost_map, model
-    ):
+    def test_adaptive_thinking_not_detected_for_unmapped_low_versions(self, local_model_cost_map, model):
         """Unmapped Claude names below 4.6 stay non-adaptive through the declarative path.
         The eight-digit dated Opus 4.0 id (``...-4-20250514``) is the date-safety case: the
         version rule caps the minor at two digits, so the date is not misread as a >= 4.6
@@ -2005,14 +1957,11 @@ class TestDefaultSuffixAdaptiveThinking:
             "vertex_ai/claude-fable-5@default",
         ],
     )
-    def test_default_suffix_models_are_adaptive_thinking(
-        self, local_model_cost_map, model: str
-    ) -> None:
+    def test_default_suffix_models_are_adaptive_thinking(self, local_model_cost_map, model: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
-            f"{model} not classified as adaptive thinking. "
-            "Check _model_map_lookup_candidates strips @default suffix."
+            f"{model} not classified as adaptive thinking. Check _model_map_lookup_candidates strips @default suffix."
         )
 
     @pytest.mark.parametrize(
@@ -2022,15 +1971,11 @@ class TestDefaultSuffixAdaptiveThinking:
             ("vertex_ai/claude-sonnet-4-6@default", "claude-sonnet-4-6"),
         ],
     )
-    def test_lookup_candidates_include_bare_name(
-        self, model: str, expected_bare: str
-    ) -> None:
+    def test_lookup_candidates_include_bare_name(self, model: str, expected_bare: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
-        assert expected_bare in candidates, (
-            f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
-        )
+        assert expected_bare in candidates, f"Expected '{expected_bare}' in candidates for '{model}', got: {candidates}"
 
 
 class TestCapabilityProbeUsesCallerProvider:
@@ -2043,42 +1988,27 @@ class TestCapabilityProbeUsesCallerProvider:
 
     BEDROCK_MODEL = "global.anthropic.claude-opus-4-8"
 
-    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(
-        self, local_model_cost_map, monkeypatch
-    ):
+    def test_exact_bedrock_entry_flag_is_authoritative_for_bedrock_caller(self, local_model_cost_map, monkeypatch):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
-            is True
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is True
 
-        monkeypatch.setitem(
-            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
-        )
+        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock")
-            is False
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
 
-    def test_native_anthropic_probe_still_reads_anthropic_entry(
-        self, local_model_cost_map, monkeypatch
-    ):
+    def test_native_anthropic_probe_still_reads_anthropic_entry(self, local_model_cost_map, monkeypatch):
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        monkeypatch.setitem(
-            litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False
-        )
+        monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert (
-            AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic")
-            is True
-        )
+        assert AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8", "anthropic") is True
+
+
 def test_create_anthropic_model_list_response_shape():
     from litellm.llms.anthropic.common_utils import (
         create_anthropic_model_list_response,
