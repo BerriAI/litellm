@@ -47329,7 +47329,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
-        "supports_vision": false,
+        "supports_vision": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
         "supports_reasoning": true
