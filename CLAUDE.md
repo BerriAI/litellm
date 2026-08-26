@@ -66,7 +66,7 @@ Commit and push your work when you're done without asking
 
 When referencing or running models (coding, QA'ing, writing docs, writing tests, etc.), use the latest model in that model family unless otherwise specified; treat your training knowledge, memories, configs, and tests as stale, and determine the family's latest with model_prices_and_context_window.json or the web
 
-Always pull before starting any work. The checkout or worktree may be sitting on a stale branch, so run `git fetch origin`, then `git pull --no-rebase`. Bring a feature branch up to date with a fresh `origin/litellm_internal_staging` too: rebase onto it while unpushed, merge it in once pushed, and never rewrite pushed history
+Always pull before starting any work. The checkout or worktree may be sitting on a stale branch
 
 If you're an internal contributor, when creating a new PR, the typical flow is to branch off litellm_internal_staging and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
 
