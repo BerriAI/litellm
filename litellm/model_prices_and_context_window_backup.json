@@ -12515,7 +12515,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "provider_specific_entry": {
+            "us": 1.1
+        }
     },
     "claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -50825,7 +50828,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        }
     },
     "claude-mythos-preview": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -50860,7 +50866,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        }
     },
     "gemini/gemini-robotics-er-2-streaming-preview": {
         "input_cost_per_audio_token": 2e-06,
