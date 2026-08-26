@@ -254,9 +254,6 @@ class ProxyClient:
         ).data
 
     def model_cost_map(self) -> dict[str, CostMapEntry]:
-        """The registry the proxy prices with and gates capabilities on, keyed
-        `<provider>/<model>`, read from the proxy itself so a test sees exactly the
-        map the deployment under test resolves against."""
         return unwrap(
             self.transport.get(
                 "/public/litellm_model_cost_map",
