@@ -185,7 +185,11 @@ from .litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     stringify_json_tool_call_content,
 )
-from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+from .litellm_core_utils.streaming_chunk_builder_utils import (
+    ChunkProcessor,
+    choice_indices,
+    chunks_for_choice,
+)
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -8587,6 +8591,75 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
+def _reindexed_choice(choice: Choices, index: int) -> Choices:
+    reindexed: Final = choice.model_copy()
+    reindexed.index = index
+    return reindexed
+
+
+def _rebuild_each_choice(
+    *,
+    chunks: Sequence[object],
+    indices: tuple[int, ...],
+    model: str,
+    messages: list | None,  # mutable-ok: forwarded verbatim to stream_chunk_builder, which declares `list | None`.
+    processor: ChunkProcessor,
+    start_time: datetime.datetime | None,
+    end_time: datetime.datetime | None,
+    logging_obj: Optional["Logging"],
+) -> ModelResponse | None:
+    """Assemble an `n>1` streamed response one choice at a time.
+
+    Everything in stream_chunk_builder assembles a single choice, reading
+    `chunks[...]["choices"][0]` throughout, so a stream carrying several choices
+    would otherwise have every choice's deltas concatenated into one message and
+    the rest dropped. Slicing per index and reusing that assembly keeps `n=1` on
+    exactly the path it takes today.
+
+    Returns None when nothing could be assembled, leaving the caller on its
+    original path.
+    """
+    rebuilt: Final = tuple(
+        (
+            index,
+            stream_chunk_builder(
+                chunks=chunks_for_choice(chunks, index),
+                messages=messages,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=None,
+            ),
+        )
+        for index in indices
+    )
+    assembled: Final = tuple(
+        (index, one) for index, one in rebuilt if one is not None and getattr(one, "choices", None)
+    )
+    if not assembled:
+        return None
+
+    merged: Final = assembled[0][1]
+    if not isinstance(merged, ModelResponse):
+        return None
+
+    reindexed: Final = tuple(_reindexed_choice(one.choices[0], index) for index, one in assembled)
+    merged.choices = list(reindexed)  # mutable-ok: ModelResponse.choices is declared `list[Choices]`.
+    completion_output: Final[str] = get_content_from_model_response(merged)
+    merged.usage = processor.calculate_usage(  # pyright: ignore[reportAttributeAccessIssue]  # set in __init__, not declared
+        chunks=chunks,
+        model=model,
+        completion_output=completion_output,
+        messages=messages,
+        reasoning_tokens=processor.count_reasoning_tokens(merged),
+    )
+    if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+        merged.usage.cost = logging_obj._response_cost_calculator(  # pyright: ignore[reportAttributeAccessIssue]  # same as above
+            result=merged
+        )
+    processor.apply_provider_assembled_streaming_metadata(merged, chunks, logging_obj)
+    return merged
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: list | None = None,
@@ -8619,6 +8692,22 @@ def stream_chunk_builder(
             return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
+
+        indices: Final = choice_indices(chunks)
+        if len(indices) > 1:
+            merged: Final = _rebuild_each_choice(
+                chunks=chunks,
+                indices=indices,
+                model=model,
+                messages=messages,
+                processor=processor,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+            )
+            if merged is not None:
+                return merged
+
         # Initialize the response dictionary
         response: Final = processor.build_base_response(chunks)
 

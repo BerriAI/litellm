@@ -173,6 +173,50 @@ def attach_cache_creation_token_details(
     return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
 
+def _choices_of(chunk: object) -> Sequence[object]:
+    choices: Final = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
+    return choices or ()
+
+
+def _index_of(choice: object) -> int:
+    raw: Final = choice.get("index", 0) if isinstance(choice, dict) else getattr(choice, "index", 0)
+    return 0 if raw is None else int(raw)
+
+
+def choice_indices(chunks: Sequence[object]) -> tuple[int, ...]:
+    """Distinct `choices[].index` across a streamed response, ascending.
+
+    An absent index means 0, per the OpenAI schema.
+    """
+    found: Final = frozenset(_index_of(choice) for chunk in chunks for choice in _choices_of(chunk))
+    return tuple(sorted(found)) or (0,)
+
+
+def _narrow(chunk: object, index: int) -> object | None:
+    choices: Final = _choices_of(chunk)
+    if not choices:
+        return chunk
+
+    kept: Final = tuple(choice for choice in choices if _index_of(choice) == index)
+    if not kept:
+        return None
+    if isinstance(chunk, dict):
+        return {**chunk, "choices": list(kept)}  # mutable-ok: a streamed chunk is a plain dict downstream.
+    if hasattr(chunk, "model_copy"):
+        return chunk.model_copy(update={"choices": list(kept)})  # mutable-ok: `choices` is a declared `list` field.
+    return chunk
+
+
+def chunks_for_choice(chunks: Sequence[object], index: int) -> list:  # mutable-ok: stream_chunk_builder wants a list.
+    """The same stream carrying only the choices for `index`.
+
+    Chunks without choices, such as the usage-only chunk many providers send
+    last, are kept because usage belongs to the request rather than a choice.
+    """
+    narrowed_chunks: Final = (narrowed for chunk in chunks if (narrowed := _narrow(chunk, index)) is not None)
+    return list(narrowed_chunks)  # mutable-ok: see the return annotation.
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: list | None = None):
         self.chunks = self._sort_chunks(chunks)
