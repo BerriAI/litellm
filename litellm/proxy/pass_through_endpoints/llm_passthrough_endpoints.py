@@ -509,7 +509,7 @@ async def milvus_proxy_route(
             detail=f"collectionName must be a string. Got {type(_raw_collection_name).__name__}",
         )
     collection_name: str | None = _raw_collection_name  # rebind-ok: locally scoped conversion
-    extra_headers: Final = {}  # mutable-ok: dict for extra headers
+    extra_headers = {}  # mutable-ok: dict for extra headers; rebind-ok: reassigned later from credentials
     base_target_url: str | None = None
     if not collection_name:
         raise HTTPException(
@@ -2839,10 +2839,10 @@ async def gigachat_proxy_route(
     )
 
     ## check for streaming
-    request_body: Final = await get_request_body(request)
+    request_body: Final = await get_request_body(request)  # pyright: ignore[reportUnknownVariableType]  # get_request_body returns Unknown
     is_router_model = False  # rebind-ok: conditionally set to True when model uses router
 
-    model: Final = request_body.get("model")
+    model: Final = request_body.get("model")  # pyright: ignore[reportUnknownVariableType]  # get_request_body returns Unknown
     if model:
         is_router_model = is_passthrough_request_using_router_model(
             request_body, llm_router
@@ -2880,7 +2880,9 @@ async def gigachat_proxy_route(
         "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
     )
 
-    data: Final[dict[str, Any]] = {}  # mutable-ok: request body mutated in place by proxy pipeline
+    data: dict[
+        str, Any
+    ] = {}  # mutable-ok: request body mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline flexibility
 
     data["method"] = request.method
     data["endpoint"] = endpoint
@@ -2968,9 +2970,11 @@ async def handle_gigachat_passthrough_router_model(
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     # Detect streaming based on request body
-    is_streaming: Final = request_body.get("stream", False)
+    is_streaming: Final = request_body.get("stream", False)  # pyright: ignore[reportUnknownVariableType]  # request_body is dict[Unknown, Unknown]
 
-    data: Final[dict[str, Any]] = await _read_request_body(request=request)
+    data: dict[str, Any] = await _read_request_body(
+        request=request
+    )  # mutable-ok: mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline
     if user_api_key_dict is not None:
         if data.get("metadata") is None:
             data["metadata"] = {}  # mutable-ok: metadata dict mutated in place
@@ -3021,7 +3025,7 @@ async def handle_gigachat_passthrough_router_model(
     # Use the common passthrough processing to handle metadata and hooks
     # This also handles all response formatting (streaming/non-streaming) and exceptions
     try:
-        result: Final = await base_llm_response_processor.base_passthrough_process_llm_request(
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(  # rebind-ok: assigned once in try block
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
