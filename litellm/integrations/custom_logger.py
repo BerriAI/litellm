@@ -190,6 +190,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
+        """
+        Called when a client disconnects mid-request, for a callback that reserved
+        per-request state outside async_log_success_event/async_log_failure_event
+        (e.g. a concurrency slot admitted before the first response chunk) -- those
+        two callbacks never run for a client disconnect, so a callback relying on
+        them alone to release such state would otherwise leak it until its own
+        safety-net TTL.
+        """
+
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""
 

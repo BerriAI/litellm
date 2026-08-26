@@ -33,6 +33,7 @@ from litellm.proxy.common_request_processing import (
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _release_disconnect_state_on_all_callbacks,
     _resolve_per_request_model_group_alias,
     _should_return_raw_model_name,
     _UpstreamClosingStreamingResponse,
@@ -4318,6 +4319,25 @@ class TestCancelOnDisconnect:
 
         assert exc_info.value.status_code == 499
         assert recorder.disconnect_hook_calls == 1
+
+    async def test_release_disconnect_state_calls_every_callback_including_ones_without_an_override(
+        self, monkeypatch
+    ):
+        """
+        Bugbot finding: CustomLogger never defined async_release_disconnect_state_hook
+        as an empty default, unlike every other optional hook on that base class, so
+        calling it on a callback that never overrides it (most registered callbacks)
+        raised AttributeError -- caught here, but still a real gap in the base class's
+        own contract that a genuine implementation bug would be indistinguishable from.
+        """
+        overriding = _RecordingDisconnectHookLogger()
+        bare = CustomLogger()
+        monkeypatch.setattr(litellm, "callbacks", [overriding, bare])
+
+        await _release_disconnect_state_on_all_callbacks({"litellm_call_id": "call-1"})
+
+        assert overriding.disconnect_hook_calls == 1
+        assert await bare.async_release_disconnect_state_hook({"litellm_call_id": "call-1"}) is None
 
     async def _drive_base_process_llm_request(
         self, monkeypatch, general_settings: dict, llm_call, request: Request
