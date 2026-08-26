@@ -429,7 +429,10 @@ class MCPRequestHandler:
                 and oauth2_headers
                 and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
             ):
-                validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                (
+                    validated_user_api_key_auth,
+                    mcp_server_auth_headers,
+                ) = await MCPRequestHandler._admit_dcr_bridge_delegate(
                     server=bridge_delegate_target,
                     authorization_value=oauth2_headers["Authorization"],
                     mcp_server_auth_headers=mcp_server_auth_headers,
@@ -828,7 +831,9 @@ class MCPRequestHandler:
                     else await MCPRequestHandler._reload_admitted_principal(result.identity)
                 )
                 if validated_user_api_key_auth is None:
-                    await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+                    await MCPRequestHandler._enforce_admitted_live_policy(
+                        admitted=admitted, request=request, route=route
+                    )
                 injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
