@@ -1,23 +1,11 @@
-"""Live e2e: Together AI through the gateway, driven the way its users drive it.
+"""Live e2e: Together AI through the gateway on /chat/completions and /v1/messages.
 
-Covers the Together overhaul (LIT-5960): reasoning surfaces as ``reasoning_content``
-non-streaming and streamed, tool calls survive the transform and round-trip a tool
-result on both ``/chat/completions`` and ``/v1/messages``, ``chat_template_kwargs``
-reaches Together, and the cost header and spend row agree with the registry price.
-
-Model selection is registry-driven so the matrix does not rot: the reasoning and
-tool-calling deployment is the cheapest live ``together_ai/`` chat model whose cost
-map row (read from the proxy's own ``/public/litellm_model_cost_map``) carries
-``supports_function_calling`` and ``supports_reasoning``. The one pinned model,
-``TEMPLATE_KWARGS_BACKEND``, is pinned on purpose: ``enable_thinking`` is a Qwen
-chat-template contract the registry has no flag for. ``REASONING_REPLAY_BACKEND`` is
-pinned for the same reason: it is the serverless Together model whose template
-renders a replayed ``reasoning_content`` back into the prompt (its prompt_tokens grow
-with the replay and it answers from it; Qwen and DeepSeek silently drop it), which is
-what makes a stripped replay observable end to end.
-
-Requires TOGETHER_API_KEY on the proxy (tests/e2e/.env). No skip gate: once the
-proxy is up, a failure here is real, per the suite's hard-fail contract.
+The reasoning and tool-calling backend is the cheapest live ``together_ai/`` chat row
+in the proxy's own cost map that carries both capability flags. Two backends are
+pinned because the registry has no flag for what they prove: ``enable_thinking`` is a
+Qwen chat-template contract, and MiniMax-M3 is the serverless model whose template
+renders a replayed ``reasoning_content`` back into the prompt (Qwen and DeepSeek
+silently drop it). Requires TOGETHER_API_KEY on the proxy; no skip gate.
 """
 
 from __future__ import annotations
@@ -354,9 +342,6 @@ class TestTogetherChatCompletions:
     def test_chat_template_kwargs_reach_together(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        """Control first: the pinned Qwen model thinks by default, so the treatment's
-        missing reasoning_content proves ``enable_thinking: false`` reached Together
-        rather than the model simply not reasoning."""
         model, key = _register(client, resources, TEMPLATE_KWARGS_BACKEND)
 
         def ask(chat_template_kwargs: dict[str, bool] | None) -> OutMessage:
@@ -390,9 +375,6 @@ class TestTogetherChatCompletions:
     def test_replayed_reasoning_content_reaches_together(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        """The only place the fact lives is the replayed assistant turn's
-        ``reasoning_content``, so the model can answer only if the Together transform
-        forwarded it (LIT-5960: it used to strip it with the thinking blocks)."""
         model, key = _register(client, resources, REASONING_REPLAY_BACKEND)
 
         answer = _message(
@@ -423,9 +405,6 @@ class TestTogetherChatCompletions:
         registry: dict[str, CostMapEntry],
         reasoning_tool_backend: str,
     ) -> None:
-        """Cached prompt tokens (Together caches shared prefixes across calls) bill at
-        the registry's cache read rate, which is $0 until a row carries one (LIT-5972),
-        so the expected cost is computed from the same registry row the proxy prices with."""
         model, key = _register(client, resources, reasoning_tool_backend)
 
         result = client.proxy.transport.send(
