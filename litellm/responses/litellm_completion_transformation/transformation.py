@@ -1994,6 +1994,29 @@ class LiteLLMCompletionResponsesConfig:
         return restored_tool_name, namespace
 
     @staticmethod
+    def _unpack_parallel_tool_calls(
+        tool_id: str,
+        tool_arguments: str,
+        status: str = "completed",
+    ) -> Sequence[ResponseFunctionToolCall] | None:
+        """Unpack synthetic Azure multi_tool_use.parallel container into individual function calls."""
+        try:
+            parsed_args: Final = json.loads(tool_arguments)
+            return tuple(
+                ResponseFunctionToolCall(
+                    name=tool_use["recipient_name"].removeprefix("functions."),
+                    arguments=json.dumps(tool_use["parameters"]),
+                    call_id=f"{tool_id}_{idx}",
+                    id=f"{tool_id}_{idx}",
+                    type="function_call",
+                    status=status,
+                )
+                for idx, tool_use in enumerate(parsed_args["tool_uses"])
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+            return None
+
+    @staticmethod
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
@@ -2007,14 +2030,13 @@ class LiteLLMCompletionResponsesConfig:
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
-            if isinstance(choice, Choices):
-                if choice.message.tool_calls:
-                    all_chat_completion_tools.extend(choice.message.tool_calls)
-                    for tool_call in choice.message.tool_calls:
-                        TOOL_CALLS_CACHE.set_cache(
-                            key=tool_call.id,
-                            value=tool_call,
-                        )
+            if isinstance(choice, Choices) and choice.message.tool_calls:
+                all_chat_completion_tools.extend(choice.message.tool_calls)
+                for tool_call in choice.message.tool_calls:
+                    TOOL_CALLS_CACHE.set_cache(
+                        key=tool_call.id,
+                        value=tool_call,
+                    )
 
         request_tools: Final = responses_api_request.get("tools") if responses_api_request is not None else None
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
@@ -2045,6 +2067,16 @@ class LiteLLMCompletionResponsesConfig:
                     # Build regular function_call output item
                     restore_name = LiteLLMCompletionResponsesConfig._restore_namespace_tool_name
                     tool_name, namespace = restore_name(tool_name, namespace_tool_names)
+
+                    if tool_name == "multi_tool_use.parallel":
+                        unpacked = LiteLLMCompletionResponsesConfig._unpack_parallel_tool_calls(
+                            tool_id=tool_id,
+                            tool_arguments=tool_arguments,
+                            status=function_definition.get("status") or "completed",
+                        )
+                        if unpacked is not None:
+                            responses_tools.extend(unpacked)
+                            continue
 
                     provider_specific_fields: dict | None = None
                     if hasattr(tool, "provider_specific_fields") and getattr(tool, "provider_specific_fields", None):
