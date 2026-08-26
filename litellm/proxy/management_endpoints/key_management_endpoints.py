@@ -2294,10 +2294,9 @@ async def _process_single_key_update(
             prisma_client=prisma_client,
         )
 
-    _existing_row_metadata: Final = getattr(existing_key_row, "metadata", None)
     enforce_batch_enqueued_token_limit_is_admin_only(
         data=update_key_request,
-        existing_metadata=_existing_row_metadata if isinstance(_existing_row_metadata, dict) else None,
+        existing_metadata=existing_key_row.metadata,
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )

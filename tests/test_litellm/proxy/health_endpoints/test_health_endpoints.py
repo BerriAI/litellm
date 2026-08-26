@@ -6,11 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
+import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
+from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2674,3 +2677,38 @@ class TestNoRedisWarning:
         ):
             details = await _health_endpoints_module._get_health_readiness_details()
         assert details["show_no_redis_warning"] is False
+
+
+def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
+    """
+    Regression: /health/test_connection rejected mode=image_edit with a 422
+    before image_edit was added to its mode Literal, breaking the UI Test
+    Connection button for image edit deployments.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(
+            json={"created": 1700000000, "data": [{"b64_json": TEST_IMAGE_BASE64}]}
+        )
+        response = client.post(
+            "/health/test_connection",
+            json={
+                "mode": "image_edit",
+                "litellm_params": {"model": "openai/gpt-image-2", "api_key": "sk-test"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "success"

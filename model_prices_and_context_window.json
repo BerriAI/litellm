@@ -12282,7 +12282,7 @@
     },
     "claude-3-haiku-20240307": {
         "cache_creation_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr": 5e-07,
         "cache_read_input_token_cost": 3e-08,
         "deprecation_date": "2026-04-20",
         "input_cost_per_token": 2.5e-07,
@@ -12301,7 +12301,7 @@
     },
     "claude-3-opus-20240229": {
         "cache_creation_input_token_cost": 1.875e-05,
-        "cache_creation_input_token_cost_above_1hr": 6e-06,
+        "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "deprecation_date": "2026-01-05",
         "input_cost_per_token": 1.5e-05,
@@ -12515,7 +12515,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "provider_specific_entry": {
+            "us": 1.1
+        }
     },
     "claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -49469,6 +49472,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-sol": {
@@ -49494,6 +49498,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-terra": {
@@ -49519,6 +49524,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-terra": {
@@ -49544,6 +49550,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-luna": {
@@ -49569,6 +49576,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-luna": {
@@ -49594,6 +49602,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "bedrock_mantle/openai.gpt-5.5": {
@@ -49601,7 +49610,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "output_cost_per_token": 3.3e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
@@ -49628,7 +49637,7 @@
         "cache_read_input_token_cost": 2.75e-07,
         "output_cost_per_token": 1.65e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
@@ -50821,7 +50830,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        }
     },
     "claude-mythos-preview": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -50856,7 +50868,10 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "provider_specific_entry": {
+            "us": 1.1
+        }
     },
     "gemini/gemini-robotics-er-2-streaming-preview": {
         "input_cost_per_audio_token": 2e-06,
