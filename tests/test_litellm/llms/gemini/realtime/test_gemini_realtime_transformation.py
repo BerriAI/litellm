@@ -1867,15 +1867,15 @@ def test_is_setup_message_and_is_content_message():
     assert config.is_content_message({"setup": {}}) is False
 
 
-def test_map_openai_params_maps_stock_voice_case_insensitively():
-    """Regression: OpenAI stock voices map to Gemini prebuilt voices regardless of casing.
+def test_map_openai_params_drops_stock_voice_case_insensitively():
+    """Regression: OpenAI stock voices are dropped regardless of casing so Gemini Live keeps its default voice.
 
-    Unknown names pass through verbatim.
+    Non-OpenAI names pass through verbatim.
     """
     cfg = GeminiRealtimeConfig()
 
-    mapped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
-    assert mapped["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Zephyr"
+    dropped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
+    assert "speechConfig" not in dropped.get("generationConfig", {})
 
     passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
