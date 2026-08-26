@@ -148,13 +148,15 @@ def _apply_redacted_messages_back_preserving_fields(
     Responses-API ``input`` string, with no chat messages to merge into)."""
     original_messages: Final = data.get("messages")
     if not isinstance(original_messages, list):
-        apply_redacted_messages_back(
-            data, list(redacted_messages)
-        )  # mutable-ok: apply_redacted_messages_back requires a list
+        redacted_list: Final = list(redacted_messages)  # mutable-ok: apply_redacted_messages_back requires a list
+        apply_redacted_messages_back(data, redacted_list)
         return
     scope_indices: Final = _pre_masking_scope_indices(guardrail, original_messages)
     guardrailed_scoped: Final = tuple(
-        {**original_messages[original_idx], "content": redacted["content"]}
+        {  # mutable-ok: fresh dict per iteration, not stored beyond this comprehension
+            **original_messages[original_idx],
+            "content": redacted["content"],
+        }
         for original_idx, redacted in zip(scope_indices, redacted_messages, strict=True)
     )
     data["messages"] = merge_guardrailed_scoped_messages(
@@ -184,6 +186,20 @@ def _has_responses_instructions(data: Mapping[str, object]) -> bool:
     API never consumes."""
     instructions = data.get("instructions")
     return isinstance(instructions, str) and bool(instructions)
+
+
+def _breakdown_has_pii_violation(lakera_response: LakeraAIResponse | None) -> bool:
+    """True if any PII-category detector fired, regardless of whether other,
+    non-PII detectors (prompt injection, moderated content) also fired.
+    Unlike ``_is_only_pii_violation``, this doesn't require PII to be the
+    *only* thing detected -- it's used to decide whether masking/blocking is
+    even relevant at all before advisory mode's own logic runs."""
+    if not lakera_response:
+        return False
+    breakdown = lakera_response.get("breakdown") or ()
+    return any(
+        item.get("detected", False) and (item.get("detector_type") or "").startswith("pii/") for item in breakdown
+    )
 
 
 def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
@@ -540,30 +556,32 @@ class LakeraAIGuardrail(CustomGuardrail):
                 _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
                 verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
             elif self.on_flagged == "inject_system_message":
-                if is_multimodal_input:
-                    # Nothing here can be safely masked, so an advisory note next
-                    # to this raw, unredacted content would be no safer than a
-                    # note next to nothing. Degrade to blocking instead, same as
-                    # this on_flagged setting already does when the advisory
-                    # itself has no field it can be delivered into.
+                if _breakdown_has_pii_violation(lakera_guardrail_response) and is_multimodal_input:
+                    # There's PII in the mix and nothing here can be safely masked,
+                    # so an advisory note next to this raw, unredacted PII would be
+                    # no safer than a note next to nothing. Degrade to blocking
+                    # instead, same as this on_flagged setting already does when
+                    # the advisory itself has no field it can be delivered into.
                     raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
-                # A mixed violation (PII plus something else, e.g. prompt injection):
-                # mask whatever Lakera returned location data for before advising
-                # about what remains, so the advisory is never shown next to raw
-                # PII that could have been redacted.
-                mixed_redacted_messages: Final = self._mask_pii_in_messages(
-                    messages=new_messages,
-                    lakera_response=lakera_guardrail_response,
-                    masked_entity_count=masked_entity_count,
-                )
-                _apply_redacted_messages_back_preserving_fields(self, data, mixed_redacted_messages)
+                masked_pii_before_advisory: Final = _breakdown_has_pii_violation(lakera_guardrail_response)
+                if masked_pii_before_advisory:
+                    # A mixed violation (PII plus something else, e.g. prompt
+                    # injection): mask whatever Lakera returned location data for
+                    # before advising about what remains, so the advisory is never
+                    # shown next to raw PII that could have been redacted.
+                    mixed_redacted_messages: Final = self._mask_pii_in_messages(
+                        messages=new_messages,
+                        lakera_response=lakera_guardrail_response,
+                        masked_entity_count=masked_entity_count,
+                    )
+                    _apply_redacted_messages_back_preserving_fields(self, data, mixed_redacted_messages)
                 advisory_delivered: Final = self.inject_advisory_message(
                     data, self._build_advisory_message(lakera_guardrail_response)
                 )
                 if advisory_delivered:
                     verbose_proxy_logger.warning(
-                        "Lakera Guardrail: Advisory mode - violation detected, masked PII and appended advisory "
-                        "system message"
+                        "Lakera Guardrail: Advisory mode - violation detected, %sappended advisory system message",
+                        "masked PII and " if masked_pii_before_advisory else "",
                     )
                 else:
                     # Structured Responses-API input (a list, not a plain string)
