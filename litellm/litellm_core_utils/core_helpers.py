@@ -60,12 +60,18 @@ def safe_divide(
 
 def is_expected_client_error(exception: BaseException | None) -> bool:
     """
-    True when the exception maps to an HTTP 4xx status.
+    True when the proxy itself rejected the request with an HTTP 4xx before any
+    provider call (bad key, budget, unknown model, guardrail). A 4xx returned by
+    a provider (the exception carries ``llm_provider``) is an upstream or
+    deployment problem, so it is never an expected client error and keeps its
+    traceback.
 
     ProxyException stores the status on .code (as a str), HTTPException and
     litellm exceptions on .status_code.
     """
     if exception is None:
+        return False
+    if getattr(exception, "llm_provider", None):
         return False
     code: Final[object] = getattr(exception, "code", None)
     status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)

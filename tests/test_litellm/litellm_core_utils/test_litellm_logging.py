@@ -5714,6 +5714,24 @@ def test_get_error_information_skips_traceback_for_expected_4xx(monkeypatch):
     assert "test_litellm_logging" in result["traceback"]
 
 
+def test_get_error_information_keeps_traceback_for_provider_4xx():
+    """Regression for LIT-6163: a 4xx the provider returned (invalid deployment
+    key, upstream validation) is an operator problem, so its traceback must
+    survive the expected-client-error gate and reach every payload consumer."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    assert litellm.log_client_error_tracebacks is False
+    provider_exc = _raise_and_catch(
+        litellm.AuthenticationError(
+            message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
+        )
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(provider_exc)
+    assert result["error_code"] == "401"
+    assert result["llm_provider"] == "anthropic"
+    assert "test_litellm_logging" in result["traceback"]
+
+
 def test_failure_handler_helper_fn_builds_payload_once_per_exception():
     """Regression for LIT-6043: async and sync failure handlers both call
     _failure_handler_helper_fn for the same failed request; the standardized
