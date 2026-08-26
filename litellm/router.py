@@ -180,6 +180,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_successes_for_current_minute,
 )
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.openai import (
     AllMessageValues,
     FileTypes,
@@ -603,6 +604,7 @@ class Router:
         health_check_staleness_threshold: int | None = None,
         health_check_ignore_transient_errors: bool = False,
         enable_weighted_failover: bool = False,
+        enable_cross_model_group_collision_check: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -639,6 +641,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            enable_cross_model_group_collision_check (bool): When True, refuse the fallback that load-balances a raw `litellm_params.model` string across more than one `model_name` group. Opt-in; also enabled by `LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK`. Defaults to False.
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -810,6 +813,10 @@ class Router:
         self.disable_cooldowns = disable_cooldowns
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
+        self.enable_cross_model_group_collision_check = bool(
+            enable_cross_model_group_collision_check
+            or get_secret_bool("LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK", False)
+        )
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         _staleness: Final = health_check_staleness_threshold or (
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
@@ -10900,6 +10907,7 @@ class Router:
             "retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "enable_cross_model_group_collision_check",
             "enable_tag_filtering",
             "tag_routing_prefix",
         ]
@@ -10938,6 +10946,7 @@ class Router:
             "model_group_retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "enable_cross_model_group_collision_check",
             "enable_tag_filtering",
             "tag_routing_prefix",
         ]
@@ -11332,6 +11341,24 @@ class Router:
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
+    def _reject_cross_model_group_collision(self, model: str, deployments: list) -> None:
+        group_names: Final = frozenset(
+            str(deployment["model_name"])
+            for deployment in deployments
+            if isinstance(deployment.get("model_name"), str) and deployment["model_name"]
+        )
+        if len(group_names) <= 1:
+            return
+        groups: Final = ", ".join(sorted(group_names))
+        raise litellm.BadRequestError(
+            message=(
+                f"Model '{model}' matches deployments from multiple model groups ({groups}). "
+                "Request a configured model_name instead of the raw provider model string."
+            ),
+            model=model,
+            llm_provider="",
+        )
+
     def _try_early_resolve_deployments_for_model_not_in_names(
         self,
         model: str,
@@ -11487,6 +11514,8 @@ class Router:
                     request_kwargs=request_kwargs,
                     request_team_id=request_team_id,
                 )
+                if self.enable_cross_model_group_collision_check:
+                    self._reject_cross_model_group_collision(model=model, deployments=healthy_deployments)
                 # If the litellm-model lookup produced candidates that access-group
                 # filtering then removed, treat this the same as the by-name path
                 # being emptied: prevent default-model fallback from bypassing the

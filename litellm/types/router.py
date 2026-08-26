@@ -125,6 +125,7 @@ class UpdateRouterConfig(BaseModel):
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
     tag_routing_prefix: str | None = None
+    enable_cross_model_group_collision_check: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 

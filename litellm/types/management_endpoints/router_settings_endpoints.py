@@ -221,6 +221,14 @@ ROUTER_SETTINGS_FIELDS: Final[list[RouterSettingsField]] = [
         ui_field_name="Enable Pre-call Checks",
     ),
     RouterSettingsField(
+        field_name="enable_cross_model_group_collision_check",
+        field_type="Boolean",
+        field_value=None,
+        field_description=("Reject raw provider model strings that match more than one model_name group"),
+        field_default=False,
+        ui_field_name="Cross Model Group Collision Check",
+    ),
+    RouterSettingsField(
         field_name="default_litellm_params",
         field_type="Dictionary",
         field_value=None,

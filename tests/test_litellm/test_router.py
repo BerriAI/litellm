@@ -10649,3 +10649,96 @@ def test_permission_denied_error_is_retried_when_other_deployments_exist():
         )
         is True
     )
+
+
+def _colliding_raw_model_groups() -> list[dict]:
+    shared_model = "openai/some-shared-string"
+    return [
+        {
+            "model_name": "chain-a",
+            "litellm_params": {
+                "model": shared_model,
+                "api_key": "key-a",
+                "mock_response": "from-a",
+            },
+        },
+        {
+            "model_name": "chain-b",
+            "litellm_params": {
+                "model": shared_model,
+                "api_key": "key-b",
+                "mock_response": "from-b",
+            },
+        },
+    ]
+
+
+def test_raw_litellm_model_fallback_spans_unrelated_groups_by_default():
+    """Issue #38216: a raw litellm_params.model string load-balances across every group that shares it."""
+    router = litellm.Router(model_list=_colliding_raw_model_groups())
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="openai/some-shared-string"
+    )
+
+    assert {d["model_name"] for d in deployments} == {"chain-a", "chain-b"}
+    assert router.get_available_deployment(model="openai/some-shared-string") is not None
+
+
+def test_cross_model_group_collision_check_rejects_ambiguous_raw_model():
+    router = litellm.Router(
+        model_list=_colliding_raw_model_groups(),
+        enable_cross_model_group_collision_check=True,
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="multiple model groups"):
+        router.get_available_deployment(model="openai/some-shared-string")
+
+    deployment = router.get_available_deployment(model="chain-a")
+    assert deployment["model_name"] == "chain-a"
+
+
+def test_cross_model_group_collision_check_allows_same_group_and_unambiguous_raw_model():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chain-a",
+                "litellm_params": {
+                    "model": "openai/some-shared-string",
+                    "api_key": "key-a",
+                    "mock_response": "from-a-1",
+                },
+            },
+            {
+                "model_name": "chain-a",
+                "litellm_params": {
+                    "model": "openai/some-shared-string",
+                    "api_key": "key-a-2",
+                    "mock_response": "from-a-2",
+                },
+            },
+            {
+                "model_name": "chain-b",
+                "litellm_params": {
+                    "model": "openai/other-string",
+                    "api_key": "key-b",
+                    "mock_response": "from-b",
+                },
+            },
+        ],
+        enable_cross_model_group_collision_check=True,
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="openai/some-shared-string"
+    )
+    assert {d["model_name"] for d in deployments} == {"chain-a"}
+    assert len(deployments) == 2
+
+
+def test_cross_model_group_collision_check_env_enables_guard(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_ENABLE_CROSS_MODEL_GROUP_COLLISION_CHECK", "true")
+    router = litellm.Router(model_list=_colliding_raw_model_groups())
+
+    with pytest.raises(litellm.BadRequestError, match="multiple model groups"):
+        router.get_available_deployment(model="openai/some-shared-string")
