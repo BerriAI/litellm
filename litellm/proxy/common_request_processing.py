@@ -30,6 +30,7 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     ROUTER_MODEL_NAME_RESPONSE_FIELD,
     STREAM_SSE_DATA_PREFIX,
+    STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -200,6 +201,10 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
     "error_message": "Client disconnected the request",
     "error_class": "ClientDisconnected",
 }
+
+
+def _withheld_provider_output(response: object) -> bool:
+    return getattr(response, "has_buffered_provider_output", False) is True
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -3448,8 +3453,9 @@ class ProxyBaseLLMRequestProcessing:
                 # so a GeneratorExit on client disconnect is raised there and any
                 # statement after the yield never runs. The slow-path hook is
                 # awaited above, so a cancellation during it still leaves this
-                # False and refunds.
-                delivered_chunk = True
+                # False and refunds. A keepalive ping carries no provider output,
+                # so it must not suppress that refund.
+                delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 yield serialize_chunk(chunk)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
@@ -3463,7 +3469,7 @@ class ProxyBaseLLMRequestProcessing:
             # only sees GeneratorExit on GC) cannot own the refund.
             if not stream_completed:
                 client_disconnected = True
-            if not delivered_chunk:
+            if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
                 )

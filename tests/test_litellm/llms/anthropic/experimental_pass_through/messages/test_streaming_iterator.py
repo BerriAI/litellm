@@ -8,6 +8,8 @@ import pytest
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
+    AnthropicMessagesStreamHiddenParams,
+    AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
     _incomplete_stream_error_sse_event,
     _is_message_stop_chunk,
@@ -509,6 +511,32 @@ def test_anthropic_messages_response_as_sse_events_multiple_blocks_are_indexed()
     assert [s["index"] for s in starts] == [0, 1]
     deltas = [payload for event_type, payload in decoded if event_type == "content_block_delta"]
     assert [d["delta"]["text"] for d in deltas] == ["a", "b"]
+
+
+def test_anthropic_messages_streaming_response_reports_withheld_output_of_its_stream():
+    class _HoldingBack:
+        has_buffered_provider_output = True
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> bytes:
+            raise StopAsyncIteration
+
+    async def _bare_stream():
+        yield b""
+
+    hidden_params: AnthropicMessagesStreamHiddenParams = {"additional_headers": {}}
+    assert (
+        AnthropicMessagesStreamingResponse(completion_stream=_HoldingBack(), hidden_params=hidden_params)
+        .has_buffered_provider_output
+        is True
+    )
+    assert (
+        AnthropicMessagesStreamingResponse(completion_stream=_bare_stream(), hidden_params=hidden_params)
+        .has_buffered_provider_output
+        is False
+    )
 
 
 def test_anthropic_messages_response_as_sse_events_no_content_blocks():

@@ -5513,3 +5513,46 @@ async def test_handle_group_membership_changes_already_in_team_is_noop(mocker):
     )
 
     assert mock_team_member_add.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_group_404s_when_team_deleted_mid_request(mocker):
+    """A group deleted between the existence check and the write must 404.
+
+    Prisma returns None from both the update and the refresh reads once the row is
+    gone, and patch_group used to dereference that None while building the response.
+    """
+    group_id = "team-gone"
+
+    snapshot_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Group",
+        members_with_roles=[Member(user_id="zed", role="user")],
+        metadata={"externalId": "grp-ext"},
+    )
+
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="replace", path="displayName", value="Renamed")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=[snapshot_team, None, None])
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    mocker.patch(  # test-quality-ok: stubs the collaborator so the test pins the endpoint's own error contract
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator so the test pins the endpoint's own error contract
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    assert exc_info.value.code == "404"
+    assert f"Group not found with ID: {group_id}" in exc_info.value.message

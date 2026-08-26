@@ -15,11 +15,16 @@ import litellm
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
+)
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     FallbackAwareAnthropicMessagesStream,
     _anthropic_stream_commits_now,
     _anthropic_stream_should_decline_fallback,
+    _anthropic_stream_error_is_gateway_verdict,
+    _anthropic_stream_forwards_ping_live,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
 )
@@ -9469,21 +9474,103 @@ async def test_anthropic_messages_content_coalesced_with_error_in_one_physical_c
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_ping_keepalive_never_buffered_or_forwarded():
-    """Bugbot regression: a `ping` keepalive carries no content and must be
-    dropped outright before any real content arrives, rather than buffered -
+async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_dropped():
+    """Bugbot regression: a `ping` keepalive behind buffered lifecycle frames
+    carries no content and is dropped outright rather than buffered -
     otherwise a slow-starting connection sending many pings could grow the
     pre-content buffer without bound."""
     router = _anthropic_messages_make_router()
     source = _AnthropicMessagesFakeByteStream(
-        [_anthropic_messages_ping_chunk(), _anthropic_messages_content_chunk("hi")]
+        [
+            _anthropic_messages_message_start_chunk(),
+            _anthropic_messages_ping_chunk(),
+            _anthropic_messages_content_chunk("hi"),
+        ]
     )
 
     wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
     collected = [chunk async for chunk in wrapped]
 
-    assert _anthropic_messages_ping_chunk() not in collected
-    assert collected == [_anthropic_messages_content_chunk("hi")]
+    assert collected == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_leading_ping_keepalive_is_forwarded_live():
+    """A `ping` that no lifecycle frame precedes is how a hold-back turn keeps
+    its connection alive (AgenticAnthropicStreamingIterator), so it must reach
+    the client at once rather than wait behind the pre-content buffer."""
+    router = _anthropic_messages_make_router()
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_ping_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_message_start_chunk()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_ping_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [
+        _anthropic_messages_message_start_chunk(),
+        _anthropic_messages_content_chunk("hi"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_leading_ping_does_not_disqualify_fallback():
+    """A live-forwarded leading `ping` commits nothing: a retriable error after
+    it still falls back, and the fallback's own lifecycle follows the ping cleanly."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_ping_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    )
+    fallback_message_start = b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_2"}}\n\n'
+    fallback_stream = _AnthropicMessagesFallbackByteStream(
+        [fallback_message_start, _anthropic_messages_content_chunk("fallback answer")]
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == [
+        _anthropic_messages_ping_chunk(),
+        fallback_message_start,
+        _anthropic_messages_content_chunk("fallback answer"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_hold_back_retrieval_failure_reaches_client_without_fallback():
+    """The hold-back iterator's own retrieval-failure frame is the gateway's verdict, not a
+    provider failure: a configured fallback stays untouched and the client reads the error
+    right after the live keepalive."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_ping_chunk(), SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+    )
+    fallback = AsyncMock(
+        return_value=_AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
+    )
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils", new=fallback):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    fallback.assert_not_called()
+    assert collected == [_anthropic_messages_ping_chunk(), SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
 
 
 @pytest.mark.asyncio
@@ -9813,6 +9900,36 @@ def test_anthropic_stream_should_drop_pre_content_ping_direct_call():
     assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=False) is True
     assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=True) is False
     assert _anthropic_stream_should_drop_pre_content_ping(content, has_generated_content=False) is False
+
+
+def test_anthropic_stream_forwards_ping_live_direct_call():
+    ping = _anthropic_messages_ping_chunk()
+    content = _anthropic_messages_content_chunk("hi")
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=0) is True
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=1) is False
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True, buffered_chunk_count=0) is False
+    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False, buffered_chunk_count=0) is False
+
+
+def test_anthropic_stream_error_is_gateway_verdict_direct_call():
+    assert _anthropic_stream_error_is_gateway_verdict(SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES) is True
+    assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_overloaded_error_chunk()) is False
+    assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_ping_chunk()) is False
+
+
+def test_fallback_aware_stream_reports_withheld_output_of_its_current_source():
+    """The proxy's cancel-refund guard reads this flag off the router wrapper, so it
+    must reflect the stream actually being drained: the primary, then the fallback."""
+
+    class _HoldingBack:
+        _hidden_params = {"additional_headers": {}}
+        has_buffered_provider_output = True
+
+    wrapper = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), _HoldingBack())
+    assert wrapper.has_buffered_provider_output is True
+
+    wrapper.adopt_fallback_source(_AnthropicMessagesFakeByteStream([]))
+    assert wrapper.has_buffered_provider_output is False
 
 
 def test_is_retriable_anthropic_status_direct_call():

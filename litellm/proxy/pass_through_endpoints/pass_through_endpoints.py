@@ -5,7 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import groupby
 from typing import Any, Final, TypedDict, cast
@@ -3183,13 +3183,18 @@ async def _filter_endpoints_by_team_allowed_routes(
         )
 
     # retrieve team metadata
-    team_metadata: Final = team.metadata
+    team_metadata: Final = cast(  # cast-ok: prisma types the Json column as str; reads hand back the decoded value
+        "Mapping[str, object] | None", team.metadata
+    )
     if team_metadata is not None and team_metadata.get("allowed_passthrough_routes") is not None:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
         pass_through_endpoints = [
             endpoint
             for endpoint in pass_through_endpoints
-            if endpoint.path in team_metadata.get("allowed_passthrough_routes")
+            if endpoint.path
+            in cast(  # cast-ok: guarded above; team metadata stores this key as a list of route paths
+                "Sequence[str]", team_metadata.get("allowed_passthrough_routes")
+            )
         ]
 
     return pass_through_endpoints

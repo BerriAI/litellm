@@ -49,6 +49,8 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
+# in-memory stand-in handed to provider converters for redacted arguments; never stored
+REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
 
 MAX_STRING_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", 4096)
 
@@ -462,6 +464,8 @@ CONNECTION_ERROR_PATTERNS: Final[list[str]] = [
 ]
 STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
+STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
+STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = float(
     os.getenv("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400)
