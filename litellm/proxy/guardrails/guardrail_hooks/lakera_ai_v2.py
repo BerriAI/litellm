@@ -293,6 +293,8 @@ class LakeraAIGuardrail(CustomGuardrail):
             on_flagged=self.on_flagged,
             advisory_system_message=self.advisory_system_message,
             event_hook=self.event_hook,
+            payload=self.payload,
+            breakdown=self.breakdown,
         )
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
@@ -315,10 +317,14 @@ class LakeraAIGuardrail(CustomGuardrail):
         whose real dispatch hook never changed.
         """
         new_event_hook: Final = getattr(litellm_params, "mode", None) or self.event_hook
+        prospective_payload: Final = getattr(litellm_params, "payload", None)
+        prospective_breakdown: Final = getattr(litellm_params, "breakdown", None)
         self._validate_advisory_config(
             on_flagged=getattr(litellm_params, "on_flagged", None) or self.on_flagged,
             advisory_system_message=getattr(litellm_params, "advisory_system_message", None),
             event_hook=new_event_hook,
+            payload=self.payload if prospective_payload is None else prospective_payload,
+            breakdown=self.breakdown if prospective_breakdown is None else prospective_breakdown,
         )
         super().update_in_memory_litellm_params(litellm_params=litellm_params)
         self.event_hook = new_event_hook
@@ -328,6 +334,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         on_flagged: str,
         advisory_system_message: str | None,
         event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | str | Sequence[str] | None,
+        payload: bool | None,
+        breakdown: bool | None,
     ) -> None:
         if advisory_system_message is not None:
             if not _template_uses_reason_placeholder(advisory_system_message):
@@ -347,6 +355,13 @@ class LakeraAIGuardrail(CustomGuardrail):
                 "on_flagged='inject_system_message' is not supported for mode='during_call': during_call "
                 "runs concurrently with the LLM dispatch with no pre-call barrier, so the advisory message "
                 "cannot reliably reach the request. Use mode='pre_call' instead."
+            )
+        if on_flagged == "inject_system_message" and not (payload and breakdown):
+            raise ValueError(
+                "on_flagged='inject_system_message' requires payload=True and breakdown=True: advisory "
+                "mode masks any detected PII before appending the advisory note, and that masking can "
+                "only happen when Lakera's response carries both the violation breakdown and the "
+                "payload location data. Without them, PII would be forwarded to the model unredacted."
             )
 
     def _build_advisory_message(self, lakera_response: LakeraAIResponse | None) -> str:

@@ -735,6 +735,78 @@ class TestAdvisoryModeDuringCallUnsupported:
         assert guardrail.event_hook == "pre_call"
 
 
+class TestAdvisoryModeRequiresPayloadAndBreakdown:
+    """Veria-ai finding on BerriAI/litellm#34940: the mixed-violation masking
+    safety net (mask any detected PII before appending the advisory note) only
+    works when Lakera's response carries both breakdown (to detect a PII hit
+    at all) and payload (the location data to mask by). payload=False or
+    breakdown=False alongside on_flagged='inject_system_message' would forward
+    raw, unredacted PII next to the advisory note with no error and no signal
+    to the operator, so that combination must be rejected at construction
+    time, same as the during_call combination already is."""
+
+    def test_payload_false_raises_at_construction(self):
+        with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+            LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", payload=False)
+
+    def test_breakdown_false_raises_at_construction(self):
+        with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+            LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", breakdown=False)
+
+    def test_both_false_raises_at_construction(self):
+        with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+            LakeraAIGuardrail(
+                api_key="test_key", on_flagged="inject_system_message", payload=False, breakdown=False
+            )
+
+    def test_defaults_construct_without_error(self):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        assert guardrail.payload is True
+        assert guardrail.breakdown is True
+
+    def test_payload_false_with_block_mode_constructs_without_error(self):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", payload=False)
+        assert guardrail.payload is False
+
+    def test_in_memory_update_reintroducing_payload_false_raises(self):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", payload=False)
+        updated_params = LitellmParams(
+            guardrail="lakera_v2", mode="pre_call", on_flagged="inject_system_message", payload=False
+        )
+        with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+            guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
+        assert guardrail.on_flagged == "block", "a rejected update must leave the live instance untouched"
+
+    def test_in_memory_update_leaving_payload_unspecified_resets_to_the_model_default(self):
+        """LitellmParams.payload defaults to True (not None/unset), so an update
+        that doesn't mention payload at all still carries payload=True through
+        the base setattr -- it does not preserve the live instance's prior
+        False value. That's a valid transition, not a bug: it's the same
+        pydantic-default behavior every other field on this update already has."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", payload=False)
+        updated_params = LitellmParams(guardrail="lakera_v2", mode="pre_call", on_flagged="inject_system_message")
+        guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
+        assert guardrail.on_flagged == "inject_system_message"
+        assert guardrail.payload is True
+
+    def test_in_memory_update_disabling_breakdown_on_an_advisory_instance_raises(self):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        updated_params = LitellmParams(
+            guardrail="lakera_v2", mode="pre_call", on_flagged="inject_system_message", breakdown=False
+        )
+        with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+            guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
+        assert guardrail.breakdown is True, "a rejected update must leave the live instance untouched"
+
+    def test_in_memory_update_enabling_both_while_flipping_on_flagged_is_allowed(self):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", payload=False, breakdown=False)
+        updated_params = LitellmParams(
+            guardrail="lakera_v2", mode="pre_call", on_flagged="inject_system_message", payload=True, breakdown=True
+        )
+        guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
+        assert guardrail.on_flagged == "inject_system_message"
+
+
 class TestAdvisoryModeWiring:
     """Tests for on_flagged='inject_system_message' wiring in async_pre_call_hook / async_moderation_hook."""
 
