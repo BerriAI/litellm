@@ -1,70 +1,37 @@
 """
 Tag-scoped token, request, dollar, and concurrency rate limits declared once,
-globally, in `litellm_settings.global_tag_rate_limits` -- enforced once per
-request in `async_pre_call_hook`, before Router does any routing, so a limit
-applies regardless of which model or fallback chain the request ends up
-hitting.
+globally, in `litellm_settings.global_tag_rate_limits` and enforced in
+`async_pre_call_hook`, before Router does any routing -- so a limit applies
+regardless of which model or fallback chain the request ends up hitting.
 
-This is the model-independent sibling of `model_based_tag_rate_limits_hook`,
-which enforces the same `TagRateLimitEntry` shape but nested per-deployment
-under `model_info.tag_rate_limits`, once per routing hop
-(`async_filter_deployments`). A global entry has no deployment/routing-group
-to reconcile -- there is exactly one config value, read once -- so this hook
-reuses that sibling's free, already-hardened helper functions
-(`entry_applies`, the Lua atomic check-and-increment scripts, cache
-partitioning, bucket-key hashing primitives) from `tag_rate_limits_shared.py`
-rather than duplicating them, but implements its own, much smaller
-admission/accounting engine: no `_LimitsIndex`, no routing-group or
-team-alias resolution, no per-deployment dedup signatures.
+Model-independent sibling of `model_based_tag_rate_limits_hook`, which
+enforces the same `TagRateLimitEntry` shape per-deployment instead. Reuses
+that sibling's shared helpers (`entry_applies`, the atomic Lua scripts, cache
+partitioning, bucket-key hashing) from `tag_rate_limits_shared.py`, but has
+its own smaller admission/accounting engine with no routing-group or
+per-deployment concerns.
 
-Three independent entry-level knobs decide who a global entry applies to and
-how its bucket is shared:
+Three entry-level knobs: `apply_to_key_alias` scopes an entry to specific
+virtual-key aliases; `apply_to_models` scopes it to specific caller-facing
+model names, letting one entry cap a whole fallback chain as a unit (a
+rejection then carries `detail["cross_model_scope"] = True` so
+`_pre_call_with_fallbacks` re-raises instead of silently admitting the
+request through an unlisted fallback model); `scope_by_key_hash` controls
+whether matching keys share one bucket or each gets its own.
 
-- `apply_to_key_alias`: unset means every request, any key, any model.  Set
-  to a list of virtual-key aliases, only those keys' requests count.
-- `apply_to_models`: unset means every model. Set to a list of model names,
-  only requests whose caller-facing `model` field is in that list count --
-  letting one entry rate-limit a whole fallback chain as a single unit by
-  naming every model in the chain. Each check is a fresh, independent
-  evaluation of `_entry_applies` against whatever `model` is current at that
-  moment, not a one-time decision that then sticks for the rest of the
-  request. Two concrete consequences follow from that:
-  (1) if the request's own model fails mid-flight and Router internally
-  retries a different model for the *same* admitted call, that retry is
-  never re-checked -- the original admission (against the originally
-  requested model) already stands, so an operator who needs the limit to
-  track whichever model actually ends up serving a request needs
-  `model_info.tag_rate_limits` instead; but
-  (2) if this hook's own admission *rejects* the request,
-  `common_request_processing.py` would otherwise catch that rejection and
-  retry the whole pre-call pipeline against
-  `litellm_settings.fallbacks`/`router_settings.fallbacks`, with
-  `data["model"]` mutated to the fallback target -- silently admitting the
-  request via a model outside `apply_to_models`, defeating the cap. A
-  rejection from an `apply_to_models`-scoped entry carries
-  `detail["cross_model_scope"] = True` for exactly this reason:
-  `_pre_call_with_fallbacks` checks that marker and re-raises immediately
-  instead of trying any fallback, so this bypass is closed regardless of
-  whether the fallback chain is also listed in `apply_to_models`.
-- `scope_by_key_hash` (already exists on `TagRateLimitEntry`): whether the
-  keys an entry applies to share one bucket, or each gets its own.
-
-`async_pre_call_hook` runs before Router constructs `Logging`/`litellm_logging_obj`
-for this request (see `common_request_processing.py`: `pre_call_hook` fires
-well before `base_process_llm_request` builds the logging object), so unlike
-`model_based_tag_rate_limits_hook` this hook cannot stash pending concurrency
-reservations on `data["litellm_logging_obj"].model_call_details` -- that
-object doesn't exist yet. Per-request state is instead kept on a
-`ContextVar`-based stash, the same established pattern
-`parallel_request_limiter_v3.py`'s v3 handler already uses for exactly this
-problem, with one difference: the stash here is a dict keyed by
-`litellm_call_id` rather than one shared mutable instance with an
-overwritable "owner" field, so a nested LiteLLM call made inside the request
-(e.g. a guardrail's own LLM judge call) -- which mints its own fresh call id
-but inherits the same ContextVar-held ancestor context, not a separate one
--- gets its own isolated entry instead of overwriting the outer call's and
-having its own success callback release the outer call's still-pending
-reservations early.
+`data["litellm_logging_obj"]` does exist by the time `async_pre_call_hook`
+runs, but `_pre_call_with_fallbacks` re-runs the whole pre-call pipeline
+(building a fresh `Logging` object each time) once per fallback model on the
+same `litellm_call_id`, so unlike `model_based_tag_rate_limits_hook`'s
+per-Router-hop reservations, a stash keyed to one attempt's own
+`model_call_details` wouldn't survive to a later attempt. Per-request state
+instead lives on a `ContextVar`-based stash (the same pattern
+`parallel_request_limiter_v3.py` uses for the identical admission-to-release
+problem), keyed by `litellm_call_id` so a nested LiteLLM call sharing the
+same inherited context (an LLM-judge guardrail, for example) gets its own
+isolated entry instead of releasing the outer call's still-pending
+reservation early. Confirmed live: a real streaming client disconnect
+correctly releases its concurrency reservation through this mechanism.
 """
 
 import asyncio
@@ -84,7 +51,7 @@ from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_f
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching model_based_tag_rate_limits_hook's identical import
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # shared private helper, reused by model_based_tag_rate_limits_hook too
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
     ATOMIC_UNITS as _ATOMIC_UNITS,
@@ -146,7 +113,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_strategy.tag_based_routing import (
-    _get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching model_based_tag_rate_limits_hook's identical import
+    _get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # shared private helper, reused by model_based_tag_rate_limits_hook too
 )
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.router import TagRateLimitEntry, TagRateLimits
@@ -160,16 +127,23 @@ else:
     Span: TypeAlias = object
 
 
+def _entry_applies_any_admitted_model(
+    entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str | None, admitted_models: frozenset[str]
+) -> bool:
+    """Same as `_entry_applies`, except an `apply_to_models`-scoped entry
+    counts as applying if ANY model an admission attempt for this call_id
+    saw was in scope -- not just whichever model the call ultimately served.
+    A `_pre_call_with_fallbacks` retry re-admits with a different model for
+    the same call_id, and an entry that matched an earlier attempt must
+    still get its success-time accounting."""
+    if not admitted_models:
+        return _entry_applies(entry, tags, key_alias, None)
+    return any(_entry_applies(entry, tags, key_alias, model) for model in admitted_models)
+
+
 def _hash_tag(entry: TagRateLimitEntry, unit: _LimitUnit, tag_value: str, key_hash: str | None) -> str:
-    """
-    Global-hook equivalent of `model_based_tag_rate_limits_hook._hash_tag`,
-    without a `model_group`/deployment-scope/team-scope dimension -- a global
-    entry has none of those. Namespaced under `tag_rl:global:` so it can never
-    collide with that sibling hook's own `tag_rl:{model_group}:...` keys even
-    if an operator names a deployment "global": every key also differs by
-    `unit`/`name`/`tag_id`/`_policy_fingerprint`, and the two hooks' entries
-    are never meant to share a bucket in the first place.
-    """
+    """Namespaced under `tag_rl:global:` so it never collides with
+    `model_based_tag_rate_limits_hook`'s own `tag_rl:{model_group}:...` keys."""
     key_suffix: Final = f":key:{key_hash}" if key_hash is not None else ""
     policy_suffix: Final = f":policy:{_policy_fingerprint(entry)}"
     return f"tag_rl:global:{unit}:{entry.name}:{entry.tag_id}:{_fixed_length_identity(tag_value)}{key_suffix}{policy_suffix}"
@@ -203,45 +177,30 @@ class _CachePartition:
 @dataclass(slots=True)
 class _GlobalTagRateLimitStash:
     """Per-call bookkeeping `async_pre_call_hook` hands to that same call's
-    success/failure/disconnect callbacks -- see module docstring for why
-    this lives on a `ContextVar`, not `model_call_details`.
+    success/failure/disconnect callbacks -- see module docstring for why this
+    lives on a `ContextVar`, not `model_call_details`.
 
-    Keyed by `litellm_call_id` in the dict below rather than one shared
-    mutable instance with an overwritable "owner" field: a nested LiteLLM
-    call made inside the request (an LLM-judge guardrail, a silent
-    experiment) that mints its own fresh call id runs inside the *same*
-    inherited context, not a separate one, so a single shared instance's
-    owner field would get reassigned to the nested call and its own
-    success callback would then release the outer call's still-pending
-    reservations early -- letting extra same-tag requests through while
-    the outer request is still genuinely in flight. Keying by call id
-    isolates each call's own reservations regardless of nesting.
+    Keyed by `litellm_call_id` rather than one shared mutable instance so a
+    nested LiteLLM call (an LLM-judge guardrail) that mints its own call id
+    but inherits the same context doesn't release the outer call's
+    still-pending reservation early.
     """
 
     admission_time: float | None = None
-    # The caller-facing `model` admission read from `data.get("model")`, so
-    # async_log_success_event's tokens/dollars accounting gates
-    # apply_to_models against the same, originally-requested model admission
-    # decided on -- not whatever model a later fallback actually served.
-    model: str | None = None
+    # Every model any admission attempt for this call_id has classified
+    # entries against, accumulated rather than overwritten: a
+    # _pre_call_with_fallbacks retry re-runs admission with a *different*
+    # model for the same call_id, and an apply_to_models entry that matched
+    # an earlier attempt must still get its accounting at success time even
+    # though the request ultimately serves from a later attempt's model.
+    admitted_models: frozenset[str] = field(default_factory=frozenset)
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
-    # "requests" keys already charged for this call_id -- veria-ai finding:
-    # ProxyBaseLLMRequestProcessing._pre_call_with_fallbacks reruns the whole
-    # pre-call pipeline (this hook included) once per fallback model on ANY
-    # ProxyRateLimitError, not only one this hook itself raised, but reuses
-    # the same litellm_call_id (self.data is mutated in place, only `model`
-    # changes) across every attempt -- so this stash is the SAME object each
-    # time. A "requests" check matching an already-charged key here renews
-    # at zero net cost instead of charging a second unit for the same
-    # logical request; see async_pre_call_hook's own comment for how.
+    # Keys already charged for this call_id, so a fallback retry (same
+    # litellm_call_id, different model) renews instead of double-charging.
     charged_request_keys: list[str] = field(default_factory=list)  # mutable-ok: see comment above
-    # The server-authenticated key_hash (UserAPIKeyAuth.api_key) of whichever
-    # call first claimed this stash. litellm_call_id is caller-controlled via
-    # the x-litellm-call-id header (the exact forgery vector
-    # model_based_tag_rate_limits_hook's own pending-reservations mirror was
-    # hardened against earlier), so two unrelated requests sharing a
-    # caller-chosen id must not be allowed to "renew" each other's charge --
-    # only a later admission carrying this same, authenticated key_hash may.
+    # key_hash of whoever first claimed this stash. litellm_call_id is
+    # caller-controlled (x-litellm-call-id), so only a later admission with
+    # the same authenticated key_hash may renew this stash's charges.
     owner_key_hash: str | None = None
 
 
@@ -392,12 +351,8 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         self,
         checks: Sequence[tuple[InternalUsageCache, str, float, float, int]],
     ) -> tuple[int | None, tuple[float, ...]]:
-        """All-or-nothing atomic admission across `checks` -- see
-        `model_based_tag_rate_limits_hook._PROXY_ModelBasedTagRateLimitsHook._atomic_check_and_increment`'s
-        own docstring for the full rationale (refund-on-rollback, why a
-        raising key's own outcome is never refunded); identical logic,
-        duplicated rather than shared since it lives as instance methods
-        rather than free functions."""
+        """All-or-nothing atomic admission across `checks`: on a rejection,
+        refunds every check admitted earlier in this batch."""
         if not checks:
             return None, ()
         admitted_values: Final = []  # mutable-ok: sequential async accumulator, discardable on early rejection
@@ -563,12 +518,10 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         if config is None:
             return data
 
-        # async_pre_call_hook fires once per request in the common case, but
-        # ProxyBaseLLMRequestProcessing._pre_call_with_fallbacks can re-run
-        # this same pipeline once per fallback model on any ProxyRateLimitError
-        # (not only one this hook raised) -- see charged_request_keys' own
-        # docstring for how a repeat run for the same call_id renews rather
-        # than re-charges both "requests" and "concurrency" checks below.
+        # _pre_call_with_fallbacks can re-run this pipeline once per fallback
+        # model on any ProxyRateLimitError, reusing the same litellm_call_id --
+        # see charged_request_keys for how a repeat run renews instead of
+        # re-charging.
         stash: Final = _claim_stash_for_data(data)
 
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(data)
@@ -577,17 +530,16 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         key_hash: Final = user_api_key_dict.api_key
         model: Final = data.get("model") if isinstance(data.get("model"), str) else None
 
-        # Only a repeat admission carrying the SAME authenticated key_hash as
-        # whichever call first claimed this stash may renew its charges --
-        # see owner_key_hash's own docstring for why a bare call_id match is
-        # not enough. First admission for this stash claims ownership here.
+        # First admission for this stash claims ownership; only a later one
+        # with the same key_hash may renew its charges (see owner_key_hash).
         if stash.owner_key_hash is None:
             stash.owner_key_hash = key_hash
         renewal_allowed: Final = stash.owner_key_hash == key_hash
 
         now: Final = self._time_provider().timestamp()
         stash.admission_time = now
-        stash.model = model
+        if renewal_allowed and model is not None:
+            stash.admitted_models = stash.admitted_models | frozenset((model,))
         classified: Final = self._classify(config, tags, key_alias, key_hash, now, model)
         if not classified:
             return data
@@ -615,15 +567,8 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                         check.key,
                         check.entry.limit,
                         # A key already charged/reserved for this call_id (an
-                        # earlier _pre_call_with_fallbacks attempt for the
-                        # same logical request) renews at zero net cost
-                        # instead of charging or reserving a second unit --
-                        # folded into this same all-or-nothing batch so a
-                        # rollback here (some other check in the batch
-                        # rejecting) refunds that zero-cost renewal as a
-                        # genuine no-op, same reasoning as
-                        # model_based_tag_rate_limits_hook's identical fix
-                        # for its own per-hop retries.
+                        # earlier fallback attempt for the same request) renews
+                        # at zero net cost instead of charging a second unit.
                         0.0
                         if renewal_allowed
                         and (
@@ -642,11 +587,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                     failing_check.unit, failing_check.entry, failing_check.tag_value, model, current=values[0]
                 )
 
-            # Only genuinely new reservations, never a key already in
-            # already_reserved_concurrency_keys: that key's own check just
-            # renewed at zero net cost above, so re-adding it here would
-            # make release (which decrements once per queued entry) decrement
-            # twice for a counter that was only ever incremented once.
+            # Exclude already_reserved_concurrency_keys: that key renewed at
+            # zero cost above, so re-adding it would make release decrement
+            # twice for a counter only ever incremented once.
             concurrency_reservations: Final = tuple(
                 (check.key, _partition_key(check.entry))
                 for check in atomic_checks
@@ -655,12 +598,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if concurrency_reservations:
                 stash.pending_concurrency_keys.extend(concurrency_reservations)  # mutable-ok: see field's own docstring
 
-            # Only recorded when renewal_allowed: an admission that didn't
-            # own this stash (a call_id collision from a different key_hash)
-            # must not contaminate the rightful owner's own renewal
-            # tracking, or a later, genuine fallback retry from the owner
-            # could wrongly treat the impostor's charge as its own and
-            # renew for free.
+            # Only recorded when renewal_allowed, so a call_id collision from
+            # a different key_hash can't contaminate the rightful owner's
+            # renewal tracking.
             request_keys: Final = (
                 tuple(
                     check.key
@@ -684,15 +624,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         await self._release_keys(release_keys)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        # No special-case skip for this hook's own tag_rate_limit_exceeded
-        # rejection: that rejection never reaches the point where a
-        # concurrency reservation is queued (see async_pre_call_hook), so
-        # stash.pending_concurrency_keys is already empty in that case and
-        # the check below naturally no-ops. Skipping release based on the
-        # exception's error marker alone would be wrong here, since
-        # model_based_tag_rate_limits_hook raises the identical marker --
-        # that rejection can land after this hook already reserved a slot
-        # for this same request, and that slot must still be released.
+        # Always release regardless of which hook raised: this hook's own
+        # rejection never reserves a slot, so pending_concurrency_keys is
+        # already empty in that case and the check below no-ops; a rejection
+        # from model_based_tag_rate_limits_hook (same error marker) can still
+        # land after this hook already reserved its own slot.
         stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
         if stash is None or not stash.pending_concurrency_keys:
             return
@@ -735,7 +671,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if stash is not None and stash.admission_time is not None
             else self._time_provider().timestamp()
         )
-        model: Final = stash.model if stash is not None else None
+        admitted_models: Final = stash.admitted_models if stash is not None else frozenset()
         increment_by_unit: Final[Mapping[_LimitUnit, float]] = MappingProxyType(
             {
                 "tokens": float(standard_logging_object.get("total_tokens") or 0),
@@ -752,7 +688,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies(entry, tags, key_alias, model):
+                if not _entry_applies_any_admitted_model(entry, tags, key_alias, admitted_models):
                     continue
                 increment_value = increment_by_unit[unit]
                 if increment_value == 0:

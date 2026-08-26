@@ -517,6 +517,79 @@ async def test_apply_to_models_fallback_does_not_re_narrow_accounting_to_the_ser
         )
 
 
+@pytest.mark.asyncio
+async def test_apply_to_models_accounts_when_a_fallback_retry_re_admits_with_a_different_model(
+    time_controller, monkeypatch
+):
+    """
+    Unlike the test above (one admission, a later Router-level fallback
+    reported only at success time), this simulates
+    _pre_call_with_fallbacks itself re-running async_pre_call_hook for the
+    SAME call_id with a DIFFERENT model after some other hook rejected the
+    original one. The first admission (opus-chain, in apply_to_models scope)
+    must still get its success-time accounting even though the second
+    admission (sonnet-chain, out of scope) is the one that actually proceeds
+    -- overwriting a single "last admitted model" field would silently drop
+    the spend for the in-scope entry.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "dollar_limits": {
+                "limits": [
+                    {
+                        "name": "chain_spend",
+                        "tag_id": "end_user_id",
+                        "limit": 10.0,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain"},
+        call_type="completion",
+    )
+    # _pre_call_with_fallbacks retry: same call_id, fallback model outside apply_to_models.
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "sonnet-chain"},
+        call_type="completion",
+    )
+
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "model": "sonnet-chain",
+        "standard_logging_object": {
+            "total_tokens": 0,
+            "response_cost": 12.0,
+            "model": "sonnet-chain",
+            "model_group": "sonnet-chain",
+        },
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # The $12 spend landed in the opus-chain-scoped bucket, so a fresh
+    # opus-chain request is now over the $10 limit and rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"},
+            call_type="completion",
+        )
+
+
 # ---------------------------------------------------------------------------
 # _pre_call_with_fallbacks reruns admission for the same logical request:
 # a repeat call_id must renew, not double-charge -- veria-ai finding on
@@ -788,6 +861,46 @@ async def test_concurrency_reservation_released_on_disconnect(time_controller, m
     data = _data(["end_user_id:u1"], call_id="call-1")
     await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="completion")
     await hook.async_release_disconnect_state_hook({"litellm_call_id": "call-1"})
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data=_data(["end_user_id:u1"], call_id="call-2"),
+        call_type="completion",
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_concurrency_reservation_released_when_disconnect_runs_in_a_forked_task(time_controller, monkeypatch):
+    """
+    common_request_processing.py's real disconnect path runs the release call
+    inside a task forked via asyncio.create_task AFTER admission already ran
+    in the parent task (_await_llm_call_cancelling_on_disconnect's `monitor`
+    task, the streaming generator's own task), not in the same coroutine as
+    admission the way the test above calls it. A ContextVar-based stash that
+    only happens to work when both calls share one coroutine has caused a
+    real leak in this codebase before, so this exercises the actual
+    parent-then-forked-child topology instead.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data = _data(["end_user_id:u1"], call_id="call-1")
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="completion")
+
+    async def release_in_child_task() -> None:
+        await hook.async_release_disconnect_state_hook({"litellm_call_id": "call-1"})
+
+    await asyncio.create_task(release_in_child_task())
 
     result = await hook.async_pre_call_hook(
         user_api_key_dict=_key(),
