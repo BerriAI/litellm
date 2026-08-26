@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -43,7 +43,7 @@ from typing import (
 from urllib.parse import quote, unquote
 
 from fastapi import HTTPException
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -52,6 +52,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
+from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -818,6 +819,125 @@ async def rewrite_response_ids(
         canonical,
     )
     return mutated if changed else body
+
+
+# ---------------------------------------------------------------------------
+# OUTPUT path — streamed Responses API bodies
+# ---------------------------------------------------------------------------
+
+_RESPONSE_ID_PREFIX: Final = "resp_"
+_STREAMED_RESPONSE_ID_SPEC: Final[_FieldSpec] = ("id", _RESPONSE_ID_PREFIX)
+_SSE_DATA_PREFIX: Final = "data:"
+_SSE_EVENT_ADAPTER: Final = TypeAdapter(Mapping[str, JsonValue])
+
+
+def _first_streamed_response(frames: bytes) -> tuple[str, Mapping[str, JsonValue]] | None:
+    for line in frames.decode("utf-8", errors="replace").splitlines():
+        if not line.startswith(_SSE_DATA_PREFIX):
+            continue
+        try:
+            event = _SSE_EVENT_ADAPTER.validate_json(line[len(_SSE_DATA_PREFIX) :])
+        except ValidationError:
+            continue
+        response = event.get("response")
+        if not isinstance(response, dict):
+            continue
+        raw_id = response.get("id")
+        if isinstance(raw_id, str) and raw_id.startswith(_RESPONSE_ID_PREFIX):
+            return raw_id, response
+    return None
+
+
+class _StreamedResponseIdRewriter:
+    __slots__ = ("_is_create_route", "_pending", "_prisma_client", "_provider", "_replacement", "_user_api_key_dict")
+
+    def __init__(
+        self,
+        provider: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+        is_create_route: bool,
+    ) -> None:
+        self._provider: Final = provider
+        self._user_api_key_dict: Final = user_api_key_dict
+        self._prisma_client: Final = prisma_client
+        self._is_create_route: Final = is_create_route
+        self._pending = b""
+        self._replacement: tuple[bytes, bytes] | None = None
+
+    async def feed(self, chunk: bytes) -> bytes:
+        complete_frames, self._pending = split_complete_sse_frames(self._pending + chunk)
+        if not complete_frames:
+            return b""
+        if self._replacement is None:
+            self._replacement = await self._mint(complete_frames)
+        return self._rewrite(complete_frames)
+
+    def flush(self) -> bytes:
+        tail: Final = self._pending
+        self._pending = b""
+        return self._rewrite(tail)
+
+    async def _mint(self, frames: bytes) -> tuple[bytes, bytes] | None:
+        first: Final = _first_streamed_response(frames)
+        if first is None:
+            return None
+        raw_id, snapshot = first
+        managed_id: Final = await _mint_or_reuse_object(
+            raw_id,
+            self._provider,
+            "response",
+            snapshot,
+            self._user_api_key_dict,
+            self._prisma_client,
+            self._is_create_route,
+        )
+        return raw_id.encode(), managed_id.encode()
+
+    def _rewrite(self, frames: bytes) -> bytes:
+        if self._replacement is None:
+            return frames
+        raw_id, managed_id = self._replacement
+        return frames.replace(raw_id, managed_id)
+
+
+async def rewrite_streamed_response_ids(
+    stream: AsyncGenerator[bytes, None],
+    provider: str,
+    method: str,
+    route: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> AsyncGenerator[bytes, None]:
+    """
+    Record ownership of the response object streamed back by a Responses API
+    passthrough and swap its managed id into every SSE frame, so a streamed
+    response is owned and resolved exactly like a non-streamed one.
+
+    Streams for any other ``(provider, method, route)`` are relayed untouched.
+    """
+    from litellm.proxy.auth.auth_utils import normalize_request_route
+
+    canonical: Final = normalize_request_route(_canonical_path(route))
+    field_specs: Final = BUILTIN_OUTPUT_ID_FIELD_MAP.get((provider, method, canonical), ())
+    if _STREAMED_RESPONSE_ID_SPEC not in field_specs:
+        async for chunk in stream:
+            yield chunk
+        return
+
+    rewriter: Final = _StreamedResponseIdRewriter(
+        provider=provider,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        is_create_route="{" not in canonical,
+    )
+    async for chunk in stream:
+        rewritten_frames = await rewriter.feed(chunk)
+        if rewritten_frames:
+            yield rewritten_frames
+    tail: Final = rewriter.flush()
+    if tail:
+        yield tail
 
 
 # ---------------------------------------------------------------------------
