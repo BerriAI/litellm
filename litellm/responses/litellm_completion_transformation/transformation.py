@@ -1300,16 +1300,14 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, list):
-            text_parts: Final[list[str]] = []  # mutable-ok: text accumulator
-            for block in content:
-                if not isinstance(block, Mapping):
-                    continue
-                block_type = block.get("type")
-                if block_type in ("encrypted_content", "redacted_thinking"):
-                    continue
-                text = block.get("text")
-                if isinstance(text, str) and text.strip():
-                    text_parts.append(text.strip())
+            text_parts: Final = tuple(
+                text.strip()
+                for block in content
+                if isinstance(block, Mapping)
+                and block.get("type") not in ("encrypted_content", "redacted_thinking")
+                and isinstance(text := block.get("text"), str)
+                and text.strip()
+            )
             if text_parts:
                 return "\n".join(text_parts)
         return None
@@ -1325,13 +1323,11 @@ class LiteLLMCompletionResponsesConfig:
         summary: Final[object] = input_item.get("summary")
         if not isinstance(summary, list):
             return None
-        text_parts: Final[list[str]] = []  # mutable-ok: text accumulator
-        for block in summary:
-            if not isinstance(block, Mapping):
-                continue
-            text = block.get("text")
-            if isinstance(text, str) and text.strip():
-                text_parts.append(text.strip())
+        text_parts: Final = tuple(
+            text.strip()
+            for block in summary
+            if isinstance(block, Mapping) and isinstance(text := block.get("text"), str) and text.strip()
+        )
         return "\n".join(text_parts) if text_parts else None
 
     @staticmethod

@@ -36262,7 +36262,9 @@ export interface components {
             } | null;
             /** Model Max Budget Usage */
             model_max_budget_usage?: {
-                [key: string]: unknown;
+                [key: string]: {
+                    [key: string]: unknown;
+                };
             } | null;
             /**
              * Models
