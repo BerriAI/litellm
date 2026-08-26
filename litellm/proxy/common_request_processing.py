@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -284,7 +284,7 @@ def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
     )
 
 
-def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: object) -> bool:
+def _assembled_model_came_from_a_later_chunk(chunks: Sequence[object], assembled_model: object) -> bool:
     """Report whether stream_chunk_builder picked a model the first chunk did not carry.
 
     Azure Model Router puts the routed model on the chunks after the first one, and the
@@ -306,7 +306,10 @@ def _assembled_model_came_from_a_later_chunk(chunks: list, assembled_model: obje
     )
 
 
-def _assembled_model_is_the_name_the_client_asked_for(request_data: dict, assembled_model: object) -> bool:
+def _assembled_model_is_the_name_the_client_asked_for(
+    request_data: Mapping[str, object],
+    assembled_model: object,
+) -> bool:
     """Report whether the assembled model is the public name the proxy stamps onto chunks.
 
     That stamp is what leaves an unpriced alias on the partial response, so the deployment's
