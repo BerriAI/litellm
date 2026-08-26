@@ -150,9 +150,7 @@ async def _route_registered_provider(
     registered_provider: Final = litellm_params.get("custom_llm_provider")
     registered_model: Final = litellm_params.get("model")
     native_provider: Final = registered_provider == "pydantic_ai_agents" or (
-        registered_provider == "bedrock"
-        and isinstance(registered_model, str)
-        and "agentcore" in registered_model
+        registered_provider == "bedrock" and isinstance(registered_model, str) and "agentcore" in registered_model
     )
     bridge_params: Final = _OBJECT_DICT_ADAPTER.validate_python(
         {"message": params["message"]} if native_provider else params

@@ -39,9 +39,7 @@ def _build_wxo_headers(
         {
             key: value
             for key, value in static_headers.items()
-            if isinstance(key, str)
-            and isinstance(value, str)
-            and key.lower() not in _WXO_RESERVED_HEADERS
+            if isinstance(key, str) and isinstance(value, str) and key.lower() not in _WXO_RESERVED_HEADERS
         }
         if isinstance(static_headers, Mapping)
         else {}
@@ -309,9 +307,7 @@ class WatsonxOrchestrateHandler:
     ) -> dict[str, object]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
-        client: Final = WatsonxOrchestrateHandler._http_client(
-            timeout=timeout if timeout is not None else 90.0
-        )
+        client: Final = WatsonxOrchestrateHandler._http_client(timeout=timeout if timeout is not None else 90.0)
         token: Final = await WatsonxOrchestrateHandler._get_bearer_token(
             cp4d_host=wxo.cp4d_host,
             auth_mode=wxo.auth_mode,
@@ -362,9 +358,7 @@ class WatsonxOrchestrateHandler:
     ) -> AsyncIterator[dict[str, object]]:
         wxo: Final = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
-        client: Final = WatsonxOrchestrateHandler._http_client(
-            timeout=timeout if timeout is not None else 120.0
-        )
+        client: Final = WatsonxOrchestrateHandler._http_client(timeout=timeout if timeout is not None else 120.0)
         token: Final = await WatsonxOrchestrateHandler._get_bearer_token(
             cp4d_host=wxo.cp4d_host,
             auth_mode=wxo.auth_mode,

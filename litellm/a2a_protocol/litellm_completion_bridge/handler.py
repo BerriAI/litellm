@@ -52,9 +52,7 @@ class A2ACompletionBridgeHandler:
             merged = dict(previous)
             for key, value in current.items():
                 merged[key] = (
-                    A2ACompletionBridgeHandler._merge_stream_values(merged[key], value)
-                    if key in merged
-                    else value
+                    A2ACompletionBridgeHandler._merge_stream_values(merged[key], value) if key in merged else value
                 )
             return merged
         if isinstance(previous, list) and isinstance(current, list):
