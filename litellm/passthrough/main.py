@@ -101,7 +101,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         self._flush_scheduled = True
 
         try:
-            task = asyncio.create_task(
+            task: Final = asyncio.create_task(
                 self._litellm_logging_obj.async_flush_passthrough_collected_chunks(
                     raw_bytes=self._raw_bytes,
                     provider_config=self._provider_config,
@@ -127,7 +127,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         if not self._initialized:
             await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
         try:
-            chunk = await anext(self._iterator)
+            chunk: Final = await anext(self._iterator)
             self._raw_bytes.append(chunk)
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
@@ -205,7 +205,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
 
     def __next__(self) -> bytes:
         try:
-            chunk = next(self._iterator)
+            chunk: Final = next(self._iterator)
             self._raw_bytes.append(chunk)
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()

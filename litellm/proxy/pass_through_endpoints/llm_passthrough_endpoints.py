@@ -76,9 +76,9 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.router import Router
 
-    ProxyConfig = _ProxyConfig
+    ProxyConfig = _ProxyConfig  # rebind-ok: conditional type alias
 else:
-    ProxyConfig = Any
+    ProxyConfig = Any  # rebind-ok: runtime fallback
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
@@ -508,8 +508,8 @@ async def milvus_proxy_route(
             status_code=400,
             detail=f"collectionName must be a string. Got {type(_raw_collection_name).__name__}",
         )
-    collection_name: str | None = _raw_collection_name
-    extra_headers = {}
+    collection_name: str | None = _raw_collection_name  # rebind-ok: locally scoped conversion
+    extra_headers: Final = {}  # mutable-ok: dict for extra headers
     base_target_url: str | None = None
     if not collection_name:
         raise HTTPException(
@@ -2839,12 +2839,14 @@ async def gigachat_proxy_route(
     )
 
     ## check for streaming
-    request_body = await get_request_body(request)
-    is_router_model = False
+    request_body: Final = await get_request_body(request)
+    is_router_model = False  # rebind-ok: conditionally set to True when model uses router
 
-    model = request_body.get("model")
+    model: Final = request_body.get("model")
     if model:
-        is_router_model = is_passthrough_request_using_router_model(request_body, llm_router)
+        is_router_model = is_passthrough_request_using_router_model(
+            request_body, llm_router
+        )  # rebind-ok: conditionally set to True
     elif any(word in endpoint for word in ("completions", "embeddings")):
         raise HTTPException(
             status_code=400, detail={"error": "Model is required in request body"}
@@ -2878,14 +2880,14 @@ async def gigachat_proxy_route(
         "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
     )
 
-    data: dict[str, Any] = {}  # mutable-ok: request body mutated in place by proxy pipeline
+    data: Final[dict[str, Any]] = {}  # mutable-ok: request body mutated in place by proxy pipeline
 
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["json"] = request_body
     data["custom_llm_provider"] = "gigachat"
 
-    client = get_async_httpx_client(
+    client: Final = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
         params={  # mutable-ok: httpx client params
             "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
@@ -2894,7 +2896,7 @@ async def gigachat_proxy_route(
     )
     data["client"] = client
 
-    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     try:
         return await base_llm_response_processor.base_passthrough_process_llm_request(
@@ -2966,9 +2968,9 @@ async def handle_gigachat_passthrough_router_model(
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     # Detect streaming based on request body
-    is_streaming = request_body.get("stream", False)
+    is_streaming: Final = request_body.get("stream", False)
 
-    data: dict[str, Any] = await _read_request_body(request=request)
+    data: Final[dict[str, Any]] = await _read_request_body(request=request)
     if user_api_key_dict is not None:
         if data.get("metadata") is None:
             data["metadata"] = {}  # mutable-ok: metadata dict mutated in place
@@ -2995,7 +2997,7 @@ async def handle_gigachat_passthrough_router_model(
     data["custom_llm_provider"] = "gigachat"
 
     # Remove sensitive keys from data
-    keys = [  # mutable-ok: list of keys to remove from data
+    keys: Final = [  # mutable-ok: list of keys to remove from data
         "gigachat_auth_url",
         "gigachat_access_token",
         "gigachat_scope",
@@ -3005,7 +3007,7 @@ async def handle_gigachat_passthrough_router_model(
     for key in keys:
         data.pop(key, None)
 
-    client = get_async_httpx_client(
+    client: Final = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
         params={  # mutable-ok: httpx client params
             "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
@@ -3014,12 +3016,12 @@ async def handle_gigachat_passthrough_router_model(
     )
 
     data["client"] = client
-    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     # Use the common passthrough processing to handle metadata and hooks
     # This also handles all response formatting (streaming/non-streaming) and exceptions
     try:
-        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+        result: Final = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,

@@ -92,7 +92,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             if provider_chat_config is None:
                 raise ValueError(f"No provider config found for model: {model}")
 
-            litellm_model_response: ModelResponse = provider_chat_config.transform_response(
+            litellm_model_response: Final = provider_chat_config.transform_response(
                 model=model,
                 messages=request_data.get("messages", []),  # mutable-ok: empty list default for transform_response
                 raw_response=httpx_response,

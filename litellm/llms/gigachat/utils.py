@@ -17,9 +17,13 @@ def convert_usage(usage_data: Mapping[str, int]) -> Usage:
     prompt_tokens_total: Final = prompt_tokens + precached_prompt_tokens
     total_tokens_total: Final = total_tokens + precached_prompt_tokens
 
-    prompt_tokens_details: PromptTokensDetailsWrapper | None = None
+    prompt_tokens_details: PromptTokensDetailsWrapper | None = (
+        None  # rebind-ok: conditionally assigned when cached tokens exist
+    )
     if precached_prompt_tokens > 0:
-        prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=precached_prompt_tokens)
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=precached_prompt_tokens
+        )  # rebind-ok: conditionally assigned when cached tokens exist
 
     return Usage(
         prompt_tokens=prompt_tokens_total,

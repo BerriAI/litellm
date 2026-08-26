@@ -249,12 +249,12 @@ def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
             message=f"Invalid token response: {data}",
         )
 
-    expires_at: int
     # expires_at is in milliseconds
+    expires_at: int  # rebind-ok: conditionally assigned from str or int
     if isinstance(expires_at_raw, str):
-        expires_at = int(expires_at_raw)
+        expires_at = int(expires_at_raw)  # rebind-ok: conditionally assigned from str or int
     else:
-        expires_at = expires_at_raw  # pyright: ignore[reportAssignmentType]  # raw value is int or str; converted above
+        expires_at = expires_at_raw  # pyright: ignore[reportAssignmentType]  # raw value is int or str; converted above; rebind-ok: conditionally assigned from str or int
 
     verbose_logger.debug("GigaChat access token obtained successfully")
     return access_token, expires_at

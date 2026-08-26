@@ -48,15 +48,15 @@ class GigaChatModelResponseIterator:
         # Extract text content
         text: Final = delta.get("content", "") or ""
 
-        usage_block: ChatCompletionUsageBlock | None = None
-        tool_use: ChatCompletionToolCallChunk | None = None
+        usage_block: ChatCompletionUsageBlock | None = None  # rebind-ok: conditionally assigned after stop detection
+        tool_use: ChatCompletionToolCallChunk | None = None  # rebind-ok: conditionally assigned on function_call
         finish_reason: str | None = chunk_finish_reason
 
         # Handle function_call in stream
         if chunk_finish_reason == "function_call" and delta.get("function_call"):
             func_call: Final = delta["function_call"]
             args_raw: Final = func_call.get("arguments") or {}
-            args_str: str
+            args_str: str  # rebind-ok: conditionally assigned from dict or str
             if isinstance(args_raw, dict):
                 args_str = json.dumps(args_raw, ensure_ascii=False)  # rebind-ok: build from dict
             else:
@@ -76,7 +76,7 @@ class GigaChatModelResponseIterator:
         if chunk_finish_reason == "stop":
             usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
             if usage_data:
-                usage: Final = convert_usage(usage_data)
+                usage = convert_usage(usage_data)  # rebind-ok: conditional usage assignment
                 usage_block = ChatCompletionUsageBlock(
                     prompt_tokens=usage.prompt_tokens,
                     completion_tokens=usage.completion_tokens,
