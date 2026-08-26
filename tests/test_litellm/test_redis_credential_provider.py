@@ -1,4 +1,6 @@
 import asyncio
+import builtins
+import sys
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -87,6 +89,41 @@ def test_elasticache_provider_resolves_credentials_once_but_refreshes_signature(
     assert rotating_credentials.calls == 3
 
 
+def test_elasticache_provider_uses_botocore_session_credentials(monkeypatch):
+    credentials = _FakeCredentials("AKIA-SYNTHETIC")
+    monkeypatch.setattr("botocore.session.get_session", lambda: SimpleNamespace(get_credentials=lambda: credentials))
+    provider = ElastiCacheIAMCredentialProvider(
+        user_name="iam-user",
+        cache_name="cache.example.com",
+        region="us-east-1",
+    )
+
+    user_name, token = provider.get_credentials()
+
+    assert user_name == "iam-user"
+    assert "AKIA-SYNTHETIC" in token
+
+
+def test_elasticache_provider_reports_missing_botocore(monkeypatch):
+    original_import = builtins.__import__
+
+    def import_without_botocore(name, *args, **kwargs):
+        if name == "botocore.session":
+            raise ImportError("synthetic missing dependency")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "botocore.session", raising=False)
+    monkeypatch.setattr(builtins, "__import__", import_without_botocore)
+    provider = ElastiCacheIAMCredentialProvider(
+        user_name="iam-user",
+        cache_name="cache.example.com",
+        region="us-east-1",
+    )
+
+    with pytest.raises(ImportError, match="pip install boto3"):
+        provider.get_credentials()
+
+
 def test_elasticache_provider_reports_missing_credentials():
     provider = ElastiCacheIAMCredentialProvider(
         user_name="iam-user",
@@ -96,6 +133,39 @@ def test_elasticache_provider_reports_missing_credentials():
     )
 
     with pytest.raises(RuntimeError, match="Unable to resolve AWS credentials"):
+        provider.get_credentials()
+
+
+def test_elasticache_provider_reports_missing_frozen_credentials():
+    provider = ElastiCacheIAMCredentialProvider(
+        user_name="iam-user",
+        cache_name="cache.example.com",
+        region="us-east-1",
+        credentials_resolver=_FakeResolver(SimpleNamespace(get_frozen_credentials=lambda: None)),
+    )
+
+    with pytest.raises(RuntimeError, match="Unable to resolve AWS credentials"):
+        provider.get_credentials()
+
+
+def test_elasticache_provider_reports_missing_signing_dependency(monkeypatch):
+    original_import = builtins.__import__
+
+    def import_without_botocore_auth(name, *args, **kwargs):
+        if name == "botocore.auth":
+            raise ImportError("synthetic missing dependency")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "botocore.auth", raising=False)
+    monkeypatch.setattr(builtins, "__import__", import_without_botocore_auth)
+    provider = ElastiCacheIAMCredentialProvider(
+        user_name="iam-user",
+        cache_name="cache.example.com",
+        region="us-east-1",
+        credentials_resolver=_FakeResolver(_FakeCredentials("AKIA-SYNTHETIC")),
+    )
+
+    with pytest.raises(ImportError, match="pip install boto3"):
         provider.get_credentials()
 
 
