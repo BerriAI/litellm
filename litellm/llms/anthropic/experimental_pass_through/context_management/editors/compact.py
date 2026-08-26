@@ -13,8 +13,10 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 """
 
 import re
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Literal, NotRequired, Optional, TypedDict, Union, cast
+
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,9 +31,8 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
     from litellm.types.llms.anthropic import (
+        AllAnthropicPassThroughMessageValues,
         AllAnthropicToolsValues,
-        AnthopicMessagesAssistantMessageParam,
-        AnthropicMessagesUserMessageParam,
     )
     from litellm.types.llms.openai import ChatCompletionToolParam
     from litellm.types.utils import ModelResponse
@@ -55,7 +56,7 @@ from ..result import PolyfillResult
 # so the summary's spend is attributed to the same scopes. The list mirrors the
 # fields populated by
 # ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``.
-# ``user_api_key_model_max_budget`` / ``user_api_key_end_user_model_max_budget``
+# The three ``*_model_max_budget`` fields
 # are what ``_PROXY_VirtualKeyModelMaxBudgetLimiter`` reads post-call to update
 # the per-model spend caches, so without them the summary spend would never
 # count against the caller's model budget. ``user_api_key_end_user_id`` /
@@ -63,7 +64,7 @@ from ..result import PolyfillResult
 # and rate limiter key their counters on, and ``user_api_end_user_max_budget``
 # is the end-user budget the cost callback enforces — without these the summary
 # tokens escape the caller's end-user/project budgets and counters.
-_PROPAGATED_METADATA_KEYS = (
+_PROPAGATED_METADATA_KEYS: Final = (
     "user_api_key",
     "user_api_key_alias",
     "user_api_key_team_id",
@@ -75,12 +76,13 @@ _PROPAGATED_METADATA_KEYS = (
     "user_api_key_end_user_id",
     "user_api_end_user_max_budget",
     "user_api_key_model_max_budget",
+    "user_api_key_user_model_max_budget",
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
     "litellm_parent_otel_span",
 )
 
-_SUMMARY_TAG_RE = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
+_SUMMARY_TAG_RE: Final = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
 
 
 def _read_summary_model_setting() -> str | None:
@@ -89,7 +91,7 @@ def _read_summary_model_setting() -> str | None:
         from litellm.proxy.proxy_server import general_settings
     except Exception:
         return None
-    value = general_settings.get(COMPACT_SUMMARY_MODEL_SETTING_KEY)
+    value: Final = general_settings.get(COMPACT_SUMMARY_MODEL_SETTING_KEY)
     return value if isinstance(value, str) and value else None
 
 
@@ -104,7 +106,7 @@ def _read_summary_max_tokens_setting() -> int:
         from litellm.proxy.proxy_server import general_settings
     except Exception:
         return COMPACT_SUMMARY_MAX_TOKENS
-    value = general_settings.get(COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY)
+    value: Final = general_settings.get(COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY)
     if isinstance(value, int) and value > 0:
         return value
     return COMPACT_SUMMARY_MAX_TOKENS
@@ -156,14 +158,14 @@ async def _check_summary_model_access(
     except Exception:
         return True
 
-    key_models = list(getattr(user_api_key_auth, "models", None) or [])
-    team_id = getattr(user_api_key_auth, "team_id", None)
-    team_model_aliases = getattr(user_api_key_auth, "team_model_aliases", None)
-    team_models = list(getattr(user_api_key_auth, "team_models", None) or [])
-    user_id = getattr(user_api_key_auth, "user_id", None)
-    project_id = getattr(user_api_key_auth, "project_id", None)
+    key_models: Final = list(getattr(user_api_key_auth, "models", None) or [])
+    team_id: Final = getattr(user_api_key_auth, "team_id", None)
+    team_model_aliases: Final = getattr(user_api_key_auth, "team_model_aliases", None)
+    team_models: Final = list(getattr(user_api_key_auth, "team_models", None) or [])
+    user_id: Final = getattr(user_api_key_auth, "user_id", None)
+    project_id: Final = getattr(user_api_key_auth, "project_id", None)
 
-    checks: tuple[tuple[Literal["key", "team"], list[str]], ...] = (
+    checks: Final[tuple[tuple[Literal["key", "team"], list[str]], ...]] = (
         ("key", key_models),
         ("team", team_models),
     )
@@ -277,7 +279,7 @@ async def _check_summary_model_access(
                 e,
             )
             team_membership = None
-        member_allowed_models = (
+        member_allowed_models: Final = (
             team_membership.litellm_budget_table.allowed_models
             if team_membership is not None and team_membership.litellm_budget_table is not None
             else None
@@ -316,10 +318,14 @@ async def _check_summary_model_budget(
     The summary subrequest never passes back through ``user_api_key_auth``, so
     without this gate a caller whose ``model_max_budget`` for
     ``context_management_summary_model`` is exhausted could keep consuming that
-    model via compaction. Mirrors the ``model_max_budget`` /
-    ``end_user_model_max_budget`` enforcement that ``user_api_key_auth`` runs for
-    the client-requested model. Returns True outside the proxy or when no
+    model via compaction. Mirrors the per-model budget enforcement that
+    ``user_api_key_auth`` runs for the client-requested model. Returns True outside the proxy or when no
     per-model budget is configured.
+
+    All three scopes are checked because the summary's spend is charged to all
+    three: this file propagates the key, user and end-user budgets into the
+    subrequest's metadata, so enforcing only two of them would let compaction
+    increment a counter it can never be refused by.
     """
     if user_api_key_auth is None:
         return True
@@ -328,8 +334,8 @@ async def _check_summary_model_budget(
     except Exception:
         return True
 
-    model_max_budget = getattr(user_api_key_auth, "model_max_budget", None)
-    token = getattr(user_api_key_auth, "token", None)
+    model_max_budget: Final = getattr(user_api_key_auth, "model_max_budget", None)
+    token: Final = getattr(user_api_key_auth, "token", None)
     if isinstance(model_max_budget, dict) and model_max_budget and token is not None:
         try:
             await model_max_budget_limiter.is_key_within_model_budget(
@@ -346,8 +352,27 @@ async def _check_summary_model_budget(
             )
             return False
 
-    end_user_model_max_budget = getattr(user_api_key_auth, "end_user_model_max_budget", None)
-    end_user_id = getattr(user_api_key_auth, "end_user_id", None)
+    user_model_max_budget: Final = user_api_key_auth.user_model_max_budget
+    user_id: Final = user_api_key_auth.user_id
+    if isinstance(user_model_max_budget, dict) and user_model_max_budget and user_id is not None:
+        try:
+            await model_max_budget_limiter.is_user_within_model_budget(
+                user_id=user_id,
+                user_model_max_budget=user_model_max_budget,
+                model=summary_model,
+            )
+        except litellm.BudgetExceededError:
+            return False
+        except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the key and end-user scopes do
+            verbose_logger.warning(
+                "compact_20260112: unexpected error during user model-budget check for summary_model=%s; denying: %s",
+                summary_model,
+                e,
+            )
+            return False
+
+    end_user_model_max_budget: Final = getattr(user_api_key_auth, "end_user_model_max_budget", None)
+    end_user_id: Final = getattr(user_api_key_auth, "end_user_id", None)
     if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
         try:
             await model_max_budget_limiter.is_end_user_within_model_budget(
@@ -399,7 +424,7 @@ async def _check_summary_model_rate_limit(
     except Exception:
         return True
 
-    limiter = getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
+    limiter: Final = getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
     if (
         limiter is None
         or not hasattr(limiter, "should_rate_limit")
@@ -408,9 +433,9 @@ async def _check_summary_model_rate_limit(
         return True
 
     try:
-        metadata = getattr(user_api_key_auth, "metadata", None) or {}
-        data = {"model": summary_model}
-        descriptors = limiter._create_rate_limit_descriptors(
+        metadata: Final = getattr(user_api_key_auth, "metadata", None) or {}
+        data: Final = {"model": summary_model}
+        descriptors: Final = limiter._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_auth,
             data=data,
             rpm_limit_type=metadata.get("rpm_limit_type"),
@@ -430,7 +455,7 @@ async def _check_summary_model_rate_limit(
         descriptors.extend(limiter.create_organization_rate_limit_descriptor(user_api_key_auth, summary_model))
         if not descriptors:
             return True
-        response = await limiter.should_rate_limit(
+        response: Final = await limiter.should_rate_limit(
             descriptors=descriptors,
             parent_otel_span=getattr(user_api_key_auth, "parent_otel_span", None),
             read_only=True,
@@ -479,15 +504,15 @@ def _slice_around_compaction_block(
     if msg_idx is None or blk_idx is None:
         return messages, None
 
-    original_msg = messages[msg_idx]
-    original_content = original_msg["content"]
-    compaction_block = cast(dict[str, object], original_content[blk_idx])
+    original_msg: Final = messages[msg_idx]
+    original_content: Final = original_msg["content"]
+    compaction_block: Final = cast(dict[str, object], original_content[blk_idx])
 
     # Per Anthropic's contract everything before the compaction block is
     # dropped, including earlier blocks within the same assistant message.
-    sliced_content = list(original_content[blk_idx:])
+    sliced_content: Final = list(original_content[blk_idx:])
 
-    sliced_messages: list[dict[str, object]] = [{**original_msg, "content": sliced_content}]
+    sliced_messages: Final[list[dict[str, object]]] = [{**original_msg, "content": sliced_content}]
     sliced_messages.extend(messages[msg_idx + 1 :])
     return sliced_messages, compaction_block
 
@@ -500,7 +525,7 @@ def _strip_compaction_blocks(
     Used to build the downstream-bound message list — the adapter has no
     concept of a compaction block, so it must not see one.
     """
-    cleaned: list[dict[str, object]] = []
+    cleaned: Final[list[dict[str, object]]] = []
     for msg in messages:
         content = msg.get("content")
         if not isinstance(content, list):
@@ -519,7 +544,7 @@ def _augment_system_with_summary(
     summary_text: str,
 ) -> str | list[dict[str, object]]:
     """Prepend a "Previous conversation summary: ..." block to ``system``."""
-    prefix = f"{COMPACT_SUMMARY_SYSTEM_PREFIX}{summary_text}\n\n"
+    prefix: Final = f"{COMPACT_SUMMARY_SYSTEM_PREFIX}{summary_text}\n\n"
     if system is None:
         return prefix.rstrip()
     if isinstance(system, str):
@@ -534,24 +559,24 @@ def _augment_system_with_summary(
     return [{"type": "text", "text": prefix.rstrip()}, *system]
 
 
-def _resolve_trigger_tokens(edit_spec: dict[str, object]) -> tuple[int, list[str]]:
+def _resolve_trigger_tokens(edit_spec: Mapping[str, object]) -> tuple[int, list[str]]:
     """Validate and resolve ``trigger.value``.
 
     Raises ``AnthropicContextManagementError`` if the explicitly-supplied value
     is below the 50k minimum. Unknown ``trigger.type`` values fall back to
     ``input_tokens`` with a warning.
     """
-    warnings: list[str] = []
-    trigger = edit_spec.get("trigger") or {}
+    warnings: Final[list[str]] = []
+    trigger: Final = edit_spec.get("trigger") or {}
     if not isinstance(trigger, dict):
         warnings.append("trigger_not_a_dict_using_default")
         return COMPACT_DEFAULT_TRIGGER_TOKENS, warnings
 
-    trigger_type = trigger.get("type", "input_tokens")
+    trigger_type: Final = trigger.get("type", "input_tokens")
     if trigger_type != "input_tokens":
         warnings.append(f"unsupported_trigger_type_{trigger_type}_using_input_tokens")
 
-    value = trigger.get("value")
+    value: Final = trigger.get("value")
     if value is None:
         return COMPACT_DEFAULT_TRIGGER_TOKENS, warnings
     if not isinstance(value, int):
@@ -568,8 +593,8 @@ def _resolve_trigger_tokens(edit_spec: dict[str, object]) -> tuple[int, list[str
     return value, warnings
 
 
-def _build_summary_prompt(edit_spec: dict[str, object], tools: list[dict[str, object]] | None) -> str:
-    custom = edit_spec.get("instructions")
+def _build_summary_prompt(edit_spec: Mapping[str, object], tools: Sequence[Mapping[str, object]] | None) -> str:
+    custom: Final = edit_spec.get("instructions")
     if isinstance(custom, str) and custom.strip():
         return custom
     prompt = COMPACT_DEFAULT_INSTRUCTIONS
@@ -591,7 +616,7 @@ def _propagate_metadata(
     """
     if not parent_litellm_metadata:
         return {}
-    propagated: dict[str, object] = {}
+    propagated: Final[dict[str, object]] = {}
     for key in _PROPAGATED_METADATA_KEYS:
         if key in parent_litellm_metadata:
             propagated[key] = parent_litellm_metadata[key]
@@ -618,12 +643,12 @@ def _count_effective_tokens(
         LiteLLMAnthropicMessagesAdapter,
     )
 
-    messages_without_compaction = _strip_compaction_blocks(effective_messages)
-    adapter = LiteLLMAnthropicMessagesAdapter()
+    messages_without_compaction: Final = _strip_compaction_blocks(effective_messages)
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
     try:
         openai_shape = adapter.translate_anthropic_messages_to_openai(
             messages=cast(
-                "list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]",
+                "list[AllAnthropicPassThroughMessageValues]",
                 messages_without_compaction,
             )
         )
@@ -661,10 +686,10 @@ def _count_effective_tokens(
         tools=cast("list[ChatCompletionToolParam] | None", openai_tools),
     )
     if compaction_block is not None:
-        content = compaction_block.get("content") or ""
+        content: Final = compaction_block.get("content") or ""
         if content:
             total += litellm.token_counter(model=model, text=content)
-    system_text = _system_to_text(system)
+    system_text: Final = _system_to_text(system)
     if system_text:
         total += litellm.token_counter(model=model, text=system_text)
     return total
@@ -679,7 +704,7 @@ def _system_to_text(
         return ""
     if isinstance(system, str):
         return system
-    parts: list[str] = []
+    parts: Final[list[str]] = []
     for block in system:
         if isinstance(block, dict) and block.get("type") == "text":
             text = block.get("text")
@@ -727,16 +752,16 @@ def _select_last_user_question(
 def _extract_summary_text(raw: str | None) -> str | None:
     if not raw:
         return None
-    match = _SUMMARY_TAG_RE.search(raw)
+    match: Final = _SUMMARY_TAG_RE.search(raw)
     if match is None:
         return None
-    summary = match.group(1).strip()
+    summary: Final = match.group(1).strip()
     return summary or None
 
 
 def _system_to_openai_message(
     system: str | list[dict[str, Any]] | None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """Translate Anthropic-shaped ``system`` to an OpenAI system message.
 
     Accepts a bare string or a list of Anthropic content blocks; returns
@@ -748,7 +773,7 @@ def _system_to_openai_message(
         return {"role": "system", "content": system} if system else None
     if isinstance(system, list):
         parts = [block.get("text", "") for block in system if isinstance(block, dict) and block.get("type") == "text"]
-        joined = "\n\n".join(part for part in parts if part)
+        joined: Final = "\n\n".join(part for part in parts if part)
         return {"role": "system", "content": joined} if joined else None
     return None
 
@@ -769,11 +794,11 @@ def _build_summary_messages(
         LiteLLMAnthropicMessagesAdapter,
     )
 
-    stripped = _strip_compaction_blocks(effective_messages)
+    stripped: Final = _strip_compaction_blocks(effective_messages)
     try:
         openai_messages = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
             messages=cast(
-                "list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]",
+                "list[AllAnthropicPassThroughMessageValues]",
                 stripped,
             )
         )
@@ -785,8 +810,8 @@ def _build_summary_messages(
         )
         openai_messages = stripped
 
-    summary_messages: list[dict[str, object]] = []
-    system_message = _system_to_openai_message(system)
+    summary_messages: Final[list[dict[str, object]]] = []
+    system_message: Final = _system_to_openai_message(system)
     if system_message is not None:
         summary_messages.append(system_message)
     summary_messages.extend(openai_messages)
@@ -795,7 +820,7 @@ def _build_summary_messages(
     # reject two consecutive ``role=user`` messages, which would otherwise
     # silently fall into the ``summary_call_failed`` error path.
     if summary_messages and _is_user_message(summary_messages[-1]):
-        last_msg = summary_messages[-1]
+        last_msg: Final = summary_messages[-1]
         summary_messages[-1] = {
             **last_msg,
             "content": _append_text_to_content(last_msg.get("content"), prompt),
@@ -809,7 +834,7 @@ def _is_user_message(msg: object) -> bool:
     return isinstance(msg, dict) and msg.get("role") == "user"
 
 
-def _append_text_to_content(content: Any, extra_text: str) -> Any:
+def _append_text_to_content(content: object, extra_text: str) -> object:
     """Append ``extra_text`` to an OpenAI-shape message ``content`` field.
 
     Handles the two common shapes: ``str`` and ``list`` of content parts.
@@ -820,8 +845,27 @@ def _append_text_to_content(content: Any, extra_text: str) -> Any:
     if isinstance(content, str):
         return f"{content}\n\n{extra_text}"
     if isinstance(content, list):
-        return [*content, {"type": "text", "text": extra_text}]
+        appended: Final[list[object]] = [*content, {"type": "text", "text": extra_text}]
+        return appended
     return [content, {"type": "text", "text": extra_text}]
+
+
+class _SummaryCallUserKwarg(TypedDict, total=False):
+    user: ReadOnly[object]
+
+
+class _SummaryCallRegionKwarg(TypedDict, total=False):
+    allowed_model_region: ReadOnly[str]
+
+
+class _SummaryCallKwargs(TypedDict):
+    model: ReadOnly[str]
+    messages: ReadOnly[list[dict[str, object]]]
+    max_tokens: ReadOnly[int]
+    timeout: ReadOnly[float]
+    litellm_metadata: ReadOnly[Mapping[str, object]]
+    user: NotRequired[ReadOnly[object]]
+    allowed_model_region: NotRequired[ReadOnly[str]]
 
 
 async def _call_summary_model(
@@ -860,22 +904,24 @@ async def _call_summary_model(
     # the parent ``/v1/messages`` request. On timeout the caller catches the
     # exception and surfaces ``applied_edits[0].error = "summary_call_failed"``,
     # forwarding the request without compaction rather than hanging.
-    call_kwargs: dict[str, Any] = {
+    # The end-user id must also travel as the top-level ``user`` kwarg: legacy
+    # limiter hooks and prometheus end-user tracking read it from there rather
+    # than from ``litellm_metadata``, so without it the summary tokens would not
+    # debit the caller's end-user counters.
+    end_user_id: Final = metadata.get("user_api_key_end_user_id")
+    call_kwargs: Final[_SummaryCallKwargs] = {
         "model": summary_model,
         "messages": summary_messages,
         "max_tokens": max_tokens,
         "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
         "litellm_metadata": metadata,
+        **(_SummaryCallUserKwarg(user=end_user_id) if end_user_id else _SummaryCallUserKwarg()),
+        **(
+            _SummaryCallRegionKwarg(allowed_model_region=allowed_model_region)
+            if allowed_model_region is not None
+            else _SummaryCallRegionKwarg()
+        ),
     }
-    # The end-user id must also travel as the top-level ``user`` kwarg: legacy
-    # limiter hooks and prometheus end-user tracking read it from there rather
-    # than from ``litellm_metadata``, so without it the summary tokens would not
-    # debit the caller's end-user counters.
-    end_user_id = metadata.get("user_api_key_end_user_id")
-    if end_user_id:
-        call_kwargs["user"] = end_user_id
-    if allowed_model_region is not None:
-        call_kwargs["allowed_model_region"] = allowed_model_region
     if llm_router is not None and hasattr(llm_router, "acompletion"):
         return await llm_router.acompletion(**call_kwargs)
     return await litellm.acompletion(**call_kwargs)
@@ -883,14 +929,14 @@ async def _call_summary_model(
 
 def _extract_response_text(response: Any) -> str | None:
     try:
-        choice = response.choices[0]
-        message = choice.message
-        content = getattr(message, "content", None)
+        choice: Final = response.choices[0]
+        message: Final = choice.message
+        content: Final = getattr(message, "content", None)
         if isinstance(content, str):
             return content
         # Some providers return a list of content parts.
         if isinstance(content, list):
-            text_parts = [
+            text_parts: Final = [
                 part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
             ]
             return "".join(text_parts) or None
@@ -900,7 +946,7 @@ def _extract_response_text(response: Any) -> str | None:
 
 
 def _extract_usage(response: object) -> tuple[int, int]:
-    usage = getattr(response, "usage", None)
+    usage: Final = getattr(response, "usage", None)
     if usage is None:
         return 0, 0
     return (
@@ -932,7 +978,7 @@ def apply_client_compaction_block_history(
         "applying slice-only forwarding (no context_management edit)"
     )
 
-    prior_summary_text = prior_compaction_block.get("content") or ""
+    prior_summary_text: Final = prior_compaction_block.get("content") or ""
     augmented_system: str | list[dict[str, object]] | None = system
     if isinstance(prior_summary_text, str) and prior_summary_text:
         augmented_system = _augment_system_with_summary(system, prior_summary_text)
@@ -983,7 +1029,7 @@ async def apply_compact_20260112(
     if edit_spec.get("pause_after_compaction"):
         warnings.append("pause_after_compaction_ignored")
 
-    applied: AppliedEdit = {"type": COMPACT_EDIT_TYPE}
+    applied: Final[AppliedEdit] = {"type": COMPACT_EDIT_TYPE}
     if warnings:
         applied["warnings"] = warnings
 
@@ -992,7 +1038,7 @@ async def apply_compact_20260112(
     # strip Anthropic-only ``compaction`` blocks from messages going to
     # non-Anthropic backends (which would reject them).
     effective_messages, prior_compaction_block = _slice_around_compaction_block(messages)
-    prior_summary_text = prior_compaction_block.get("content") if prior_compaction_block else None
+    prior_summary_text: Final = prior_compaction_block.get("content") if prior_compaction_block else None
     augmented_system: str | list[dict[str, object]] | None = system
     if isinstance(prior_summary_text, str) and prior_summary_text:
         augmented_system = _augment_system_with_summary(system, prior_summary_text)
@@ -1005,7 +1051,7 @@ async def apply_compact_20260112(
 
     # Opt-in gate: no summary model configured → no-op (but still return the
     # Phase A-sliced/stripped messages so compaction blocks don't leak).
-    summary_model = _read_summary_model_setting()
+    summary_model: Final = _read_summary_model_setting()
     if summary_model is None:
         applied["error"] = "summary_model_not_configured"
         # Slice-only forwarding: ``augmented_system`` already carries any prior
@@ -1103,13 +1149,13 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    prompt = _build_summary_prompt(edit_spec, tools)
-    summary_messages = _build_summary_messages(effective_messages, prompt, system=augmented_system)
-    propagated_metadata = _propagate_metadata(litellm_metadata)
-    allowed_model_region = getattr(user_api_key_auth, "allowed_model_region", None)
+    prompt: Final = _build_summary_prompt(edit_spec, tools)
+    summary_messages: Final = _build_summary_messages(effective_messages, prompt, system=augmented_system)
+    propagated_metadata: Final = _propagate_metadata(litellm_metadata)
+    allowed_model_region: Final = getattr(user_api_key_auth, "allowed_model_region", None)
 
     try:
-        response = await _call_summary_model(
+        response: Final = await _call_summary_model(
             summary_model=summary_model,
             summary_messages=summary_messages,
             metadata=propagated_metadata,
@@ -1126,7 +1172,7 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    summary_text = _extract_summary_text(_extract_response_text(response))
+    summary_text: Final = _extract_summary_text(_extract_response_text(response))
     if summary_text is None:
         applied["error"] = "summary_extraction_failed"
         return PolyfillResult(
@@ -1139,11 +1185,11 @@ async def apply_compact_20260112(
     applied["summary_input_tokens"] = summary_input_tokens
     applied["summary_output_tokens"] = summary_output_tokens
 
-    compaction_block: CompactionBlock = {
+    compaction_block: Final[CompactionBlock] = {
         "type": "compaction",
         "content": summary_text,
     }
-    iterations_usage: list[UsageIteration] = [
+    iterations_usage: Final[list[UsageIteration]] = [
         {
             "type": "compaction",
             "input_tokens": summary_input_tokens,
@@ -1162,12 +1208,12 @@ async def apply_compact_20260112(
     # with no matching ``tool_calls`` in the prior assistant history. If no
     # eligible turn exists, fall back to a synthetic continuation prompt so
     # the downstream call still has a non-empty user message.
-    summarized_system = _augment_system_with_summary(system, summary_text)
+    summarized_system: Final = _augment_system_with_summary(system, summary_text)
     verbose_logger.info(
         "compact_20260112: compaction summary added to main call system prefix (%s chars)",
         len(summary_text),
     )
-    downstream_messages_after_summary = _select_last_user_question(effective_messages)
+    downstream_messages_after_summary: Final = _select_last_user_question(effective_messages)
 
     return PolyfillResult(
         messages=downstream_messages_after_summary,

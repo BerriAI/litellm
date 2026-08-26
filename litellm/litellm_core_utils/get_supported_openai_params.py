@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Final, Literal
 
 import litellm
 from litellm.exceptions import BadRequestError
@@ -54,7 +54,7 @@ def get_supported_openai_params(
     if provider_config and request_type == "chat_completion":
         supported_params = provider_config.get_supported_openai_params(model=model)
         if base_model and base_model != model:
-            base_model_params = provider_config.get_supported_openai_params(model=base_model)
+            base_model_params: Final = provider_config.get_supported_openai_params(model=base_model)
             supported_params = list(dict.fromkeys([*supported_params, *base_model_params]))
         return supported_params
 
@@ -128,7 +128,7 @@ def get_supported_openai_params(
         elif request_type == "embeddings":
             return litellm.GenAIHubEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
-        _azure_detection_model = base_model or model
+        _azure_detection_model: Final = base_model or model
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=_azure_detection_model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(model=_azure_detection_model)
         elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=_azure_detection_model):
@@ -172,7 +172,7 @@ def get_supported_openai_params(
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "together_ai":
-        return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
+        return litellm.TogetherAIChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "databricks":
         if request_type == "chat_completion":
             return litellm.DatabricksConfig().get_supported_openai_params(model=model)

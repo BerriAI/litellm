@@ -25,12 +25,7 @@ Design notes (intentional divergences from the framework defaults):
 import asyncio
 import os
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    Optional,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi.exceptions import HTTPException
 
@@ -62,20 +57,20 @@ if TYPE_CHECKING:
 
 
 def _sanitize_scan_result_for_logging(scan_result: dict) -> dict:
-    without_secrets = {key: value for key, value in scan_result.items() if key != "secret_fields"}
-    redacted = redact_nested_match_and_regex_keys(without_secrets)
-    masked = mask_credentials_in_payload(redacted if isinstance(redacted, dict) else without_secrets)
+    without_secrets: Final = {key: value for key, value in scan_result.items() if key != "secret_fields"}
+    redacted: Final = redact_nested_match_and_regex_keys(without_secrets)
+    masked: Final = mask_credentials_in_payload(redacted if isinstance(redacted, dict) else without_secrets)
     return masked if isinstance(masked, dict) else without_secrets
 
 
-_DEFAULT_API_BASE = "https://api-xecguard.cycraft.ai"
-_SCAN_ENDPOINT = "/xecguard/v1/scan"
-_GROUNDING_ENDPOINT = "/xecguard/v1/grounding"
-_DEFAULT_MODEL = "xecguard_v2"
-_DEFAULT_GROUNDING_STRICTNESS = "BALANCED"
-_METADATA_GROUNDING_KEY = "xecguard_grounding_documents"
-_RATIONALE_TRUNCATE_CHARS = 200
-_DEFAULT_POLICIES = [
+_DEFAULT_API_BASE: Final = "https://api-xecguard.cycraft.ai"
+_SCAN_ENDPOINT: Final = "/xecguard/v1/scan"
+_GROUNDING_ENDPOINT: Final = "/xecguard/v1/grounding"
+_DEFAULT_MODEL: Final = "xecguard_v2"
+_DEFAULT_GROUNDING_STRICTNESS: Final = "BALANCED"
+_METADATA_GROUNDING_KEY: Final = "xecguard_grounding_documents"
+_RATIONALE_TRUNCATE_CHARS: Final = 200
+_DEFAULT_POLICIES: Final = [
     "Default_Policy_SystemPromptEnforcement",
     "Default_Policy_HarmfulContentProtection",
     "Default_Policy_GeneralPromptAttackProtection",
@@ -112,7 +107,7 @@ class XecGuardGuardrail(CustomGuardrail):
         self.policy_names = policy_names
 
         if block_on_error is None:
-            env = os.environ.get("XECGUARD_BLOCK_ON_ERROR", "true")
+            env: Final = os.environ.get("XECGUARD_BLOCK_ON_ERROR", "true")
             self.block_on_error = env.lower() in (
                 "true",
                 "1",
@@ -156,7 +151,7 @@ class XecGuardGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        messages = self._build_full_history(
+        messages: Final = self._build_full_history(
             request_data=request_data,
             inputs=inputs,
             input_type=input_type,
@@ -164,8 +159,8 @@ class XecGuardGuardrail(CustomGuardrail):
         if not messages:
             return inputs
 
-        scan_type = "input" if input_type == "request" else "response"
-        scan_result = await self._call_scan(messages=messages, scan_type=scan_type)
+        scan_type: Final = "input" if input_type == "request" else "response"
+        scan_result: Final = await self._call_scan(messages=messages, scan_type=scan_type)
         if scan_result is None:
             return inputs
 
@@ -180,9 +175,9 @@ class XecGuardGuardrail(CustomGuardrail):
             )
 
         if input_type == "response":
-            documents = self._extract_grounding_documents(request_data)
+            documents: Final = self._extract_grounding_documents(request_data)
             if documents:
-                grounding_result = await self._call_grounding(
+                grounding_result: Final = await self._call_grounding(
                     messages=messages,
                     documents=documents,
                 )
@@ -219,10 +214,10 @@ class XecGuardGuardrail(CustomGuardrail):
         ):
             return kwargs, result
 
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
         try:
-            assistant_text = self._extract_assistant_text_from_response(result)
-            request_data = {**kwargs}
+            assistant_text: Final = self._extract_assistant_text_from_response(result)
+            request_data: Final = {**kwargs}
             if assistant_text is not None:
                 request_data["response"] = result
                 messages = self._build_full_history(
@@ -242,7 +237,7 @@ class XecGuardGuardrail(CustomGuardrail):
             if not messages:
                 return kwargs, result
 
-            scan_result = await self._call_scan(
+            scan_result: Final = await self._call_scan(
                 messages=messages,
                 scan_type=scan_type,
                 suppress_errors=True,
@@ -250,11 +245,11 @@ class XecGuardGuardrail(CustomGuardrail):
             if scan_result is None:
                 return kwargs, result
 
-            guardrail_status: GuardrailStatus = (
+            guardrail_status: Final[GuardrailStatus] = (
                 "guardrail_intervened" if scan_result.get("decision") == "UNSAFE" else "success"
             )
-            end_time = datetime.now()
-            slg = StandardLoggingGuardrailInformation(
+            end_time: Final = datetime.now()
+            slg: Final = StandardLoggingGuardrailInformation(
                 guardrail_name=self.guardrail_name or "xecguard",
                 guardrail_mode=GuardrailEventHooks.logging_only,
                 guardrail_response=_sanitize_scan_result_for_logging(scan_result),
@@ -264,7 +259,7 @@ class XecGuardGuardrail(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 masked_entity_count=None,
             )
-            existing = kwargs["standard_logging_object"].get("guardrail_information")
+            existing: Final = kwargs["standard_logging_object"].get("guardrail_information")
             if isinstance(existing, list):
                 existing.append(slg)
             else:
@@ -315,7 +310,7 @@ class XecGuardGuardrail(CustomGuardrail):
         scan_type: str,
         suppress_errors: bool = False,
     ) -> dict | None:
-        payload: dict[str, Any] = {
+        payload: Final[dict[str, Any]] = {
             "model": self.xecguard_model,
             "scan_type": scan_type,
             "messages": messages,
@@ -332,11 +327,11 @@ class XecGuardGuardrail(CustomGuardrail):
         messages: list[dict],
         documents: list[dict],
     ) -> dict | None:
-        prompt = self._extract_last_text_by_role(messages, "user")
-        response_text = self._extract_last_text_by_role(messages, "assistant")
+        prompt: Final = self._extract_last_text_by_role(messages, "user")
+        response_text: Final = self._extract_last_text_by_role(messages, "assistant")
         if prompt is None or response_text is None:
             return None
-        payload = {
+        payload: Final = {
             "model": self.xecguard_model,
             "prompt": prompt,
             "response": response_text,
@@ -351,14 +346,14 @@ class XecGuardGuardrail(CustomGuardrail):
         payload: dict,
         suppress_errors: bool = False,
     ) -> dict | None:
-        endpoint = f"{self.api_base}{path}"
+        endpoint: Final = f"{self.api_base}{path}"
         verbose_proxy_logger.debug(
             "XecGuard: POST %s payload_keys=%s",
             endpoint,
             list(payload.keys()),
         )
         try:
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=endpoint,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
@@ -400,21 +395,21 @@ class XecGuardGuardrail(CustomGuardrail):
         system prompts. Synthesises a trailing user/assistant message when
         the request data is incomplete.
         """
-        raw_messages = request_data.get("messages") or []
-        messages: list[dict] = [self._normalize_message(m) for m in raw_messages if isinstance(m, dict)]
+        raw_messages: Final = request_data.get("messages") or []
+        messages: Final[list[dict]] = [self._normalize_message(m) for m in raw_messages if isinstance(m, dict)]
 
         if input_type == "request":
             if not messages:
                 return []
             if messages[-1].get("role") != "user":
-                synthesized = self._synthesize_user_from_inputs(inputs)
+                synthesized: Final = self._synthesize_user_from_inputs(inputs)
                 if synthesized is None:
                     return []
                 messages.append(synthesized)
             return messages
 
         # input_type == "response"
-        assistant_text = self._extract_assistant_text_from_response(request_data.get("response"))
+        assistant_text: Final = self._extract_assistant_text_from_response(request_data.get("response"))
         if assistant_text is None:
             return []
         messages.append({"role": "assistant", "content": assistant_text})
@@ -423,12 +418,12 @@ class XecGuardGuardrail(CustomGuardrail):
     @staticmethod
     def _normalize_message(message: dict) -> dict:
         """Flatten multimodal content to a plain string for XecGuard."""
-        role = message.get("role") or "user"
-        content = message.get("content")
+        role: Final = message.get("role") or "user"
+        content: Final = message.get("content")
         if isinstance(content, str):
             return {"role": role, "content": content}
         if isinstance(content, list):
-            parts: list[str] = []
+            parts: Final[list[str]] = []
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
                     text = item.get("text")
@@ -441,10 +436,10 @@ class XecGuardGuardrail(CustomGuardrail):
     def _synthesize_user_from_inputs(inputs: Any) -> dict | None:
         if not isinstance(inputs, dict):
             return None
-        texts = inputs.get("texts")
+        texts: Final = inputs.get("texts")
         if not texts:
             return None
-        joined = "\n".join(t for t in texts if isinstance(t, str) and t)
+        joined: Final = "\n".join(t for t in texts if isinstance(t, str) and t)
         if not joined:
             return None
         return {"role": "user", "content": joined}
@@ -470,7 +465,7 @@ class XecGuardGuardrail(CustomGuardrail):
             choices = response.get("choices")
         if not choices:
             return None
-        text_parts: list[str] = []
+        text_parts: Final[list[str]] = []
         for choice in choices:
             content = XecGuardGuardrail._extract_choice_content(choice)
             text = XecGuardGuardrail._content_to_text(content)
@@ -499,12 +494,12 @@ class XecGuardGuardrail(CustomGuardrail):
         if isinstance(content, str) and content:
             return content
         if isinstance(content, list):
-            parts = [
+            parts: Final = [
                 item.get("text")
                 for item in content
                 if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str)
             ]
-            joined = "\n".join(p for p in parts if p)
+            joined: Final = "\n".join(p for p in parts if p)
             return joined or None
         return None
 
@@ -514,13 +509,13 @@ class XecGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _extract_grounding_documents(request_data: dict) -> list[dict]:
-        metadata = request_data.get("metadata") or request_data.get("litellm_metadata")
+        metadata: Final = request_data.get("metadata") or request_data.get("litellm_metadata")
         if not isinstance(metadata, dict):
             return []
-        raw_docs = metadata.get(_METADATA_GROUNDING_KEY)
+        raw_docs: Final = metadata.get(_METADATA_GROUNDING_KEY)
         if not isinstance(raw_docs, list) or not raw_docs:
             return []
-        valid_docs: list[dict] = []
+        valid_docs: Final[list[dict]] = []
         for doc in raw_docs:
             if (
                 isinstance(doc, dict)
@@ -546,18 +541,18 @@ class XecGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _format_scan_block_message(result: dict) -> str:
-        trace_id = result.get("trace_id", "")
+        trace_id: Final = result.get("trace_id", "")
         violations = result.get("xecguard_result")
         if not isinstance(violations, list):
             violations = []
-        seen: list[str] = []
+        seen: Final[list[str]] = []
         for v in violations:
             if not isinstance(v, dict):
                 continue
             name = v.get("violated_policy_name")
             if isinstance(name, str) and name and name not in seen:
                 seen.append(name)
-        policies = ",".join(seen) if seen else "unknown"
+        policies: Final = ",".join(seen) if seen else "unknown"
         rationale = ""
         for v in violations:
             if isinstance(v, dict):
@@ -569,16 +564,16 @@ class XecGuardGuardrail(CustomGuardrail):
 
     @staticmethod
     def _format_grounding_block_message(result: dict) -> str:
-        trace_id = result.get("trace_id", "")
-        detail = result.get("xecguard_result")
+        trace_id: Final = result.get("trace_id", "")
+        detail: Final = result.get("xecguard_result")
         rules: list[str] = []
         rationale = ""
         if isinstance(detail, dict):
-            raw_rules = detail.get("violated_rules_list")
+            raw_rules: Final = detail.get("violated_rules_list")
             if isinstance(raw_rules, list):
                 rules = [r for r in raw_rules if isinstance(r, str)]
-            candidate = detail.get("rationale")
+            candidate: Final = detail.get("rationale")
             if isinstance(candidate, str):
                 rationale = candidate[:_RATIONALE_TRUNCATE_CHARS]
-        rules_str = ",".join(rules) if rules else "unknown"
+        rules_str: Final = ",".join(rules) if rules else "unknown"
         return f"Blocked by XecGuard grounding: rules=[{rules_str}] trace_id={trace_id} rationale={rationale}"

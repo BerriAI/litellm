@@ -3,6 +3,7 @@ Translate from OpenAI's `/v1/audio/transcriptions` to Groq's `/v1/audio/transcri
 """
 
 import types
+from typing import Final
 
 import litellm
 
@@ -38,7 +39,7 @@ class GroqSTTConfig:
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -79,7 +80,7 @@ class GroqSTTConfig:
         model: str,
         drop_params: bool,
     ) -> dict:
-        response_formats = self.get_supported_openai_response_formats_stt()
+        response_formats: Final = self.get_supported_openai_response_formats_stt()
         for param, value in non_default_params.items():
             if param == "response_format":
                 if value in response_formats:

@@ -6,7 +6,7 @@ Used to get the LangFuseLogger for a given request
 Handles Key/Team Based Langfuse Logging
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
 
@@ -43,11 +43,11 @@ class LangFuseHandler:
             )
 
         # get langfuse logging config to use for this request, based on standard_callback_dynamic_params
-        _credentials = LangFuseHandler.get_dynamic_langfuse_logging_config(
+        _credentials: Final = LangFuseHandler.get_dynamic_langfuse_logging_config(
             globalLangfuseLogger=globalLangfuseLogger,
             standard_callback_dynamic_params=standard_callback_dynamic_params,
         )
-        credentials_dict = dict(_credentials)
+        credentials_dict: Final = dict(_credentials)
 
         # check if langfuse logger is already cached
         temp_langfuse_logger = in_memory_dynamic_logger_cache.get_cache(
@@ -104,7 +104,7 @@ class LangFuseHandler:
         2. cache the LangFuseLogger to prevent re-creating it for the same credentials
         """
 
-        langfuse_logger = LangFuseLogger(
+        langfuse_logger: Final = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret") or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),

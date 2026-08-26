@@ -1,9 +1,9 @@
 import hashlib
-from typing import Any
+from typing import Any, Final
 
 
 def get_session_id_from_a2a_params(params: dict[str, Any]) -> str | None:
-    message = params.get("message", {})
+    message: Final = params.get("message", {})
     if isinstance(message, dict):
         return message.get("contextId")
     return getattr(message, "contextId", None)
@@ -21,7 +21,7 @@ def scope_session_to_principal(session_id: str, principal: str | None) -> str:
     """
     if not principal:
         return session_id
-    principal_prefix = hashlib.sha256(principal.encode("utf-8")).hexdigest()[:16]
+    principal_prefix: Final = hashlib.sha256(principal.encode("utf-8")).hexdigest()[:16]
     return f"{principal_prefix}-{session_id}"
 
 
@@ -30,8 +30,8 @@ def merge_a2a_session_into_litellm_params(
     params: dict[str, Any],
     principal: str | None = None,
 ) -> dict[str, Any]:
-    merged = dict(litellm_params)
-    session_id = get_session_id_from_a2a_params(params)
+    merged: Final = dict(litellm_params)
+    session_id: Final = get_session_id_from_a2a_params(params)
     if session_id and "session_id" not in merged:
         merged["session_id"] = scope_session_to_principal(session_id, principal)
     return merged

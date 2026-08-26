@@ -7,7 +7,7 @@ with ``client_id``, ``client_secret``, and ``token_url``.
 
 import asyncio
 import hashlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -65,7 +65,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         """Cache key for the token this server's config would mint, prefixed by server_id so a
         single server's entries stay greppable and invalidatable. The secret is hashed with the
         rest of the identity rather than stored in a key."""
-        material = "\x00".join(
+        material: Final = "\x00".join(
             (
                 server.token_url or "",
                 server.client_id or "",
@@ -94,7 +94,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         if not self._has_client_credentials_config(server):
             return None
 
-        identity = self._token_identity(server)
+        identity: Final = self._token_identity(server)
 
         # Fast path — cached token is still valid
         cached = self.get_cache(identity)
@@ -117,7 +117,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         Returns ``(access_token, ttl_seconds)`` where ttl accounts for the
         expiry buffer so the cache entry expires before the real token does.
         """
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
         if not server.client_id or not server.client_secret or not server.token_url:
             raise ValueError(
@@ -127,13 +127,13 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"token_url={bool(server.token_url)}"
             )
 
-        token_request = build_upstream_oauth2_token_request(
+        token_request: Final = build_upstream_oauth2_token_request(
             server,
             auth_method=server.token_endpoint_auth_method,
             client_id=server.client_id,
             client_secret=server.client_secret,
         )
-        data: dict[str, str] = {
+        data: Final[dict[str, str]] = {
             "grant_type": "client_credentials",
             **token_request.body,
         }
@@ -145,9 +145,8 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
         )
 
-        post_kwargs = {"data": data, **({"headers": token_request.headers} if token_request.headers else {})}
         try:
-            response = await client.post(server.token_url, **post_kwargs)
+            response: Final = await client.post(server.token_url, data=data, headers=token_request.headers or None)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(
@@ -155,7 +154,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"failed with status {exc.response.status_code}"
             ) from exc
 
-        body = response.json()
+        body: Final = response.json()
 
         if not isinstance(body, dict):
             raise ValueError(
@@ -163,18 +162,18 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"returned non-object JSON (got {type(body).__name__})"
             )
 
-        access_token = body.get("access_token")
+        access_token: Final = body.get("access_token")
         if not access_token:
             raise ValueError(f"OAuth2 token response for MCP server '{server.server_id}' missing 'access_token'")
 
         # Safely parse expires_in — providers may return null or non-numeric values
-        raw_expires_in = body.get("expires_in")
+        raw_expires_in: Final = body.get("expires_in")
         try:
             expires_in = int(raw_expires_in) if raw_expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
         except (TypeError, ValueError):
             expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
 
-        ttl = max(
+        ttl: Final = max(
             expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
             MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
         )
@@ -192,12 +191,12 @@ class MCPOAuth2TokenCache(InMemoryCache):
         Entries are keyed by token identity, so one server can hold more than one entry across a
         config change; a 401 invalidates all of them rather than only the current configuration's.
         """
-        prefix = f"{server_id}:"
+        prefix: Final = f"{server_id}:"
         for key in [k for k in self.cache_dict if isinstance(k, str) and k.startswith(prefix)]:
             self.delete_cache(key)
 
 
-mcp_oauth2_token_cache = MCPOAuth2TokenCache()
+mcp_oauth2_token_cache: Final = MCPOAuth2TokenCache()
 
 
 def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
@@ -208,7 +207,7 @@ def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> 
     outlives the token itself; otherwise derives TTL from expires_in minus the
     expiry buffer; falls back to the default TTL.
     """
-    lifetime_bound = expires_in - MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS if expires_in is not None else None
+    lifetime_bound: Final = expires_in - MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS if expires_in is not None else None
     if server.token_storage_ttl_seconds is not None:
         if lifetime_bound is None:
             return max(server.token_storage_ttl_seconds, 1)
@@ -237,11 +236,11 @@ class MCPPerUserTokenCache:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key = self._cache_key(user_id, server_id)
-            encrypted = await user_api_key_cache.async_get_cache(key)
+            key: Final = self._cache_key(user_id, server_id)
+            encrypted: Final = await user_api_key_cache.async_get_cache(key)
             if encrypted is None:
                 return None
-            plaintext = decrypt_value_helper(
+            plaintext: Final = decrypt_value_helper(
                 encrypted,
                 key="mcp_per_user_token",
                 exception_type="debug",
@@ -267,8 +266,8 @@ class MCPPerUserTokenCache:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key = self._cache_key(user_id, server_id)
-            encrypted = encrypt_value_helper(access_token)
+            key: Final = self._cache_key(user_id, server_id)
+            encrypted: Final = encrypt_value_helper(access_token)
             await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
             verbose_logger.debug(
                 "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",
@@ -289,7 +288,7 @@ class MCPPerUserTokenCache:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-            key = self._cache_key(user_id, server_id)
+            key: Final = self._cache_key(user_id, server_id)
             await user_api_key_cache.async_delete_cache(key)
         except Exception as exc:
             verbose_logger.debug(
@@ -300,7 +299,7 @@ class MCPPerUserTokenCache:
             )
 
 
-mcp_per_user_token_cache = MCPPerUserTokenCache()
+mcp_per_user_token_cache: Final = MCPPerUserTokenCache()
 
 
 async def resolve_mcp_auth(

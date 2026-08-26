@@ -4,7 +4,7 @@ Calls Serper's /search endpoint to search Google.
 Serper API Reference: https://serper.dev
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -108,7 +108,7 @@ class SerperSearchConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        request_data: SerperSearchRequest = {
+        request_data: Final[SerperSearchRequest] = {
             "q": query,
         }
 
@@ -119,13 +119,13 @@ class SerperSearchConfig(BaseSearchConfig):
             request_data["gl"] = optional_params["country"].lower()
 
         if "search_domain_filter" in optional_params:
-            domains = optional_params["search_domain_filter"]
+            domains: Final = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                domain_clauses = " OR ".join(f"site:{d}" for d in domains)
+                domain_clauses: Final = " OR ".join(f"site:{d}" for d in domains)
                 request_data["q"] = f"({request_data['q']}) ({domain_clauses})"
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -156,9 +156,9 @@ class SerperSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
-        results = []
+        results: Final = []
         for result in response_json.get("organic", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

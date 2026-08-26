@@ -12,7 +12,7 @@ Authentication priority:
 
 import os
 import re
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -71,7 +71,7 @@ class DatabricksBase:
             return result
 
         if isinstance(data, dict):
-            redacted = {}
+            redacted: Final = {}
             for key, value in data.items():
                 lower_key = key.lower()
                 if any(
@@ -113,8 +113,8 @@ class DatabricksBase:
         if not headers:
             return {}
 
-        redacted = {}
-        sensitive_headers = {
+        redacted: Final = {}
+        sensitive_headers: Final = {
             "authorization",
             "x-api-key",
             "api-key",
@@ -186,7 +186,7 @@ class DatabricksBase:
             try:
                 from databricks.sdk import WorkspaceClient
 
-                databricks_client = WorkspaceClient()
+                databricks_client: Final = WorkspaceClient()
                 api_base = f"{databricks_client.config.host}/serving-endpoints"
                 return api_base
             except ImportError:
@@ -229,10 +229,10 @@ class DatabricksBase:
         if "/serving-endpoints" in workspace_url:
             workspace_url = workspace_url.replace("/serving-endpoints", "")
 
-        token_url = f"{workspace_url}/oidc/v1/token"
+        token_url: Final = f"{workspace_url}/oidc/v1/token"
 
         try:
-            response = requests.post(
+            response: Final = requests.post(
                 token_url,
                 data={
                     "grant_type": "client_credentials",
@@ -254,7 +254,7 @@ class DatabricksBase:
                 message=f"OAuth M2M token request failed: {response.text}",
             )
 
-        token_data = response.json()
+        token_data: Final = response.json()
         return token_data["access_token"]
 
     def _get_databricks_credentials(
@@ -281,12 +281,12 @@ class DatabricksBase:
             # Register LiteLLM as partner for Databricks telemetry attribution
             useragent.with_partner("litellm")
 
-            databricks_client = WorkspaceClient()
+            databricks_client: Final = WorkspaceClient()
 
             api_base = api_base or f"{databricks_client.config.host}/serving-endpoints"
 
             if api_key is None:
-                databricks_auth_headers: dict[str, str] = databricks_client.config.authenticate()
+                databricks_auth_headers: Final[dict[str, str]] = databricks_client.config.authenticate()
                 headers = {**databricks_auth_headers, **headers}
 
             return api_base, headers
@@ -332,8 +332,8 @@ class DatabricksBase:
         from litellm._logging import verbose_logger
 
         # Check for OAuth M2M credentials (recommended for production)
-        client_id = os.getenv("DATABRICKS_CLIENT_ID")
-        client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+        client_id: Final = os.getenv("DATABRICKS_CLIENT_ID")
+        client_secret: Final = os.getenv("DATABRICKS_CLIENT_SECRET")
 
         # Determine api_base first
         if api_base is None:
@@ -342,7 +342,7 @@ class DatabricksBase:
         if client_id and client_secret and api_base:
             # Use OAuth M2M flow (preferred for production)
             verbose_logger.debug("Using OAuth M2M authentication for Databricks")
-            access_token = self._get_oauth_m2m_token(api_base, client_id, client_secret)
+            access_token: Final = self._get_oauth_m2m_token(api_base, client_id, client_secret)
             headers = headers or {}
             headers["Authorization"] = f"Bearer {access_token}"
             headers["Content-Type"] = "application/json"

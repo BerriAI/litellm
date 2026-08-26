@@ -8,7 +8,7 @@ Reference: https://docs.databricks.com/aws/en/machine-learning/foundation-model-
 """
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.llms.databricks.common_utils import DatabricksBase
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -45,8 +45,8 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = litellm_params.api_key or os.getenv("DATABRICKS_API_KEY")
-        api_base = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
+        api_key: Final = litellm_params.api_key or os.getenv("DATABRICKS_API_KEY")
+        api_base: Final = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
 
         # Reuse Databricks auth logic (OAuth M2M, PAT, SDK fallback).
         # custom_endpoint=False allows SDK auth fallback; the appended

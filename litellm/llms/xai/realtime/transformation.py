@@ -16,7 +16,7 @@ construction time (see ``handler.py``) so all normalization is isolated here
 and ``RealTimeStreaming`` stays provider-agnostic.
 """
 
-from typing import Any
+from typing import Any, Final
 
 
 class XAIRealtimeNormalizer:
@@ -71,7 +71,7 @@ class XAIRealtimeNormalizer:
     def normalize(self, event: dict) -> dict:
         """Apply all xAI normalization passes in order."""
         event = self._normalize_content_part_events(event)
-        event_type = event.get("type") or ""
+        event_type: Final = event.get("type") or ""
         event = self._normalize_conversation_item_added(event, event_type)
         event = self._inject_missing_indices(event, event_type)
         event = self._normalize_response_usage_event(event, event_type)
@@ -91,15 +91,15 @@ class XAIRealtimeNormalizer:
 
     @staticmethod
     def _default_server_vad_create_response(session: dict) -> None:
-        turn_detection = session.get("turn_detection")
+        turn_detection: Final = session.get("turn_detection")
         if isinstance(turn_detection, dict):
             XAIRealtimeNormalizer._ensure_server_vad_create_response(turn_detection)
 
-        audio = session.get("audio")
+        audio: Final = session.get("audio")
         if isinstance(audio, dict):
-            audio_input = audio.get("input")
+            audio_input: Final = audio.get("input")
             if isinstance(audio_input, dict):
-                nested_td = audio_input.get("turn_detection")
+                nested_td: Final = audio_input.get("turn_detection")
                 if isinstance(nested_td, dict):
                     XAIRealtimeNormalizer._ensure_server_vad_create_response(nested_td)
 
@@ -121,15 +121,15 @@ class XAIRealtimeNormalizer:
         )
 
     def _remember_content_part(self, event: dict) -> None:
-        part = event.get("part")
+        part: Final = event.get("part")
         if isinstance(part, dict):
             self._content_part_by_key[self._content_part_key(event)] = part
 
     def _update_content_part_field(self, event: dict, *, part_type: str, field: str, value: object) -> None:
         if value is None:
             return
-        key = self._content_part_key(event)
-        existing = self._content_part_by_key.get(key)
+        key: Final = self._content_part_key(event)
+        existing: Final = self._content_part_by_key.get(key)
         if not isinstance(existing, dict):
             updated = {"type": part_type, field: value}
         else:
@@ -141,16 +141,16 @@ class XAIRealtimeNormalizer:
         self._content_part_by_key[key] = updated
 
     def _resolve_content_part(self, event: dict) -> dict[str, Any]:
-        part = event.get("part")
+        part: Final = event.get("part")
         if isinstance(part, dict):
             return part
-        cached = self._content_part_by_key.get(self._content_part_key(event))
+        cached: Final = self._content_part_by_key.get(self._content_part_key(event))
         if isinstance(cached, dict):
             return cached
         return {"type": "audio", "transcript": ""}
 
     def _normalize_content_part_events(self, event: dict) -> dict:
-        event_type = event.get("type")
+        event_type: Final = event.get("type")
 
         if event_type == "response.content_part.added":
             self._remember_content_part(event)
@@ -192,7 +192,7 @@ class XAIRealtimeNormalizer:
         """
         if event_type != "conversation.item.added":
             return event
-        item = event.get("item")
+        item: Final = event.get("item")
         if not isinstance(item, dict):
             return event
         if item.get("role") == "tool":
@@ -210,11 +210,11 @@ class XAIRealtimeNormalizer:
         clients require them as non-optional ints.  Defaulting to 0 is correct
         for single-turn single-item responses and harmless for well-formed events.
         """
-        needs_output = event_type in self._EVENTS_NEEDING_OUTPUT_INDEX
-        needs_content = event_type in self._EVENTS_NEEDING_CONTENT_INDEX
+        needs_output: Final = event_type in self._EVENTS_NEEDING_OUTPUT_INDEX
+        needs_content: Final = event_type in self._EVENTS_NEEDING_CONTENT_INDEX
         if not needs_output and not needs_content:
             return event
-        patch: dict[str, Any] = {}
+        patch: Final[dict[str, Any]] = {}
         if needs_output and "output_index" not in event:
             patch["output_index"] = 0
         if needs_content and "content_index" not in event:
@@ -229,7 +229,7 @@ class XAIRealtimeNormalizer:
 
     @staticmethod
     def _default_ga_usage() -> dict[str, Any]:
-        default_details: dict[str, Any] = {
+        default_details: Final[dict[str, Any]] = {
             "cached_tokens": 0,
             "text_tokens": 0,
             "audio_tokens": 0,
@@ -253,12 +253,12 @@ class XAIRealtimeNormalizer:
             return None
         if not usage:
             return None if empty_as_null else XAIRealtimeNormalizer._default_ga_usage()
-        default_details: dict[str, Any] = {
+        default_details: Final[dict[str, Any]] = {
             "cached_tokens": 0,
             "text_tokens": 0,
             "audio_tokens": 0,
         }
-        normalized: dict[str, Any] = {
+        normalized: Final[dict[str, Any]] = {
             "total_tokens": usage.get("total_tokens", 0),
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
@@ -274,10 +274,10 @@ class XAIRealtimeNormalizer:
     def _normalize_response_usage_event(self, event: dict, event_type: str) -> dict:
         if event_type not in ("response.created", "response.done"):
             return event
-        response = event.get("response")
+        response: Final = event.get("response")
         if not isinstance(response, dict) or "usage" not in response:
             return event
-        normalized_usage = self._normalize_usage(
+        normalized_usage: Final = self._normalize_usage(
             response.get("usage"),
             empty_as_null=event_type == "response.created",
         )

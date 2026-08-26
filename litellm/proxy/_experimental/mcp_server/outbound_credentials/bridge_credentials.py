@@ -12,7 +12,7 @@ token-endpoint and admission wiring live in their respective call sites.
 import hashlib
 from datetime import datetime
 from functools import lru_cache
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
@@ -33,18 +33,18 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     open_refresh_envelope,
 )
 
-_SIGNING_KEY_DOMAIN = b"litellm-mcp-bridge:envelope-signing:"
-_ENCRYPTION_KEY_DOMAIN = b"litellm-mcp-bridge:envelope-encryption:"
+_SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-signing:"
+_ENCRYPTION_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-encryption:"
 
 # scrypt work factors (RFC 7914). n=2**15 with r=8/p=1 costs ~50ms and ~32MB per derivation, which
 # makes offline guessing of a candidate master key memory-hard rather than a bare hash comparison.
-_SCRYPT_N = 2**15
-_SCRYPT_R = 8
-_SCRYPT_P = 1
+_SCRYPT_N: Final = 2**15
+_SCRYPT_R: Final = 8
+_SCRYPT_P: Final = 1
 # scrypt's working-set is ~128 * N * r * p bytes; cap at twice that so the maxmem ceiling scales
 # with every work factor and a future p or r bump does not trip "memory limit exceeded".
-_SCRYPT_MAXMEM = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
-_DERIVED_KEY_BYTES = 32
+_SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
+_DERIVED_KEY_BYTES: Final = 32
 
 
 @lru_cache(maxsize=8)
@@ -61,7 +61,7 @@ def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
     admission path. The derivation is deterministic; rotating ``master_key`` invalidates
     every outstanding envelope, which is the intended behavior for a signing-key change.
     """
-    signing = hashlib.scrypt(
+    signing: Final = hashlib.scrypt(
         master_key.encode(),
         salt=_SIGNING_KEY_DOMAIN,
         n=_SCRYPT_N,
@@ -70,7 +70,7 @@ def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
         maxmem=_SCRYPT_MAXMEM,
         dklen=_DERIVED_KEY_BYTES,
     ).hex()
-    encryption = hashlib.scrypt(
+    encryption: Final = hashlib.scrypt(
         master_key.encode(),
         salt=_ENCRYPTION_KEY_DOMAIN,
         n=_SCRYPT_N,
@@ -92,7 +92,7 @@ def build_bridge_token_response(
 
     The producer mirror of :func:`resolve_bridge_envelope`: a thin, pure wrapper over
     :func:`mint_envelope` that returns the sealed envelope, or the mint error as a value
-    (an oversized grant) for the caller to map onto an OAuth error response.
+    for the caller to map onto an OAuth error response.
     """
     return mint_envelope(identity, grant, keys, now)
 
@@ -147,10 +147,10 @@ def open_bridge_refresh_envelope(
     against another. A raw upstream refresh token (not envelope-shaped) is ``BridgeRefreshInvalid``: this
     mode never hands the client a bare upstream refresh token, so it must never accept one.
     """
-    candidate = _strip_bearer(refresh_value)
+    candidate: Final = _strip_bearer(refresh_value)
     if not is_refresh_envelope(candidate):
         return BridgeRefreshInvalid()
-    opened = open_refresh_envelope(candidate, keys, now)
+    opened: Final = open_refresh_envelope(candidate, keys, now)
     if not isinstance(opened, OpenedRefreshEnvelope):
         return BridgeRefreshInvalid()
     if opened.identity.server_id != expected_server_id:
@@ -187,7 +187,7 @@ BridgeEnvelopeResult: TypeAlias = NotBridgeEnvelope | BridgeEnvelopeAdmitted | B
 
 
 def _strip_bearer(value: str) -> str:
-    parts = value.split(None, 1)
+    parts: Final = value.split(None, 1)
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1]
     return value
@@ -198,7 +198,7 @@ def is_bridge_envelope_shaped(authorization_value: str) -> bool:
     ``Bearer`` scheme stripped). The admission edge engages the bridge arm for an access envelope (to
     admit) and for a refresh envelope (to reject it explicitly, since a refresh credential is never
     usable at the tool-call edge); a plain upstream bearer falls through to normal oauth2 admission."""
-    candidate = _strip_bearer(authorization_value)
+    candidate: Final = _strip_bearer(authorization_value)
     return is_envelope(candidate) or is_refresh_envelope(candidate)
 
 
@@ -228,16 +228,16 @@ def resolve_bridge_envelope(
     secret (the caller targets that server), so a plain equality check is sufficient and,
     unlike ``hmac.compare_digest`` on ``str``, does not raise on a non-ASCII server_id.
     """
-    candidate = _strip_bearer(authorization_value)
+    candidate: Final = _strip_bearer(authorization_value)
     if is_refresh_envelope(candidate):
         return BridgeEnvelopeInvalid()
     if not is_envelope(candidate):
         return NotBridgeEnvelope()
-    opened = open_envelope(candidate, keys, now)
+    opened: Final = open_envelope(candidate, keys, now)
     if not isinstance(opened, OpenedEnvelope):
         return BridgeEnvelopeInvalid()
     if opened.identity.server_id != expected_server_id:
         return BridgeEnvelopeInvalid()
-    grant = opened.grant
-    upstream_authorization = f"{grant.token_type} {grant.access_token.get_secret_value()}"
+    grant: Final = opened.grant
+    upstream_authorization: Final = f"{grant.token_type} {grant.access_token.get_secret_value()}"
     return BridgeEnvelopeAdmitted(identity=opened.identity, upstream_authorization=SecretStr(upstream_authorization))

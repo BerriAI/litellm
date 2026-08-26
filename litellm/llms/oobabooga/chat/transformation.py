@@ -1,5 +1,5 @@
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -51,7 +51,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception:
             raise OobaboogaError(message=raw_response.text, status_code=raw_response.status_code)
         if "error" in completion_response:
@@ -61,7 +61,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
             )
         else:
             try:
-                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]  # type: ignore
+                model_response.choices[0].message.content = completion_response["choices"][0]["message"]["content"]
             except Exception as e:
                 raise OobaboogaError(
                     message=str(e),
@@ -70,7 +70,7 @@ class OobaboogaConfig(OpenAIGPTConfig):
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=completion_response["usage"]["prompt_tokens"],
             completion_tokens=completion_response["usage"]["completion_tokens"],
             total_tokens=completion_response["usage"]["total_tokens"],

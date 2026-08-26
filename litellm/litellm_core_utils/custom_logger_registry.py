@@ -8,6 +8,8 @@ Example:
     "prometheus" -> PrometheusLogger
 """
 
+from typing import Final
+
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -168,7 +170,7 @@ class CustomLoggerRegistry:
         Returns:
             list: List of callback strings that map to the class type
         """
-        callback_strs: list[str] = []
+        callback_strs: Final[list[str]] = []
         for (
             callback_str,
             callback_class,

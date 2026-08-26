@@ -4,11 +4,7 @@ import base64
 import io
 import struct
 from collections.abc import Callable, Mapping
-from typing import (
-    Any,
-    Literal,
-    cast,
-)
+from typing import Any, Final, Literal, cast
 
 import tiktoken
 
@@ -23,6 +19,7 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
@@ -60,9 +57,9 @@ def get_modified_max_tokens(
             return None
 
         ## MODEL INFO
-        _model_info = litellm.get_model_info(model=model)
+        _model_info: Final = litellm.get_model_info(model=model)
 
-        max_output_tokens = litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
+        max_output_tokens: Final = litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
 
         ## UNKNOWN MAX OUTPUT TOKENS - return user defined amount
         if max_output_tokens is None:
@@ -75,7 +72,7 @@ def get_modified_max_tokens(
             buffer_perc = 0.1
         if buffer_num is None:
             buffer_num = 10
-        token_buffer = max(
+        token_buffer: Final = max(
             buffer_perc * input_tokens, buffer_num
         )  # give at least a 10 token buffer. token counting can be imprecise.
 
@@ -121,19 +118,19 @@ def resize_image_high_res(
     height: int,
 ) -> tuple[int, int]:
     # Maximum dimensions for high res mode
-    max_short_side = MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
-    max_long_side = MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
+    max_short_side: Final = MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
+    max_long_side: Final = MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
 
     # Return early if no resizing is needed
     if width <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES and height <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES:
         return width, height
 
     # Determine the longer and shorter sides
-    longer_side = max(width, height)
-    shorter_side = min(width, height)
+    longer_side: Final = max(width, height)
+    shorter_side: Final = min(width, height)
 
     # Calculate the aspect ratio
-    aspect_ratio = longer_side / shorter_side
+    aspect_ratio: Final = longer_side / shorter_side
 
     # Resize based on the short side being 768px
     if width <= height:  # Portrait or square
@@ -161,9 +158,9 @@ def calculate_tiles_needed(
     tile_width=MAX_TILE_WIDTH,
     tile_height=MAX_TILE_HEIGHT,
 ):
-    tiles_across = (resized_width + tile_width - 1) // tile_width
-    tiles_down = (resized_height + tile_height - 1) // tile_height
-    total_tiles = tiles_across * tiles_down
+    tiles_across: Final = (resized_width + tile_width - 1) // tile_width
+    tiles_down: Final = (resized_height + tile_height - 1) // tile_height
+    total_tiles: Final = tiles_across * tiles_down
     return total_tiles
 
 
@@ -205,14 +202,14 @@ def get_image_dimensions(
     img_data = None
     if data.startswith(("http://", "https://")):
         try:
-            client = _get_httpx_client()
-            response = safe_get(client, data)
-            max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
-            content_length = response.headers.get("Content-Length")
+            client: Final = _get_httpx_client()
+            response: Final = safe_get(client, data)
+            max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+            content_length: Final = response.headers.get("Content-Length")
             if content_length is not None and int(content_length) > max_bytes:
                 pass  # skip download; img_data stays None
             else:
-                body = response.read()
+                body: Final = response.read()
                 if len(body) <= max_bytes:
                     img_data = body
         except Exception:
@@ -222,7 +219,7 @@ def get_image_dimensions(
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
-    img_type = get_image_type(img_data)
+    img_type: Final = get_image_type(img_data)
 
     if img_type == "png":
         w, h = struct.unpack(">LL", img_data[16:24])
@@ -259,7 +256,7 @@ def get_image_dimensions(
             return w, h
         # Check for VP8L (lossless format)
         elif img_data[12:16] == b"VP8L":
-            bits = struct.unpack("<I", img_data[21:25])[0]
+            bits: Final = struct.unpack("<I", img_data[21:25])[0]
             w = (bits & 0x3FFF) + 1
             h = ((bits >> 14) & 0x3FFF) + 1
             return w, h
@@ -298,8 +295,8 @@ def calculate_img_tokens(
         )
         resized_width, resized_height = resize_image_high_res(width=width, height=height)
         tiles_needed_high_res = calculate_tiles_needed(resized_width=resized_width, resized_height=resized_height)
-        tile_tokens = (base_tokens * 2) * tiles_needed_high_res
-        total_tokens = base_tokens + tile_tokens
+        tile_tokens: Final = (base_tokens * 2) * tiles_needed_high_res
+        total_tokens: Final = base_tokens + tile_tokens
         return total_tokens
 
 
@@ -307,6 +304,16 @@ TokenCounterFunction = Callable[[str], int]
 """
 Type for a function that counts tokens in a string.
 """
+
+
+def _get_tiktoken_count_function(
+    encode_length: Callable[[str], int],
+    chunk_size: int = TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        return sum(encode_length(text[start : start + chunk_size]) for start in range(0, len(text), chunk_size))
+
+    return count_tokens
 
 
 class _MessageCountParams:
@@ -321,7 +328,7 @@ class _MessageCountParams:
     ):
         from litellm.utils import print_verbose
 
-        actual_model = _fix_model_name(model)
+        actual_model: Final = _fix_model_name(model)
         if actual_model == "gpt-3.5-turbo-0301":
             self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
@@ -387,15 +394,15 @@ def token_counter(
             text_to_count = "".join(t for t in text if isinstance(t, str))
         elif isinstance(text, str):
             text_to_count = text
-        count_function = _get_count_function(model, custom_tokenizer)
+        count_function: Final = _get_count_function(model, custom_tokenizer)
         num_tokens = count_function(text_to_count)
 
     elif messages is not None:
-        new_messages = cast(list[AllMessageValues], convert_list_message_to_dict(messages))
-        params = _MessageCountParams(model, custom_tokenizer)
+        new_messages: Final = cast(list[AllMessageValues], convert_list_message_to_dict(messages))
+        params: Final = _MessageCountParams(model, custom_tokenizer)
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
-            includes_system_message = any([message.get("role", None) == "system" for message in new_messages])
+            includes_system_message: Final = any([message.get("role", None) == "system" for message in new_messages])
             num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
 
     else:
@@ -528,15 +535,16 @@ def _get_count_function(
     from litellm.utils import _select_tokenizer, print_verbose
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json = custom_tokenizer or _select_tokenizer(model)  # type: ignore
+        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
 
             def count_tokens(text: str) -> int:
-                enc = tokenizer_json["tokenizer"].encode(text)
+                enc: Final = tokenizer_json["tokenizer"].encode(text)
                 return len(enc.ids)
 
+            return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
-            model_to_use = _fix_model_name(model)  # type: ignore
+            model_to_use: Final = _fix_model_name(model)
             try:
                 if "gpt-4o" in model_to_use:
                     encoding = tiktoken.get_encoding("o200k_base")
@@ -546,17 +554,18 @@ def _get_count_function(
                 print_verbose("Warning: model not found. Using cl100k_base encoding.")
                 encoding = tiktoken.get_encoding("cl100k_base")
 
-            def count_tokens(text: str) -> int:
+            def encode_length(text: str) -> int:
                 return len(encoding.encode(text, disallowed_special=()))
 
+            return _get_tiktoken_count_function(encode_length)
         else:
             raise ValueError("Unsupported tokenizer type")
     else:
 
-        def count_tokens(text: str) -> int:
+        def encode_length(text: str) -> int:
             return len(default_encoding.encode(text, disallowed_special=()))
 
-    return count_tokens
+        return _get_tiktoken_count_function(encode_length)
 
 
 def _fix_model_name(model: str) -> str:
@@ -565,7 +574,7 @@ def _fix_model_name(model: str) -> str:
         # azure llms use gpt-35-turbo instead of gpt-3.5-turbo 🙃
         return model.replace("-35", "-3.5")
     elif model in litellm.open_ai_chat_completion_models:
-        return model  # type: ignore
+        return model
     else:
         return "gpt-3.5-turbo"
 
@@ -588,15 +597,15 @@ def _count_image_tokens(
         ValueError: If image_url is invalid type or detail value is invalid
     """
     if isinstance(image_url, dict):
-        detail = image_url.get("detail", "auto")
+        detail: Final = image_url.get("detail", "auto")
         if detail not in ["low", "high", "auto"]:
             raise ValueError(f"Invalid detail value: {detail}. Expected 'low', 'high', or 'auto'.")
-        url = image_url.get("url")
+        url: Final = image_url.get("url")
         if not url:
             raise ValueError("Missing required key 'url' in image_url dict.")
         return calculate_img_tokens(
             data=url,
-            mode=detail,  # type: ignore
+            mode=detail,
             use_default_image_token_count=use_default_image_token_count,
         )
     elif isinstance(image_url, str):
@@ -617,20 +626,20 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
 
     Returns the corresponding TypedDict class if recognized, otherwise raises.
     """
-    content_type = content.get("type")
+    content_type: Final = content.get("type")
     if not content_type:
         raise ValueError("Anthropic content missing required field: 'type'")
 
-    mapping = {
+    mapping: Final = {
         "tool_use": AnthropicMessagesToolUseParam,
         "tool_result": AnthropicMessagesToolResultParam,
     }
 
-    expected_cls = mapping.get(content_type)
+    expected_cls: Final = mapping.get(content_type)
     if expected_cls is None:
         raise ValueError(f"Unknown Anthropic content type: '{content_type}'")
 
-    missing = [k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content]
+    missing: Final = [k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content]
     if missing:
         raise ValueError(f"Missing required fields in {content_type} block: {', '.join(missing)}")
 
@@ -652,12 +661,12 @@ def _count_anthropic_content(
     Dynamically infers which fields to count based on the TypedDict definition,
     avoiding hardcoded field names.
     """
-    typeddict_cls = _validate_anthropic_content(content)
-    type_hints = getattr(typeddict_cls, "__annotations__", {})
+    typeddict_cls: Final = _validate_anthropic_content(content)
+    type_hints: Final = getattr(typeddict_cls, "__annotations__", {})
     tokens = 0
 
     # Fields to skip (metadata/identifiers that don't contribute to prompt tokens)
-    skip_fields = {"type", "id", "tool_use_id", "cache_control", "is_error"}
+    skip_fields: Final = {"type", "id", "tool_use_id", "cache_control", "is_error"}
 
     # Iterate over all fields defined in the TypedDict
     for field_name, field_type in type_hints.items():
@@ -673,7 +682,7 @@ def _count_anthropic_content(
             elif isinstance(field_value, list):
                 tokens += _count_content_list(
                     count_function,
-                    field_value,  # type: ignore
+                    field_value,
                     use_default_image_token_count,
                     default_token_count,
                 )
@@ -748,7 +757,7 @@ def _format_function_definitions(tools):
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
-    lines = []
+    lines: Final = []
     lines.append("namespace functions {")
     lines.append("")
     for tool in tools:
@@ -788,11 +797,11 @@ def _format_function_definitions(tools):
 
 
 def _format_object_parameters(parameters, indent):
-    properties = parameters.get("properties")
+    properties: Final = parameters.get("properties")
     if not properties:
         return ""
-    required_params = parameters.get("required", [])
-    lines = []
+    required_params: Final = parameters.get("required", [])
+    lines: Final = []
     for key, props in properties.items():
         description = props.get("description")
         if description:
@@ -805,7 +814,7 @@ def _format_object_parameters(parameters, indent):
 
 
 def _format_type(props, indent):
-    type = props.get("type")
+    type: Final = props.get("type")
     if type == "string":
         if "enum" in props:
             return " | ".join([f'"{item}"' for item in props["enum"]])

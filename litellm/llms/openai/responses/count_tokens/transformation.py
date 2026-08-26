@@ -4,7 +4,7 @@ OpenAI Responses API token counting transformation logic.
 This module handles the transformation of requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
-from typing import Any
+from typing import Any, Final
 
 
 class OpenAICountTokensConfig:
@@ -33,7 +33,7 @@ class OpenAICountTokensConfig:
 
         The Responses API uses `input` (not `messages`) and `instructions` (not `system`).
         """
-        request: dict[str, Any] = {
+        request: Final[dict[str, Any]] = {
             "model": model,
             "input": input,
         }
@@ -69,7 +69,7 @@ class OpenAICountTokensConfig:
         Chat format:  {"type": "function", "function": {"name": "...", "parameters": {...}}}
         Responses format: {"type": "function", "name": "...", "parameters": {...}}
         """
-        transformed = []
+        transformed: Final = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
@@ -98,8 +98,8 @@ class OpenAICountTokensConfig:
             (input_items, instructions) tuple where instructions is extracted
             from system/developer messages.
         """
-        input_items: list[dict[str, Any]] = []
-        instructions_parts: list[str] = []
+        input_items: Final[list[dict[str, Any]]] = []
+        instructions_parts: Final[list[str]] = []
 
         for msg in messages:
             role = msg.get("role", "")
@@ -156,5 +156,5 @@ class OpenAICountTokensConfig:
                     }
                 )
 
-        instructions = "\n".join(instructions_parts) if instructions_parts else None
+        instructions: Final = "\n".join(instructions_parts) if instructions_parts else None
         return input_items, instructions

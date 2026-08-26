@@ -6,7 +6,7 @@ Slack alerts are sent every 10s or when events are greater than X events
 see custom_batch_logger.py for more details / defaults
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -19,7 +19,7 @@ else:
 
 
 def squash_payloads(queue):
-    squashed = {}
+    squashed: Final = {}
     if len(queue) == 0:
         return squashed
     if len(queue) == 1:
@@ -57,12 +57,12 @@ async def send_to_webhook(slackAlertingInstance: SlackAlertingType, item, count)
     """
     import json
 
-    payload = item.get("payload", {})
+    payload: Final = item.get("payload", {})
     try:
         if count > 1:
             payload["text"] = f"[Num Alerts: {count}]\n\n{payload['text']}"
 
-        response = await slackAlertingInstance.async_http_handler.post(
+        response: Final = await slackAlertingInstance.async_http_handler.post(
             url=item["url"],
             headers=item["headers"],
             data=json.dumps(payload),

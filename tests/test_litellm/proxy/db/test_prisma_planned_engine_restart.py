@@ -6,13 +6,24 @@ subprocess), and the engine-death watcher / in-flight transport-error
 retries must not treat that planned restart as a crash and recreate the
 client a second time.
 
+A planned restart is also invisible to the database itself, so a ``SELECT 1``
+health probe that races the kill/connect window fails with a transport error
+against the engine's local HTTP port. That failure must not be reported as a
+``db_exceptions`` DB failure, or every IAM refresh cycle raises a false alarm.
+
 Symbols pinned here:
   - ``PrismaWrapper._expected_engine_deaths``
   - ``PrismaWrapper._engine_generation``
+  - ``PrismaWrapper.engine_generation``
+  - ``PrismaWrapper.wait_for_planned_engine_replacement``
   - ``PrismaWrapper.on_engine_replaced``
   - ``PrismaWrapper.recreate_prisma_client`` (expected_generation guard)
   - ``PrismaWrapper._safe_refresh_token`` (refresh coalescing)
   - ``RoutingPrismaWrapper.recreate_prisma_client`` (guard forwarding)
+  - ``PrismaClient.health_check`` (planned-replacement alert suppression)
+  - ``PrismaClient._probe_target_wrapper``
+  - ``PrismaClient._probe_answers_now``
+  - ``PrismaClient._planned_engine_replacement_absorbed``
 """
 
 import asyncio
@@ -21,22 +32,26 @@ import signal
 import sys
 import urllib.parse
 from datetime import datetime, timedelta
+from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
 from prisma import Prisma as GeneratedPrisma
+from prisma.engine.errors import EngineConnectionError
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.utils import PrismaClient
 
 
 @pytest.fixture(autouse=True)
 def mock_prisma_binary():
     """Mock prisma.Prisma to avoid requiring generated Prisma binaries for unit tests."""
     mock_module = MagicMock()
+    # Production code isinstance-checks against this, which a bare MagicMock
+    # attribute cannot satisfy.
+    mock_module.engine.errors.EngineConnectionError = EngineConnectionError
     with patch.dict(sys.modules, {"prisma": mock_module}):
         yield mock_module
 
@@ -47,6 +62,87 @@ def _make_wrapper(engine_pid: int = 111, iam: bool = False) -> PrismaWrapper:
     engine.process.pid = engine_pid
     setattr(prisma, "_Prisma__engine", engine)
     return PrismaWrapper(original_prisma=prisma, iam_token_db_auth=iam)
+
+
+def _make_prisma_client(db: Any) -> PrismaClient:
+    """A ``PrismaClient`` whose ``db`` is a real wrapper and whose alerting
+    hook is observable."""
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+    client = PrismaClient(
+        database_url="postgresql://user:pass@localhost:5432/db",
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    client.db = db
+    client._db_watchdog_reconnect_timeout_seconds = 5.0
+    return client
+
+
+_real_asyncio_sleep = asyncio.sleep
+
+
+async def _yield_to_loop(times: int = 10) -> None:
+    """Let already-scheduled tasks make progress.
+
+    Bound to the real ``asyncio.sleep`` at import time: the tests below patch
+    ``asyncio.sleep`` to skip the SIGTERM/SIGKILL grace, and an ``AsyncMock``
+    stand-in never yields to the event loop, which would silently leave every
+    background task un-started and the assertions vacuous.
+    """
+    for _ in range(times):
+        await _real_asyncio_sleep(0)
+
+
+async def _await_health_check_reports() -> None:
+    """Await the fire-and-forget reporting tasks ``health_check()`` scheduled.
+
+    Selected by coroutine qualname rather than by draining every pending task,
+    so an unrelated background task can never make these assertions pass by
+    accident.
+    """
+    reports = [
+        task
+        for task in asyncio.all_tasks()
+        if getattr(task.get_coro(), "__qualname__", "")
+        == "PrismaClient._report_health_check_failure"
+    ]
+    if reports:
+        await asyncio.gather(*reports, return_exceptions=True)
+
+
+def _fails_then_answers(error: Exception, failures: int = 3) -> Any:
+    """Raise ``error`` for the first ``failures`` probes, then answer.
+
+    ``health_check`` retries up to three times, so this exhausts the retries and
+    still lets the confirmation probe that decides suppression succeed. Without
+    that, a test would report for the wrong reason: the confirmation probe would
+    fail too, masking whether the error type was classified at all.
+    """
+    seen: List[int] = []
+
+    async def _query_raw(_sql: str) -> Any:
+        seen.append(1)
+        if len(seen) <= failures:
+            raise error
+        return [{"?column?": 1}]
+
+    return _query_raw
+
+
+def _blocking_replacement(gate: asyncio.Event, fail: bool = False) -> MagicMock:
+    """A replacement Prisma whose ``connect()`` parks until ``gate`` is set.
+
+    Holds ``_reconnection_lock`` open for as long as the test needs, which is
+    how a health probe is made to fail *while* a planned replacement is in
+    flight rather than after it.
+    """
+
+    async def _connect(*_: Any, **__: Any) -> None:
+        await gate.wait()
+        if fail:
+            raise ConnectionRefusedError("database is down")
+
+    return MagicMock(connect=AsyncMock(side_effect=_connect))
 
 
 def _token_db_url(created: datetime, expires_in: int = 900) -> str:
@@ -603,3 +699,348 @@ async def test_recreate_caps_expected_engine_deaths_set(mock_prisma_binary):
         await wrapper.recreate_prisma_client("postgresql://new")
 
     assert wrapper._expected_engine_deaths == {111}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_planned_engine_replacement_returns_once_recreate_settles(
+    mock_prisma_binary,
+):
+    wrapper = _make_wrapper(engine_pid=111)
+    gate = asyncio.Event()
+    mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
+
+    with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
+        recreate = asyncio.create_task(
+            wrapper.recreate_prisma_client("postgresql://new")
+        )
+        await _yield_to_loop()
+        assert wrapper._reconnection_lock.locked() is True
+
+        waiter = asyncio.create_task(wrapper.wait_for_planned_engine_replacement(5.0))
+        await _yield_to_loop()
+        blocked_while_in_flight = not waiter.done()
+
+        gate.set()
+        await recreate
+        await waiter
+
+    assert {
+        "blocked_while_in_flight": blocked_while_in_flight,
+        "generation": wrapper.engine_generation,
+    } == {"blocked_while_in_flight": True, "generation": 1}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_planned_engine_replacement_gives_up_at_timeout(
+    mock_prisma_binary,
+):
+    """A replacement that never settles must not stall the caller forever; the
+    caller then sees an unchanged generation and reports the failure."""
+    wrapper = _make_wrapper(engine_pid=111)
+    gate = asyncio.Event()
+    mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
+
+    with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
+        recreate = asyncio.create_task(
+            wrapper.recreate_prisma_client("postgresql://new")
+        )
+        await _yield_to_loop()
+        assert wrapper._reconnection_lock.locked() is True
+
+        await asyncio.wait_for(
+            wrapper.wait_for_planned_engine_replacement(0.05), timeout=5.0
+        )
+        gave_up_with_replacement_still_in_flight = not recreate.done()
+
+        gate.set()
+        await recreate
+
+    assert gave_up_with_replacement_still_in_flight is True
+
+
+@pytest.mark.asyncio
+async def test_health_check_does_not_alert_when_probe_races_a_completed_replacement(
+    mock_prisma_binary,
+):
+    """The reported bug: an IAM-refresh engine recreate makes a concurrent
+    readiness probe fail transiently, and that failure was alerting as a DB
+    exception on every refresh cycle.
+
+    The reporting task is drained while the replacement is still in flight,
+    which is when it runs in production; a decision taken at that instant sees
+    an engine generation that has not moved yet.
+    """
+    wrapper = _make_wrapper(engine_pid=111)
+    client = _make_prisma_client(wrapper)
+    wrapper.query_raw = AsyncMock(
+        side_effect=[
+            httpx.ConnectError("All connection attempts failed"),
+            [{"?column?": 1}],
+            [{"?column?": 1}],
+        ]
+    )
+    gate = asyncio.Event()
+    mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
+
+    with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
+        recreate = asyncio.create_task(
+            wrapper.recreate_prisma_client("postgresql://new")
+        )
+        await _yield_to_loop()
+        assert wrapper._reconnection_lock.locked() is True
+
+        probe_result = await client.health_check()
+
+        drain = asyncio.create_task(_await_health_check_reports())
+        await _yield_to_loop()
+        alerts_while_replacement_in_flight = (
+            client.proxy_logging_obj.failure_handler.await_count
+        )
+
+        gate.set()
+        await recreate
+        await drain
+
+    assert {
+        "probe_result": probe_result,
+        "probe_attempts": wrapper.query_raw.await_count,
+        "alerts_while_in_flight": alerts_while_replacement_in_flight,
+        "alerts": client.proxy_logging_obj.failure_handler.await_count,
+    } == {
+        "probe_result": [{"?column?": 1}],
+        "probe_attempts": 3,
+        "alerts_while_in_flight": 0,
+        "alerts": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_check_alerts_when_a_completed_replacement_still_cannot_reach_the_database(
+    mock_prisma_binary,
+):
+    """``Prisma.connect()`` polls the query engine's own ``/status`` endpoint
+    rather than round-tripping to the database, so a replacement can complete
+    against a database that is still unreachable. The engine generation alone
+    must not be enough to stay silent."""
+    wrapper = _make_wrapper(engine_pid=111)
+    client = _make_prisma_client(wrapper)
+    wrapper.query_raw = AsyncMock(
+        side_effect=httpx.ConnectError("All connection attempts failed")
+    )
+    gate = asyncio.Event()
+    mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
+
+    with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
+        recreate = asyncio.create_task(
+            wrapper.recreate_prisma_client("postgresql://new")
+        )
+        await _yield_to_loop()
+        assert wrapper._reconnection_lock.locked() is True
+
+        with pytest.raises(httpx.ConnectError):
+            await client.health_check()
+
+        gate.set()
+        await recreate
+        await _await_health_check_reports()
+
+    assert {
+        "replacement_completed": wrapper.engine_generation,
+        "alerted": client.proxy_logging_obj.failure_handler.await_count > 0,
+    } == {"replacement_completed": 1, "alerted": True}
+
+
+@pytest.mark.asyncio
+async def test_health_check_alerts_when_the_replacement_never_completes(
+    mock_prisma_binary,
+):
+    """A real outage also has a replacement in flight, but it fails, so the
+    engine generation never advances and the probe failure must still alert."""
+    wrapper = _make_wrapper(engine_pid=111)
+    client = _make_prisma_client(wrapper)
+    wrapper.query_raw = AsyncMock(
+        side_effect=httpx.ConnectError("All connection attempts failed")
+    )
+    gate = asyncio.Event()
+    mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate, fail=True)
+
+    with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
+        recreate = asyncio.create_task(
+            wrapper.recreate_prisma_client("postgresql://new")
+        )
+        await _yield_to_loop()
+        assert wrapper._reconnection_lock.locked() is True
+
+        with pytest.raises(httpx.ConnectError):
+            await client.health_check()
+
+        gate.set()
+        with pytest.raises(ConnectionRefusedError):
+            await recreate
+        await _await_health_check_reports()
+
+    call_types: List[str] = [
+        c.kwargs["call_type"]
+        for c in client.proxy_logging_obj.failure_handler.await_args_list
+    ]
+    assert {
+        "generation": wrapper.engine_generation,
+        "alerted": len(call_types) > 0,
+        "call_types": set(call_types),
+    } == {"generation": 0, "alerted": True, "call_types": {"health_check"}}
+
+
+@pytest.mark.asyncio
+async def test_health_check_alerts_for_non_connection_errors_during_a_replacement(
+    mock_prisma_binary,
+):
+    """Suppression is scoped to transport failures. A query the database itself
+    rejected is a real defect and must alert even mid-replacement, and even
+    though the database is plainly reachable a moment later."""
+    wrapper = _make_wrapper(engine_pid=111)
+    client = _make_prisma_client(wrapper)
+    wrapper.query_raw = AsyncMock(side_effect=_fails_then_answers(ValueError("malformed SELECT")))
+    gate = asyncio.Event()
+    mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
+
+    with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
+        recreate = asyncio.create_task(
+            wrapper.recreate_prisma_client("postgresql://new")
+        )
+        await _yield_to_loop()
+        assert wrapper._reconnection_lock.locked() is True
+
+        with pytest.raises(ValueError, match='malformed SELECT'):
+            await client.health_check()
+
+        gate.set()
+        await recreate
+        await _await_health_check_reports()
+
+    assert {
+        "generation": wrapper.engine_generation,
+        "alerted": client.proxy_logging_obj.failure_handler.await_count > 0,
+    } == {"generation": 1, "alerted": True}
+
+
+@pytest.mark.asyncio
+async def test_health_check_alerts_for_a_transient_failure_with_no_engine_replacement(
+    mock_prisma_binary,
+):
+    """Suppression is scoped to failures a planned replacement explains. A
+    transport blip that self-heals with no engine replacement at all still
+    alerts, so the gate cannot be widened into silencing every failure whose
+    database happens to answer a moment later."""
+    wrapper = _make_wrapper(engine_pid=111)
+    client = _make_prisma_client(wrapper)
+    wrapper.query_raw = AsyncMock(
+        side_effect=[
+            httpx.ConnectError("All connection attempts failed"),
+            [{"?column?": 1}],
+            [{"?column?": 1}],
+        ]
+    )
+
+    probe_result = await client.health_check()
+    await _await_health_check_reports()
+
+    assert {
+        "probe_result": probe_result,
+        "generation": wrapper.engine_generation,
+        "alerted": client.proxy_logging_obj.failure_handler.await_count > 0,
+    } == {"probe_result": [{"?column?": 1}], "generation": 0, "alerted": True}
+
+
+@pytest.mark.asyncio
+async def test_health_probe_stays_on_its_target_when_reader_availability_flips(
+    mock_prisma_binary, monkeypatch
+):
+    """Routing is re-resolved on every attribute access, so a reader that
+    recovers mid-call would otherwise send the probe to a different engine than
+    the one whose generation is being checked, and blame the wrong replacement.
+    The probe follows the wrapper it was handed."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader")
+    writer = _make_wrapper(engine_pid=111)
+    reader = _make_wrapper(engine_pid=222)
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    client = _make_prisma_client(routing)
+    writer.query_raw = AsyncMock(return_value=[{"writer": 1}])
+    reader.query_raw = AsyncMock(return_value=[{"reader": 1}])
+
+    routing._reader_unavailable = False
+    target = client._probe_target_wrapper()
+    routing._reader_unavailable = True
+    result = await client._run_health_probe(target)
+
+    assert {
+        "target_is_reader": target is reader,
+        "result": result,
+        "reader_probes": reader.query_raw.await_count,
+        "writer_probes": writer.query_raw.await_count,
+    } == {
+        "target_is_reader": True,
+        "result": [{"reader": 1}],
+        "reader_probes": 1,
+        "writer_probes": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_health_check_consults_the_reader_wrapper_under_read_replica_routing(
+    mock_prisma_binary, monkeypatch
+):
+    """``query_raw`` is routed to the reader, so a reader-side planned
+    replacement is the one that explains a probe failure."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://reader")
+    writer = _make_wrapper(engine_pid=111)
+    reader = _make_wrapper(engine_pid=222)
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    client = _make_prisma_client(routing)
+    reader.query_raw = AsyncMock(
+        side_effect=[
+            httpx.ConnectError("All connection attempts failed"),
+            [{"?column?": 1}],
+            [{"?column?": 1}],
+        ]
+    )
+    gate = asyncio.Event()
+    mock_prisma_binary.Prisma.return_value = _blocking_replacement(gate)
+
+    with patch("os.kill"), patch("asyncio.sleep", new_callable=AsyncMock):
+        recreate = asyncio.create_task(
+            reader.recreate_prisma_client("postgresql://new-reader")
+        )
+        await _yield_to_loop()
+        assert reader._reconnection_lock.locked() is True
+
+        probe_result = await client.health_check()
+
+        drain = asyncio.create_task(_await_health_check_reports())
+        await _yield_to_loop()
+        alerts_while_replacement_in_flight = (
+            client.proxy_logging_obj.failure_handler.await_count
+        )
+
+        gate.set()
+        await recreate
+        await drain
+
+    assert {
+        "probe_target_is_the_reader": client._probe_target_wrapper() is reader,
+        "writer_generation": writer.engine_generation,
+        "reader_generation": reader.engine_generation,
+        "probe_result": probe_result,
+        "alerts_while_in_flight": alerts_while_replacement_in_flight,
+        "alerts": client.proxy_logging_obj.failure_handler.await_count,
+    } == {
+        "probe_target_is_the_reader": True,
+        "writer_generation": 0,
+        "reader_generation": 1,
+        "probe_result": [{"?column?": 1}],
+        "alerts_while_in_flight": 0,
+        "alerts": 0,
+    }

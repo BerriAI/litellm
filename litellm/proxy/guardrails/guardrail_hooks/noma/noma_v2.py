@@ -8,7 +8,7 @@ import enum
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
@@ -31,10 +31,17 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
-_DEFAULT_API_BASE = "https://api.noma.security/"
-_AIDR_SCAN_ENDPOINT = "/litellm/guardrail"
-_INTERVENED_INPUT_FIELDS = ("texts", "images", "tools", "tool_calls")
-_DEFAULT_API_BASE_HOSTNAME = urlparse(_DEFAULT_API_BASE).hostname
+_DEFAULT_API_BASE: Final = "https://api.noma.security/"
+_AIDR_SCAN_ENDPOINT: Final = "/litellm/guardrail"
+_INTERVENED_INPUT_FIELDS: Final = ("texts", "images", "tools", "tool_calls")
+_DEFAULT_API_BASE_HOSTNAME: Final = urlparse(_DEFAULT_API_BASE).hostname
+
+_KEYS_DUPLICATING_SCAN_INPUTS: Final = ("messages", "input")
+_LOGGING_KEYS_DUPLICATING_SCAN_INPUTS: Final = _KEYS_DUPLICATING_SCAN_INPUTS + (
+    "additional_args",
+    "standard_logging_object",
+    "original_response",
+)
 
 
 class _Action(str, enum.Enum):
@@ -100,21 +107,21 @@ class NomaV2Guardrail(CustomGuardrail):
 
     @staticmethod
     def _requires_api_key(api_base: str) -> bool:
-        parsed = urlparse(api_base)
+        parsed: Final = urlparse(api_base)
         return parsed.hostname == _DEFAULT_API_BASE_HOSTNAME
 
     @staticmethod
     def _get_non_empty_str(value: Any) -> str | None:
         if not isinstance(value, str):
             return None
-        stripped = value.strip()
+        stripped: Final = value.strip()
         return stripped or None
 
     def _resolve_action_from_response(
         self,
         response_json: dict,
     ) -> _Action:
-        action = response_json.get("action")
+        action: Final = response_json.get("action")
         if isinstance(action, str):
             try:
                 return _Action(action)
@@ -131,11 +138,22 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: str | None,
     ) -> dict:
-        payload_request_data = self._sanitize_payload_for_transport(request_data)
+        payload_request_data: Final = self._sanitize_payload_for_transport(
+            {key: value for key, value in request_data.items() if key not in _KEYS_DUPLICATING_SCAN_INPUTS}
+        )
         if logging_obj is not None:
-            payload_request_data["litellm_logging_obj"] = getattr(logging_obj, "model_call_details", None)
+            model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+            payload_request_data["litellm_logging_obj"] = (
+                {
+                    key: value
+                    for key, value in model_call_details.items()
+                    if key not in _LOGGING_KEYS_DUPLICATING_SCAN_INPUTS
+                }
+                if isinstance(model_call_details, dict)
+                else model_call_details
+            )
 
-        payload: dict[str, Any] = {
+        payload: Final[dict[str, Any]] = {
             "inputs": inputs,
             "request_data": payload_request_data,
             "input_type": input_type,
@@ -160,7 +178,7 @@ class NomaV2Guardrail(CustomGuardrail):
         except (ValueError, TypeError):
             json_str = safe_dumps(payload)
 
-        safe_payload = safe_json_loads(json_str, default={})
+        safe_payload: Final = safe_json_loads(json_str, default={})
         if safe_payload == {} and payload:
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail: payload serialization failed, falling back to empty payload"
@@ -179,14 +197,14 @@ class NomaV2Guardrail(CustomGuardrail):
         self,
         payload: dict,
     ) -> dict:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        authorization_header = self._get_authorization_header()
+        headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
+        authorization_header: Final = self._get_authorization_header()
         if authorization_header:
             headers["Authorization"] = authorization_header
 
-        endpoint = f"{self.api_base}{_AIDR_SCAN_ENDPOINT}"
-        sanitized_payload = self._sanitize_payload_for_transport(payload)
-        response = await self.async_handler.post(
+        endpoint: Final = f"{self.api_base}{_AIDR_SCAN_ENDPOINT}"
+        sanitized_payload: Final = self._sanitize_payload_for_transport(payload)
+        response: Final = await self.async_handler.post(
             url=endpoint,
             headers=headers,
             json=sanitized_payload,
@@ -197,7 +215,7 @@ class NomaV2Guardrail(CustomGuardrail):
             response.text,
         )
         response.raise_for_status()
-        response_json = response.json()
+        response_json: Final = response.json()
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response parsed: %s",
             json.dumps(response_json, default=str),
@@ -211,8 +229,8 @@ class NomaV2Guardrail(CustomGuardrail):
         guardrail_status: GuardrailStatus,
         guardrail_json_response: Any,
     ) -> None:
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
+        end_time: Final = datetime.now()
+        duration: Final = (end_time - start_time).total_seconds()
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider="noma_v2",
             guardrail_json_response=guardrail_json_response,
@@ -233,11 +251,11 @@ class NomaV2Guardrail(CustomGuardrail):
             raise NomaBlockedMessage(response_json)
 
         if action == _Action.GUARDRAIL_INTERVENED:
-            updated_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
+            updated_inputs: Final = cast(GenericGuardrailAPIInputs, dict(inputs))
             for field in _INTERVENED_INPUT_FIELDS:
                 value = response_json.get(field)
                 if isinstance(value, list):
-                    updated_inputs[field] = value  # type: ignore[literal-required]
+                    updated_inputs[field] = value
             return updated_inputs
 
         return inputs
@@ -250,7 +268,7 @@ class NomaV2Guardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
         guardrail_status: GuardrailStatus = "success"
         guardrail_json_response: Any = {}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
@@ -272,7 +290,7 @@ class NomaV2Guardrail(CustomGuardrail):
             ) or self._get_non_empty_str(request_data.get("metadata", {}).get("user_api_key_alias"))
 
         try:
-            payload = self._build_scan_payload(
+            payload: Final = self._build_scan_payload(
                 inputs=inputs,
                 request_data=request_data,
                 input_type=input_type,
@@ -291,7 +309,7 @@ class NomaV2Guardrail(CustomGuardrail):
                 input_type,
                 action.value,
             )
-            processed_inputs = self._apply_action(
+            processed_inputs: Final = self._apply_action(
                 inputs=inputs,
                 response_json=response_json,
                 action=action,

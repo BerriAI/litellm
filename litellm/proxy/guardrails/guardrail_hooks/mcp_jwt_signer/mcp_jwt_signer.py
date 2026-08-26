@@ -73,12 +73,14 @@ import hashlib
 import os
 import re
 import time
-from typing import Any, Optional
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -90,14 +92,29 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
+if TYPE_CHECKING:
+    from jwt.types import Options
+
+
+class _OIDCDiscoveryDocument(TypedDict, total=False):
+    jwks_uri: str
+
+
+class _JWTDecodeKwargs(TypedDict):
+    algorithms: Sequence[str]
+    options: "Options"
+    audience: NotRequired[str]
+    issuer: NotRequired[str]
+
+
 # Module-level singleton for the JWKS discovery endpoint to access.
 _mcp_jwt_signer_instance: Optional["MCPJWTSigner"] = None
 
-_MCP_JWT_CALL_TYPES = frozenset({"call_mcp_tool", "list_mcp_tools"})
+_MCP_JWT_CALL_TYPES: Final = frozenset({"call_mcp_tool", "list_mcp_tools"})
 
 # Simple in-memory JWKS cache: keyed by JWKS URI → (keys_list, fetched_at).
-_jwks_cache: dict[str, tuple] = {}
-_JWKS_CACHE_TTL = 3600  # 1 hour
+_jwks_cache: Final[dict[str, tuple[Sequence[Mapping[str, object]], float]]] = {}
+_JWKS_CACHE_TTL: Final = 3600  # 1 hour
 
 
 def get_mcp_jwt_signer() -> Optional["MCPJWTSigner"]:
@@ -107,16 +124,16 @@ def get_mcp_jwt_signer() -> Optional["MCPJWTSigner"]:
 
 def _load_private_key_from_env(env_var: str) -> RSAPrivateKey:
     """Load an RSA private key from an env var (PEM string or file:// path)."""
-    key_material = os.environ.get(env_var, "")
+    key_material: Final = os.environ.get(env_var, "")
     if not key_material:
         raise ValueError(f"MCPJWTSigner: environment variable '{env_var}' is set but empty.")
     if key_material.startswith("file://"):
-        path = key_material[len("file://") :]
+        path: Final = key_material[len("file://") :]
         with open(path, "rb") as f:
             key_bytes = f.read()
     else:
         key_bytes = key_material.encode("utf-8")
-    return serialization.load_pem_private_key(key_bytes, password=None)  # type: ignore[return-value]
+    return serialization.load_pem_private_key(key_bytes, password=None)
 
 
 def _generate_rsa_key_pair() -> RSAPrivateKey:
@@ -129,56 +146,58 @@ def _generate_rsa_key_pair() -> RSAPrivateKey:
 
 def _int_to_base64url(n: int) -> str:
     """Encode an integer as a base64url string (no padding)."""
-    byte_length = (n.bit_length() + 7) // 8
+    byte_length: Final = (n.bit_length() + 7) // 8
     return base64.urlsafe_b64encode(n.to_bytes(byte_length, byteorder="big")).rstrip(b"=").decode("ascii")
 
 
-def _compute_kid(public_key: Any) -> str:
+def _compute_kid(public_key: RSAPublicKey) -> str:
     """Derive a key ID from the public key's DER encoding (SHA-256, first 16 hex chars)."""
-    der_bytes = public_key.public_bytes(
+    der_bytes: Final = public_key.public_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
     return hashlib.sha256(der_bytes).hexdigest()[:16]
 
 
-async def _fetch_jwks(jwks_uri: str) -> list[dict[str, Any]]:
+async def _fetch_jwks(jwks_uri: str) -> Sequence[Mapping[str, object]]:
     """
     Fetch and cache a JWKS from the given URI.
 
     Results are cached for _JWKS_CACHE_TTL seconds to avoid hammering the IdP.
     """
-    now = time.time()
-    cached = _jwks_cache.get(jwks_uri)
+    now: Final = time.time()
+    cached: Final = _jwks_cache.get(jwks_uri)
     if cached is not None:
         keys, fetched_at = cached
         if now - fetched_at < _JWKS_CACHE_TTL:
-            return keys  # type: ignore[return-value]
+            return keys
 
     from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
         httpxSpecialProvider,
     )
 
-    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    resp = await client.get(jwks_uri, headers={"Accept": "application/json"})
+    client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    resp: Final = await client.get(jwks_uri, headers={"Accept": "application/json"})
     resp.raise_for_status()
-    keys = resp.json().get("keys", [])
-    _jwks_cache[jwks_uri] = (keys, now)
-    return keys  # type: ignore[return-value]
+    jwks_body: Final[Mapping[str, Sequence[Mapping[str, object]]]] = resp.json()
+    fetched_keys: Final = jwks_body.get("keys", [])
+    _jwks_cache[jwks_uri] = (fetched_keys, now)
+    return fetched_keys
 
 
-async def _fetch_oidc_discovery(discovery_uri: str) -> dict[str, Any]:
+async def _fetch_oidc_discovery(discovery_uri: str) -> _OIDCDiscoveryDocument:
     """Fetch an OIDC discovery document and return its parsed JSON."""
     from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
         httpxSpecialProvider,
     )
 
-    client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    resp = await client.get(discovery_uri, headers={"Accept": "application/json"})
+    client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    resp: Final = await client.get(discovery_uri, headers={"Accept": "application/json"})
     resp.raise_for_status()
-    return resp.json()  # type: ignore[return-value]
+    document: Final[_OIDCDiscoveryDocument] = resp.json()
+    return document
 
 
 class MCPJWTSigner(CustomGuardrail):
@@ -230,8 +249,8 @@ class MCPJWTSigner(CustomGuardrail):
         # FR-12: End-user identity mapping
         end_user_claim_sources: list[str] | None = None,
         # FR-13: Claim operations
-        add_claims: dict[str, Any] | None = None,
-        set_claims: dict[str, Any] | None = None,
+        add_claims: Mapping[str, object] | None = None,
+        set_claims: Mapping[str, object] | None = None,
         remove_claims: list[str] | None = None,
         # FR-14: Two-token model
         channel_token_audience: str | None = None,
@@ -249,7 +268,7 @@ class MCPJWTSigner(CustomGuardrail):
         super().__init__(**kwargs)
 
         # --- Signing key setup ---
-        key_material = os.environ.get(self.SIGNING_KEY_ENV)
+        key_material: Final = os.environ.get(self.SIGNING_KEY_ENV)
         if key_material:
             self._private_key = _load_private_key_from_env(self.SIGNING_KEY_ENV)
             self._persistent_key: bool = True
@@ -270,7 +289,7 @@ class MCPJWTSigner(CustomGuardrail):
             issuer or os.environ.get("MCP_JWT_ISSUER") or os.environ.get("LITELLM_EXTERNAL_URL") or "litellm"
         )
         self.audience: str = audience or os.environ.get("MCP_JWT_AUDIENCE") or self.DEFAULT_AUDIENCE
-        resolved_ttl = int(
+        resolved_ttl: Final = int(
             ttl_seconds if ttl_seconds is not None else os.environ.get("MCP_JWT_TTL_SECONDS", str(self.DEFAULT_TTL))
         )
         if resolved_ttl <= 0:
@@ -283,7 +302,7 @@ class MCPJWTSigner(CustomGuardrail):
         self.verify_issuer: str | None = verify_issuer
         self.verify_audience: str | None = verify_audience
         # Cached OIDC discovery document (fetched lazily, TTL = 24 h)
-        self._oidc_discovery_doc: dict[str, Any] | None = None
+        self._oidc_discovery_doc: _OIDCDiscoveryDocument | None = None
         self._oidc_discovery_fetched_at: float = 0.0
 
         # --- FR-12: End-user identity mapping ---
@@ -294,8 +313,8 @@ class MCPJWTSigner(CustomGuardrail):
         ]
 
         # --- FR-13: Claim operations ---
-        self.add_claims: dict[str, Any] = add_claims or {}
-        self.set_claims: dict[str, Any] = set_claims or {}
+        self.add_claims: Mapping[str, object] = add_claims or {}
+        self.set_claims: Mapping[str, object] = set_claims or {}
         self.remove_claims: list[str] = remove_claims or []
 
         # --- FR-14: Two-token model ---
@@ -347,12 +366,12 @@ class MCPJWTSigner(CustomGuardrail):
         """
         return 3600 if self._persistent_key else 300
 
-    def get_jwks(self) -> dict[str, Any]:
+    def get_jwks(self) -> Mapping[str, Sequence[Mapping[str, str]]]:
         """
         Return the JWKS for the RSA public key.
         Used by GET /.well-known/jwks.json so MCP servers can verify tokens.
         """
-        public_numbers = self._public_key.public_numbers()
+        public_numbers: Final = self._public_key.public_numbers()
         return {
             "keys": [
                 {
@@ -374,16 +393,16 @@ class MCPJWTSigner(CustomGuardrail):
     # the IdP, short enough to pick up jwks_uri changes after key rotation.
     _OIDC_DISCOVERY_TTL = 86400
 
-    async def _get_oidc_discovery(self) -> dict[str, Any]:
+    async def _get_oidc_discovery(self) -> _OIDCDiscoveryDocument:
         """Fetch and cache the OIDC discovery document with a 24-hour TTL.
 
         Only caches when the doc contains a 'jwks_uri' so that a transient or
         malformed response doesn't permanently disable JWT verification.
         """
-        now = time.time()
-        cache_expired = (now - self._oidc_discovery_fetched_at) >= self._OIDC_DISCOVERY_TTL
+        now: Final = time.time()
+        cache_expired: Final = (now - self._oidc_discovery_fetched_at) >= self._OIDC_DISCOVERY_TTL
         if (self._oidc_discovery_doc is None or cache_expired) and self.access_token_discovery_uri:
-            doc = await _fetch_oidc_discovery(self.access_token_discovery_uri)
+            doc: Final = await _fetch_oidc_discovery(self.access_token_discovery_uri)
             if "jwks_uri" in doc:
                 self._oidc_discovery_doc = doc
                 self._oidc_discovery_fetched_at = now
@@ -391,40 +410,38 @@ class MCPJWTSigner(CustomGuardrail):
                 return doc
         return self._oidc_discovery_doc or {}
 
-    async def _verify_incoming_jwt(self, raw_token: str) -> dict[str, Any]:
+    async def _verify_incoming_jwt(self, raw_token: str) -> dict[str, object]:
         """
         Verify an incoming Bearer JWT against the configured IdP's JWKS.
 
         Returns the verified payload claims dict.
         Raises jwt.PyJWTError (or subclass) if verification fails.
         """
-        discovery = await self._get_oidc_discovery()
-        jwks_uri = discovery.get("jwks_uri")
+        discovery: Final = await self._get_oidc_discovery()
+        jwks_uri: Final = discovery.get("jwks_uri")
         if not jwks_uri:
             raise ValueError(
                 "MCPJWTSigner: access_token_discovery_uri discovery document "
                 f"at {self.access_token_discovery_uri!r} has no 'jwks_uri'."
             )
 
-        jwks_keys = await _fetch_jwks(jwks_uri)
+        jwks_keys: Final = await _fetch_jwks(jwks_uri)
 
         # Only read `kid` from the unverified header — never `alg`.
         # Reading `alg` from an attacker-controlled header enables algorithm
         # confusion attacks (e.g. alg:none, HS256 with the public key as secret).
         # The algorithm is determined from the JWKS key entry instead.
-        unverified_header = jwt.get_unverified_header(raw_token)
-        kid = unverified_header.get("kid")
+        unverified_header: Final = jwt.get_unverified_header(raw_token)
+        kid: Final = unverified_header.get("kid")
 
         # Build a JWKS object and pick the matching key.
         # PyJWT's PyJWKSet handles key-type parsing and kid matching correctly.
         from jwt import PyJWKSet
 
         try:
-            jwks_set = PyJWKSet.from_dict({"keys": jwks_keys})
+            jwks_set: Final = PyJWKSet.from_dict({"keys": jwks_keys})
         except Exception as exc:
-            raise jwt.exceptions.PyJWKSetError(  # type: ignore[attr-defined]
-                f"Failed to parse JWKS from {jwks_uri!r}: {exc}"
-            ) from exc
+            raise jwt.exceptions.PyJWKSetError(f"Failed to parse JWKS from {jwks_uri!r}: {exc}") from exc
 
         signing_jwk = None
         for jwk_obj in jwks_set.keys:
@@ -433,17 +450,15 @@ class MCPJWTSigner(CustomGuardrail):
                 break
 
         if signing_jwk is None:
-            raise jwt.exceptions.PyJWKSetError(  # type: ignore[attr-defined]
-                f"No JWKS key matching kid={kid!r} at {jwks_uri!r}"
-            )
+            raise jwt.exceptions.PyJWKSetError(f"No JWKS key matching kid={kid!r} at {jwks_uri!r}")
 
         # Use the algorithm declared by the JWKS key entry, not the token header.
         # PyJWT populates algorithm_name from the key's `alg` field; when absent
         # it infers from the key type (RSAPublicKey → RS256).
-        alg = getattr(signing_jwk, "algorithm_name", None) or "RS256"
+        alg: Final = getattr(signing_jwk, "algorithm_name", None) or "RS256"
 
-        decode_options: dict[str, Any] = {"verify_exp": True}
-        decode_kwargs: dict[str, Any] = {
+        decode_options: Final[Options] = {"verify_exp": True}
+        decode_kwargs: Final[_JWTDecodeKwargs] = {
             "algorithms": [alg],
             "options": decode_options,
         }
@@ -455,10 +470,10 @@ class MCPJWTSigner(CustomGuardrail):
         if self.verify_issuer:
             decode_kwargs["issuer"] = self.verify_issuer
 
-        payload: dict[str, Any] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
+        payload: Final[dict[str, object]] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
         return payload
 
-    async def _introspect_opaque_token(self, token: str) -> dict[str, Any]:
+    async def _introspect_opaque_token(self, token: str) -> dict[str, object]:
         """
         Perform RFC 7662 token introspection for opaque (non-JWT) tokens.
 
@@ -476,16 +491,16 @@ class MCPJWTSigner(CustomGuardrail):
             httpxSpecialProvider,
         )
 
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-        resp = await client.post(
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        resp: Final = await client.post(
             self.token_introspection_endpoint,
             data={"token": token},
             headers={"Accept": "application/json"},
         )
         resp.raise_for_status()
-        result: dict[str, Any] = resp.json()
+        result: Final[dict[str, object]] = resp.json()
         if not result.get("active", False):
-            raise jwt.exceptions.ExpiredSignatureError(  # type: ignore[attr-defined]
+            raise jwt.exceptions.ExpiredSignatureError(
                 "MCPJWTSigner: incoming token is inactive (introspection returned active=false)"
             )
         return result
@@ -496,7 +511,7 @@ class MCPJWTSigner(CustomGuardrail):
 
     def _validate_required_claims(
         self,
-        jwt_claims: dict[str, Any] | None,
+        jwt_claims: Mapping[str, object] | None,
     ) -> None:
         """
         Raise HTTP 403 if any required_claims are absent from the verified
@@ -507,7 +522,7 @@ class MCPJWTSigner(CustomGuardrail):
 
         from fastapi import HTTPException
 
-        missing = [c for c in self.required_claims if not (jwt_claims or {}).get(c)]
+        missing: Final = [c for c in self.required_claims if not (jwt_claims or {}).get(c)]
         if missing:
             raise HTTPException(
                 status_code=403,
@@ -526,7 +541,7 @@ class MCPJWTSigner(CustomGuardrail):
     def _resolve_end_user_identity(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        jwt_claims: dict[str, Any] | None,
+        jwt_claims: Mapping[str, object] | None,
     ) -> str:
         """
         Resolve the outbound JWT 'sub' using the ordered end_user_claim_sources list.
@@ -549,19 +564,19 @@ class MCPJWTSigner(CustomGuardrail):
                 value = str(raw) if raw else None
 
             elif source == "litellm:user_id":
-                uid = getattr(user_api_key_dict, "user_id", None)
+                uid = user_api_key_dict.user_id
                 value = str(uid) if uid else None
 
             elif source == "litellm:email":
-                email = getattr(user_api_key_dict, "user_email", None)
+                email = user_api_key_dict.user_email
                 value = str(email) if email else None
 
             elif source == "litellm:end_user_id":
-                eid = getattr(user_api_key_dict, "end_user_id", None)
+                eid = user_api_key_dict.end_user_id
                 value = str(eid) if eid else None
 
             elif source == "litellm:team_id":
-                tid = getattr(user_api_key_dict, "team_id", None)
+                tid = user_api_key_dict.team_id
                 value = str(tid) if tid else None
 
             else:
@@ -572,7 +587,7 @@ class MCPJWTSigner(CustomGuardrail):
                 return value
 
         # Final fallback for service accounts with no user identity
-        token = getattr(user_api_key_dict, "token", None) or getattr(user_api_key_dict, "api_key", None)
+        token: Final = user_api_key_dict.token or user_api_key_dict.api_key
         if token:
             return "apikey:" + hashlib.sha256(str(token).encode()).hexdigest()[:16]
         return "litellm-proxy"
@@ -602,7 +617,7 @@ class MCPJWTSigner(CustomGuardrail):
         if self.allowed_scopes is not None:
             return " ".join(self.allowed_scopes)
 
-        tool_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_tool_name) if raw_tool_name else ""
+        tool_name: Final = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw_tool_name) if raw_tool_name else ""
         if tool_name:
             scopes = ["mcp:tools/call", f"mcp:tools/{tool_name}:call"]
         elif call_type == "call_mcp_tool":
@@ -619,7 +634,7 @@ class MCPJWTSigner(CustomGuardrail):
     # FR-13: Claim operations
     # ------------------------------------------------------------------
 
-    def _apply_claim_operations(self, claims: dict[str, Any]) -> dict[str, Any]:
+    def _apply_claim_operations(self, claims: dict[str, object]) -> dict[str, object]:
         """Apply add_claims, set_claims, and remove_claims to the claim dict."""
         # add_claims: insert only when key is absent
         for k, v in self.add_claims.items():
@@ -641,9 +656,9 @@ class MCPJWTSigner(CustomGuardrail):
 
     def _passthrough_optional_claims(
         self,
-        claims: dict[str, Any],
-        jwt_claims: dict[str, Any] | None,
-    ) -> dict[str, Any]:
+        claims: dict[str, object],
+        jwt_claims: Mapping[str, object] | None,
+    ) -> dict[str, object]:
         """Forward optional_claims from verified incoming token into the outbound JWT."""
         if not self.optional_claims or not jwt_claims:
             return claims
@@ -660,7 +675,7 @@ class MCPJWTSigner(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
-        jwt_claims: dict[str, Any] | None = None,
+        jwt_claims: Mapping[str, object] | None = None,
         call_type: CallTypesLiteral | None = None,
     ) -> dict[str, Any]:
         """
@@ -672,8 +687,8 @@ class MCPJWTSigner(CustomGuardrail):
             jwt_claims: Verified incoming IdP claims (FR-5), or LiteLLM-decoded
                         jwt_claims if available.  None for pure API-key requests.
         """
-        now = int(time.time())
-        claims: dict[str, Any] = {
+        now: Final = int(time.time())
+        claims: dict[str, object] = {
             "iss": self.issuer,
             "aud": self.audience,
             "iat": now,
@@ -685,23 +700,23 @@ class MCPJWTSigner(CustomGuardrail):
         claims["sub"] = self._resolve_end_user_identity(user_api_key_dict, jwt_claims)
 
         # email passthrough when available from LiteLLM context
-        user_email = getattr(user_api_key_dict, "user_email", None)
+        user_email: Final = user_api_key_dict.user_email
         if user_email:
             claims["email"] = user_email
 
         # act — RFC 8693 delegation claim (team/org context)
-        team_id = getattr(user_api_key_dict, "team_id", None)
-        org_id = getattr(user_api_key_dict, "org_id", None)
-        act_sub = team_id or org_id or "litellm-proxy"
+        team_id: Final = user_api_key_dict.team_id
+        org_id: Final = user_api_key_dict.org_id
+        act_sub: Final = team_id or org_id or "litellm-proxy"
         claims["act"] = {"sub": act_sub}
 
         # end_user_id when set separately from user_id
-        end_user_id = getattr(user_api_key_dict, "end_user_id", None)
+        end_user_id: Final = user_api_key_dict.end_user_id
         if end_user_id:
             claims["end_user_id"] = end_user_id
 
         # scope (FR-10)
-        raw_tool_name: str = data.get("mcp_tool_name", "")
+        raw_tool_name: Final[str] = data.get("mcp_tool_name", "")
         claims["scope"] = self._build_scope(raw_tool_name, call_type=call_type)
 
         # optional_claims passthrough (FR-15)
@@ -714,8 +729,8 @@ class MCPJWTSigner(CustomGuardrail):
 
     def _build_channel_token_claims(
         self,
-        base_claims: dict[str, Any],
-    ) -> dict[str, Any]:
+        base_claims: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Build claims for the channel token (FR-14 two-token model).
 
@@ -723,7 +738,7 @@ class MCPJWTSigner(CustomGuardrail):
         audience and TTL so the transport layer and resource layer receive
         purpose-bound credentials.
         """
-        now = int(time.time())
+        now: Final = int(time.time())
         return {
             **base_claims,
             "aud": self.channel_token_audience,
@@ -744,9 +759,9 @@ class MCPJWTSigner(CustomGuardrail):
         Format: v=1; kid=<kid>; sub=<sub>; iss=<iss>; exp=<exp>; scope=<scope>
         Scope is truncated to 80 chars for header safety.
         """
-        sub = claims.get("sub", "")
-        iss = claims.get("iss", "")
-        exp = claims.get("exp", 0)
+        sub: Final = claims.get("sub", "")
+        iss: Final = claims.get("iss", "")
+        exp: Final = claims.get("exp", 0)
         scope = claims.get("scope", "")
         if len(scope) > 80:
             scope = scope[:77] + "..."
@@ -773,19 +788,19 @@ class MCPJWTSigner(CustomGuardrail):
         if call_type not in _MCP_JWT_CALL_TYPES:
             return data
 
-        hook_data = dict(data)
+        hook_data: Final = dict(data)
         if call_type == "list_mcp_tools":
             hook_data["mcp_tool_name"] = ""
 
         # ------------------------------------------------------------------
         # FR-5: Verify incoming token before re-signing
         # ------------------------------------------------------------------
-        jwt_claims: dict[str, Any] | None = None
-        raw_token: str | None = hook_data.get("incoming_bearer_token")
+        jwt_claims: dict[str, object] | None = None
+        raw_token: Final[str | None] = hook_data.get("incoming_bearer_token")
 
         if self.access_token_discovery_uri and raw_token:
             # Three-dot pattern → JWT;  otherwise opaque.
-            is_jwt = raw_token.count(".") == 2
+            is_jwt: Final = raw_token.count(".") == 2
             try:
                 if is_jwt:
                     jwt_claims = await self._verify_incoming_jwt(raw_token)
@@ -814,7 +829,7 @@ class MCPJWTSigner(CustomGuardrail):
 
         # Fall back to LiteLLM-decoded JWT claims (available when proxy uses JWT auth).
         if jwt_claims is None:
-            jwt_claims = getattr(user_api_key_dict, "jwt_claims", None)
+            jwt_claims = user_api_key_dict.jwt_claims
 
         # ------------------------------------------------------------------
         # FR-15: Validate required claims
@@ -824,9 +839,9 @@ class MCPJWTSigner(CustomGuardrail):
         # ------------------------------------------------------------------
         # Build outbound access token
         # ------------------------------------------------------------------
-        claims = self._build_claims(user_api_key_dict, hook_data, jwt_claims, call_type=call_type)
+        claims: Final = self._build_claims(user_api_key_dict, hook_data, jwt_claims, call_type=call_type)
 
-        signed_token = jwt.encode(
+        signed_token: Final = jwt.encode(
             claims,
             self._private_key,
             algorithm=self.ALGORITHM,
@@ -835,8 +850,8 @@ class MCPJWTSigner(CustomGuardrail):
 
         # Merge into existing extra_headers — a prior guardrail in the chain may
         # have already injected tracing headers or correlation IDs.
-        existing_headers: dict[str, str] = hook_data.get("extra_headers") or {}
-        new_headers: dict[str, str] = {
+        existing_headers: Final[dict[str, str]] = hook_data.get("extra_headers") or {}
+        new_headers: Final[dict[str, str]] = {
             **existing_headers,
             "Authorization": f"Bearer {signed_token}",
         }
@@ -845,8 +860,8 @@ class MCPJWTSigner(CustomGuardrail):
         # FR-14: Two-token model — channel token
         # ------------------------------------------------------------------
         if self.channel_token_audience:
-            channel_claims = self._build_channel_token_claims(claims)
-            channel_token = jwt.encode(
+            channel_claims: Final = self._build_channel_token_claims(claims)
+            channel_token: Final = jwt.encode(
                 channel_claims,
                 self._private_key,
                 algorithm=self.ALGORITHM,
@@ -889,23 +904,23 @@ async def inject_mcp_jwt_headers_for_upstream(
 
     Used by tools/list paths that do not go through proxy pre_call_hook.
     """
-    merged = dict(extra_headers or {})
-    signer = get_mcp_jwt_signer()
+    merged: Final = dict(extra_headers or {})
+    signer: Final = get_mcp_jwt_signer()
     if signer is None or user_api_key_dict is None:
         return merged
 
-    normalized_raw = {k.lower(): v for k, v in (raw_headers or {}).items()}
+    normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
     incoming_bearer_token: str | None = None
-    auth_hdr = normalized_raw.get("authorization", "")
+    auth_hdr: Final = normalized_raw.get("authorization", "")
     if auth_hdr.lower().startswith("bearer "):
         incoming_bearer_token = auth_hdr[len("bearer ") :]
 
-    hook_data: dict[str, Any] = {
+    hook_data: Final = {
         "mcp_tool_name": "" if for_list_tools else mcp_tool_name,
         "incoming_bearer_token": incoming_bearer_token,
         "extra_headers": merged,
     }
-    call_type: CallTypesLiteral = "list_mcp_tools" if for_list_tools else "call_mcp_tool"
+    call_type: Final[CallTypesLiteral] = "list_mcp_tools" if for_list_tools else "call_mcp_tool"
     try:
         from litellm.proxy.proxy_server import (  # noqa: PLC0415
             proxy_logging_obj as _proxy_logging,
@@ -915,7 +930,7 @@ async def inject_mcp_jwt_headers_for_upstream(
     except Exception:
         shared_cache = DualCache()
 
-    result = await signer.async_pre_call_hook(
+    result: Final = await signer.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=shared_cache,
         data=hook_data,

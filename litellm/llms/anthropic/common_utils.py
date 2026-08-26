@@ -4,11 +4,16 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from typing import Any
+from collections.abc import Mapping, MutableMapping, Sequence
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Any, Final, Literal
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -25,11 +30,33 @@ from litellm.types.llms.anthropic import (
     AnthropicMcpServerTool,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.proxy.model_listing import ModelInfoResponse
 
-_BEDROCK_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
-_INFERENCE_PROFILE_MINOR_RE = re.compile(r":\d+$")
-_DATED_RELEASE_SUFFIX_RE = re.compile(r"-\d{8}$")
-_DOTTED_VERSION_RE = re.compile(r"(\d)\.(\d)")
+DROP_DISABLED_THINKING_WARNING: Final = (
+    "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
+    "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
+    "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+
+# Anthropic error `type` (both the JSON error body and SSE `event: error`
+# payloads use this field) mapped to the HTTP status code it corresponds to.
+ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
+    {
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "rate_limit_error": 429,
+        "api_error": 500,
+        "overloaded_error": 503,
+        "timeout_error": 504,
+    }
+)
+
+_BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
+_INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
+_DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
+_DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 
 
 def _strip_bedrock_id_suffixes(model: str) -> str:
@@ -57,7 +84,7 @@ def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
     """Merge a new beta value into an existing comma-separated anthropic-beta header."""
     if not existing:
         return new_beta
-    betas = {b.strip() for b in existing.split(",") if b.strip()}
+    betas: Final = {b.strip() for b in existing.split(",") if b.strip()}
     betas.add(new_beta)
     return ",".join(sorted(betas))
 
@@ -66,8 +93,8 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     """
     Handle Anthropic OAuth token detection and header setup.
 
-    If an OAuth token is detected in the Authorization header, extracts it
-    and sets the required OAuth headers.
+    If an OAuth token is detected in the Authorization header (any casing),
+    extracts it and sets the required OAuth headers.
 
     Args:
         headers: Request headers dict
@@ -77,16 +104,21 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
         Tuple of (updated headers, api_key)
     """
     # Check Authorization header (passthrough / forwarded requests)
-    auth_header = headers.get("authorization", "")
-    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.replace("Bearer ", "")
-        headers.pop("x-api-key", None)
+    auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
+    if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.removeprefix("Bearer ")
+        for name in tuple(
+            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+        ):
+            headers.pop(name)
+        headers["authorization"] = auth_header
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
-        headers.pop("x-api-key", None)
+        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+            headers.pop(name)
         headers["authorization"] = f"Bearer {api_key}"
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
@@ -125,7 +157,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         Return if {"source": {"type": "file", "file_id": ..}} in message content block
         """
-        file_ids = get_file_ids_from_messages(messages)
+        file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
 
     def is_mcp_server_used(self, mcp_servers: list[AnthropicMcpServerTool] | None) -> bool:
@@ -244,10 +276,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Driven by the ``supports_sampling_params`` flag in the model map; the
         name check remains only as a fallback for provider-routed ids whose
         map entries predate the flag."""
-        flag = AnthropicModelInfo._get_model_capability(model, "supports_sampling_params")
+        flag: Final = AnthropicModelInfo._get_model_capability(model, "supports_sampling_params")
         if flag is not None:
             return flag
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         return not any(
             v in model_lower
             for v in (
@@ -279,7 +311,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if AnthropicModelInfo._supports_sampling_params(model) or (param == "temperature" and value == 1):
             optional_params[output_key] = value
         elif not (litellm.drop_params or drop_params):
-            supported_hint = "Only temperature=1 is supported. " if param == "temperature" else ""
+            supported_hint: Final = "Only temperature=1 is supported. " if param == "temperature" else ""
             raise litellm.utils.UnsupportedParamsError(
                 message=(
                     f"{model} does not support {param}={value}. {supported_hint}"
@@ -290,7 +322,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _strip_version_suffix(model: str) -> str:
-        at = model.rfind("@")
+        at: Final = model.rfind("@")
         if at > 0:
             return model[:at]
         return model
@@ -306,22 +338,22 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         ``bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0``,
         ``claude-sonnet-4-6-20260219`` or ``claude-sonnet-4.6``) resolve to its base
         cost-map entry so the capability flag on that entry stays authoritative."""
-        prefixes = (
+        prefixes: Final = (
             "bedrock/converse/",
             "bedrock/invoke/",
             "bedrock/",
             "vertex_ai/",
         )
-        deprefixed = tuple(model[len(p) :] for p in prefixes if model.startswith(p))
+        deprefixed: Final = tuple(model[len(p) :] for p in prefixes if model.startswith(p))
         try:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
             base = BedrockModelInfo.get_base_model(model)
         except Exception:
             base = None
-        bedrock_base = (base, f"bedrock/{base}") if base else ()
-        primary = (model, *deprefixed, *bedrock_base)
-        normalized = tuple(
+        bedrock_base: Final = (base, f"bedrock/{base}") if base else ()
+        primary: Final = (model, *deprefixed, *bedrock_base)
+        normalized: Final = tuple(
             stripped
             for cand in primary
             for stripped in (
@@ -342,7 +374,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         from litellm.utils import _get_bundled_model_cost_map
 
         try:
-            candidates = AnthropicModelInfo._model_map_lookup_candidates(model)
+            candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
             for model_cost in (litellm.model_cost, _get_bundled_model_cost_map()):
                 for cand in candidates:
                     value = model_cost.get(cand, {}).get(key)
@@ -359,7 +391,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Unlike ``_get_model_capability``, does not walk stripped provider aliases.
         Use when a feature is tied to a specific host (e.g. Anthropic API fast mode).
         """
-        value = litellm.model_cost.get(model, {}).get(key)
+        value: Final = litellm.model_cost.get(model, {}).get(key)
         return value if isinstance(value, bool) else None
 
     @staticmethod
@@ -377,7 +409,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-            value = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+            value: Final = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
         except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
             return None
         return value if isinstance(value, bool) else None
@@ -393,7 +425,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         from litellm.utils import _supports_factory
 
-        resolved = AnthropicModelInfo._get_provider_resolved_capability(model, key, custom_llm_provider)
+        resolved: Final = AnthropicModelInfo._get_provider_resolved_capability(model, key, custom_llm_provider)
         if resolved is not None:
             return resolved
         try:
@@ -419,6 +451,45 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
 
+    @staticmethod
+    def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` always thinks and rejects ``thinking.type=disabled``
+        (Fable 5 / Mythos 5 generation). The model cost map is authoritative: an
+        explicit ``thinking_always_on`` entry resolved under ``custom_llm_provider``,
+        or a ``fallback_generalizations`` rule for unmapped ids of those families.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
+
+    @staticmethod
+    def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` is an adaptive-thinking model that still accepts legacy
+        ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
+        The model cost map is authoritative: an explicit ``supports_legacy_thinking``
+        entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
+        rule for unmapped 4.6 ids. Absent flag means the model rejects the legacy shape.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "supports_legacy_thinking", custom_llm_provider)
+
+    @staticmethod
+    def maybe_drop_disabled_thinking(
+        model: str,
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
+        custom_llm_provider: str,
+    ) -> None:
+        """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
+        (Fable 5 / Mythos 5), which 400 on it; omission is the API-documented
+        remedy and yields the model's default adaptive thinking."""
+        thinking: Final = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "disabled":
+            return
+        if not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+            return
+        litellm.verbose_logger.warning(
+            DROP_DISABLED_THINKING_WARNING,
+            model,
+        )
+        optional_params.pop("thinking", None)
+
     def is_effort_used(
         self,
         optional_params: dict | None,
@@ -442,14 +513,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
-            reasoning_effort = optional_params.get("reasoning_effort")
+            reasoning_effort: Final = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True
 
         # Check if output_config is directly provided (for non-4.6 models)
-        output_config = optional_params.get("output_config")
+        output_config: Final = optional_params.get("output_config")
         if output_config and isinstance(output_config, dict):
-            effort = output_config.get("effort")
+            effort: Final = output_config.get("effort")
             if effort and isinstance(effort, str):
                 return True
 
@@ -479,9 +550,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if not optional_params:
             return False
 
-        container = optional_params.get("container")
+        container: Final = optional_params.get("container")
         if container and isinstance(container, dict):
-            skills = container.get("skills")
+            skills: Final = container.get("skills")
             if skills and isinstance(skills, list) and len(skills) > 0:
                 return True
         return False
@@ -501,7 +572,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Returns:
             The corresponding beta header string
         """
-        computer_tool_beta_mapping = {
+        computer_tool_beta_mapping: Final = {
             "computer_20250124": "computer-use-2025-01-24",
             "computer_20241022": "computer-use-2024-10-22",
         }
@@ -529,16 +600,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
 
-        betas = []
+        betas: Final = []
 
         # Detect features
-        effort_used = self.is_effort_used(optional_params, model, custom_llm_provider=custom_llm_provider)
+        effort_used: Final = self.is_effort_used(optional_params, model, custom_llm_provider=custom_llm_provider)
 
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
 
         if computer_tool_used:
-            beta_header = self.get_computer_tool_beta_header(computer_tool_used)
+            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
             betas.append(beta_header)
 
         # Anthropic no longer requires the prompt-caching beta header
@@ -559,7 +630,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if use_bearer_for_custom_base and (
             api_base and "api.anthropic.com" not in api_base and not api_key.startswith("sk-ant-")
         ):
-            value = api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"
+            value: Final = api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"
             return {"authorization": value}
         return {"x-api-key": api_key}
 
@@ -585,12 +656,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
     ) -> dict:
-        betas = set()
+        betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         if computer_tool_used:
-            beta_header = self.get_computer_tool_beta_header(computer_tool_used)
+            beta_header: Final = self.get_computer_tool_beta_header(computer_tool_used)
             betas.add(beta_header)
         # if pdf_used:
         #     betas.add("pdfs-2024-09-25")
@@ -619,8 +690,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if container_with_skills_used:
             betas.add("skills-2025-10-02")
 
-        _is_oauth = api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
-        headers = {
+        _is_oauth: Final = api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+        headers: Final = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "accept": "application/json",
             "content-type": "application/json",
@@ -661,7 +732,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     ) -> dict:
         if api_base is None and isinstance(litellm_params, dict):
             api_base = litellm_params.get("api_base")
-        use_bearer_for_custom_base: bool = bool(
+        use_bearer_for_custom_base: Final[bool] = bool(
             isinstance(litellm_params, dict) and litellm_params.get("use_bearer_for_custom_base", False)
         )
         # Check for Anthropic OAuth token in headers
@@ -678,23 +749,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 model=model,
             )
 
-        tools = optional_params.get("tools")
-        prompt_caching_set = self.is_cache_control_set(messages=messages)
-        computer_tool_used = self.is_computer_tool_used(tools=tools)
-        mcp_server_used = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
-        pdf_used = self.is_pdf_used(messages=messages)
-        file_id_used = self.is_file_id_used(messages=messages)
-        web_search_tool_used = self.is_web_search_tool_used(tools=tools)
-        tool_search_used = self.is_tool_search_used(tools=tools)
-        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
-        input_examples_used = self.is_input_examples_used(tools=tools)
+        tools: Final = optional_params.get("tools")
+        prompt_caching_set: Final = self.is_cache_control_set(messages=messages)
+        computer_tool_used: Final = self.is_computer_tool_used(tools=tools)
+        mcp_server_used: Final = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
+        pdf_used: Final = self.is_pdf_used(messages=messages)
+        file_id_used: Final = self.is_file_id_used(messages=messages)
+        web_search_tool_used: Final = self.is_web_search_tool_used(tools=tools)
+        tool_search_used: Final = self.is_tool_search_used(tools=tools)
+        programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools=tools)
+        input_examples_used: Final = self.is_input_examples_used(tools=tools)
         effort_used = self.is_effort_used(optional_params=optional_params, model=model, custom_llm_provider="anthropic")
-        code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
-        container_with_skills_used = self.is_container_with_skills_used(optional_params=optional_params)
-        user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
+        code_execution_tool_used: Final = self.is_code_execution_tool_used(tools=tools)
+        container_with_skills_used: Final = self.is_container_with_skills_used(optional_params=optional_params)
+        user_anthropic_beta_headers: Final = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
-        anthropic_headers = self.get_anthropic_headers(
+        anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
@@ -759,12 +830,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         use_bearer_for_custom_base), then ANTHROPIC_AUTH_TOKEN (-> Authorization: Bearer).
         Returns None if neither is available.
         """
-        resolved_key = AnthropicModelInfo.get_api_key(api_key)
+        resolved_key: Final = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
             if is_anthropic_oauth_key(resolved_key):
                 return {"authorization": f"Bearer {resolved_key}"}
             return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base, use_bearer_for_custom_base)
-        auth_token = AnthropicModelInfo.get_auth_token()
+        auth_token: Final = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
             return {"authorization": f"Bearer {auth_token}"}
         return None
@@ -775,14 +846,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = AnthropicModelInfo.get_api_base(api_base)
-        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if api_base is None or auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_BASE/ANTHROPIC_BASE_URL or ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
             )
-        headers = {"anthropic-version": "2023-06-01"}
+        headers: Final = {"anthropic-version": "2023-06-01"}
         headers.update(auth_header)
-        response = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
             headers=headers,
         )
@@ -794,9 +865,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Anthropic. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models = response.json()["data"]
+        models: Final = response.json()["data"]
 
-        litellm_model_names = []
+        litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["id"]
             litellm_model_name = "anthropic/" + stripped_model_name
@@ -914,7 +985,7 @@ def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
     """
     if not error_text:
         return False
-    lower = error_text.lower()
+    lower: Final = error_text.lower()
     return "thinking" in lower and "signature" in lower and ("invalid" in lower or "valid string" in lower)
 
 
@@ -926,7 +997,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
     Messages whose content is a list and becomes empty after stripping are omitted,
     since Anthropic rejects empty content arrays.
     """
-    out: list[Any] = []
+    out: Final[list[Any]] = []
     for m in messages:
         if not isinstance(m, dict):
             out.append(m)
@@ -951,7 +1022,7 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     Mutate an Anthropic Messages-style request dict: strip thinking blocks from
     ``messages`` and remove the top-level ``thinking`` extended-thinking param.
     """
-    msgs = data.get("messages")
+    msgs: Final = data.get("messages")
     if isinstance(msgs, list):
         data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
     data.pop("thinking", None)
@@ -979,7 +1050,7 @@ def strip_empty_text_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: list[Any] = []
+    out: Final[list[Any]] = []
     for m in messages:
         if not isinstance(m, dict) or not isinstance(m.get("content"), list):
             out.append(m)
@@ -996,7 +1067,7 @@ def strip_empty_text_blocks_from_anthropic_messages(
 def _is_empty_text_block(block: Any) -> bool:
     if not isinstance(block, dict) or block.get("type") != "text":
         return False
-    text = block.get("text")
+    text: Final = block.get("text")
     return not isinstance(text, str) or not text.strip()
 
 
@@ -1009,14 +1080,14 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     replaces any remaining invalid characters with underscores.
     """
     base_id = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in raw_id else raw_id
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
+    sanitized: Final = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
     return sanitized or "tool_use_id"
 
 
 def _sanitize_tool_use_id_content_block(block: Any) -> Any:
     if not isinstance(block, dict):
         return block
-    block_type = block.get("type")
+    block_type: Final = block.get("type")
     if block_type in ("tool_use", "server_tool_use"):
         raw_id = block.get("id")
         if isinstance(raw_id, str):
@@ -1043,7 +1114,7 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
     and ``:`` — valid on the upstream provider but rejected by Anthropic when
     the session is switched to a native Anthropic deployment.
     """
-    out: list[Any] = []
+    out: Final[list[Any]] = []
     for m in messages:
         if not isinstance(m, dict) or not isinstance(m.get("content"), list):
             out.append(m)
@@ -1057,8 +1128,154 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
     return out
 
 
+class _ReplayedSearchQuery(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    query: str = ""
+
+
+class _ReplayedWebSearchResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_result"]
+    url: str = ""
+    title: str = ""
+    snippet: str = ""
+    encrypted_content: str = ""
+
+
+class _ReplayedWebSearchToolResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_tool_result"]
+    tool_use_id: str
+    content: tuple[_ReplayedWebSearchResult, ...]
+
+
+class _ReplayedServerToolUse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["server_tool_use"]
+    id: str
+    input: _ReplayedSearchQuery = _ReplayedSearchQuery()
+
+
+class _TextBlock(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+_WEB_SEARCH_TOOL_RESULT_ADAPTER: Final = TypeAdapter(_ReplayedWebSearchToolResult)
+_SERVER_TOOL_USE_ADAPTER: Final = TypeAdapter(_ReplayedServerToolUse)
+
+
+def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchToolResult | None:
+    """
+    The parsed block when it is a ``web_search_tool_result`` carrying no
+    ``encrypted_content``, else None for anything Anthropic itself issued.
+
+    An empty ``content`` list is flattenable too. It is what the interceptor emits
+    when a search legitimately returns nothing and when a search raises, and it
+    carries neither evidence to preserve nor an ``encrypted_content`` to respect,
+    so leaving it in place only buys the 400 this whole function exists to avoid.
+    """
+    try:
+        parsed: Final = _WEB_SEARCH_TOOL_RESULT_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+    if any(result.encrypted_content for result in parsed.content):
+        return None
+    return parsed
+
+
+def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
+    try:
+        return _SERVER_TOOL_USE_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+
+
+def _render_web_search_results(query: str, results: tuple[_ReplayedWebSearchResult, ...]) -> str:
+    header: Final = f"Web search results for '{query}':" if query else "Web search results:"
+    if not results:
+        return f"{header}\n\nNo results were returned."
+    body: Final = "\n\n".join(
+        "\n".join(
+            line
+            for line in (
+                f"Title: {result.title}" if result.title else "",
+                f"URL: {result.url}" if result.url else "",
+                f"Snippet: {result.snippet}" if result.snippet else "",
+            )
+            if line
+        )
+        for result in results
+    )
+    return f"{header}\n\n{body}" if body else header
+
+
+def _rewrite_replayed_web_search_block(
+    block: object,
+    flattenable: Mapping[str, _ReplayedWebSearchToolResult],
+    queries: Mapping[str, str],
+) -> object | None:
+    parsed_result: Final = _flattenable_web_search_tool_result(block)
+    if parsed_result is not None:
+        return _TextBlock(
+            text=_render_web_search_results(queries.get(parsed_result.tool_use_id, ""), parsed_result.content)
+        ).model_dump()
+    parsed_use: Final = _replayed_server_tool_use(block)
+    if parsed_use is not None and parsed_use.id in flattenable:
+        return None
+    return block
+
+
+def _flatten_web_search_results_in_message(message: object) -> object:
+    if not isinstance(message, Mapping) or not isinstance(message.get("content"), Sequence):
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return message
+    flattenable: Final = MappingProxyType(
+        {
+            parsed.tool_use_id: parsed
+            for parsed in (_flattenable_web_search_tool_result(block) for block in content)
+            if parsed is not None
+        }
+    )
+    if not flattenable:
+        return message
+    queries: Final = MappingProxyType(
+        {
+            parsed.id: parsed.input.query
+            for parsed in (_replayed_server_tool_use(block) for block in content)
+            if parsed is not None
+        }
+    )
+    rewritten: Final = tuple(_rewrite_replayed_web_search_block(block, flattenable, queries) for block in content)
+    return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
+
+
+def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok: as sibling sanitizers
+    messages: list[Any],
+) -> list[Any]:
+    """
+    Return a new message list with replayed ``web_search_tool_result`` blocks that
+    carry no ``encrypted_content`` rewritten into plain ``text`` blocks holding the
+    same title / url / snippet evidence.
+
+    ``encrypted_content`` is an opaque blob only Anthropic's own search backend can
+    mint, so blocks synthesized by LiteLLM (websearch interception against a search
+    provider) are rejected with ``Invalid encrypted_content in search_result block``
+    when a native client loops them back as history. Flattening them keeps the
+    evidence in the conversation instead of 400ing the follow-up turn, and leaves
+    genuine Anthropic-issued blocks untouched.
+    """
+    return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+
+
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
-    openai_headers = {}
+    openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]
     if "anthropic-ratelimit-requests-remaining" in headers:
@@ -1068,7 +1285,41 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     if "anthropic-ratelimit-tokens-remaining" in headers:
         openai_headers["x-ratelimit-remaining-tokens"] = headers["anthropic-ratelimit-tokens-remaining"]
 
-    llm_response_headers = {"{}-{}".format("llm_provider", k): v for k, v in headers.items()}
+    llm_response_headers: Final = {"{}-{}".format("llm_provider", k): v for k, v in headers.items()}
 
-    additional_headers = {**llm_response_headers, **openai_headers}
+    additional_headers: Final = {**llm_response_headers, **openai_headers}
     return additional_headers
+
+
+def _anthropic_model_entry(model: ModelInfoResponse, created_at: str) -> Mapping[str, object]:
+    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+        "type": "model",
+        "id": model["id"],
+        "display_name": model["id"],
+        "created_at": created_at,
+        "max_input_tokens": model.get("max_input_tokens"),
+        "max_tokens": model.get("max_output_tokens"),
+    }
+
+
+def create_anthropic_model_list_response(models: Sequence[ModelInfoResponse]) -> Mapping[str, object]:
+    """Build the Anthropic-native /v1/models envelope.
+
+    Clients that send an anthropic-version header parse the Anthropic Models API
+    shape (type/display_name/created_at plus has_more/first_id/last_id) and filter
+    the list themselves, so every model is returned here. The token limits carry
+    over from the OpenAI-shaped listing, named as the Messages API names them, and
+    are always present because the vendor shape declares them nullable, not optional
+    """
+    created_at: Final = (
+        datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    )
+    data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
+        _anthropic_model_entry(model, created_at) for model in models
+    ]
+    return {  # mutable-ok: JSON response body, serialized by the route and never mutated
+        "data": data,
+        "has_more": False,
+        "first_id": models[0]["id"] if models else None,
+        "last_id": models[-1]["id"] if models else None,
+    }

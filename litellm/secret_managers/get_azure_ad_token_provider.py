@@ -1,6 +1,6 @@
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
@@ -15,6 +15,8 @@ def infer_credential_type_from_environment() -> AzureCredentialType:
         and os.environ.get("AZURE_TENANT_ID")
     ):
         return AzureCredentialType.ClientSecretCredential
+    elif os.environ.get("AZURE_FEDERATED_TOKEN_FILE"):
+        return AzureCredentialType.DefaultAzureCredential
     elif os.environ.get("AZURE_CLIENT_ID"):
         return AzureCredentialType.ManagedIdentityCredential
     elif (
@@ -64,7 +66,7 @@ def get_azure_ad_token_provider(
     if azure_scope is None:
         azure_scope = os.environ.get("AZURE_SCOPE") or "https://cognitiveservices.azure.com/.default"
 
-    cred: str = (
+    cred: Final[str] = (
         azure_credential.value
         if azure_credential
         else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
@@ -100,7 +102,7 @@ def get_azure_ad_token_provider(
         # It automatically discovers credentials from the environment (managed identity, CLI, etc.)
         credential = DefaultAzureCredential()
     else:
-        cred_cls = getattr(identity, cred)
+        cred_cls: Final = getattr(identity, cred)
         credential = cred_cls()
 
     if credential is None:

@@ -6,7 +6,7 @@ and exposes it for router candidate filtering.
 """
 
 import time
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -16,7 +16,7 @@ from litellm.caching.caching import DualCache
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -60,7 +60,7 @@ class DeploymentHealthCache:
         """Given raw cache value, return set of non-stale unhealthy deployment IDs."""
         if not raw or not isinstance(raw, dict):
             return set()
-        now = time.time()
+        now: Final = time.time()
         return {
             model_id
             for model_id, state in raw.items()
@@ -72,7 +72,7 @@ class DeploymentHealthCache:
     async def async_get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Return set of deployment IDs currently marked unhealthy and not stale."""
         try:
-            raw = await self.cache.async_get_cache(key=self.CACHE_KEY)
+            raw: Final = await self.cache.async_get_cache(key=self.CACHE_KEY)
             return self._extract_unhealthy_ids(raw)
         except Exception as e:
             verbose_logger.debug(
@@ -84,7 +84,7 @@ class DeploymentHealthCache:
     def get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Sync version: return set of deployment IDs currently marked unhealthy and not stale."""
         try:
-            raw = self.cache.get_cache(key=self.CACHE_KEY)
+            raw: Final = self.cache.get_cache(key=self.CACHE_KEY)
             return self._extract_unhealthy_ids(raw)
         except Exception as e:
             verbose_logger.debug(

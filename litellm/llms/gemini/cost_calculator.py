@@ -4,7 +4,7 @@ This file is used to calculate the cost of the Gemini API.
 Handles the context caching for Gemini API.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
@@ -41,9 +41,9 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     """
     from litellm.types.utils import PromptTokensDetailsWrapper
 
-    _DEFAULT_COST = 35e-3
-    search_costs = model_info.get("search_context_cost_per_query") or {}
-    _cost = search_costs.get("search_context_size_medium", _DEFAULT_COST)
+    _DEFAULT_COST: Final = 35e-3
+    search_costs: Final = model_info.get("search_context_cost_per_query") or {}
+    _cost: Final = search_costs.get("search_context_size_medium", _DEFAULT_COST)
 
     number_of_web_search_requests = 0
     if (
@@ -56,7 +56,7 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         number_of_web_search_requests = usage.prompt_tokens_details.web_search_requests
 
     # per_prompt billing: clamp to 1 (flat fee per grounded API call)
-    billing_mode = model_info.get("web_search_billing_unit") or "per_prompt"
+    billing_mode: Final = model_info.get("web_search_billing_unit") or "per_prompt"
     if number_of_web_search_requests > 0 and billing_mode == "per_prompt":
         number_of_web_search_requests = 1
 

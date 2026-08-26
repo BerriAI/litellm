@@ -1,14 +1,8 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Iterable
+from collections.abc import Coroutine, Iterable, Mapping
 from functools import partial
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    Optional,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 import httpx
 from pydantic import BaseModel
@@ -45,7 +39,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.types.llms.openai import ResponseText  # type: ignore
+    from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -59,6 +53,7 @@ from litellm.utils import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import WebSocket
     from mcp.types import Tool as MCPTool
 else:
     MCPTool = Any
@@ -68,11 +63,11 @@ from .streaming_iterator import BaseResponsesAPIStreamingIterator
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
-litellm_completion_transformation_handler = LiteLLMCompletionTransformationHandler()
+litellm_completion_transformation_handler: Final = LiteLLMCompletionTransformationHandler()
 #################################################
 
 
-def _has_file_search_tool(tools: Any | None) -> bool:
+def _has_file_search_tool(tools: Iterable[Mapping[str, object]] | None) -> bool:
     """Return True if any tool in the list has type 'file_search'."""
     if not tools:
         return False
@@ -83,7 +78,7 @@ def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
     return ResponsesAPIResponse(
-        **{  # type: ignore
+        **{
             "id": "resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b",
             "object": "response",
             "created_at": 1741476542,
@@ -138,7 +133,7 @@ async def aresponses_api_with_mcp(
     instructions: str | None = None,
     max_output_tokens: int | None = None,
     prompt: PromptObject | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
     parallel_tool_calls: bool | None = None,
     previous_response_id: str | None = None,
     reasoning: Reasoning | None = None,
@@ -154,9 +149,9 @@ async def aresponses_api_with_mcp(
     user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -209,13 +204,13 @@ async def aresponses_api_with_mcp(
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
     )
-    openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
+    openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
 
     # Combine with other tools
-    all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
+    all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
 
     # Prepare call parameters for reuse
-    call_params = {
+    call_params: Final = {
         "include": include,
         "instructions": instructions,
         "max_output_tokens": max_output_tokens,
@@ -248,15 +243,15 @@ async def aresponses_api_with_mcp(
             create_mcp_list_tools_events,
         )
 
-        base_item_id = f"mcp_{uuid.uuid4().hex[:8]}"
-        mcp_discovery_events = await create_mcp_list_tools_events(
+        base_item_id: Final = f"mcp_{uuid.uuid4().hex[:8]}"
+        mcp_discovery_events: Final = await create_mcp_list_tools_events(
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             user_api_key_auth=user_api_key_auth,
             base_item_id=base_item_id,
             pre_processed_mcp_tools=original_mcp_tools,
         )
 
-        mcp_streaming_response = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
+        mcp_streaming_response: Final = LiteLLM_Proxy_MCP_Handler._create_mcp_streaming_response(
             input=input,
             model=model,
             all_tools=all_tools,
@@ -278,14 +273,14 @@ async def aresponses_api_with_mcp(
     )
 
     # Prepare parameters for the initial call
-    initial_call_params = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
+    initial_call_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
         call_params=call_params, should_auto_execute=should_auto_execute
     )
 
     #########################################################
     # Make initial response API call
     #########################################################
-    response = await aresponses(
+    response: Final = await aresponses(
         input=input,
         model=model,
         tools=all_tools,
@@ -299,8 +294,8 @@ async def aresponses_api_with_mcp(
     # Auto-Execute Tools Handling
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
-    if should_auto_execute and isinstance(response, ResponsesAPIResponse):  # type: ignore
-        tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
+    if should_auto_execute and isinstance(response, ResponsesAPIResponse):
+        tool_calls: Final = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
 
         if tool_calls:
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
@@ -317,7 +312,7 @@ async def aresponses_api_with_mcp(
                 tools=tools,
             )
 
-            tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+            tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=tool_server_map,
                 tool_calls=tool_calls,
                 user_api_key_auth=user_api_key_auth,
@@ -331,12 +326,12 @@ async def aresponses_api_with_mcp(
             )
 
             if tool_results:
-                follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
                     response=response, tool_results=tool_results, original_input=input
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)
-                follow_up_call_params = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+                follow_up_call_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
                     call_params=call_params, original_stream_setting=stream or False
                 )
 
@@ -403,7 +398,7 @@ async def aresponses(
     instructions: str | None = None,
     max_output_tokens: int | None = None,
     prompt: PromptObject | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
     parallel_tool_calls: bool | None = None,
     previous_response_id: str | None = None,
     reasoning: Reasoning | None = None,
@@ -422,9 +417,9 @@ async def aresponses(
     safety_identifier: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -433,9 +428,9 @@ async def aresponses(
     """
     Async: Handles responses API requests by reusing the synchronous function
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aresponses"] = True
 
         # Convert text_format to text parameter if provided
@@ -460,10 +455,10 @@ async def aresponses(
         # Pass merged_optional_params via an internal kwarg so responses()
         # can apply them to local_vars without re-invoking the hook.
         #########################################################
-        litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
-        prompt_id = cast(str | None, kwargs.get("prompt_id", None))
-        prompt_variables = cast(dict | None, kwargs.get("prompt_variables", None))
-        original_model = model
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj", None)
+        prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
+        prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
+        original_model: Final = model
 
         if isinstance(
             litellm_logging_obj, LiteLLMLoggingObj
@@ -471,11 +466,7 @@ async def aresponses(
             if isinstance(input, str):
                 client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
             else:
-                client_input = [
-                    item  # type: ignore[misc]
-                    for item in input
-                    if isinstance(item, dict) and "role" in item
-                ]
+                client_input = [item for item in input if isinstance(item, dict) and "role" in item]
             (
                 model,
                 merged_input,
@@ -502,7 +493,7 @@ async def aresponses(
             kwargs.pop("prompt_id", None)
             kwargs["_async_prompt_merged_params"] = merged_optional_params
 
-        func = partial(
+        func: Final = partial(
             responses,
             input=input,
             model=model,
@@ -534,9 +525,9 @@ async def aresponses(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -574,26 +565,22 @@ def _apply_prompt_management_to_responses_call(
     custom_llm_provider: str | None,
     litellm_logging_obj: LiteLLMLoggingObj | None,
     kwargs: dict[str, Any],
-    local_vars: dict[str, Any],
+    local_vars: dict[str, object],
 ) -> tuple[str | ResponseInputParam, str, str | None]:
-    async_merged = kwargs.pop("_async_prompt_merged_params", None)
+    async_merged: Final[Mapping[str, object] | None] = kwargs.pop("_async_prompt_merged_params", None)
     if async_merged is not None:
         for key, value in async_merged.items():
             local_vars[key] = value
         return input, model, custom_llm_provider
 
-    prompt_id = cast(str | None, kwargs.get("prompt_id", None))
-    prompt_variables = cast(dict | None, kwargs.get("prompt_variables", None))
-    original_model = model
+    prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
+    prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
+    original_model: Final = model
 
     if isinstance(input, str):
         client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
     else:
-        client_input = [
-            item  # type: ignore[misc]
-            for item in input
-            if isinstance(item, dict) and "role" in item
-        ]
+        client_input = [item for item in input if isinstance(item, dict) and "role" in item]
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
         prompt_id=prompt_id, non_default_params=kwargs
@@ -631,7 +618,7 @@ def _apply_prompt_management_to_responses_call(
 
 
 # Opt-in via model id (mirrors the `responses/` prefix pattern on chat completions).
-_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX = "openai/chat_completions/"
+_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX: Final = "openai/chat_completions/"
 
 
 def _normalize_openai_chat_completions_responses_model(model: str) -> tuple[str, bool]:
@@ -641,50 +628,59 @@ def _normalize_openai_chat_completions_responses_model(model: str) -> tuple[str,
     """
     if not model.startswith(_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX):
         return model, False
-    remainder = model[len(_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX) :]
+    remainder: Final = model[len(_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX) :]
     if not remainder:
         return model, False
     return f"openai/{remainder}", True
 
 
-def _pop_use_chat_completions_api_kw(kwargs: dict[str, Any]) -> bool:
+def _pop_use_chat_completions_api_kw(kwargs: dict[str, object]) -> bool:
     """Pop use_chat_completions_api; True when the chat-completions bridge is requested."""
-    use_cc = kwargs.pop("use_chat_completions_api", None)
+    use_cc: Final = kwargs.pop("use_chat_completions_api", None)
     return bool(use_cc)
+
+
+_RESPONSES_ROUTING_PREFIX: Final = "responses/"
+
+
+def _strip_responses_routing_prefix(model: str) -> str:
+    if not model.startswith(_RESPONSES_ROUTING_PREFIX):
+        return model
+    return model[len(_RESPONSES_ROUTING_PREFIX) :]
 
 
 def _resolve_model_provider_for_responses(
     model: str,
     custom_llm_provider: str | None,
     litellm_params: GenericLiteLLMParams,
-    local_vars: dict[str, Any],
+    local_vars: dict[str, object],
 ) -> tuple[str, str | None]:
     if custom_llm_provider is not None and not litellm_params.custom_llm_provider:
         litellm_params.custom_llm_provider = custom_llm_provider
     (
-        model,
-        custom_llm_provider,
+        provider_model,
+        resolved_provider,
         dynamic_api_key,
         dynamic_api_base,
     ) = litellm.get_llm_provider(
         model=model,
         litellm_params=litellm_params,
     )
-    local_vars["custom_llm_provider"] = custom_llm_provider
+    local_vars["custom_llm_provider"] = resolved_provider
     if dynamic_api_key is not None:
         litellm_params.api_key = dynamic_api_key
     if dynamic_api_base is not None:
         litellm_params.api_base = dynamic_api_base
-    return model, custom_llm_provider
+    return _strip_responses_routing_prefix(provider_model), resolved_provider
 
 
 def _apply_managed_file_id_mapping(
     input: str | ResponseInputParam,
     tools: Iterable[ToolParam] | None,
     kwargs: dict[str, Any],
-    local_vars: dict[str, Any],
+    local_vars: dict[str, object],
 ) -> tuple[str | ResponseInputParam, Iterable[ToolParam] | None]:
-    model_file_id_mapping = kwargs.get("model_file_id_mapping")
+    model_file_id_mapping: Final = kwargs.get("model_file_id_mapping")
     model_info_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
 
     input = cast(
@@ -701,7 +697,7 @@ def _apply_managed_file_id_mapping(
         tools = cast(
             Iterable[ToolParam] | None,
             update_responses_tools_with_model_file_ids(
-                tools=cast(list[dict[str, Any]] | None, tools),
+                tools=cast(list[dict[str, object]] | None, tools),
                 model_id=model_info_id,
                 model_file_id_mapping=model_file_id_mapping,
             ),
@@ -720,7 +716,7 @@ def _responses_try_dispatch_mcp_gateway(
     instructions: str | None,
     max_output_tokens: int | None,
     prompt: PromptObject | None,
-    metadata: dict[str, Any] | None,
+    metadata: dict[str, object] | None,
     parallel_tool_calls: bool | None,
     previous_response_id: str | None,
     reasoning: Reasoning | None,
@@ -733,12 +729,12 @@ def _responses_try_dispatch_mcp_gateway(
     top_p: float | None,
     truncation: Literal["auto", "disabled"] | None,
     user: str | None,
-    extra_headers: dict[str, Any] | None,
-    extra_query: dict[str, Any] | None,
-    extra_body: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
+    extra_query: dict[str, object] | None,
+    extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
     _is_async: bool,
 ) -> Any | None:
     """Return a response when MCP gateway handles the call; otherwise None."""
@@ -748,7 +744,7 @@ def _responses_try_dispatch_mcp_gateway(
 
     if not LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
         return None
-    mcp_call_kwargs = {
+    mcp_call_kwargs: Final = {
         "input": input,
         "model": model,
         "include": include,
@@ -792,7 +788,7 @@ def _responses_try_dispatch_emulated_file_search(
     instructions: str | None,
     max_output_tokens: int | None,
     prompt: PromptObject | None,
-    metadata: dict[str, Any] | None,
+    metadata: dict[str, object] | None,
     parallel_tool_calls: bool | None,
     previous_response_id: str | None,
     reasoning: Reasoning | None,
@@ -809,14 +805,14 @@ def _responses_try_dispatch_emulated_file_search(
     safety_identifier: str | None,
     text_format: type[BaseModel] | dict | None,
     allowed_openai_params: list[str] | None,
-    extra_headers: dict[str, Any] | None,
-    extra_query: dict[str, Any] | None,
-    extra_body: dict[str, Any] | None,
+    extra_headers: dict[str, object] | None,
+    extra_query: dict[str, object] | None,
+    extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
     _is_async: bool,
-) -> Any | None:
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse] | None:
     """Return a response when emulated file_search handles the call; otherwise None."""
     if not _has_file_search_tool(tools) or not (
         responses_api_provider_config is None
@@ -828,8 +824,8 @@ def _responses_try_dispatch_emulated_file_search(
         aresponses_with_emulated_file_search,
     )
 
-    _internal_skip = {"litellm_call_id", "aresponses"}
-    emulated_kwargs = {
+    _internal_skip: Final = {"litellm_call_id", "aresponses"}
+    emulated_kwargs: Final = {
         "include": include,
         "instructions": instructions,
         "max_output_tokens": max_output_tokens,
@@ -878,7 +874,7 @@ def responses(
     instructions: str | None = None,
     max_output_tokens: int | None = None,
     prompt: PromptObject | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
     parallel_tool_calls: bool | None = None,
     previous_response_id: str | None = None,
     reasoning: Reasoning | None = None,
@@ -897,9 +893,9 @@ def responses(
     safety_identifier: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     allowed_openai_params: list[str] | None = None,
@@ -910,15 +906,15 @@ def responses(
     Synchronous version of the Responses API.
     Uses the synchronous HTTP handler to make requests.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("aresponses", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("aresponses", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
-        client_headers = kwargs.get("headers")
+        client_headers: Final = kwargs.get("headers")
         extra_headers = ResponsesAPIRequestUtils.merge_client_forwarded_headers(
             extra_headers=extra_headers,
             client_headers=client_headers if isinstance(client_headers, dict) else None,
@@ -932,7 +928,7 @@ def responses(
             local_vars["text"] = text
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         #########################################################
         # MOCK RESPONSE LOGIC
@@ -975,7 +971,7 @@ def responses(
         #########################################################
         # Native MCP Responses API
         #########################################################
-        _mcp_dispatch = _responses_try_dispatch_mcp_gateway(
+        _mcp_dispatch: Final = _responses_try_dispatch_mcp_gateway(
             tools=tools,
             input=input,
             model=model,
@@ -1025,11 +1021,11 @@ def responses(
                 reasoning = _mapped
                 local_vars["reasoning"] = _mapped
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
-        response_api_optional_params: ResponsesAPIOptionalRequestParams = (
+        response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
         )
 
-        _file_search_dispatch = _responses_try_dispatch_emulated_file_search(
+        _file_search_dispatch: Final = _responses_try_dispatch_emulated_file_search(
             tools=tools,
             input=input,
             model=model,
@@ -1078,12 +1074,13 @@ def responses(
                 extra_headers=extra_headers,
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
+                allowed_openai_params=allowed_openai_params,
                 **kwargs,
             )
 
         # Get optional parameters for the responses API
-        request_drop_params = kwargs.get("drop_params")
-        responses_api_request_params: dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+        request_drop_params: Final = kwargs.get("drop_params")
+        responses_api_request_params: Final[dict] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
@@ -1161,9 +1158,9 @@ async def adelete_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1175,19 +1172,19 @@ async def adelete_responses(
     DELETE /v1/responses/{response_id} endpoint in the responses API
 
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["adelete_responses"] = True
 
         # get custom llm provider from response_id
-        decoded_response_id: DecodedResponseId = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
         custom_llm_provider = decoded_response_id.get("custom_llm_provider") or custom_llm_provider
 
-        func = partial(
+        func: Final = partial(
             delete_responses,
             response_id=response_id,
             custom_llm_provider=custom_llm_provider,
@@ -1198,9 +1195,9 @@ async def adelete_responses(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -1222,31 +1219,31 @@ def delete_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> DeleteResponseResult | Coroutine[Any, Any, DeleteResponseResult]:
+) -> DeleteResponseResult | Coroutine[object, object, DeleteResponseResult]:
     """
     Synchronous version of the DELETE Responses API
 
     DELETE /v1/responses/{response_id} endpoint in the responses API
 
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("adelete_responses", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("adelete_responses", False) is True
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # get custom llm provider from response_id
-        decoded_response_id: DecodedResponseId = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -1256,7 +1253,7 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: BaseResponsesAPIConfig | None = (
+        responses_api_provider_config: Final[BaseResponsesAPIConfig | None] = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1282,7 +1279,7 @@ def delete_responses(
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
-        response = base_llm_http_handler.delete_response_api_handler(
+        response: Final = base_llm_http_handler.delete_response_api_handler(
             response_id=response_id,
             custom_llm_provider=custom_llm_provider,
             responses_api_provider_config=responses_api_provider_config,
@@ -1312,9 +1309,9 @@ async def aget_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1332,19 +1329,19 @@ async def aget_responses(
     Returns:
         The response object with complete information about the stored response.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["aget_responses"] = True
 
         # get custom llm provider from response_id
-        decoded_response_id: DecodedResponseId = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
         custom_llm_provider = decoded_response_id.get("custom_llm_provider") or custom_llm_provider
 
-        func = partial(
+        func: Final = partial(
             get_responses,
             response_id=response_id,
             custom_llm_provider=custom_llm_provider,
@@ -1355,9 +1352,9 @@ async def aget_responses(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -1387,14 +1384,14 @@ def get_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
     """
     Fetch a response by its ID.
 
@@ -1407,17 +1404,17 @@ def get_responses(
     Returns:
         The response object with complete information about the stored response.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("aget_responses", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("aget_responses", False) is True
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # get custom llm provider from response_id
-        decoded_response_id: DecodedResponseId = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -1427,7 +1424,7 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: BaseResponsesAPIConfig | None = (
+        responses_api_provider_config: Final[BaseResponsesAPIConfig | None] = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1494,22 +1491,22 @@ async def alist_input_items(
     include: list[str] | None = None,
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> dict:
     """Async: List input items for a response"""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["alist_input_items"] = True
 
-        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id=response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id=response_id)
         response_id = decoded_response_id.get("response_id") or response_id
         custom_llm_provider = decoded_response_id.get("custom_llm_provider") or custom_llm_provider
 
-        func = partial(
+        func: Final = partial(
             list_input_items,
             response_id=response_id,
             after=after,
@@ -1523,9 +1520,9 @@ async def alist_input_items(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -1550,28 +1547,28 @@ def list_input_items(
     include: list[str] | None = None,
     limit: int = 20,
     order: Literal["asc", "desc"] = "desc",
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> dict | Coroutine[Any, Any, dict]:
+) -> dict | Coroutine[object, object, dict]:
     """List input items for a response"""
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("alist_input_items", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("alist_input_items", False) is True
 
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-        decoded_response_id = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id=response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id=response_id)
         response_id = decoded_response_id.get("response_id") or response_id
         custom_llm_provider = decoded_response_id.get("custom_llm_provider") or custom_llm_provider
 
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: BaseResponsesAPIConfig | None = (
+        responses_api_provider_config: Final[BaseResponsesAPIConfig | None] = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1591,7 +1588,7 @@ def list_input_items(
             custom_llm_provider=custom_llm_provider,
         )
 
-        response = base_llm_http_handler.list_responses_input_items(
+        response: Final = base_llm_http_handler.list_responses_input_items(
             response_id=response_id,
             custom_llm_provider=custom_llm_provider,
             responses_api_provider_config=responses_api_provider_config,
@@ -1625,9 +1622,9 @@ async def acancel_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1639,19 +1636,19 @@ async def acancel_responses(
     POST /v1/responses/{response_id}/cancel endpoint in the responses API
 
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acancel_responses"] = True
 
         # get custom llm provider from response_id
-        decoded_response_id: DecodedResponseId = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
         custom_llm_provider = decoded_response_id.get("custom_llm_provider") or custom_llm_provider
 
-        func = partial(
+        func: Final = partial(
             cancel_responses,
             response_id=response_id,
             custom_llm_provider=custom_llm_provider,
@@ -1662,9 +1659,9 @@ async def acancel_responses(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -1686,31 +1683,31 @@ def cancel_responses(
     response_id: str,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
     """
     Synchronous version of the POST Responses API
 
     POST /v1/responses/{response_id}/cancel endpoint in the responses API
 
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("acancel_responses", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("acancel_responses", False) is True
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # get custom llm provider from response_id
-        decoded_response_id: DecodedResponseId = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -1720,7 +1717,7 @@ def cancel_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: BaseResponsesAPIConfig | None = (
+        responses_api_provider_config: Final[BaseResponsesAPIConfig | None] = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
@@ -1746,7 +1743,7 @@ def cancel_responses(
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
-        response = base_llm_http_handler.cancel_response_api_handler(
+        response: Final = base_llm_http_handler.cancel_response_api_handler(
             response_id=response_id,
             custom_llm_provider=custom_llm_provider,
             responses_api_provider_config=responses_api_provider_config,
@@ -1779,9 +1776,9 @@ async def acompact_responses(
     previous_response_id: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1794,9 +1791,9 @@ async def acompact_responses(
 
     Runs a compaction pass over a conversation, returning encrypted, opaque items.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["acompact_responses"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
@@ -1807,7 +1804,7 @@ async def acompact_responses(
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
 
-        func = partial(
+        func: Final = partial(
             compact_responses,
             input=input,
             model=model,
@@ -1821,9 +1818,9 @@ async def acompact_responses(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -1857,14 +1854,14 @@ def compact_responses(
     previous_response_id: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ResponsesAPIResponse | Coroutine[Any, Any, ResponsesAPIResponse]:
+) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse]:
     """
     Synchronous version of the POST Compact Responses API
 
@@ -1872,14 +1869,14 @@ def compact_responses(
 
     Runs a compaction pass over a conversation, returning encrypted, opaque items.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("acompact_responses", False) is True
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        _is_async: Final = kwargs.pop("acompact_responses", False) is True
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
@@ -1892,7 +1889,7 @@ def compact_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: BaseResponsesAPIConfig | None = (
+        responses_api_provider_config: Final[BaseResponsesAPIConfig | None] = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=model,
                 provider=custom_llm_provider,
@@ -1905,13 +1902,13 @@ def compact_responses(
         local_vars.update(kwargs)
 
         # Build optional params for compact endpoint
-        response_api_optional_params: ResponsesAPIOptionalRequestParams = (
+        response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
         )
 
         # Get optional parameters for the responses API
-        request_drop_params = kwargs.get("drop_params")
-        responses_api_request_params: dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+        request_drop_params: Final = kwargs.get("drop_params")
+        responses_api_request_params: Final[dict] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
@@ -1978,8 +1975,8 @@ def compact_responses(
 
 
 def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
-    metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
-    guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
+    metadata: Final[dict] = {**(kwargs.get("litellm_metadata") or {})}
+    guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:
         metadata["guardrails"] = guardrails
     return metadata
@@ -1988,7 +1985,7 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
 @client
 async def _aresponses_websocket(
     model: str,
-    websocket: Any,
+    websocket: "WebSocket",
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
@@ -2003,13 +2000,13 @@ async def _aresponses_websocket(
     ``BaseResponsesAPIConfig``, and hands off to
     ``BaseLLMHTTPHandler.async_responses_websocket``.
     """
-    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    user = kwargs.get("user", None)
-    litellm_params = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+    user: Final = kwargs.get("user", None)
+    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     (
-        model,
+        provider_model,
         _custom_llm_provider,
         dynamic_api_key,
         dynamic_api_base,
@@ -2018,6 +2015,7 @@ async def _aresponses_websocket(
         api_base=api_base,
         api_key=api_key,
     )
+    resolved_model: Final = _strip_responses_routing_prefix(provider_model)
 
     litellm_params_dict["data_residency"] = infer_openai_data_residency(
         _custom_llm_provider,
@@ -2026,7 +2024,7 @@ async def _aresponses_websocket(
 
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
-        model=model,
+        model=resolved_model,
         user=user,
         optional_params={},
         litellm_params=litellm_params_dict,
@@ -2036,12 +2034,12 @@ async def _aresponses_websocket(
     responses_api_provider_config: BaseResponsesAPIConfig | None = None
     if _custom_llm_provider is not None:
         responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
+            model=resolved_model,
             provider=litellm.LlmProviders(_custom_llm_provider),
         )
 
-    resolved_api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
-    resolved_api_key = (
+    resolved_api_base: Final = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
+    resolved_api_key: Final = (
         dynamic_api_key
         or litellm_params.api_key
         or litellm.api_key
@@ -2050,7 +2048,7 @@ async def _aresponses_websocket(
     )
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
-    _explicit_keys = {
+    _explicit_keys: Final = {
         "user_api_key_dict",
         "litellm_metadata",
         "custom_llm_provider",
@@ -2061,10 +2059,10 @@ async def _aresponses_websocket(
         "api_key",
         "timeout",
     }
-    remaining_kwargs = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
+    remaining_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
 
     await base_llm_http_handler.async_responses_websocket(
-        model=model,
+        model=resolved_model,
         websocket=websocket,
         logging_obj=litellm_logging_obj,
         responses_api_provider_config=responses_api_provider_config,

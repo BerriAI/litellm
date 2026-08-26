@@ -8,7 +8,7 @@ then we poll until the result is ready.
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -105,7 +105,7 @@ class BlackForestLabsImageEdit:
             sync_client = client
 
         # Validate environment and get headers
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -114,7 +114,7 @@ class BlackForestLabsImageEdit:
             headers.update(extra_headers)
 
         # Get complete URL
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             model=model,
             api_base=api_base,
             litellm_params=litellm_params_dict,
@@ -150,7 +150,7 @@ class BlackForestLabsImageEdit:
 
         # Make initial request
         try:
-            response = sync_client.post(
+            response: Final = sync_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
@@ -163,7 +163,7 @@ class BlackForestLabsImageEdit:
             )
 
         # Poll for result
-        final_response = self._poll_for_result_sync(
+        final_response: Final = self._poll_for_result_sync(
             initial_response=response,
             headers=headers,
             sync_client=sync_client,
@@ -209,7 +209,7 @@ class BlackForestLabsImageEdit:
             async_client = client
 
         # Validate environment and get headers
-        headers = self.config.validate_environment(
+        headers: Final = self.config.validate_environment(
             api_key=api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -218,7 +218,7 @@ class BlackForestLabsImageEdit:
             headers.update(extra_headers)
 
         # Get complete URL
-        complete_url = self.config.get_complete_url(
+        complete_url: Final = self.config.get_complete_url(
             model=model,
             api_base=api_base,
             litellm_params=litellm_params_dict,
@@ -253,7 +253,7 @@ class BlackForestLabsImageEdit:
 
         # Make initial request
         try:
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 url=complete_url,
                 headers=headers,
                 json=data,
@@ -266,7 +266,7 @@ class BlackForestLabsImageEdit:
             )
 
         # Poll for result
-        final_response = await self._poll_for_result_async(
+        final_response: Final = await self._poll_for_result_async(
             initial_response=response,
             headers=headers,
             async_client=async_client,
@@ -311,7 +311,7 @@ class BlackForestLabsImageEdit:
 
         # Parse initial response to get polling URL
         try:
-            response_data = initial_response.json()
+            response_data: Final = initial_response.json()
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -325,7 +325,7 @@ class BlackForestLabsImageEdit:
                 message=f"BFL error: {response_data['errors']}",
             )
 
-        polling_url = response_data.get("polling_url")
+        polling_url: Final = response_data.get("polling_url")
         if not polling_url:
             raise BlackForestLabsError(
                 status_code=500,
@@ -339,9 +339,9 @@ class BlackForestLabsImageEdit:
         assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
-        polling_headers = {"x-key": headers.get("x-key", "")}
+        polling_headers: Final = {"x-key": headers.get("x-key", "")}
 
-        start_time = time.time()
+        start_time: Final = time.time()
         verbose_logger.debug("BFL starting sync polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
@@ -402,7 +402,7 @@ class BlackForestLabsImageEdit:
 
         # Parse initial response to get polling URL
         try:
-            response_data = initial_response.json()
+            response_data: Final = initial_response.json()
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -416,7 +416,7 @@ class BlackForestLabsImageEdit:
                 message=f"BFL error: {response_data['errors']}",
             )
 
-        polling_url = response_data.get("polling_url")
+        polling_url: Final = response_data.get("polling_url")
         if not polling_url:
             raise BlackForestLabsError(
                 status_code=500,
@@ -430,9 +430,9 @@ class BlackForestLabsImageEdit:
         assert_bfl_polling_url(polling_url)
 
         # Get just the auth header for polling
-        polling_headers = {"x-key": headers.get("x-key", "")}
+        polling_headers: Final = {"x-key": headers.get("x-key", "")}
 
-        start_time = time.time()
+        start_time: Final = time.time()
         verbose_logger.debug("BFL starting async polling at %s", polling_url)
 
         while time.time() - start_time < max_wait:
@@ -474,4 +474,4 @@ class BlackForestLabsImageEdit:
 
 
 # Singleton instance for use in images/main.py
-bfl_image_edit = BlackForestLabsImageEdit()
+bfl_image_edit: Final = BlackForestLabsImageEdit()

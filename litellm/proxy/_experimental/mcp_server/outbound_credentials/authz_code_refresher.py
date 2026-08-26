@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
@@ -87,12 +87,12 @@ class AuthorizationCodeRefresher:
     async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
         if token.refresh_token is None:
             return None
-        server = self._server_lookup(server_id)
+        server: Final = self._server_lookup(server_id)
         if server is None or not server.token_url:
             return None
 
         try:
-            token_request = build_upstream_oauth2_token_request(
+            token_request: Final = build_upstream_oauth2_token_request(
                 server,
                 auth_method=server.token_endpoint_auth_method,
                 client_id=server.client_id,
@@ -101,22 +101,22 @@ class AuthorizationCodeRefresher:
         except TokenEndpointAuthConfigError as exc:
             verbose_logger.warning("MCP OAuth refresh misconfigured for server %s: %s", server_id, exc)
             return None
-        form = {
+        form: Final = {
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
             **token_request.body,
         }
-        body = await self._token_endpoint(server.token_url, form, token_request.headers)
+        body: Final = await self._token_endpoint(server.token_url, form, token_request.headers)
         if body is None:
             return None
-        access_token = body.get("access_token")
+        access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             return None
 
-        rotated = body.get("refresh_token")
-        new_refresh = rotated if isinstance(rotated, str) and rotated else token.refresh_token
-        expires_in = _parse_expires_in(body.get("expires_in"))
-        scopes = _parse_scopes(body.get("scope")) or token.scopes
+        rotated: Final = body.get("refresh_token")
+        new_refresh: Final = rotated if isinstance(rotated, str) and rotated else token.refresh_token
+        expires_in: Final = _parse_expires_in(body.get("expires_in"))
+        scopes: Final = _parse_scopes(body.get("scope")) or token.scopes
 
         await self._persist(user_id, server_id, access_token, new_refresh, expires_in, scopes or None)
         return OAuthToken(

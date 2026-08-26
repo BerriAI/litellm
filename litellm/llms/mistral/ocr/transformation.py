@@ -2,7 +2,7 @@
 Mistral OCR transformation implementation.
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -15,7 +15,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
-MISTRAL_OCR_API_KEY_ENV_VAR = "MISTRAL_API_KEY"
+MISTRAL_OCR_API_KEY_ENV_VAR: Final = "MISTRAL_API_KEY"
 
 
 class MistralOCRConfig(BaseOCRConfig):
@@ -78,10 +78,10 @@ class MistralOCRConfig(BaseOCRConfig):
         Mistral accepts these parameters directly, so no transformation needed.
         Just filter out unsupported params.
         """
-        supported_params = self.get_supported_ocr_params(model=model)
+        supported_params: Final = self.get_supported_ocr_params(model=model)
 
         # Only include params that are in the supported list
-        mapped_params = {}
+        mapped_params: Final = {}
         for param, value in non_default_params.items():
             if param in supported_params:
                 mapped_params[param] = value
@@ -183,7 +183,7 @@ class MistralOCRConfig(BaseOCRConfig):
             raise ValueError(f"Expected document dict, got {type(document)}")
 
         # Build request data - use document dict directly
-        data = {
+        data: Final = {
             "model": model,
             "document": document,  # Pass through the Mistral-format document dict
         }
@@ -224,7 +224,7 @@ class MistralOCRConfig(BaseOCRConfig):
         }
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
 
             verbose_logger.debug("Mistral OCR response keys: %s", response_json.keys())
 

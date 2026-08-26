@@ -4,13 +4,11 @@ Tests for Evals API operations across providers
 
 import hashlib
 import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.types.llms.openai_evals import (

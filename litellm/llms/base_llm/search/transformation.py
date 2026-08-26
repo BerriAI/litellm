@@ -2,7 +2,7 @@
 Base Search transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -18,6 +18,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_PERPLEXITY_UNIFIED_PARAMS: Final[frozenset[str]] = frozenset(
+    (
+        "max_results",
+        "search_domain_filter",
+        "country",
+        "max_tokens_per_page",
+    )
+)
+
+
 def _search_host(url: str) -> str:
     return urlsplit(url).netloc.lower()
 
@@ -27,10 +37,10 @@ def _is_trusted_search_api_base(
     default_api_base: str | None,
     base_env_var: str | None,
 ) -> bool:
-    candidate = _search_host(caller_api_base)
+    candidate: Final = _search_host(caller_api_base)
     if not candidate:
         return False
-    trusted = {
+    trusted: Final = {
         _search_host(base)
         for base in (
             default_api_base,
@@ -96,7 +106,7 @@ class BaseSearchConfig:
         return "POST"
 
     @staticmethod
-    def get_supported_perplexity_optional_params() -> set:
+    def get_supported_perplexity_optional_params() -> frozenset[str]:
         """
         Get the set of Perplexity unified search parameters.
         These are the standard parameters that providers should transform from.
@@ -104,12 +114,7 @@ class BaseSearchConfig:
         Returns:
             Set of parameter names that are part of the unified spec
         """
-        return {
-            "max_results",
-            "search_domain_filter",
-            "country",
-            "max_tokens_per_page",
-        }
+        return _PERPLEXITY_UNIFIED_PARAMS
 
     def _assert_trusted_api_base_for_server_credential(
         self,
@@ -154,7 +159,7 @@ class BaseSearchConfig:
         """
         if caller_api_key:
             return caller_api_key
-        server_key = next(
+        server_key: Final = next(
             (key for key in (get_secret_str(var) for var in key_env_vars) if key),
             None,
         )
@@ -177,6 +182,29 @@ class BaseSearchConfig:
         Override in provider-specific implementations.
         """
         return headers
+
+    def sign_request(
+        self,
+        headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
+        optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
+        request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
+        api_base: str,
+        api_key: str | None = None,
+    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
+        """
+        OPTIONAL
+
+        Sign the request. Providers like Bedrock AgentCore need to SigV4-sign
+        the request before sending it to the API.
+
+        For all other providers, this is a no-op and we just return the headers.
+
+        Returns:
+            Tuple of (headers, signed_json_body). When signed_json_body is not
+            None, the handler MUST send it verbatim as the request body —
+            re-serializing the payload would invalidate the signature.
+        """
+        return headers, None
 
     def get_complete_url(
         self,

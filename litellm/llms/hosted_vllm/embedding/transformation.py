@@ -7,7 +7,7 @@ VLLM is OpenAI-compatible and supports embeddings via the /v1/embeddings endpoin
 Docs: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -53,7 +53,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         if api_key is None:
             api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
 
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
         }
 
@@ -131,7 +131,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # VLLM returns standard OpenAI-compatible embedding response
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,

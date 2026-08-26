@@ -1,5 +1,5 @@
 from collections.abc import Coroutine
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -35,7 +35,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         Removes expires_after if None to match SDK's Omit pattern.
         SDK expects file_create_params.ExpiresAfter | Omit, but FileExpiresAfter works at runtime.
         """
-        data = dict(create_file_data)
+        data: Final = dict(create_file_data)
         if data.get("expires_after") is None:
             data.pop("expires_after", None)
         return data
@@ -46,7 +46,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
-        response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))  # type: ignore[arg-type]
+        response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))
         verbose_logger.debug("create_file_response=%s", response)
         return OpenAIFileObject(**response.model_dump())
 
@@ -81,9 +81,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
             return self.acreate_file(create_file_data=create_file_data, openai_client=openai_client)
-        response = cast(AzureOpenAI | OpenAI, openai_client).files.create(
+        response: Final = cast(AzureOpenAI | OpenAI, openai_client).files.create(
             **self._prepare_create_file_data(create_file_data)
-        )  # type: ignore[arg-type]
+        )
         return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(
@@ -91,7 +91,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         file_content_request: FileContentRequest,
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> HttpxBinaryResponseContent:
-        response = await openai_client.files.content(**file_content_request)
+        response: Final = await openai_client.files.content(**file_content_request)
         return HttpxBinaryResponseContent(response=response.response)
 
     def file_content(
@@ -124,11 +124,11 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.afile_content(  # type: ignore
+            return self.afile_content(
                 file_content_request=file_content_request,
                 openai_client=openai_client,
             )
-        response = cast(AzureOpenAI | OpenAI, openai_client).files.content(**file_content_request)
+        response: Final = cast(AzureOpenAI | OpenAI, openai_client).files.content(**file_content_request)
 
         return HttpxBinaryResponseContent(response=response.response)
 
@@ -137,7 +137,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         file_id: str,
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> FileObject:
-        response = await openai_client.files.retrieve(file_id=file_id)
+        response: Final = await openai_client.files.retrieve(file_id=file_id)
         return response
 
     def retrieve_file(
@@ -170,11 +170,11 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.aretrieve_file(  # type: ignore
+            return self.aretrieve_file(
                 file_id=file_id,
                 openai_client=openai_client,
             )
-        response = openai_client.files.retrieve(file_id=file_id)
+        response: Final = openai_client.files.retrieve(file_id=file_id)
 
         return response
 
@@ -183,7 +183,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         file_id: str,
         openai_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> FileDeleted:
-        response = await openai_client.files.delete(file_id=file_id)
+        response: Final = await openai_client.files.delete(file_id=file_id)
 
         if not isinstance(response, FileDeleted):  # azure returns an empty string
             return FileDeleted(id=file_id, deleted=True, object="file")
@@ -220,11 +220,11 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.adelete_file(  # type: ignore
+            return self.adelete_file(
                 file_id=file_id,
                 openai_client=openai_client,
             )
-        response = openai_client.files.delete(file_id=file_id)
+        response: Final = openai_client.files.delete(file_id=file_id)
 
         if not isinstance(response, FileDeleted):  # azure returns an empty string
             return FileDeleted(id=file_id, deleted=True, object="file")
@@ -272,7 +272,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
                 raise ValueError(
                     "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
                 )
-            return self.alist_files(  # type: ignore
+            return self.alist_files(
                 purpose=purpose,
                 openai_client=openai_client,
             )

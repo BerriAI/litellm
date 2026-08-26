@@ -18,7 +18,7 @@ A2A Streaming Events:
 """
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
@@ -48,7 +48,7 @@ class A2ACompletionBridgeTransformation:
     @staticmethod
     def _extract_text_from_a2a_parts(parts: list[dict[str, Any]]) -> str:
         """Extract text from A2A parts (with or without explicit ``kind``)."""
-        content_parts: list[str] = []
+        content_parts: Final[list[str]] = []
         for part in parts:
             if not isinstance(part, dict):
                 continue
@@ -71,10 +71,10 @@ class A2ACompletionBridgeTransformation:
         Forwarded once on the LangGraph run payload (``metadata``), not duplicated on
         each input message — see ``apply_forward_metadata_to_completion_params``.
         """
-        merged: dict[str, Any] = {}
+        merged: Final[dict[str, Any]] = {}
         if params and isinstance(params.get("metadata"), dict):
             merged.update(params["metadata"])
-        message_metadata = a2a_message.get("metadata")
+        message_metadata: Final = a2a_message.get("metadata")
         if isinstance(message_metadata, dict):
             merged.update(message_metadata)
         return merged or None
@@ -90,7 +90,7 @@ class A2ACompletionBridgeTransformation:
 
         Uses ``extra_body`` so we do not collide with LiteLLM's spend-log ``metadata`` kwarg.
         """
-        forward_metadata = A2ACompletionBridgeTransformation.get_forward_metadata(
+        forward_metadata: Final = A2ACompletionBridgeTransformation.get_forward_metadata(
             a2a_message=a2a_message,
             params=params,
         )
@@ -103,9 +103,9 @@ class A2ACompletionBridgeTransformation:
         # Layer client-supplied A2A metadata under any agent-owner-configured
         # ``extra_body.metadata`` so the configured keys remain authoritative
         # and an A2A caller cannot overwrite server-set run metadata.
-        existing_metadata = extra_body.get("metadata")
-        existing_dict: dict[str, Any] = existing_metadata if isinstance(existing_metadata, dict) else {}
-        merged_metadata: dict[str, Any] = {**forward_metadata, **existing_dict}
+        existing_metadata: Final = extra_body.get("metadata")
+        existing_dict: Final[dict[str, Any]] = existing_metadata if isinstance(existing_metadata, dict) else {}
+        merged_metadata: Final[dict[str, Any]] = {**forward_metadata, **existing_dict}
         extra_body = {**extra_body, "metadata": merged_metadata}
         completion_params["extra_body"] = extra_body
 
@@ -124,7 +124,7 @@ class A2ACompletionBridgeTransformation:
         Returns:
             List of OpenAI-format messages
         """
-        role = a2a_message.get("role", "user")
+        role: Final = a2a_message.get("role", "user")
         parts = a2a_message.get("parts", [])
 
         # Map A2A roles to OpenAI roles
@@ -139,11 +139,11 @@ class A2ACompletionBridgeTransformation:
         if not isinstance(parts, list):
             parts = []
 
-        content = A2ACompletionBridgeTransformation._extract_text_from_a2a_parts(parts)
+        content: Final = A2ACompletionBridgeTransformation._extract_text_from_a2a_parts(parts)
 
         # Do not attach A2A message.metadata here — the completion bridge forwards it
         # once at run level via extra_body.metadata (LangGraph POST /runs/wait shape).
-        openai_message: dict[str, Any] = {"role": openai_role, "content": content}
+        openai_message: Final[dict[str, Any]] = {"role": openai_role, "content": content}
 
         verbose_logger.debug(
             "A2A -> OpenAI transform: role=%s -> %s, content_length=%s", role, openai_role, len(content)
@@ -169,12 +169,12 @@ class A2ACompletionBridgeTransformation:
         # Extract content from response
         content = ""
         if hasattr(response, "choices") and response.choices:
-            choice = response.choices[0]
+            choice: Final = response.choices[0]
             if hasattr(choice, "message") and choice.message:
                 content = choice.message.content or ""
 
         # Build A2A message
-        a2a_message = {
+        a2a_message: Final = {
             "kind": "message",
             "role": "agent",
             "parts": [{"kind": "text", "text": content}],
@@ -182,7 +182,7 @@ class A2ACompletionBridgeTransformation:
         }
 
         # Build A2A response
-        a2a_response = {
+        a2a_response: Final = {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": a2a_message,
@@ -245,7 +245,7 @@ class A2ACompletionBridgeTransformation:
             final: Whether this is the final event
             message_text: Optional message text for 'working' status
         """
-        status: dict[str, Any] = {
+        status: Final[dict[str, Any]] = {
             "state": state,
             "timestamp": A2ACompletionBridgeTransformation._get_timestamp(),
         }

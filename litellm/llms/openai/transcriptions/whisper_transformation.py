@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 from httpx import Headers, Response
 
@@ -68,7 +69,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         Map the OpenAI params to the Whisper params
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -86,7 +87,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> dict:
         api_key = api_key or get_secret_str("OPENAI_API_KEY")
 
-        auth_header = {
+        auth_header: Final = {
             "Authorization": f"Bearer {api_key}",
         }
 
@@ -103,7 +104,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         Transform the audio transcription request
         """
-        data = {"model": model, "file": audio_file, **optional_params}
+        data: Final = {"model": model, "file": audio_file, **optional_params}
 
         if "response_format" not in data:
             data["response_format"] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
@@ -124,14 +125,14 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: Response,
     ) -> TranscriptionResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except json.JSONDecodeError:
-            content_type = raw_response.headers.get("content-type", "").lower()
+            content_type: Final = raw_response.headers.get("content-type", "").lower()
             if "application/json" in content_type:
                 raise
             return TranscriptionResponse(text=raw_response.text)
 
-        if any(key in raw_response_json for key in TranscriptionResponse.model_fields.keys()):
+        if any(key in raw_response_json for key in TranscriptionResponse.model_fields):
             return TranscriptionResponse(**raw_response_json)
         else:
             raise ValueError(

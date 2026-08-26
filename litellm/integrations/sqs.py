@@ -11,6 +11,7 @@ import base64
 import json
 import re
 import traceback
+from typing import Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -31,7 +32,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
-_BASE64_INLINE_PATTERN = re.compile(
+_BASE64_INLINE_PATTERN: Final = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
     re.MULTILINE,
 )
@@ -253,8 +254,8 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
 
             from litellm.litellm_core_utils.asyncify import asyncify
 
-            asyncified_get_credentials = asyncify(self.get_credentials)
-            credentials = await asyncified_get_credentials(
+            asyncified_get_credentials: Final = asyncify(self.get_credentials)
+            credentials: Final = await asyncified_get_credentials(
                 aws_access_key_id=self.sqs_aws_access_key_id,
                 aws_secret_access_key=self.sqs_aws_secret_access_key,
                 aws_session_token=self.sqs_aws_session_token,
@@ -269,26 +270,26 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             if self.sqs_queue_url is None:
                 raise ValueError("sqs_queue_url not set")
 
-            json_data = json.loads(safe_dumps(payload))
+            json_data: Final = json.loads(safe_dumps(payload))
             if self.app_crypto:
-                aad_bytes = self.sqs_app_encryption_aad.encode("utf-8") if self.sqs_app_encryption_aad else None
-                encrypted = self.app_crypto.encrypt_json(json_data, aad=aad_bytes)
+                aad_bytes: Final = self.sqs_app_encryption_aad.encode("utf-8") if self.sqs_app_encryption_aad else None
+                encrypted: Final = self.app_crypto.encrypt_json(json_data, aad=aad_bytes)
                 json_string = json.dumps({"__encrypted__": True, "payload": encrypted})
             else:
                 json_string = safe_dumps(payload)
 
-            body = f"Action={SQS_SEND_MESSAGE_ACTION}&Version={SQS_API_VERSION}&MessageBody=" + quote(
+            body: Final = f"Action={SQS_SEND_MESSAGE_ACTION}&Version={SQS_API_VERSION}&MessageBody=" + quote(
                 json_string, safe=""
             )
 
-            headers = {
+            headers: Final = {
                 "Content-Type": "application/x-www-form-urlencoded",
             }
 
-            req = requests.Request("POST", self.sqs_queue_url, data=body, headers=headers)
-            prepped = req.prepare()
+            req: Final = requests.Request("POST", self.sqs_queue_url, data=body, headers=headers)
+            prepped: Final = req.prepare()
 
-            aws_request = AWSRequest(
+            aws_request: Final = AWSRequest(
                 method=prepped.method,
                 url=prepped.url,
                 data=prepped.body,
@@ -296,9 +297,9 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
             SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth(aws_request)
 
-            signed_headers = dict(aws_request.headers.items())
+            signed_headers: Final = dict(aws_request.headers.items())
 
-            response = await self.async_httpx_client.post(
+            response: Final = await self.async_httpx_client.post(
                 self.sqs_queue_url,
                 data=body,
                 headers=signed_headers,
@@ -317,7 +318,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             )
 
             # Create a minimal standard logging payload
-            standard_logging_object: StandardLoggingPayload = create_dummy_standard_logging_payload()
+            standard_logging_object: Final[StandardLoggingPayload] = create_dummy_standard_logging_payload()
             # Attempt to send a single message
             await self.async_send_message(standard_logging_object)
             return IntegrationHealthCheckStatus(status="healthy", error_message=None)

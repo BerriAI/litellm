@@ -7,7 +7,7 @@ post_call (model output) checkpoints with optional correction/blocking.
 import datetime
 import hashlib
 import os
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
-BLOCKED_BY_OVALIX_FALLBACK_MESSAGE = "This message was blocked by Ovalix"
-BLOCKED_ACTION_TYPE = "block"
+BLOCKED_BY_OVALIX_FALLBACK_MESSAGE: Final = "This message was blocked by Ovalix"
+BLOCKED_ACTION_TYPE: Final = "block"
 
 
 class OvalixGuardrailMissingSecrets(Exception):
@@ -54,6 +54,7 @@ class OvalixGuardrailBlockedException(GuardrailRaisedException):
             guardrail_name=guardrail_name,
             message=message,
             should_wrap_with_default_message=should_wrap_with_default_message,
+            blocked_content=True,
         )
 
 
@@ -112,7 +113,7 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _validate_config(self, supported_event_hooks: list[GuardrailEventHooks]) -> None:
         """Ensure required secrets and checkpoint IDs are set; auto-add hooks when IDs are present."""
-        errors: list[str] = []
+        errors: Final[list[str]] = []
 
         if not self._tracker_api_base:
             errors.append("Tracker API base, set OVALIX_TRACKER_API_BASE or pass tracker_api_base")
@@ -140,7 +141,7 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _get_actor(self, data: dict) -> str:
         """Return a stable actor identifier from request metadata (e.g. user email or id)."""
-        metadata = data.get("metadata") or data.get("litellm_metadata") or {}
+        metadata: Final = data.get("metadata") or data.get("litellm_metadata") or {}
         if metadata.get("user_api_key_user_email"):
             return metadata["user_api_key_user_email"]
         if metadata.get("user_api_key_user_id"):
@@ -153,14 +154,14 @@ class OvalixGuardrail(CustomGuardrail):
         # string (email, user id, or "unknown") into a compact, fixed-length, consistent
         # key. It is not a privacy/security measure and the actor value is not sensitive,
         # so a plain SHA-256 (truncated) is sufficient; no salting/KDF is needed here.
-        actor_id = self._get_actor(data).encode()
-        normalized_actor_id = hashlib.sha256(actor_id).hexdigest()[:8]
+        actor_id: Final = self._get_actor(data).encode()
+        normalized_actor_id: Final = hashlib.sha256(actor_id).hexdigest()[:8]
         return normalized_actor_id
 
     def _get_session_id(self, data: dict) -> str:
         """Return a unique identifier for the chat/session (actor + date + application_id)."""
-        actor_hash = self._get_tracker_actor_id(data)
-        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        actor_hash: Final = self._get_tracker_actor_id(data)
+        today: Final = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         return f"{actor_hash}_{today}_{self._application_id}"
 
     async def _call_checkpoint(
@@ -171,13 +172,13 @@ class OvalixGuardrail(CustomGuardrail):
         session_id: str,
     ) -> dict[str, Any]:
         """Call the Ovalix Tracker checkpoint API and return the JSON response."""
-        application_id = self._application_id
+        application_id: Final = self._application_id
         if not application_id or not checkpoint_id:
             raise ValueError("Ovalix: application_id or checkpoint_id not resolved")
 
-        url = f"{self._tracker_api_base}/tracking/custom_application/checkpoint"
-        headers = dict(self._tracker_headers)
-        payload = {
+        url: Final = f"{self._tracker_api_base}/tracking/custom_application/checkpoint"
+        headers: Final = dict(self._tracker_headers)
+        payload: Final = {
             "application_id": application_id,
             "checkpoint_id": checkpoint_id,
             "actor": actor,
@@ -185,7 +186,7 @@ class OvalixGuardrail(CustomGuardrail):
             "data_type": "TEXT",
             "data": {"content": content},
         }
-        response = await self._async_handler.post(url, headers=headers, json=payload)
+        response: Final = await self._async_handler.post(url, headers=headers, json=payload)
         response.raise_for_status()
         return response.json()
 
@@ -215,22 +216,22 @@ class OvalixGuardrail(CustomGuardrail):
         if not self._pre_checkpoint_id and not self._post_checkpoint_id:
             return inputs
 
-        tracker_actor_id = self._get_tracker_actor_id(request_data)
-        session_id = self._get_session_id(request_data)
-        texts = inputs.get("texts") or []
+        tracker_actor_id: Final = self._get_tracker_actor_id(request_data)
+        session_id: Final = self._get_session_id(request_data)
+        texts: Final = inputs.get("texts") or []
         if not texts or not isinstance(texts, list):
             return inputs
 
         if input_type == "response":
             if not self._post_checkpoint_id:
                 return inputs
-            corrected_llm_responses = await self._generate_post_guardrail_llm_texts(
+            corrected_llm_responses: Final = await self._generate_post_guardrail_llm_texts(
                 texts, tracker_actor_id, session_id, self._post_checkpoint_id
             )
             return {**inputs, "texts": corrected_llm_responses}
 
         if self._pre_checkpoint_id:
-            post_guardrail_texts = await self._generate_post_guardrail_llm_texts(
+            post_guardrail_texts: Final = await self._generate_post_guardrail_llm_texts(
                 texts, tracker_actor_id, session_id, self._pre_checkpoint_id
             )
             return {**inputs, "texts": post_guardrail_texts}
@@ -240,7 +241,7 @@ class OvalixGuardrail(CustomGuardrail):
         self, texts: list[str], actor: str, session_id: str, checkpoint_id: str
     ) -> list[str]:
         """Generate post-guardrail LLM responses for the given LLM responses."""
-        post_guardrail_texts: list[str] = []
+        post_guardrail_texts: Final[list[str]] = []
 
         is_first_response = True
         for llm_response in reversed(texts):
@@ -276,7 +277,7 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _get_trackers_corrected_message(self, resp: dict) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
-        modified = resp.get("modified_data")
+        modified: Final = resp.get("modified_data")
         if isinstance(modified, dict) and "content" in modified:
             return modified["content"]
         return None

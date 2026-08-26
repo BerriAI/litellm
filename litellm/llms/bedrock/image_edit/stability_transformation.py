@@ -22,7 +22,7 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -65,7 +65,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             etc.
         """
         if model:
-            model_lower = model.lower()
+            model_lower: Final = model.lower()
             if "stability." in model_lower and any(
                 [
                     "upscale" in model_lower,
@@ -108,21 +108,21 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         - size -> aspect_ratio
         - n -> (handled separately, Stability returns 1 image per request)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         # Define mapping from OpenAI params to Stability params
-        param_mapping = {
+        param_mapping: Final = {
             "size": "aspect_ratio",
             # "n" and "response_format" are handled separately
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: dict[str, Any] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
                 # Map param if mapping exists and value is valid
                 if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]  # type: ignore
+                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
                 # Don't copy "size" itself to final dict
             elif k == "n":
                 # Store for logic but do not add to outgoing params
@@ -163,7 +163,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         Returns the request body dict that will be JSON-encoded by the handler.
         """
         # Build Bedrock Stability request
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "output_format": "png",  # Default to PNG
         }
 
@@ -176,8 +176,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             image_b64: str
             if hasattr(image, "read") and callable(getattr(image, "read", None)):
                 # File-like object (e.g., BufferedReader from open())
-                image_bytes = image.read()  # type: ignore
-                image_b64 = base64.b64encode(image_bytes).decode("utf-8")  # type: ignore
+                image_bytes: Final = image.read()
+                image_b64 = base64.b64encode(image_bytes).decode("utf-8")
             elif isinstance(image, bytes):
                 # Raw bytes
                 image_b64 = base64.b64encode(image).decode("utf-8")
@@ -186,17 +186,17 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 image_b64 = image
             else:
                 # Try to handle as bytes
-                image_b64 = base64.b64encode(bytes(image)).decode("utf-8")  # type: ignore
+                image_b64 = base64.b64encode(bytes(image)).decode("utf-8")
 
             # For style-transfer models, map image to init_image
-            model_lower = model.lower()
+            model_lower: Final = model.lower()
             if "style-transfer" in model_lower:
                 data["init_image"] = image_b64
             else:
                 data["image"] = image_b64
 
         # Add optional params (already mapped in map_openai_params)
-        for key, value in image_edit_optional_request_params.items():  # type: ignore
+        for key, value in image_edit_optional_request_params.items():
             # Skip internal params (prefixed with _)
             if key.startswith("_") or value is None:
                 continue
@@ -209,7 +209,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                     file_value = value[0]
 
                 if hasattr(file_value, "read") and callable(getattr(file_value, "read", None)):
-                    file_bytes = file_value.read()  # type: ignore
+                    file_bytes = file_value.read()
                 elif isinstance(file_value, bytes):
                     file_bytes = file_value
                 elif isinstance(file_value, str):
@@ -217,7 +217,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                     data[key] = file_value
                     continue
                 else:
-                    file_bytes = file_value  # type: ignore
+                    file_bytes = file_value
 
                 if isinstance(file_bytes, bytes):
                     file_b64 = base64.b64encode(file_bytes).decode("utf-8")
@@ -242,15 +242,15 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             if key in numeric_int_fields:
                 # Convert to int (these are pixel values for outpaint)
                 try:
-                    data[key] = int(value)  # type: ignore
+                    data[key] = int(value)
                 except (ValueError, TypeError):
-                    data[key] = value  # type: ignore
+                    data[key] = value
             elif key in numeric_float_fields:
                 # Convert to float
                 try:
-                    data[key] = float(value)  # type: ignore
+                    data[key] = float(value)
                 except (ValueError, TypeError):
-                    data[key] = value  # type: ignore
+                    data[key] = value
 
             # Supported text fields
             elif key in [
@@ -263,7 +263,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 "select_prompt",
                 "search_prompt",
             ]:
-                data[key] = value  # type: ignore
+                data[key] = value
 
         return data, {}
 
@@ -282,7 +282,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Bedrock Stability response: {e}",
@@ -299,7 +299,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check finish_reasons
-        finish_reasons = response_data.get("finish_reasons", [])
+        finish_reasons: Final = response_data.get("finish_reasons", [])
         if finish_reasons and finish_reasons[0]:
             raise self.get_error_class(
                 error_message=f"Bedrock Stability error: {finish_reasons[0]}",
@@ -307,12 +307,12 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        model_response = ImageResponse()
+        model_response: Final = ImageResponse()
         if not model_response.data:
             model_response.data = []
 
         # Extract images from response
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if images:
             for image_b64 in images:
                 if image_b64:
@@ -330,8 +330,8 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             model_response._hidden_params["additional_headers"] = {}
 
         # Set cost based on model
-        model_info = get_model_info(model, custom_llm_provider="bedrock")
-        cost_per_image = model_info.get("output_cost_per_image", 0)
+        model_info: Final = get_model_info(model, custom_llm_provider="bedrock")
+        cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
             model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
                 cost_per_image

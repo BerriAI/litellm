@@ -10,8 +10,8 @@ describe("Logo", () => {
   it("renders the bundled logo untouched by the server root path for a known provider", () => {
     render(<Logo provider="openai" />);
     const img = screen.getByRole("img", { name: "openai logo" });
-    expect(img.getAttribute("src")).toBe(providerLogoMap[Providers.OpenAI]);
-    expect(img.getAttribute("src")).toContain("openai_small");
+    expect(img).toHaveAttribute("src", providerLogoMap[Providers.OpenAI]);
+    expect(img).toHaveAttribute("src", expect.stringContaining("openai_small"));
   });
 
   it("renders a letter avatar and no img for an unknown provider", () => {
@@ -29,12 +29,12 @@ describe("Logo", () => {
   it("resolves a backend asset path through the server root path in src mode", () => {
     render(<Logo src="/ui/assets/logos/github.svg" label="GitHub" />);
     const img = screen.getByRole("img", { name: "GitHub logo" });
-    expect(img.getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(img).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
   });
 
   it("passes an external https URL through untouched in src mode", () => {
     render(<Logo src="https://cdn.example.com/logo.png" label="Ext" />);
-    expect(screen.getByRole("img").getAttribute("src")).toBe("https://cdn.example.com/logo.png");
+    expect(screen.getByRole("img")).toHaveAttribute("src", "https://cdn.example.com/logo.png");
   });
 
   it("swaps to the letter avatar and warns with the failing URL on image error", () => {
@@ -63,7 +63,7 @@ describe("Logo", () => {
 
     rerender(<Logo src="/ui/assets/logos/github.svg" label="Agent" />);
     const img = screen.getByRole("img", { name: "Agent logo" });
-    expect(img.getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(img).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
 
     rerender(<Logo src="/ui/assets/logos/broken.svg" label="Agent" />);
     expect(screen.queryByRole("img")).not.toBeInTheDocument();

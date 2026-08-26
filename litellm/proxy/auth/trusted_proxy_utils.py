@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from fastapi import Request
 
@@ -9,7 +9,7 @@ from litellm.proxy.auth.network import (
     parse_trusted_proxy_ranges,
 )
 
-TRUSTED_PROXY_RANGES_KEY = "trusted_proxy_ranges"
+TRUSTED_PROXY_RANGES_KEY: Final = "trusted_proxy_ranges"
 
 
 def _get_proxy_general_settings() -> dict[str, Any]:
@@ -38,8 +38,8 @@ def get_trusted_proxy_cidrs(
 
 
 def _get_direct_client_ip(request: Request) -> str | None:
-    client = getattr(request, "client", None)
-    client_host = getattr(client, "host", None)
+    client: Final = getattr(request, "client", None)
+    client_host: Final = getattr(client, "host", None)
     if isinstance(client_host, str):
         return client_host
     return None
@@ -63,14 +63,14 @@ def require_trusted_proxy_request(
     if general_settings is None:
         general_settings = _get_proxy_general_settings()
 
-    trusted_networks = parse_trusted_proxy_ranges(general_settings.get(setting_name), setting_name=setting_name)
+    trusted_networks: Final = parse_trusted_proxy_ranges(general_settings.get(setting_name), setting_name=setting_name)
     if not trusted_networks:
         raise ValueError(
             f"{feature_name} requires general_settings.{setting_name} before "
             "trusting identity headers from an upstream proxy."
         )
 
-    direct_client_ip = _get_direct_client_ip(request)
+    direct_client_ip: Final = _get_direct_client_ip(request)
     if not ip_in_networks(direct_client_ip, trusted_networks):
         verbose_proxy_logger.warning(
             "%s rejected identity headers from untrusted direct client IP %r",

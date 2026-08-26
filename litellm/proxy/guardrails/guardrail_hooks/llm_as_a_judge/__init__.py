@@ -1,16 +1,20 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score responses against weighted criteria."""
 
-import json
-import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.llm_judge import (
+    default_router_provider,
+    extract_text_from_content,
+    judge_acompletion,
+    parse_json_verdict,
+)
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -30,52 +34,11 @@ Return ONLY valid JSON in this exact format:
   "overall_score": <weighted average 0-100>
 }"""
 
-_VALID_ON_FAILURE = frozenset({"block", "log"})
+_VALID_ON_FAILURE: Final = frozenset({"block", "log"})
 
-
-def _default_router_provider() -> "Router | None":
-    try:
-        from litellm.proxy.proxy_server import llm_router
-    except ImportError:
-        return None
-
-    return llm_router
-
-
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
-
-
-def _parse_judge_verdict(raw: str) -> dict[str, Any]:
-    """Parse the judge's JSON verdict, tolerating markdown fences and surrounding prose."""
-    text = raw.strip()
-    fenced = _JSON_FENCE_RE.search(text)
-    if fenced is not None:
-        text = fenced.group(1).strip()
-    parsed: object
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end <= start:
-            raise
-        parsed = json.loads(text[start : end + 1])
-    if not isinstance(parsed, dict):
-        raise ValueError("judge response is not a JSON object")
-    return cast(dict[str, Any], parsed)  # cast-ok: narrowed to dict by the isinstance guard above
-
-
-def _extract_text_from_content(content: Any) -> str:
-    """Return plain text from a message content field (str or multimodal list)."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                parts.append(part.get("text", ""))
-        return " ".join(parts)
-    return ""
+_default_router_provider: Final = default_router_provider
+_parse_judge_verdict: Final = parse_json_verdict
+_extract_text_from_content: Final = extract_text_from_content
 
 
 def _get_litellm_param(
@@ -84,14 +47,14 @@ def _get_litellm_param(
     key: str,
     default: Any = None,
 ) -> Any:
-    val = getattr(litellm_params, key, None)
+    val: Final = getattr(litellm_params, key, None)
     if val is not None:
         return val
-    raw = guardrail.get("litellm_params")
+    raw: Final = guardrail.get("litellm_params")
     if isinstance(raw, dict) and key in raw:
         return raw[key]
     if raw is not None and not isinstance(raw, dict):
-        attr = getattr(raw, key, None)
+        attr: Final = getattr(raw, key, None)
         if attr is not None:
             return attr
     return default
@@ -102,10 +65,10 @@ def _build_judge_prompt(
     messages: list[dict[str, Any]],
     response_text: str,
 ) -> str:
-    criteria_block = "\n".join(
+    criteria_block: Final = "\n".join(
         f"- {c.get('name', '')} (weight {c.get('weight', 0)}%): {c.get('description', '')}" for c in criteria
     )
-    conversation = "\n".join(
+    conversation: Final = "\n".join(
         f"{m.get('role', 'user').upper()}: {_extract_text_from_content(m.get('content', ''))}"
         for m in messages
         if m.get("content") is not None
@@ -161,33 +124,21 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         messages: list[dict[str, Any]],
         response_text: str,
     ) -> dict[str, Any]:
-        judge_messages = [
+        judge_messages: Final = [
             {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": _build_judge_prompt(self.criteria, messages, response_text),
             },
         ]
-        router = self._router_provider()
-        if router is not None and (
-            self.judge_model in router.model_group_alias or router.get_model_list(model_name=self.judge_model)
-        ):
-            response = await router.acompletion(
-                model=self.judge_model,
-                messages=judge_messages,
-                response_format={"type": "json_object"},
-                temperature=0,
-                num_retries=0,
-                fallbacks=[],
-            )
-        else:
-            response = await litellm.acompletion(
-                model=self.judge_model,
-                messages=judge_messages,
-                response_format={"type": "json_object"},
-                temperature=0,
-            )
-        raw = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
+        response: Final = await judge_acompletion(
+            self._router_provider(),
+            self.judge_model,
+            judge_messages,
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
 
     async def apply_guardrail(
@@ -201,17 +152,17 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         if input_type != "response":
             return inputs
 
-        texts = inputs.get("texts") or []
-        response_text = " ".join(texts)
+        texts: Final = inputs.get("texts") or []
+        response_text: Final = " ".join(texts)
         if not response_text:
             return inputs
 
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
         status: GuardrailStatus = "success"
         judge_result: dict[str, Any] = {}
 
         try:
-            messages: list[dict[str, Any]] = request_data.get("messages") or []
+            messages: Final[list[dict[str, Any]]] = request_data.get("messages") or []
 
             try:
                 judge_result = await self._run_judge(messages, response_text)
@@ -223,14 +174,14 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 return inputs
 
             try:
-                overall_score = max(0.0, min(100.0, float(judge_result.get("overall_score", 100))))
+                overall_score: Final = max(0.0, min(100.0, float(judge_result.get("overall_score", 100))))
             except (TypeError, ValueError):
                 verbose_logger.warning("llm_as_a_judge: invalid overall_score from judge, failing open")
                 return inputs
 
-            passed = overall_score >= self.overall_threshold
+            passed: Final = overall_score >= self.overall_threshold
 
-            eval_info: StandardLoggingEvalInformation = {
+            eval_info: Final[StandardLoggingEvalInformation] = {
                 "eval_name": self.guardrail_name or "",
                 "overall_score": overall_score,
                 "passed": passed,
@@ -238,8 +189,8 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "threshold": self.overall_threshold,
                 "verdicts": judge_result.get("verdicts", []),
             }
-            _metadata = request_data.setdefault("metadata", {})
-            existing = _metadata.get("eval_information")
+            _metadata: Final = request_data.setdefault("metadata", {})
+            existing: Final = _metadata.get("eval_information")
             if isinstance(existing, list):
                 existing.append(eval_info)
             elif existing is not None:
@@ -283,34 +234,34 @@ def initialize_guardrail(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
 ) -> LLMAsAJudgeGuardrail:
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("llm_as_a_judge guardrail requires a guardrail_name")
 
-    judge_model = _get_litellm_param(litellm_params, guardrail, "judge_model")
+    judge_model: Final = _get_litellm_param(litellm_params, guardrail, "judge_model")
     if not judge_model:
         raise ValueError("llm_as_a_judge guardrail requires judge_model in litellm_params")
 
-    criteria = _get_litellm_param(litellm_params, guardrail, "criteria") or []
+    criteria: Final = _get_litellm_param(litellm_params, guardrail, "criteria") or []
     if not criteria:
         raise ValueError("llm_as_a_judge guardrail requires at least one criterion")
 
-    weight_total = sum(float(c.get("weight", 0)) for c in criteria)
+    weight_total: Final = sum(float(c.get("weight", 0)) for c in criteria)
     if abs(weight_total - 100) > 0.5:
         raise ValueError(f"llm_as_a_judge criterion weights must sum to 100 (got {weight_total})")
 
-    on_failure = _get_litellm_param(litellm_params, guardrail, "on_failure", "block")
+    on_failure: Final = _get_litellm_param(litellm_params, guardrail, "on_failure", "block")
     if on_failure not in _VALID_ON_FAILURE:
         raise ValueError(f"llm_as_a_judge on_failure must be 'block' or 'log', got '{on_failure}'")
 
-    overall_threshold = float(_get_litellm_param(litellm_params, guardrail, "overall_threshold", 80.0))
+    overall_threshold: Final = float(_get_litellm_param(litellm_params, guardrail, "overall_threshold", 80.0))
 
-    mode = _get_litellm_param(litellm_params, guardrail, "mode")
+    mode: Final = _get_litellm_param(litellm_params, guardrail, "mode")
     event_hook: GuardrailEventHooks | None = None
     if isinstance(mode, str) and mode in {e.value for e in GuardrailEventHooks}:
         event_hook = GuardrailEventHooks(mode)
 
-    instance = LLMAsAJudgeGuardrail(
+    instance: Final = LLMAsAJudgeGuardrail(
         guardrail_name=guardrail_name,
         judge_model=judge_model,
         criteria=criteria,
@@ -323,7 +274,7 @@ def initialize_guardrail(
     return instance
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: LLMAsAJudgeGuardrail,
 }
 

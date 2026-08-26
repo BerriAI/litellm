@@ -6,7 +6,7 @@ Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
@@ -62,7 +62,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         Returns:
             Full endpoint URL for the count-tokens API
         """
-        publisher = self._get_publisher_for_model(model)
+        publisher: Final = self._get_publisher_for_model(model)
 
         # Use custom api_base if provided, otherwise construct default
         if api_base:
@@ -72,7 +72,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
 
         # Construct the count-tokens endpoint
         # Format: /v1/projects/{project}/locations/{location}/publishers/{publisher}/models/count-tokens:rawPredict
-        endpoint = (
+        endpoint: Final = (
             f"{base_url}/v1/projects/{project_id}/locations/{vertex_location}/"
             f"publishers/{publisher}/models/count-tokens:rawPredict"
         )
@@ -126,12 +126,12 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             raise ValueError("messages required for token counting")
 
         # Extract Vertex AI credentials and settings
-        vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
-        vertex_project = self.get_vertex_ai_project(litellm_params)
+        vertex_credentials: Final = self.get_vertex_ai_credentials(litellm_params)
+        vertex_project: Final = self.get_vertex_ai_project(litellm_params)
 
         # Check for count_tokens specific location override
-        vertex_count_tokens_location = litellm_params.get("vertex_count_tokens_location")
-        vertex_location_raw = self.get_vertex_ai_location(litellm_params)
+        vertex_count_tokens_location: Final = litellm_params.get("vertex_count_tokens_location")
+        vertex_location_raw: Final = self.get_vertex_ai_location(litellm_params)
 
         # Determine final location with precedence:
         # 1. vertex_count_tokens_location (if provided)
@@ -156,7 +156,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         )
 
         # Build the endpoint URL
-        endpoint_url = self._build_count_tokens_endpoint(
+        endpoint_url: Final = self._build_count_tokens_endpoint(
             model=model,
             project_id=project_id,
             vertex_location=vertex_location,
@@ -164,16 +164,16 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         )
 
         # Prepare headers
-        headers = {"Authorization": f"Bearer {access_token}"}
+        headers: Final = {"Authorization": f"Bearer {access_token}"}
 
         # Get async HTTP client
         from litellm import LlmProviders
 
-        async_client = get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI)
+        async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI)
 
         # Make the request
         # Note: Partner models (especially Claude) accept Anthropic Messages API format directly
-        response = await async_client.post(
+        response: Final = await async_client.post(
             endpoint_url,
             headers=headers,
             json=request_data,
@@ -182,11 +182,11 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
 
         # Check for errors
         if response.status_code != 200:
-            error_text = response.text
+            error_text: Final = response.text
             raise ValueError(f"Token counting request failed with status {response.status_code}: {error_text}")
 
         # Parse response
-        result = response.json()
+        result: Final = response.json()
 
         # Return token count
         # Vertex AI Anthropic returns: {"input_tokens": 123}

@@ -3,7 +3,7 @@
 Azure Prompt Shield Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from fastapi import HTTPException
 
@@ -13,11 +13,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs
 
 from .base import AzureGuardrailBase
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
@@ -39,6 +40,8 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         api_base: Azure Prompt Shield API endpoint
         default_on: Whether to enable by default
     """
+
+    use_native_lifecycle_hooks: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -76,7 +79,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
         from .base import AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
 
-        chunks = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
+        chunks: Final = self.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH)
 
         last_response: AzurePromptShieldGuardrailResponse | None = None
 
@@ -104,6 +107,19 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         return last_response
 
     @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        for text in inputs.get("texts") or ():
+            if text:
+                await self.async_make_request(user_prompt=text)
+        return inputs
+
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -120,11 +136,11 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: list[AllMessageValues] | None = data.get("messages")
+        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
         if new_messages is None:
             verbose_proxy_logger.warning("Azure Prompt Shield: not running guardrail. No messages in data")
             return data
-        user_prompt = self.get_user_prompt(new_messages)
+        user_prompt: Final = self.get_user_prompt(new_messages)
 
         if user_prompt:
             verbose_proxy_logger.debug("Azure Prompt Shield: User prompt: %s", user_prompt)

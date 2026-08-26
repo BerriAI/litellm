@@ -8,7 +8,7 @@ login endpoints (e.g., /login and /v2/login).
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Literal, cast
+from typing import Final, Literal, cast
 
 import jwt
 from fastapi import HTTPException
@@ -68,7 +68,7 @@ def get_ui_credentials(master_key: str | None) -> tuple[str, str]:
     Raises:
         ProxyException: If neither UI_PASSWORD nor master_key is available
     """
-    ui_username = os.getenv("UI_USERNAME", "admin")
+    ui_username: Final = os.getenv("UI_USERNAME", "admin")
     ui_password = os.getenv("UI_PASSWORD", None)
     if ui_password is None:
         ui_password = str(master_key) if master_key is not None else None
@@ -207,7 +207,7 @@ async def authenticate_user(
                     "spend": 0,
                     "user_id": key_user_id,
                     "team_id": "litellm-dashboard",
-                },  # type: ignore
+                },
             )
         else:
             raise ProxyException(
@@ -217,7 +217,7 @@ async def authenticate_user(
                 code=500,
             )
 
-        key = response["token"]  # type: ignore
+        key = response["token"]
 
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
@@ -256,8 +256,8 @@ async def authenticate_user(
         """
         user_id = getattr(_user_row, "user_id", "unknown")
         user_role = getattr(_user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
-        user_email = getattr(_user_row, "user_email", "unknown")
-        _password = getattr(_user_row, "password", "unknown")
+        user_email: Final = getattr(_user_row, "user_email", "unknown")
+        _password: Final = getattr(_user_row, "password", "unknown")
 
         if _password is None:
             raise ProxyException(
@@ -272,7 +272,7 @@ async def authenticate_user(
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
-                    **{  # type: ignore
+                    **{
                         "user_role": user_role,
                         "duration": LITELLM_UI_SESSION_DURATION,
                         "key_max_budget": litellm.max_ui_session_budget,
@@ -292,7 +292,7 @@ async def authenticate_user(
                     code=500,
                 )
 
-            key = response["token"]  # type: ignore
+            key = response["token"]
 
             return LoginResult(
                 user_id=user_id,
@@ -323,7 +323,7 @@ def _ui_session_exp_timestamp() -> int:
     duration; stamping the JWT itself gives the cookie the bounded lifetime the dashboard's
     client-side expiry check and the server-side session-cookie readers both assume, instead
     of a token that stays signature-valid until the master key rotates."""
-    ttl_seconds = duration_in_seconds(LITELLM_UI_SESSION_DURATION)
+    ttl_seconds: Final = duration_in_seconds(LITELLM_UI_SESSION_DURATION)
     return int((datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).timestamp())
 
 
@@ -336,7 +336,7 @@ def encode_ui_session_jwt(returned_ui_token_object: ReturnedUITokenObject, maste
     master key rotates, and the session-cookie readers that require a bounded lifetime
     (the MCP interactive sign-in) reject it.
     """
-    claims = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
+    claims: Final = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
     return jwt.encode(claims, master_key, algorithm="HS256")
 
 
@@ -356,7 +356,7 @@ def create_ui_token_object(
     Returns:
         ReturnedUITokenObject: Token object ready for JWT encoding
     """
-    disabled_non_admin_personal_key_creation = get_disabled_non_admin_personal_key_creation()
+    disabled_non_admin_personal_key_creation: Final = get_disabled_non_admin_personal_key_creation()
 
     return ReturnedUITokenObject(
         user_id=login_result.user_id,

@@ -4,6 +4,8 @@ Transformation logic from Cohere's /v1/rerank format to Together AI's  `/v1/rera
 Why separate file? Make it easy to see how transformation works
 """
 
+from typing import Final
+
 from litellm._uuid import uuid
 from litellm.types.rerank import (
     RerankBilledUnits,
@@ -17,16 +19,16 @@ from litellm.types.rerank import (
 
 class TogetherAIRerankConfig:
     def _transform_response(self, response: dict) -> RerankResponse:
-        _billed_units = RerankBilledUnits(**response.get("usage", {}))
-        _tokens = RerankTokens(**response.get("usage", {}))
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        _billed_units: Final = RerankBilledUnits(**response.get("usage", {}))
+        _tokens: Final = RerankTokens(**response.get("usage", {}))
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: list[dict] | None = response.get("results")
+        _results: Final[list[dict] | None] = response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
 
-        rerank_results: list[RerankResponseResult] = []
+        rerank_results: Final[list[RerankResponseResult]] = []
 
         for result in _results:
             # Validate required fields exist

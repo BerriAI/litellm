@@ -9,9 +9,18 @@ MCP Spec Reference:
     https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
 """
 
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Final, Union
 
 from litellm._logging import verbose_logger
+
+if TYPE_CHECKING:
+    from mcp.types import (
+        ElicitRequestFormParams,
+        ElicitRequestParams,
+        ElicitRequestURLParams,
+        ElicitResult,
+        ErrorData,
+    )
 
 # Guard imports that require the mcp package
 try:
@@ -56,7 +65,7 @@ async def handle_elicitation_request(
             message="MCP elicitation is not available (mcp package not installed)",
         )
     try:
-        mode = getattr(params, "mode", "form")
+        mode: Final = getattr(params, "mode", "form")
         verbose_logger.info(
             "MCP elicitation: received request mode=%s, message=%s",
             mode,
@@ -99,20 +108,20 @@ async def _relay_elicitation_to_downstream(
     Returns:
         ElicitResult from the downstream client.
     """
-    mode = getattr(params, "mode", "form")
+    mode: Final = getattr(params, "mode", "form")
     # Check if the downstream client supports the requested mode
     if downstream_capabilities is not None:
-        elicit_caps = getattr(downstream_capabilities, "elicitation", None)
+        elicit_caps: Final = getattr(downstream_capabilities, "elicitation", None)
         if elicit_caps is None:
             verbose_logger.info("MCP elicitation: downstream client does not support elicitation")
             return ElicitResult(action="decline")
         if mode == "url":
-            url_cap = getattr(elicit_caps, "url", None)
+            url_cap: Final = getattr(elicit_caps, "url", None)
             if url_cap is None:
                 verbose_logger.info("MCP elicitation: downstream client does not support URL mode")
                 return ElicitResult(action="decline")
         if mode == "form":
-            form_cap = getattr(elicit_caps, "form", None)
+            form_cap: Final = getattr(elicit_caps, "form", None)
             if form_cap is None:
                 verbose_logger.info("MCP elicitation: downstream client does not support form mode")
                 return ElicitResult(action="decline")

@@ -10,7 +10,7 @@ Validates:
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -75,7 +75,7 @@ class PolicyValidator:
                 IN_MEMORY_GUARDRAIL_HANDLER,
             )
 
-            guardrails = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
+            guardrails: Final = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
             return {g.get("guardrail_name", "") for g in guardrails if g.get("guardrail_name")}
         except Exception as e:
             verbose_proxy_logger.warning("Could not get guardrails from registry: %s", e)
@@ -95,7 +95,7 @@ class PolicyValidator:
             return True  # Can't validate without DB, assume valid
 
         try:
-            team = await TeamRepository(self.prisma_client).table.find_first(
+            team: Final = await TeamRepository(self.prisma_client).table.find_first(
                 where={"team_alias": team_alias},
             )
             return team is not None
@@ -117,7 +117,7 @@ class PolicyValidator:
             return True  # Can't validate without DB, assume valid
 
         try:
-            key = await VerificationTokenRepository(self.prisma_client).table.find_first(
+            key: Final = await VerificationTokenRepository(self.prisma_client).table.find_first(
                 where={"key_alias": key_alias},
             )
             return key is not None
@@ -145,7 +145,7 @@ class PolicyValidator:
 
             # Check if model matches any pattern via pattern router
             if hasattr(self.llm_router, "pattern_router"):
-                pattern_deployments = self.llm_router.pattern_router.get_deployments_by_pattern(model=model)
+                pattern_deployments: Final = self.llm_router.pattern_router.get_deployments_by_pattern(model=model)
                 if pattern_deployments:
                     return True
 
@@ -193,13 +193,13 @@ class PolicyValidator:
         # A concrete entry is one the request-time matcher compares by exact equality;
         # only a trailing "*" is a wildcard (RouteChecks._is_wildcard_pattern), and those
         # are left unvalidated since they may match zero entities today and more later.
-        is_pattern = RouteChecks._is_wildcard_pattern
-        concrete_teams = [t for t in (teams or []) if not is_pattern(pattern=t)]
-        concrete_keys = [k for k in (keys or []) if not is_pattern(pattern=k)]
-        concrete_models = [m for m in (models or []) if not is_pattern(pattern=m)]
+        is_pattern: Final = RouteChecks._is_wildcard_pattern
+        concrete_teams: Final = [t for t in (teams or []) if not is_pattern(pattern=t)]
+        concrete_keys: Final = [k for k in (keys or []) if not is_pattern(pattern=k)]
+        concrete_models: Final = [m for m in (models or []) if not is_pattern(pattern=m)]
 
-        team_exists = await asyncio.gather(*(self.check_team_alias_exists(t) for t in concrete_teams))
-        key_exists = await asyncio.gather(*(self.check_key_alias_exists(k) for k in concrete_keys))
+        team_exists: Final = await asyncio.gather(*(self.check_team_alias_exists(t) for t in concrete_teams))
+        key_exists: Final = await asyncio.gather(*(self.check_key_alias_exists(k) for k in concrete_keys))
 
         return [
             *(
@@ -243,7 +243,7 @@ class PolicyValidator:
         Returns:
             List of validation errors
         """
-        errors: list[PolicyValidationError] = []
+        errors: Final[list[PolicyValidationError]] = []
 
         # Prevent infinite recursion
         if max_depth <= 0:
@@ -271,7 +271,7 @@ class PolicyValidator:
             )
             return errors
 
-        policy = policies.get(policy_name)
+        policy: Final = policies.get(policy_name)
         if policy is None:
             return errors
 
@@ -308,11 +308,11 @@ class PolicyValidator:
         Returns:
             PolicyValidationResponse with errors and warnings
         """
-        errors: list[PolicyValidationError] = []
-        warnings: list[PolicyValidationError] = []
+        errors: Final[list[PolicyValidationError]] = []
+        warnings: Final[list[PolicyValidationError]] = []
 
         # Get available guardrails
-        available_guardrails = self.get_available_guardrails()
+        available_guardrails: Final = self.get_available_guardrails()
 
         for policy_name, policy in policies.items():
             # Validate guardrails
@@ -366,12 +366,12 @@ class PolicyValidator:
         available_guardrails: set[str],
     ) -> list[PolicyValidationError]:
         """Validate a policy's pipeline configuration."""
-        errors: list[PolicyValidationError] = []
-        pipeline = policy.pipeline
+        errors: Final[list[PolicyValidationError]] = []
+        pipeline: Final = policy.pipeline
         if pipeline is None:
             return errors
 
-        guardrails_add = set(policy.guardrails.get_add())
+        guardrails_add: Final = set(policy.guardrails.get_add())
 
         for i, step in enumerate(pipeline.steps):
             # Check guardrail is in policy's guardrails.add
@@ -422,10 +422,10 @@ class PolicyValidator:
         from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
 
         # First, try to parse the policies
-        errors: list[PolicyValidationError] = []
-        policies: dict[str, Policy] = {}
+        errors: Final[list[PolicyValidationError]] = []
+        policies: Final[dict[str, Policy]] = {}
 
-        temp_registry = PolicyRegistry()
+        temp_registry: Final = PolicyRegistry()
 
         for policy_name, policy_data in policy_config.items():
             try:

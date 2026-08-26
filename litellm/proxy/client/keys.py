@@ -1,5 +1,5 @@
 import builtins
-from typing import Any
+from typing import Any, Final
 
 import requests
 
@@ -27,7 +27,7 @@ class KeysManagementClient:
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -69,8 +69,8 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/list"
-        params: dict[str, Any] = {}
+        url: Final = f"{self._base_url}/key/list"
+        params: Final[dict[str, Any]] = {}
 
         # Add optional query parameters
         if page is not None:
@@ -92,14 +92,14 @@ class KeysManagementClient:
         if include_team_keys is not None:
             params["include_team_keys"] = str(include_team_keys).lower()
 
-        request = requests.Request("GET", url, headers=self._get_headers(), params=params)
+        request: Final = requests.Request("GET", url, headers=self._get_headers(), params=params)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -145,9 +145,9 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/generate"
+        url: Final = f"{self._base_url}/key/generate"
 
-        data: dict[str, Any] = {}
+        data: Final[dict[str, Any]] = {}
         if models is not None:
             data["models"] = models
         if aliases is not None:
@@ -167,14 +167,14 @@ class KeysManagementClient:
         if config is not None:
             data["config"] = config
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -204,21 +204,21 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/delete"
+        url: Final = f"{self._base_url}/key/delete"
 
-        data = {
+        data: Final = {
             "keys": keys,
             "key_aliases": key_aliases,
         }
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -257,9 +257,9 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/update"
+        url: Final = f"{self._base_url}/key/update"
 
-        data: dict[str, Any] = {"key": key}
+        data: Final[dict[str, Any]] = {"key": key}
 
         if key_alias is not None:
             data["key_alias"] = key_alias
@@ -275,11 +275,11 @@ class KeysManagementClient:
             data["duration"] = duration
         if aliases is not None:
             data["aliases"] = aliases
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
-        session = requests.Session()
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        session: Final = requests.Session()
         response_text: str | None = None
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response_text = response.text
             response.raise_for_status()
             return response.json()
@@ -301,19 +301,19 @@ class KeysManagementClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/key/info?key={key}"
-        request = requests.Request("GET", url, headers=self._get_headers())
+        url: Final = f"{self._base_url}/key/info?key={key}"
+        request: Final = requests.Request("GET", url, headers=self._get_headers())
 
         if return_request:
             return request
 
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare())
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
-            redacted_message = redact_string(str(e))
+            redacted_message: Final = redact_string(str(e))
             if e.response.status_code == 401:
                 raise UnauthorizedError(e) from None
             raise requests.exceptions.HTTPError(redacted_message, response=e.response) from None

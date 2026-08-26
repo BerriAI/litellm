@@ -4,6 +4,8 @@ Transformation logic from OpenAI /v1/embeddings format to Bedrock Cohere /invoke
 Why separate file? Make it easy to see how transformation works
 """
 
+from typing import Final
+
 from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 from litellm.types.llms.bedrock import CohereEmbeddingRequest
 
@@ -27,13 +29,13 @@ class BedrockCohereEmbeddingConfig:
         return "3" in model
 
     def _transform_request(self, model: str, input: list[str], inference_params: dict) -> CohereEmbeddingRequest:
-        transformed_request = CohereEmbeddingConfig()._transform_request(model, input, inference_params)
+        transformed_request: Final = CohereEmbeddingConfig()._transform_request(model, input, inference_params)
 
-        new_transformed_request = CohereEmbeddingRequest(
+        new_transformed_request: Final = CohereEmbeddingRequest(
             input_type=transformed_request["input_type"],
         )
-        for k in CohereEmbeddingRequest.__annotations__.keys():
+        for k in CohereEmbeddingRequest.__annotations__:
             if k in transformed_request:
-                new_transformed_request[k] = transformed_request[k]  # type: ignore
+                new_transformed_request[k] = transformed_request[k]
 
         return new_transformed_request

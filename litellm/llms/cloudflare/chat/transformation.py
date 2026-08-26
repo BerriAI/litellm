@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 from litellm._logging import verbose_logger
@@ -46,13 +48,13 @@ class CloudflareChatConfig(OpenAIGPTConfig):
     @staticmethod
     def _resolve_api_base(api_base: str | None) -> str:
         if not api_base:
-            account_id = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
+            account_id: Final = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
             if account_id is None:
                 raise ValueError(
                     "Missing CLOUDFLARE_ACCOUNT_ID - set CLOUDFLARE_ACCOUNT_ID in the environment or pass api_base explicitly"
                 )
             return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
-        trimmed = api_base.rstrip("/")
+        trimmed: Final = api_base.rstrip("/")
         if trimmed.endswith("/ai/run"):
             verbose_logger.warning(
                 "Cloudflare api_base ending in '/ai/run' is the legacy Workers AI path and no longer serves OpenAI-compatible requests; rewriting to the '/ai/v1' endpoint"

@@ -6,7 +6,7 @@ Supports different modalities: text, audio, video, and web search.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
@@ -61,7 +61,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Returns:
             Dictionary containing aggregated usage metadata, or None if not found
         """
-        all_usage_metadata = []
+        all_usage_metadata: Final = []
 
         # Collect all usage metadata messages
         for message in websocket_messages:
@@ -76,7 +76,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             return all_usage_metadata[0]
 
         # Aggregate multiple usage metadata messages
-        aggregated: dict[str, Any] = {
+        aggregated: Final[dict[str, Any]] = {
             "promptTokenCount": 0,
             "candidatesTokenCount": 0,
             "totalTokenCount": 0,
@@ -91,7 +91,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             aggregated["totalTokenCount"] += usage.get("totalTokenCount", 0)
 
         # Aggregate token details by modality
-        modality_totals = {}
+        modality_totals: Final = {}
 
         for usage in all_usage_metadata:
             # Process prompt tokens details
@@ -120,7 +120,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 aggregated["candidatesTokensDetails"].append({"modality": modality, "tokenCount": totals["candidate"]})
 
         # Add any additional fields from the first usage metadata
-        first_usage = all_usage_metadata[0]
+        first_usage: Final = all_usage_metadata[0]
         for key, value in first_usage.items():
             if key not in aggregated:
                 aggregated[key] = value
@@ -146,7 +146,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         try:
             # Get model pricing information
-            model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
             verbose_proxy_logger.debug("Vertex AI Live API model info for '%s': %s", model, model_info)
 
@@ -158,19 +158,19 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             total_cost = 0.0
 
             # Extract token counts from usage metadata
-            prompt_token_count = usage_metadata.get("promptTokenCount", 0)
-            candidates_token_count = usage_metadata.get("candidatesTokenCount", 0)
+            prompt_token_count: Final = usage_metadata.get("promptTokenCount", 0)
+            candidates_token_count: Final = usage_metadata.get("candidatesTokenCount", 0)
 
             # Calculate base text token costs
-            input_cost_per_token = model_info.get("input_cost_per_token", 0.0)
-            output_cost_per_token = model_info.get("output_cost_per_token", 0.0)
+            input_cost_per_token: Final = model_info.get("input_cost_per_token", 0.0)
+            output_cost_per_token: Final = model_info.get("output_cost_per_token", 0.0)
 
             total_cost += prompt_token_count * input_cost_per_token
             total_cost += candidates_token_count * output_cost_per_token
 
             # Handle modality-specific costs if present
-            prompt_tokens_details = usage_metadata.get("promptTokensDetails", [])
-            candidates_tokens_details = usage_metadata.get("candidatesTokensDetails", [])
+            prompt_tokens_details: Final = usage_metadata.get("promptTokensDetails", [])
+            candidates_tokens_details: Final = usage_metadata.get("candidatesTokensDetails", [])
 
             # Process prompt tokens by modality
             for detail in prompt_tokens_details:
@@ -201,10 +201,10 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 # TEXT tokens are already handled above
 
             # Handle web search costs if present
-            tool_use_prompt_token_count = usage_metadata.get("toolUsePromptTokenCount", 0)
+            tool_use_prompt_token_count: Final = usage_metadata.get("toolUsePromptTokenCount", 0)
             if tool_use_prompt_token_count > 0:
                 # Web search typically has a fixed cost per request
-                web_search_cost = model_info.get("web_search_cost_per_request", 0.0)
+                web_search_cost: Final = model_info.get("web_search_cost_per_request", 0.0)
                 if isinstance(web_search_cost, (int, float)) and web_search_cost > 0:
                     total_cost += web_search_cost
                 else:
@@ -239,13 +239,13 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Returns:
             LiteLLM Usage object
         """
-        prompt_tokens = usage_metadata.get("promptTokenCount", 0)
-        completion_tokens = usage_metadata.get("candidatesTokenCount", 0)
-        total_tokens = usage_metadata.get("totalTokenCount", 0)
+        prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0)
+        completion_tokens: Final = usage_metadata.get("candidatesTokenCount", 0)
+        total_tokens: Final = usage_metadata.get("totalTokenCount", 0)
 
         # Create modality-specific token details if available
-        prompt_tokens_details = usage_metadata.get("promptTokensDetails", [])
-        candidates_tokens_details = usage_metadata.get("candidatesTokensDetails", [])
+        prompt_tokens_details: Final = usage_metadata.get("promptTokensDetails", [])
+        candidates_tokens_details: Final = usage_metadata.get("candidatesTokensDetails", [])
 
         # Extract text tokens from details
         text_prompt_tokens = 0
@@ -300,14 +300,14 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         try:
             # Extract model from request body or kwargs
-            model = kwargs.get("model", "gemini-2.0-flash-live-preview-04-09")
-            custom_llm_provider = kwargs.get("custom_llm_provider", "vertex_ai")
+            model: Final = kwargs.get("model", "gemini-2.0-flash-live-preview-04-09")
+            custom_llm_provider: Final = kwargs.get("custom_llm_provider", "vertex_ai")
             verbose_proxy_logger.debug(
                 "Vertex AI Live API model: %s, custom_llm_provider: %s", model, custom_llm_provider
             )
 
             # Extract usage metadata from WebSocket messages
-            usage_metadata = self._extract_usage_metadata_from_websocket_messages(websocket_messages)
+            usage_metadata: Final = self._extract_usage_metadata_from_websocket_messages(websocket_messages)
 
             if not usage_metadata:
                 verbose_proxy_logger.warning("No usage metadata found in Vertex AI Live API WebSocket messages")
@@ -317,20 +317,20 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 }
 
             # Calculate cost using Live API specific pricing
-            response_cost = self._calculate_live_api_cost(
+            response_cost: Final = self._calculate_live_api_cost(
                 model=model,
                 usage_metadata=usage_metadata,
                 custom_llm_provider=custom_llm_provider,
             )
 
             # Create Usage object for standard LiteLLM logging
-            usage = self._create_usage_object_from_metadata(
+            usage: Final = self._create_usage_object_from_metadata(
                 usage_metadata=usage_metadata,
                 model=model,
             )
 
             # Create a mock ModelResponse for standard logging
-            litellm_model_response = ModelResponse(
+            litellm_model_response: Final = ModelResponse(
                 id=f"vertex-ai-live-{start_time.timestamp()}",
                 object="chat.completion",
                 created=int(start_time.timestamp()),
@@ -347,8 +347,8 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Safely log the model name: only allow known safe formats, redact otherwise.
             import re
 
-            allowed_pattern = re.compile(r"^[A-Za-z0-9._\-:]+$")
-            safe_model = model if isinstance(model, str) and allowed_pattern.match(model) else "[REDACTED]"
+            allowed_pattern: Final = re.compile(r"^[A-Za-z0-9._\-:]+$")
+            safe_model: Final = model if isinstance(model, str) and allowed_pattern.match(model) else "[REDACTED]"
             verbose_proxy_logger.debug(
                 f"Vertex AI Live API passthrough cost tracking - "
                 f"Model: {safe_model}, Cost: ${response_cost:.6f}, "

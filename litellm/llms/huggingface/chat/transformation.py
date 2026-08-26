@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -18,9 +18,9 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
 
-logger = logging.getLogger(__name__)
+logger: Final = logging.getLogger(__name__)
 
-BASE_URL = "https://router.huggingface.co"
+BASE_URL: Final = "https://router.huggingface.co"
 
 
 def _build_chat_completion_url(model_url: str) -> str:
@@ -53,7 +53,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "content-type": "application/json",
         }
         if api_key is not None:
@@ -106,7 +106,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
             complete_url = "https://router.huggingface.co/v1/chat/completions"
             first_part, remaining = model.split("/", 1)
             if "/" in remaining:
-                provider = first_part
+                provider: Final = first_part
                 if provider == "hf-inference":
                     route = f"{provider}/models/{model}/v1/chat/completions"
                 elif provider == "novita":
@@ -136,8 +136,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         first_part, remaining = model.split("/", 1)
         mapped_model = model
         if "/" in remaining:
-            provider = first_part
-            model_id = remaining
+            provider: Final = first_part
+            model_id: Final = remaining
             provider_mapping = _fetch_inference_provider_mapping(model_id)
             if provider not in provider_mapping:
                 raise HuggingFaceError(

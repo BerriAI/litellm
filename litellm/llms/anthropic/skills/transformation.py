@@ -2,7 +2,7 @@
 Anthropic Skills API configuration and transformations
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -41,7 +41,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             api_key = litellm_params.api_key
             api_base = litellm_params.api_base
 
-        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if auth_header is None:
             raise ValueError("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API")
 
@@ -80,7 +80,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             api_base = AnthropicModelInfo.get_api_base()
 
         if skill_id:
-            encoded_skill_id = encode_url_path_segment(skill_id, field_name="skill_id")
+            encoded_skill_id: Final = encode_url_path_segment(skill_id, field_name="skill_id")
             return f"{api_base}/v1/skills/{encoded_skill_id}"
         return f"{api_base}/v1/{endpoint}"
 
@@ -94,7 +94,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         verbose_logger.debug("Transforming create skill request: %s", create_request)
 
         # Anthropic expects the request body directly
-        request_body = {k: v for k, v in create_request.items() if v is not None}
+        request_body: Final = {k: v for k, v in create_request.items() if v is not None}
 
         return request_body
 
@@ -104,7 +104,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Skill:
         """Transform Anthropic response to Skill object"""
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         verbose_logger.debug("Transforming create skill response: %s", response_json)
 
         return Skill(**response_json)
@@ -118,11 +118,11 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         """Transform list skills request for Anthropic"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base if litellm_params else None)
-        url = self.get_complete_url(api_base=api_base, endpoint="skills")
+        api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.api_base if litellm_params else None)
+        url: Final = self.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Build query parameters
-        query_params: dict[str, Any] = {}
+        query_params: Final[dict[str, Any]] = {}
         if "limit" in list_params and list_params["limit"]:
             query_params["limit"] = list_params["limit"]
         if "page" in list_params and list_params["page"]:
@@ -143,7 +143,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ListSkillsResponse:
         """Transform Anthropic response to ListSkillsResponse"""
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         verbose_logger.debug("Transforming list skills response: %s", response_json)
 
         return ListSkillsResponse(**response_json)
@@ -156,7 +156,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """Transform get skill request for Anthropic"""
-        url = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
+        url: Final = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 
         verbose_logger.debug("Get skill request - URL: %s", url)
 
@@ -168,7 +168,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> Skill:
         """Transform Anthropic response to Skill object"""
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         verbose_logger.debug("Transforming get skill response: %s", response_json)
 
         return Skill(**response_json)
@@ -181,7 +181,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         headers: dict,
     ) -> tuple[str, dict]:
         """Transform delete skill request for Anthropic"""
-        url = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
+        url: Final = self.get_complete_url(api_base=api_base, endpoint="skills", skill_id=skill_id)
 
         verbose_logger.debug("Delete skill request - URL: %s", url)
 
@@ -193,7 +193,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteSkillResponse:
         """Transform Anthropic response to DeleteSkillResponse"""
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
         verbose_logger.debug("Transforming delete skill response: %s", response_json)
 
         return DeleteSkillResponse(**response_json)

@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 from urllib.parse import urlsplit
 
 from litellm.integrations.otel.model.metadata import (
@@ -15,8 +15,10 @@ from litellm.integrations.otel.model.metadata import (
 )
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
+    GenAIOutputType,
     MCPMethod,
     resolve_operation,
+    resolve_output_type,
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import (
@@ -122,7 +124,7 @@ class LLMCost:
 
     @classmethod
     def from_breakdown(cls, breakdown: Mapping[str, object] | None) -> LLMCost:
-        b = breakdown or {}
+        b: Final = breakdown or {}
         return cls(
             input=as_float(b.get("input_cost")),
             output=as_float(b.get("output_cost")),
@@ -156,7 +158,7 @@ class ServerInfo:
     def from_api_base(cls, api_base: str | None) -> ServerInfo | None:
         if not api_base:
             return None
-        parsed = urlsplit(api_base if "://" in api_base else f"//{api_base}")
+        parsed: Final = urlsplit(api_base if "://" in api_base else f"//{api_base}")
         if not parsed.hostname:
             return None
         return cls(address=parsed.hostname, port=parsed.port)
@@ -204,10 +206,10 @@ class GuardrailSpanData:
         typed as enums or lists (e.g. ``guardrail_mode``) are normalized to a
         stable string rather than assumed to already be plain strings.
         """
-        get = cast(Mapping[str, object], entry).get
-        status = as_str(get("guardrail_status"))
-        response = get("guardrail_response")
-        error = (
+        get: Final = cast(Mapping[str, object], entry).get
+        status: Final = as_str(get("guardrail_status"))
+        response: Final = get("guardrail_response")
+        error: Final = (
             SpanError(error_type=status, message=as_str(get("guardrail_action")))
             if status in cls._ERROR_STATUSES
             else None
@@ -310,6 +312,11 @@ class LLMCallSpanData:
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
+    # The requested output modality, set only on the routes that pin one (image
+    # generation, speech, transcription, OCR), and the litellm route itself, which
+    # keeps routes the convention folds into one operation distinguishable.
+    output_type: GenAIOutputType | None = None
+    call_type: str | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -318,24 +325,25 @@ class LLMCallSpanData:
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
     ) -> LLMCallSpanData:
-        params = cast(Mapping[str, object], payload.get("model_parameters") or {})
+        params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
-        context = RequestContext.from_standard_logging_payload(payload)
+        context: Final = RequestContext.from_standard_logging_payload(payload)
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
-        raw_response = payload.get("response")
-        response = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
-        choices_out = _dicts(response.get("choices"))
+        raw_response: Final = payload.get("response")
+        response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
+        choices_out: Final = _dicts(response.get("choices"))
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
         # retained when content capture is enabled (see ``capture_span_content``);
         # otherwise the content-bearing mappers receive empty sequences and emit
         # no prompt/response text.
-        finish_reasons = _finish_reasons(choices_out)
+        finish_reasons: Final = _finish_reasons(choices_out)
+        call_type: Final = as_str(payload.get("call_type"))
         return cls(
-            operation=resolve_operation(as_str(payload.get("call_type"))),
+            operation=resolve_operation(call_type),
             provider=resolve_provider(as_str(payload.get("custom_llm_provider"))),
             request_model=context.request_model,
             response_model=context.response_model,
@@ -358,10 +366,40 @@ class LLMCallSpanData:
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
+            output_type=resolve_output_type(call_type),
+            call_type=call_type or None,
         )
 
 
 # --- the MCP tool-call model ------------------------------------------------- #
+
+
+def _upstream_address_port(resource: str | None) -> tuple[str | None, int | None]:
+    """Split a redacted MCP server origin into ``server.address`` / ``server.port``.
+
+    ``mcp_server_resource`` is a scheme + host + port origin with userinfo, path,
+    query and fragment already stripped. The port falls back to the scheme default
+    when the origin omits it, because a consumer that keys a downstream dependency
+    off the address renders a missing port as ``0``.
+
+    The origin is rebuilt without its IPv6 brackets upstream, so reading the port can
+    raise on an address the host check still admits: a zone-scoped ``fe80::1%25eth0``
+    leaves a truthy hostname of ``fe80`` behind. Both halves are read inside the guard
+    so an unparseable origin yields no address rather than propagating out of span
+    construction, matching how the redactor guards the same split.
+    """
+    if not resource:
+        return None, None
+    try:
+        parsed: Final = urlsplit(resource)
+        hostname: Final = parsed.hostname
+        port: Final = parsed.port
+    except ValueError:
+        return None, None
+    if not hostname:
+        return None, None
+    default_port: Final = 443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+    return hostname, port or default_port
 
 
 @dataclass(frozen=True)
@@ -378,6 +416,8 @@ class MCPToolCallSpanData:
     method: str
     tool_name: str
     server_name: str | None
+    server_address: str | None
+    server_port: int | None
     session_id: str | None
     arguments_json: str | None
     result_json: str | None
@@ -389,12 +429,15 @@ class MCPToolCallSpanData:
     def from_standard_logging_payload(
         cls, payload: StandardLoggingPayload, capture_content: bool = False
     ) -> MCPToolCallSpanData:
-        meta = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
+        meta: Final = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
+        address, port = _upstream_address_port(as_str(meta.get("mcp_server_resource")) or None)
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
             method=MCPMethod.TOOLS_CALL.value,
             tool_name=as_str(meta.get("name")) or "",
             server_name=as_str(meta.get("mcp_server_name")),
+            server_address=address,
+            server_port=port,
             session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
                 _json_or_none(meta.get("arguments")) if capture_content and meta.get("arguments") is not None else None
@@ -412,10 +455,10 @@ def _mcp_tool_call_metadata(payload: Mapping[str, object]) -> Mapping[str, objec
     """The MCP gateway's tool-call metadata, which lives under
     ``StandardLoggingPayload.metadata`` (a ``StandardLoggingMetadata`` key), not
     at the payload's top level."""
-    metadata = payload.get("metadata")
+    metadata: Final = payload.get("metadata")
     if not isinstance(metadata, Mapping):
         return {}
-    meta = metadata.get("mcp_tool_call_metadata")
+    meta: Final = metadata.get("mcp_tool_call_metadata")
     return meta if isinstance(meta, Mapping) else {}
 
 
@@ -466,7 +509,7 @@ def is_mcp_list_tools(payload: Mapping[str, object]) -> bool:
 
 # Substrings (case-insensitive) of keys that must never reach a span: secrets,
 # tokens, and raw request/response dumps the legacy service decorators pass.
-_SENSITIVE_METADATA_SUBSTRINGS: tuple[str, ...] = (
+_SENSITIVE_METADATA_SUBSTRINGS: Final[tuple[str, ...]] = (
     "api_key",
     "token",
     "secret",
@@ -479,9 +522,9 @@ _SENSITIVE_METADATA_SUBSTRINGS: tuple[str, ...] = (
 # Keys that carry raw call-site internals — live objects, full kwargs/args. The
 # operation name is already the span's ``call_type``, so ``function_name`` is
 # redundant.
-_DROP_METADATA_KEYS: frozenset = frozenset({"function_kwargs", "function_args", "function_name"})
-_MAX_METADATA_VALUE_LEN = 1024
-_MAX_METADATA_ITEMS = 32
+_DROP_METADATA_KEYS: Final[frozenset] = frozenset({"function_kwargs", "function_args", "function_name"})
+_MAX_METADATA_VALUE_LEN: Final = 1024
+_MAX_METADATA_ITEMS: Final = 32
 
 
 def sanitize_event_metadata(
@@ -496,7 +539,7 @@ def sanitize_event_metadata(
     """
     if not event_metadata:
         return {}
-    clean: dict[str, str] = {}
+    clean: Final[dict[str, str]] = {}
     for key, value in event_metadata.items():
         if len(clean) >= _MAX_METADATA_ITEMS:
             break
@@ -534,7 +577,7 @@ def _guardrail_mode_str(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, (list, tuple)):
-        parts: list[str] = []
+        parts: Final[list[str]] = []
         for item in value:
             if item is None:
                 continue
@@ -550,7 +593,7 @@ def _guardrail_mode_str(value: object) -> str | None:
 def _total_masked_entities(value: object) -> int | None:
     """``masked_entity_count`` is a ``{entity_type: count}`` map — sum to a total."""
     if isinstance(value, Mapping):
-        total = sum(v for v in value.values() if isinstance(v, int))
+        total: Final = sum(v for v in value.values() if isinstance(v, int))
         return total or None
     return as_int(value)
 
@@ -571,7 +614,7 @@ def _parse_error(payload: StandardLoggingPayload) -> SpanError | None:
     """A ``SpanError`` for a failed request, or ``None`` on success."""
     if payload.get("status") != "failure":
         return None
-    info = cast(Mapping[str, object], payload.get("error_information") or {})
+    info: Final = cast(Mapping[str, object], payload.get("error_information") or {})
     return SpanError(
         error_type=as_str(info.get("error_class")) or as_str(info.get("error_code")),
         message=as_str(info.get("error_message")) or as_str(payload.get("error_str")),
@@ -585,13 +628,13 @@ def _tool_from_entry(entry: object) -> ToolDefinition | None:
     """One ``tools``/``functions`` entry → ``ToolDefinition``, or ``None`` if unusable."""
     if not isinstance(entry, dict):
         return None
-    fn = entry.get("function") if "function" in entry else entry
+    fn: Final = entry.get("function") if "function" in entry else entry
     if not isinstance(fn, dict):
         return None
-    name = as_str(fn.get("name"))
+    name: Final = as_str(fn.get("name"))
     if not name:
         return None
-    params = fn.get("parameters")
+    params: Final = fn.get("parameters")
     parameters_json: str | None = None
     if params is not None:
         try:

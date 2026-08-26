@@ -16,7 +16,7 @@ How it works:
 
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 import litellm.constants as _c
@@ -28,9 +28,12 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 
-ADVISOR_MAX_USES: int = _c.ADVISOR_MAX_USES
-ADVISOR_NATIVE_PROVIDERS: frozenset = _c.ADVISOR_NATIVE_PROVIDERS
-ADVISOR_TOOL_DESCRIPTION: str = _c.ADVISOR_TOOL_DESCRIPTION
+if TYPE_CHECKING:
+    from litellm.router import Router
+
+ADVISOR_MAX_USES: Final[int] = _c.ADVISOR_MAX_USES
+ADVISOR_NATIVE_PROVIDERS: Final[frozenset] = _c.ADVISOR_NATIVE_PROVIDERS
+ADVISOR_TOOL_DESCRIPTION: Final[str] = _c.ADVISOR_TOOL_DESCRIPTION
 
 from .base import MessagesInterceptor
 
@@ -49,8 +52,8 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
     ) -> bool:
         if not tools:
             return False
-        has_advisor = any(t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in tools)
-        is_non_native = custom_llm_provider not in ADVISOR_NATIVE_PROVIDERS
+        has_advisor: Final = any(t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in tools)
+        is_non_native: Final = custom_llm_provider not in ADVISOR_NATIVE_PROVIDERS
         return has_advisor and is_non_native
 
     async def handle(
@@ -69,24 +72,24 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         )
 
         # Extract advisor tool config.
-        advisor_tool = next(
+        advisor_tool: Final = next(
             (t for t in (tools or []) if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE),
             None,
         )
         if advisor_tool is None:
             raise ValueError(f"handle() called but no {ANTHROPIC_ADVISOR_TOOL_TYPE} tool found in tools list")
-        advisor_model: str = advisor_tool.get("model") or ""
+        advisor_model: Final[str] = advisor_tool.get("model") or ""
         if not advisor_model:
             raise ValueError("advisor tool definition must include a 'model' field specifying the advisor model")
-        _raw_max_uses = advisor_tool.get("max_uses")
-        max_uses: int = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
+        _raw_max_uses: Final = advisor_tool.get("max_uses")
+        max_uses: Final[int] = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
         advisor_api_key, advisor_api_base = _resolve_advisor_credentials(advisor_tool)
 
         # Build the synthetic tool definition the provider will receive.
-        synthetic_advisor_tool = _make_synthetic_advisor_tool()
+        synthetic_advisor_tool: Final = _make_synthetic_advisor_tool()
 
         # Executor tools = all original tools with advisor replaced by the synthetic one.
-        executor_tools: list[dict] = [
+        executor_tools: Final[list[dict]] = [
             (synthetic_advisor_tool if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE else t) for t in (tools or [])
         ]
 
@@ -95,8 +98,16 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             [dict(m) for m in messages], replace_with_text=True
         )
 
-        parent_request_id: str = str(kwargs.pop("litellm_call_id", None) or uuid.uuid4())
-        metadata_base: dict = dict(kwargs.pop("metadata", None) or {})
+        parent_request_id: Final[str] = str(kwargs.pop("litellm_call_id", None) or uuid.uuid4())
+        metadata_base: Final[dict] = dict(kwargs.pop("metadata", None) or {})
+        advisor_metadata: Final = {
+            **metadata_base,
+            "advisor_sub_call": True,
+            "parent_request_id": parent_request_id,
+        }
+        advisor_router: Final = (
+            None if (advisor_api_key or advisor_api_base) else _resolve_advisor_router(advisor_model)
+        )
         iteration = 0
 
         while True:
@@ -138,20 +149,27 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
             try:
-                advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
-                    model=advisor_model,
-                    messages=advisor_messages,
-                    tools=None,
-                    stream=False,
-                    max_tokens=max_tokens,
-                    custom_llm_provider=None,  # let litellm resolve from model name
-                    metadata={
-                        **metadata_base,
-                        "advisor_sub_call": True,
-                        "parent_request_id": parent_request_id,
-                    },
-                    api_key=advisor_api_key,
-                    api_base=advisor_api_base,
+                advisor_response: AnthropicMessagesResponse = (
+                    await advisor_router.aanthropic_messages(
+                        model=advisor_model,
+                        messages=advisor_messages,
+                        tools=None,
+                        stream=False,
+                        max_tokens=max_tokens,
+                        metadata=advisor_metadata,
+                    )
+                    if advisor_router is not None
+                    else await _call_messages_handler(
+                        model=advisor_model,
+                        messages=advisor_messages,
+                        tools=None,
+                        stream=False,
+                        max_tokens=max_tokens,
+                        custom_llm_provider=None,
+                        metadata=advisor_metadata,
+                        api_key=advisor_api_key,
+                        api_base=advisor_api_base,
+                    )
                 )
             except Exception as advisor_sub_call_exception:
                 mark_advisor_orchestration_failure(advisor_sub_call_exception)
@@ -206,8 +224,8 @@ def _resolve_advisor_credentials(advisor_tool: dict) -> tuple[str | None, str | 
     """
     if not _allow_client_side_advisor_credentials():
         return None, None
-    api_key: str | None = advisor_tool.get("api_key")
-    api_base: str | None = advisor_tool.get("api_base")
+    api_key: Final[str | None] = advisor_tool.get("api_key")
+    api_base: Final[str | None] = advisor_tool.get("api_base")
     if api_base is None:
         return api_key, None
     if not api_key:
@@ -250,7 +268,7 @@ def _make_synthetic_advisor_tool() -> dict:
 
 def _find_advisor_tool_use(response: Any) -> dict | None:
     """Return the first tool_use block with name='advisor', or None."""
-    content = response.get("content") if isinstance(response, dict) else []
+    content: Final = response.get("content") if isinstance(response, dict) else []
     if not isinstance(content, list):
         return None
     for block in content:
@@ -261,14 +279,14 @@ def _find_advisor_tool_use(response: Any) -> dict | None:
 
 def _extract_response_text(response: Any) -> str:
     """Extract concatenated text from all text blocks in a response."""
-    content = response.get("content") if isinstance(response, dict) else []
+    content: Final = response.get("content") if isinstance(response, dict) else []
     if not isinstance(content, list):
         return ""
-    parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    parts: Final = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
     return "\n".join(parts).strip()
 
 
-_PROVIDER_SPECIFIC_KEYS = frozenset({"provider_specific_fields"})
+_PROVIDER_SPECIFIC_KEYS: Final = frozenset({"provider_specific_fields"})
 
 
 def _build_advisor_context(
@@ -284,18 +302,23 @@ def _build_advisor_context(
 
     tool_use blocks are excluded because Anthropic requires tool_use to be
     immediately followed by tool_result — not the advisor question.
+
+    In-sequence system rows (e.g. Claude Code SessionStart hook output) are
+    excluded: they are executor-directed, and a trailing one becomes invalid
+    once the question turn is appended after it (a system row must precede an
+    assistant message or end the array).
     """
-    question = (advisor_use_block.get("input") or {}).get("question") or (
+    question: Final = (advisor_use_block.get("input") or {}).get("question") or (
         "Please provide guidance on the current task."
     )
-    raw_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
+    raw_content: Final = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
     # Keep only text blocks — strip tool_use and provider-specific fields.
-    executor_text_blocks = [
+    executor_text_blocks: Final = [
         {k: v for k, v in block.items() if k not in _PROVIDER_SPECIFIC_KEYS}
         for block in raw_content
         if isinstance(block, dict) and block.get("type") == "text"
     ]
-    result = list(messages)
+    result: Final = [m for m in messages if m.get("role") != "system"]
     if executor_text_blocks:
         result.append({"role": "assistant", "content": executor_text_blocks})
     result.append({"role": "user", "content": question})
@@ -312,8 +335,8 @@ def _inject_advisor_turn(
     Append the executor's response (as an assistant turn) and the advisor
     result (as a user tool_result turn) so the executor can continue.
     """
-    executor_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
-    tool_use_id = advisor_use_block.get("id", "")
+    executor_content: Final = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
+    tool_use_id: Final = advisor_use_block.get("id", "")
     return [
         *messages,
         {"role": "assistant", "content": executor_content},
@@ -339,8 +362,8 @@ def _inject_max_uses_error(
     Inject a max_uses_exceeded error tool_result so the executor continues
     without further advisor calls (mirrors Anthropic's server-side behaviour).
     """
-    executor_content = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
-    tool_use_id = advisor_use_block.get("id", "")
+    executor_content: Final = (executor_response.get("content") if isinstance(executor_response, dict) else []) or []
+    tool_use_id: Final = advisor_use_block.get("id", "")
     return [
         *messages,
         {"role": "assistant", "content": executor_content},
@@ -355,6 +378,24 @@ def _inject_max_uses_error(
             ],
         },
     ]
+
+
+def _resolve_advisor_router(advisor_model: str) -> "Router | None":
+    """Return the proxy router when it serves ``advisor_model`` directly or via a wildcard.
+
+    Returns ``None`` for SDK callers (no proxy router) and for advisor models the router
+    doesn't know about, so those keep resolving through ``litellm.anthropic_messages()``
+    provider inference.
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except (ImportError, ModuleNotFoundError):
+        return None
+    if llm_router is None:
+        return None
+    if llm_router.is_recognized_model(advisor_model) or llm_router.pattern_router.route(advisor_model):
+        return llm_router
+    return None
 
 
 async def _call_messages_handler(

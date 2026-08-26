@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 """
 
 from collections.abc import Coroutine
-from typing import Any, Literal, cast, overload
+from typing import Any, Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -61,8 +61,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("MOONSHOT_API_KEY")
+        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+        dynamic_api_key: Final = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
@@ -94,14 +94,14 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
         """
-        excluded_params: list[str] = ["functions"]
+        excluded_params: Final[list[str]] = ["functions"]
 
         # kimi-thinking-preview has additional limitations
         if "kimi-thinking-preview" in model:
             excluded_params.extend(["tools", "tool_choice"])
 
-        base_openai_params = super().get_supported_openai_params(model=model)
-        final_params: list[str] = []
+        base_openai_params: Final = super().get_supported_openai_params(model=model)
+        final_params: Final[list[str]] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
@@ -122,7 +122,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - Temperature <0.3 limitation for n>1
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
@@ -159,7 +159,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         Messages that already carry the field, or are not assistant/tool-call messages,
         are appended as-is (no copy made).
         """
-        result: list[AllMessageValues] = []
+        result: Final[list[AllMessageValues]] = []
         for msg in messages:
             if (
                 msg.get("role") == "assistant"

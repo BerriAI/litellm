@@ -2,6 +2,8 @@
 A2A Streaming Response Iterator
 """
 
+from typing import Final
+
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
@@ -56,10 +58,10 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         """
         try:
             # Extract text from A2A response
-            text = extract_text_from_a2a_response(chunk)
+            text: Final = extract_text_from_a2a_response(chunk)
 
             # Determine finish reason
-            finish_reason = self._get_finish_reason(chunk)
+            finish_reason: Final = self._get_finish_reason(chunk)
 
             # Return generic streaming chunk
             return GenericStreamingChunk(
@@ -83,13 +85,13 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
     def _get_finish_reason(self, chunk: dict) -> str | None:
         """Extract finish reason from A2A chunk"""
-        result = chunk.get("result", {})
+        result: Final = chunk.get("result", {})
 
         # Check for task completion
         if isinstance(result, dict):
-            status = result.get("status", {})
+            status: Final = result.get("status", {})
             if isinstance(status, dict):
-                state = status.get("state")
+                state: Final = status.get("state")
                 if state == "completed":
                     return "stop"
                 elif state == "failed":

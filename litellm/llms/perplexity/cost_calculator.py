@@ -3,6 +3,8 @@ Helper util for handling perplexity-specific cost calculation
 - e.g.: citation tokens, search queries
 """
 
+from typing import Final
+
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -19,54 +21,59 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     ## USE PRE-CALCULATED COST FROM PERPLEXITY IF AVAILABLE
-    ## Perplexity returns accurate cost in usage.cost.total_cost including request fees
-    cost_info = getattr(usage, "cost", None)
-    if cost_info is not None and isinstance(cost_info, dict):
+    ## Perplexity returns accurate cost in usage.cost.total_cost including request fees.
+    ## By the time it reaches here, ResponseAPIUsage.parse_cost has already flattened
+    ## that dict down to a float, so both shapes must be accepted.
+    cost_info: Final = getattr(usage, "cost", None)
+    total_cost: float | None = None
+    if isinstance(cost_info, dict):
         total_cost = cost_info.get("total_cost")
-        if total_cost is not None:
-            # Return total cost as completion_cost (prompt_cost=0) since Perplexity
-            # doesn't break down by input/output in their cost object
-            return (0.0, float(total_cost))
+    elif isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool):
+        total_cost = float(cost_info)
+    if total_cost is not None:
+        # Return total cost as completion_cost (prompt_cost=0) since Perplexity
+        # doesn't break down by input/output in their cost object
+        return (0.0, float(total_cost))
 
     ## FALLBACK: Calculate cost manually if Perplexity doesn't provide it
     ## GET MODEL INFO
-    model_info = get_model_info(model=model, custom_llm_provider="perplexity")
+    model_info: Final = get_model_info(model=model, custom_llm_provider="perplexity")
 
     def _safe_float_cast(value: str | float | None | object, default: float = 0.0) -> float:
         """Safely cast a value to float with proper type handling for mypy."""
         if value is None:
             return default
         try:
-            return float(value)  # type: ignore
+            return float(value)
         except (ValueError, TypeError):
             return default
 
     ## CALCULATE INPUT COST
-    input_cost_per_token = _safe_float_cast(model_info.get("input_cost_per_token"))
+    input_cost_per_token: Final = _safe_float_cast(model_info.get("input_cost_per_token"))
     prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
 
     ## ADD CITATION TOKENS COST (if present)
-    citation_tokens = getattr(usage, "citation_tokens", 0) or 0
-    citation_cost_value = model_info.get("citation_cost_per_token")
+    citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0
+    citation_cost_value: Final = model_info.get("citation_cost_per_token")
     if citation_tokens > 0 and citation_cost_value is not None:
-        citation_cost_per_token = _safe_float_cast(citation_cost_value)
+        citation_cost_per_token: Final = _safe_float_cast(citation_cost_value)
         prompt_cost += citation_tokens * citation_cost_per_token
 
     ## CALCULATE OUTPUT COST
-    output_cost_per_token = _safe_float_cast(model_info.get("output_cost_per_token"))
+    output_cost_per_token: Final = _safe_float_cast(model_info.get("output_cost_per_token"))
 
     reasoning_tokens = getattr(usage, "reasoning_tokens", 0) or 0
     if reasoning_tokens == 0 and hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
         reasoning_tokens = getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
 
-    reasoning_cost_value = model_info.get("output_cost_per_reasoning_token")
+    reasoning_cost_value: Final = model_info.get("output_cost_per_reasoning_token")
 
     # `completion_tokens` includes `reasoning_tokens` per the OpenAI/Perplexity usage
     # convention (codified for the central path in PR #18607). When a reasoning rate is
     # configured we subtract before the output-rate multiplication so the reasoning
     # tokens are not billed twice.
     if reasoning_tokens > 0 and reasoning_cost_value is not None:
-        non_reasoning_completion_tokens = max(0, (usage.completion_tokens or 0) - reasoning_tokens)
+        non_reasoning_completion_tokens: Final = max(0, (usage.completion_tokens or 0) - reasoning_tokens)
         completion_cost: float = non_reasoning_completion_tokens * output_cost_per_token
         completion_cost += reasoning_tokens * _safe_float_cast(reasoning_cost_value)
     else:
@@ -78,7 +85,7 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         num_search_queries = getattr(usage.prompt_tokens_details, "web_search_requests", 0) or 0
 
     # Check both possible keys for search cost (legacy and current)
-    search_cost_value = model_info.get("search_queries_cost_per_query") or model_info.get(
+    search_cost_value: Final = model_info.get("search_queries_cost_per_query") or model_info.get(
         "search_context_cost_per_query"
     )
     if num_search_queries > 0 and search_cost_value is not None:
@@ -90,7 +97,7 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
             search_cost_per_query = _safe_float_cast(search_cost_value.get("search_context_size_low", 0))
         else:
             search_cost_per_query = _safe_float_cast(search_cost_value)
-        search_cost = num_search_queries * search_cost_per_query
+        search_cost: Final = num_search_queries * search_cost_per_query
         # Add search cost to completion cost (similar to how other providers handle it)
         completion_cost += search_cost
 

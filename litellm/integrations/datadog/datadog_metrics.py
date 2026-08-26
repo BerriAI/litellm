@@ -3,6 +3,7 @@ import gzip
 import os
 import time
 from datetime import datetime
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -11,6 +12,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_hostname,
     get_datadog_pod_name,
     get_datadog_service,
+    normalize_datadog_tag_value,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -65,7 +67,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         Builds the list of tags for a Datadog metric point
         """
         # Base tags
-        tags = [
+        tags: Final = [
             f"env:{get_datadog_env()}",
             f"service:{get_datadog_service()}",
             f"version:{os.getenv('DD_VERSION', 'unknown')}",
@@ -87,16 +89,16 @@ class DatadogMetricsLogger(CustomBatchLogger):
             tags.append(f"status_code:{status_code}")
 
         # Extract team tag
-        metadata = log.get("metadata", {}) or {}
-        team_tag = (
+        metadata: Final = log.get("metadata", {}) or {}
+        team_tag: Final = (
             metadata.get("user_api_key_team_alias")
-            or metadata.get("team_alias")  # type: ignore
+            or metadata.get("team_alias")
             or metadata.get("user_api_key_team_id")
-            or metadata.get("team_id")  # type: ignore
+            or metadata.get("team_id")
         )
 
         if team_tag:
-            tags.append(f"team:{team_tag}")
+            tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
 
         return tags
 
@@ -109,17 +111,17 @@ class DatadogMetricsLogger(CustomBatchLogger):
         """
         Extracts latencies and appends Datadog metric series to the queue
         """
-        tags = self._extract_tags(log, status_code=status_code)
+        tags: Final = self._extract_tags(log, status_code=status_code)
 
         # We record metrics with the end_time as the timestamp for the point
-        end_time_dt = kwargs.get("end_time") or datetime.now()
-        timestamp = int(end_time_dt.timestamp())
+        end_time_dt: Final = kwargs.get("end_time") or datetime.now()
+        timestamp: Final = int(end_time_dt.timestamp())
 
         # 1. Total Request Latency Metric (End to End)
-        start_time_dt = kwargs.get("start_time")
+        start_time_dt: Final = kwargs.get("start_time")
         if start_time_dt and end_time_dt:
-            total_duration = (end_time_dt - start_time_dt).total_seconds()
-            series_total_latency: DatadogMetricSeries = {
+            total_duration: Final = (end_time_dt - start_time_dt).total_seconds()
+            series_total_latency: Final[DatadogMetricSeries] = {
                 "metric": "litellm.request.total_latency",
                 "type": 3,  # gauge
                 "points": [{"timestamp": timestamp, "value": total_duration}],
@@ -128,10 +130,10 @@ class DatadogMetricsLogger(CustomBatchLogger):
             self.log_queue.append(series_total_latency)
 
         # 2. LLM API Latency Metric (Provider alone)
-        api_call_start_time = kwargs.get("api_call_start_time")
+        api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time and end_time_dt:
-            llm_api_duration = (end_time_dt - api_call_start_time).total_seconds()
-            series_llm_latency: DatadogMetricSeries = {
+            llm_api_duration: Final = (end_time_dt - api_call_start_time).total_seconds()
+            series_llm_latency: Final[DatadogMetricSeries] = {
                 "metric": "litellm.llm_api.latency",
                 "type": 3,  # gauge
                 "points": [{"timestamp": timestamp, "value": llm_api_duration}],
@@ -140,11 +142,11 @@ class DatadogMetricsLogger(CustomBatchLogger):
             self.log_queue.append(series_llm_latency)
 
         # 3. LiteLLM Overhead Latency Metric (total - llm_api time)
-        hidden_params = log.get("hidden_params", {}) or {}
-        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+        hidden_params: Final = log.get("hidden_params", {}) or {}
+        litellm_overhead_time_ms: Final = hidden_params.get("litellm_overhead_time_ms")
         if litellm_overhead_time_ms is not None:
-            overhead_tags = self._extract_tags(log)  # no status_code on latency metric
-            series_overhead: DatadogMetricSeries = {
+            overhead_tags: Final = self._extract_tags(log)  # no status_code on latency metric
+            series_overhead: Final[DatadogMetricSeries] = {
                 "metric": "litellm.overhead.latency",
                 "type": 3,  # gauge
                 "points": [
@@ -158,7 +160,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
             self.log_queue.append(series_overhead)
 
         # 4. Request Count / Status Code
-        series_count: DatadogMetricSeries = {
+        series_count: Final[DatadogMetricSeries] = {
             "metric": "litellm.llm_api.request_count",
             "type": 1,  # count
             "points": [{"timestamp": timestamp, "value": 1.0}],
@@ -169,7 +171,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+            standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
             if standard_logging_object is None:
                 return
@@ -184,15 +186,15 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_logging_object: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+            standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
             if standard_logging_object is None:
                 return
 
             # Extract status code from error information
             status_code = "500"  # default
-            error_information = standard_logging_object.get("error_information", {}) or {}
-            error_code = error_information.get("error_code")  # type: ignore
+            error_information: Final = standard_logging_object.get("error_information", {}) or {}
+            error_code: Final = error_information.get("error_code")
             if error_code is not None:
                 status_code = str(error_code)
 
@@ -208,8 +210,8 @@ class DatadogMetricsLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        batch = self.log_queue.copy()
-        payload_data: DatadogMetricsPayload = {"series": batch}
+        batch: Final = self.log_queue.copy()
+        payload_data: Final[DatadogMetricsPayload] = {"series": batch}
 
         try:
             await self._upload_to_datadog(payload_data)
@@ -221,7 +223,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         if not self.dd_api_key:
             return
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
             "DD-API-KEY": self.dd_api_key,
         }
@@ -229,14 +231,14 @@ class DatadogMetricsLogger(CustomBatchLogger):
         if self.dd_app_key:
             headers["DD-APPLICATION-KEY"] = self.dd_app_key
 
-        json_data = safe_dumps(payload)
-        compressed_data = gzip.compress(json_data.encode("utf-8"))
+        json_data: Final = safe_dumps(payload)
+        compressed_data: Final = gzip.compress(json_data.encode("utf-8"))
         headers["Content-Encoding"] = "gzip"
 
-        response = await self.async_client.post(
+        response: Final = await self.async_client.post(
             self.upload_url,
             content=compressed_data,
-            headers=headers,  # type: ignore
+            headers=headers,
         )
 
         response.raise_for_status()
@@ -251,18 +253,18 @@ class DatadogMetricsLogger(CustomBatchLogger):
         """
         try:
             # Send a test metric point to Datadog
-            test_metric_point: DatadogMetricPoint = {
+            test_metric_point: Final[DatadogMetricPoint] = {
                 "timestamp": int(time.time()),
                 "value": 1.0,
             }
-            test_metric_series: DatadogMetricSeries = {
+            test_metric_series: Final[DatadogMetricSeries] = {
                 "metric": "litellm.health_check",
                 "type": 3,  # Gauge
                 "points": [test_metric_point],
                 "tags": ["env:health_check"],
             }
 
-            payload_data: DatadogMetricsPayload = {"series": [test_metric_series]}
+            payload_data: Final[DatadogMetricsPayload] = {"series": [test_metric_series]}
 
             await self._upload_to_datadog(payload_data)
 

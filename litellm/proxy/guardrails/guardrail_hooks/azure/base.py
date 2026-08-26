@@ -1,5 +1,5 @@
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
-AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH = 10000
+AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
 
 
 class AzureGuardrailBase:
@@ -52,19 +52,19 @@ class AzureGuardrailBase:
         Returns:
             Parsed JSON response dict.
         """
-        url = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={self.api_version}"
-        headers = {
+        url: Final = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={self.api_version}"
+        headers: Final = {
             "Ocp-Apim-Subscription-Key": self.api_key,
             "Content-Type": "application/json",
         }
 
         verbose_proxy_logger.debug("Azure Content Safety request [%s]: %s", endpoint_path, request_body)
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             url=url,
             headers=headers,
             json=request_body,
         )
-        response_json: dict[str, Any] = response.json()
+        response_json: Final[dict[str, Any]] = response.json()
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
         return response_json
 
@@ -90,9 +90,9 @@ class AzureGuardrailBase:
         # Tokenize into alternating non-whitespace and whitespace runs so
         # that original newlines, tabs, and multiple spaces are preserved
         # within each chunk.
-        tokens = re.findall(r"\S+|\s+", text)
+        tokens: Final = re.findall(r"\S+|\s+", text)
 
-        chunks: list[str] = []
+        chunks: Final[list[str]] = []
         current_chunk = ""
 
         for token in tokens:

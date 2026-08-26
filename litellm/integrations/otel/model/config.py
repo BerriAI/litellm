@@ -2,7 +2,7 @@
 
 from enum import Enum
 from functools import lru_cache
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -14,7 +14,7 @@ from litellm.integrations.otel.model.baggage import (
 )
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
-OTEL_V2_ENV = "LITELLM_OTEL_V2"
+OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
 
 
 class CaptureMessageContent(str):
@@ -39,6 +39,7 @@ class ExporterOwner(str, Enum):
     WEAVE_OTEL = "weave_otel"
     LEVO = "levo"
     AGENTOPS = "agentops"
+    NEWRELIC = "newrelic"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -95,6 +96,15 @@ class ExporterSpec(BaseModel):
         description=(
             "Force SimpleSpanProcessor regardless of exporter kind. Default: "
             "auto (Simple for console/in_memory, Batch otherwise)."
+        ),
+    )
+    requires_headers: bool = Field(
+        default=False,
+        description=(
+            "Skip this exporter when no headers are resolved. For destinations "
+            "that reject unauthenticated exports (e.g. New Relic), a spec kept "
+            "only as the per-request credential-stamping target would otherwise "
+            "export keyless traffic and produce a 4xx for every span batch."
         ),
     )
 

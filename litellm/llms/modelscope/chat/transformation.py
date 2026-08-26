@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/comple
 """
 
 from collections.abc import Coroutine
-from typing import Any, Literal, cast, overload
+from typing import Any, Final, Literal, cast, overload
 
 from typing_extensions import override
 
@@ -15,7 +15,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 def _has_non_text_content(message: AllMessageValues) -> bool:
     """Check if a message has non-text content items (e.g. image_url)."""
-    content = message.get("content")
+    content: Final = message.get("content")
     if not isinstance(content, list):
         return False
     return any(item.get("type") != "text" for item in content)
@@ -62,8 +62,8 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("MODELSCOPE_API_KEY")
+        api_base = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
+        dynamic_api_key: Final = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
     @override

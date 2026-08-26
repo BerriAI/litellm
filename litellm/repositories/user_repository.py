@@ -4,19 +4,23 @@ User repository for database operations on LiteLLM_UserTable.
 
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
+from litellm.repositories.prisma_protocols import TableActions
 
-_JSON_ENCODED_COLUMNS = frozenset({"metadata", "model_spend", "model_max_budget"})
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+_JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget"})
 
 
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
     @property
-    def table(self) -> Any:  # any-ok: Prisma table actions are reached through the untyped client wrapper
+    def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
         return self.prisma_client.db.litellm_usertable
 
     @property
@@ -40,7 +44,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     async def find_by_email(self, user_email: str) -> LiteLLM_UserTable | None:
         """Find a user by email."""
-        records = await self.find_many(where={"user_email": user_email})
+        records: Final = await self.find_many(where={"user_email": user_email})
         return records[0] if records else None
 
     async def find_by_sso_id(self, sso_user_id: str) -> LiteLLM_UserTable | None:
@@ -65,8 +69,8 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """
         from prisma import Json  # pyright: ignore[reportUnknownVariableType]
 
-        total = await self.count()
-        deactivated = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
+        total: Final = await self.count()
+        deactivated: Final = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
         return max(0, total - deactivated)
 
     async def create_user(
@@ -92,7 +96,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_UserTable:
         """Create a new user."""
-        data: dict[str, object] = {"user_id": user_id}
+        data: Final[dict[str, object]] = {"user_id": user_id}
         if user_alias is not None:
             data["user_alias"] = user_alias
         if team_id is not None:
@@ -155,7 +159,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_UserTable | None:
         """Update a user."""
-        data: dict[str, object] = {}
+        data: Final[dict[str, object]] = {}
         if user_alias is not None:
             data["user_alias"] = user_alias
         if team_id is not None:
@@ -200,7 +204,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
         Returns the number of rows updated: 0 means another writer already set an email.
         """
-        updated_count: int = await self.table.update_many(
+        updated_count: Final[int] = await self.table.update_many(
             where={"user_id": user_id, "user_email": None},  # mutable-ok: Prisma query filters are dict-shaped
             data={"user_email": user_email},  # mutable-ok: Prisma update payloads are dict-shaped
         )
@@ -228,9 +232,9 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        user = await self.find_by_id(user_id)
+        user: Final = await self.find_by_id(user_id)
         if user is None:
             return None
 
-        teams = [t for t in user.teams if t != team_id]
+        teams: Final = [t for t in user.teams if t != team_id]
         return await self.update(user_id, {"teams": teams}, id_field="user_id")

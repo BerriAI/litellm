@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -21,7 +21,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-OPENAI_STYLE_IMAGE_MODEL_PREFIXES: tuple[str, ...] = ("openai/",)
+OPENAI_STYLE_IMAGE_MODEL_PREFIXES: Final[tuple[str, ...]] = ("openai/",)
 
 
 class AimlImageGenerationConfig(BaseImageGenerationConfig):
@@ -61,8 +61,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        is_openai_style = self._is_openai_style_model(model)
+        supported_params: Final = self.get_supported_openai_params(model)
+        is_openai_style: Final = self._is_openai_style_model(model)
 
         for k in non_default_params:
             if k in optional_params:
@@ -127,7 +127,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key: str | None = (
+        final_api_key: Final[str | None] = (
             api_key or get_secret_str("AIML_API_KEY") or get_secret_str("AIMLAPI_KEY")  # Alternative name
         )
         if not final_api_key:
@@ -153,7 +153,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         if self._is_openai_style_model(model):
             return {"model": model, "prompt": prompt, **optional_params}
 
-        aiml_image_generation_request_body: AimlImageGenerationRequestParams = AimlImageGenerationRequestParams(
+        aiml_image_generation_request_body: Final[AimlImageGenerationRequestParams] = AimlImageGenerationRequestParams(
             prompt=prompt,
             model=model,
             **optional_params,
@@ -179,7 +179,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         https://api.aimlapi.com/v1/images/generations
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

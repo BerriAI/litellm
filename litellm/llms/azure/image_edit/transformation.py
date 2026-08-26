@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Final, cast
 
 import httpx
 
@@ -62,7 +62,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
           the same ``litellm_params.api_key``, so the precedence only matters
           for direct callers of this method.
         """
-        params = GenericLiteLLMParams(**(litellm_params or {}))
+        params: Final = GenericLiteLLMParams(**(litellm_params or {}))
         if api_key is not None and params.api_key is None:
             params.api_key = api_key
         return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=params)
@@ -93,12 +93,12 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
             )
-        original_url = httpx.URL(api_base)
+        original_url: Final = httpx.URL(api_base)
 
         # Resolve api_version: litellm_params > litellm.api_version > AZURE_API_VERSION env > default.
         # Mirrors the fallback chain used by the Azure chat path in common_utils.py,
         # so callers that set a global / env api_version don't get an unversioned URL.
-        api_version = (
+        api_version: Final = (
             cast(str | None, litellm_params.get("api_version"))
             or litellm.api_version
             or get_secret_str("AZURE_API_VERSION")
@@ -106,7 +106,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         )
 
         # Create a new dictionary with existing params
-        query_params = dict(original_url.params)
+        query_params: Final = dict(original_url.params)
 
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
@@ -122,7 +122,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             new_url = api_base
 
         # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params=query_params)
+        final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
 

@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 import litellm
@@ -72,7 +74,7 @@ class XAIModelInfo(BaseLLMModelInfo):
             raise ValueError(
                 "XAI API base or key is not set. Set XAI_API_BASE and provide an xAI API key via api_key, litellm.xai_key, or XAI_API_KEY."
             )
-        response = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
@@ -84,9 +86,9 @@ class XAIModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from XAI. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models = response.json()["data"]
+        models: Final = response.json()["data"]
 
-        litellm_model_names = []
+        litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["id"]
             litellm_model_name = "xai/" + stripped_model_name

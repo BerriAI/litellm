@@ -11,7 +11,7 @@ import importlib
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from starlette.types import Receive, Scope, Send
 
@@ -52,7 +52,7 @@ class LazyFeature:
         return any(path.startswith(p) for p in self.path_prefixes) or any(path.endswith(s) for s in self.path_suffixes)
 
 
-LAZY_FEATURES: tuple[LazyFeature, ...] = (
+LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="guardrails",
         module_path="litellm.proxy.guardrails.guardrail_endpoints",
@@ -155,10 +155,12 @@ LAZY_FEATURES: tuple[LazyFeature, ...] = (
             "/.well-known/oauth-",
             "/.well-known/openid-configuration",
             "/.well-known/jwks.json",
+            "/.well-known/litellm-cli-auth",
             "/authorize",
             "/token",
             "/callback",
             "/register",
+            "/revoke",
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),
@@ -315,15 +317,15 @@ async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
     if not hasattr(app.state, "lazy_loaded"):
         app.state.lazy_loaded = set()
         app.state.lazy_locks = {}
-    lock = app.state.lazy_locks.setdefault(feat.module_path, asyncio.Lock())
+    lock: Final = app.state.lazy_locks.setdefault(feat.module_path, asyncio.Lock())
     async with lock:
         if feat.module_path in app.state.lazy_loaded:
             return False
         try:
             # Import on a thread (heavy modules take 1-3 s). register_fn
             # mutates app.router.routes, so it stays on the loop thread.
-            loop = asyncio.get_running_loop()
-            module = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
+            loop: Final = asyncio.get_running_loop()
+            module: Final = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
             feat.register_fn(app, module)
             app.state.lazy_loaded.add(feat.module_path)
             app.openapi_schema = None
@@ -362,7 +364,7 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    router = APIRouter()
+    router: Final = APIRouter()
 
     @router.post(
         "/lazy/warm/{name}",
@@ -370,7 +372,7 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
         dependencies=[Depends(user_api_key_auth)],
     )
     async def warm(name: str):
-        feat = next((f for f in LAZY_FEATURES if f.name == name), None)
+        feat: Final = next((f for f in LAZY_FEATURES if f.name == name), None)
         if feat is None:
             raise HTTPException(404, f"unknown lazy feature: {name}")
         if feat.persistent_swagger_stub:
@@ -378,8 +380,8 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
 
         await _force_load(app, feat)
 
-        feat_routes = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
-        full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        feat_routes: Final = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
+        full: Final = get_openapi(title=app.title, version=app.version, routes=feat_routes)
         # Force all operations under one tag so they group under a single Swagger
         # section — many lazy modules tag routes inconsistently.
         for path_ops in full.get("paths", {}).values():
@@ -403,9 +405,9 @@ def inject_lazy_stubs(schema: dict) -> dict:
     try:
         from litellm.proxy._lazy_openapi_snapshot import load_snapshot
 
-        snapshot = load_snapshot()
-        paths = schema.setdefault("paths", {})
-        schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+        snapshot: Final = load_snapshot()
+        paths: Final = schema.setdefault("paths", {})
+        schemas: Final = schema.setdefault("components", {}).setdefault("schemas", {})
 
         for feat in LAZY_FEATURES:
             if feat.module_path in sys.modules and not feat.persistent_swagger_stub:

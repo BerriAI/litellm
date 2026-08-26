@@ -2,13 +2,15 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
@@ -25,8 +27,8 @@ from litellm.types.utils import SearchProviders
 
 #### SEARCH TOOLS ENDPOINTS ####
 
-router = APIRouter()
-SEARCH_TOOL_REGISTRY = SearchToolRegistry()
+router: Final = APIRouter()
+SEARCH_TOOL_REGISTRY: Final = SearchToolRegistry()
 
 
 def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
@@ -46,9 +48,46 @@ def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
     return value
 
 
+TeamObjectLookup: TypeAlias = Callable[[str, UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable]]
+
+
+async def _team_object_from_db(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable:
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    return await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+def _allowlist_team_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """
+    The team whose object_permission allowlist scopes this caller, or None when there is none.
+
+    Every Admin UI session key is stamped with UI_SESSION_TOKEN_TEAM_ID, a reserved sentinel that
+    never has a row in LiteLLM_TeamTable (`/team/new` rejects it as a real team id), so looking it
+    up would raise 404 instead of resolving a team. It carries no allowlist of its own, so the
+    caller is scoped by its key-level allowlist alone. Any other team id is looked up for real and
+    a failed lookup still surfaces.
+    """
+    team_id: Final = user_api_key_dict.team_id
+    if not team_id or team_id == UI_SESSION_TOKEN_TEAM_ID:
+        return None
+    return team_id
+
+
 async def _filter_visible_search_tools(
     search_tools: list[SearchToolInfoResponse],
     user_api_key_dict: UserAPIKeyAuth,
+    lookup_team_object: TeamObjectLookup = _team_object_from_db,
 ) -> list[SearchToolInfoResponse]:
     """
     Drop search tools the caller is not authorized to invoke, applying the same
@@ -60,27 +99,14 @@ async def _filter_visible_search_tools(
     ):
         return search_tools
 
-    from litellm.proxy.auth.auth_checks import (
-        can_user_view_search_tool,
-        get_team_object,
-    )
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
+    from litellm.proxy.auth.auth_checks import can_user_view_search_tool
+
+    allowlist_team_id: Final = _allowlist_team_id(user_api_key_dict)
+    team_object: Final[LiteLLM_TeamTable | None] = (
+        await lookup_team_object(allowlist_team_id, user_api_key_dict) if allowlist_team_id else None
     )
 
-    team_object: LiteLLM_TeamTable | None = None
-    if user_api_key_dict.team_id:
-        team_object = await get_team_object(
-            team_id=user_api_key_dict.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    visible: list[SearchToolInfoResponse] = []
+    visible: Final[list[SearchToolInfoResponse]] = []
     for tool in search_tools:
         tool_name = tool.get("search_tool_name")
         if tool_name and await can_user_view_search_tool(
@@ -149,15 +175,15 @@ async def list_search_tools(
     try:
         search_tools_from_db = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(prisma_client=prisma_client)
 
-        db_tool_names = {tool.get("search_tool_name") for tool in search_tools_from_db}
+        db_tool_names: Final = {tool.get("search_tool_name") for tool in search_tools_from_db}
 
         search_tool_configs: list[SearchToolInfoResponse] = []
 
         config_search_tools = []
 
         try:
-            config = await proxy_config.get_config()
-            parsed_tools = proxy_config.parse_search_tools(config)
+            config: Final = await proxy_config.get_config()
+            parsed_tools: Final = proxy_config.parse_search_tools(config)
             if parsed_tools:
                 config_search_tools = parsed_tools
         except Exception as e:
@@ -210,9 +236,11 @@ async def list_search_tools(
                 )
             )
 
-        visible_search_tools = await _filter_visible_search_tools(search_tool_configs, user_api_key_dict)
+        visible_search_tools: Final = await _filter_visible_search_tools(search_tool_configs, user_api_key_dict)
 
         return ListSearchToolsResponse(search_tools=visible_search_tools)
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error getting search tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -273,7 +301,7 @@ async def create_search_tool(request: CreateSearchToolRequest):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        result = await SEARCH_TOOL_REGISTRY.add_search_tool_to_db(
+        result: Final = await SEARCH_TOOL_REGISTRY.add_search_tool_to_db(
             search_tool=request.search_tool, prisma_client=prisma_client
         )
 
@@ -344,7 +372,7 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
 
     try:
         # Check if search tool exists
-        existing_tool = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
+        existing_tool: Final = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
@@ -354,7 +382,7 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
                 detail=f"Search tool with ID {search_tool_id} not found",
             )
 
-        result = await SEARCH_TOOL_REGISTRY.update_search_tool_in_db(
+        result: Final = await SEARCH_TOOL_REGISTRY.update_search_tool_in_db(
             search_tool_id=search_tool_id,
             search_tool=request.search_tool,
             prisma_client=prisma_client,
@@ -403,7 +431,7 @@ async def delete_search_tool(search_tool_id: str):
 
     try:
         # Check if search tool exists
-        existing_tool = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
+        existing_tool: Final = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
@@ -413,7 +441,7 @@ async def delete_search_tool(search_tool_id: str):
                 detail=f"Search tool with ID {search_tool_id} not found",
             )
 
-        result = await SEARCH_TOOL_REGISTRY.delete_search_tool_from_db(
+        result: Final = await SEARCH_TOOL_REGISTRY.delete_search_tool_from_db(
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
@@ -468,7 +496,7 @@ async def get_search_tool_info(search_tool_id: str):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        result = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
+        result: Final = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
@@ -479,8 +507,8 @@ async def get_search_tool_info(search_tool_id: str):
             )
 
         # Mask sensitive data
-        litellm_params_dict = dict(result.get("litellm_params", {}))
-        masked_litellm_params_dict = _get_masked_values(
+        litellm_params_dict: Final = dict(result.get("litellm_params", {}))
+        masked_litellm_params_dict: Final = _get_masked_values(
             litellm_params_dict,
             unmasked_length=4,
             number_of_asterisks=4,
@@ -553,10 +581,10 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
         from litellm.search import asearch
 
         # Extract params from request
-        litellm_params = request.litellm_params
-        search_provider = litellm_params.get("search_provider")
-        api_key = litellm_params.get("api_key")
-        api_base = litellm_params.get("api_base")
+        litellm_params: Final = request.litellm_params
+        search_provider: Final = litellm_params.get("search_provider")
+        api_key: Final = litellm_params.get("api_key")
+        api_base: Final = litellm_params.get("api_base")
 
         if not search_provider:
             raise HTTPException(status_code=400, detail="search_provider is required in litellm_params")
@@ -564,8 +592,8 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
         verbose_proxy_logger.debug("Testing connection to search provider: %s", search_provider)
 
         # Make a simple test search query with max_results=1 to minimize cost
-        test_query = "test"
-        response = await asearch(
+        test_query: Final = "test"
+        response: Final = await asearch(
             query=test_query,
             search_provider=search_provider,
             api_key=api_key,
@@ -584,8 +612,8 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
         }
 
     except Exception as e:
-        error_message = str(e)
-        error_type = type(e).__name__
+        error_message: Final = str(e)
+        error_type: Final = type(e).__name__
 
         verbose_proxy_logger.exception("Failed to connect to search provider: %s", error_message)
 
@@ -633,7 +661,7 @@ async def get_available_search_providers():
     try:
         from litellm.utils import ProviderConfigManager
 
-        available_providers = []
+        available_providers: Final = []
 
         # Auto-discover providers from SearchProviders enum
         for provider in SearchProviders:

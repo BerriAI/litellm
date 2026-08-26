@@ -14,6 +14,8 @@ from e2e_http import NoBody, ProbeResult, Result, StreamingResponse, Success, Un
 from models import (
     ChatBody,
     ChatMessage,
+    ConnectionTestBody,
+    ConnectionTestResponse,
     CustomerDeleteBody,
     CustomerInfoParams,
     CustomerNewBody,
@@ -116,6 +118,17 @@ class ManagementClient:
                 json=ModelDeleteBody(id=model_id),
                 response_type=NoBody,
             )
+        )
+
+    def connection_test(self, body: ConnectionTestBody) -> Result[ConnectionTestResponse]:
+        """POST /health/test_connection, the call behind the Admin UI's Test
+        Connection button, probing the live provider with the supplied params."""
+        return self.proxy.transport.post(
+            "/health/test_connection",
+            headers=self.proxy.transport.master,
+            json=body,
+            response_type=ConnectionTestResponse,
+            timeout=120.0,
         )
 
     def block_key(self, key: str) -> None:
