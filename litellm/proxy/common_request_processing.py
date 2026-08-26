@@ -28,10 +28,10 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
-    STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -203,10 +203,6 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
     "error_message": "Client disconnected the request",
     "error_class": "ClientDisconnected",
 }
-
-
-def _withheld_provider_output(response: object) -> bool:
-    return getattr(response, "has_buffered_provider_output", False) is True
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -397,6 +393,32 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         verbose_proxy_logger.debug("Failed to dispatch disconnect billing event: %s", e)
         return False
     return True
+
+
+async def _release_disconnect_state_on_all_callbacks(request_data: Mapping[str, object]) -> None:
+    """
+    A client disconnect throws GeneratorExit/CancelledError into the streaming
+    generator, so neither the success nor failure logging callback runs for it
+    (see the callers of this function). A callback that reserves per-request
+    state outside of those two callbacks (e.g. a concurrency slot admitted
+    before the first chunk) would otherwise leak that state until its own
+    safety-net TTL. Give every registered callback a chance to release such
+    state via the optional, default-no-op ``async_release_disconnect_state_hook``.
+
+    Only ``CustomLogger`` instances are considered, never raw string entries:
+    by the time a request can reach this proxy-only cleanup path, startup's
+    ``ProxyLogging._init_litellm_callbacks`` has already replaced every string
+    entry in ``litellm.callbacks`` with its initialized instance in place.
+    """
+    for callback in litellm.callbacks:
+        if not isinstance(callback, CustomLogger):
+            continue
+        try:
+            await callback.async_release_disconnect_state_hook(request_data)
+        except Exception as e:  # noqa: BLE001  # one callback's cleanup must never block another's or the response teardown
+            verbose_proxy_logger.debug(
+                "Failed to run async_release_disconnect_state_hook for %s: %s", type(callback).__name__, e
+            )
 
 
 async def _cancel_pending_gather_tasks(tasks: list["asyncio.Task[Any]"]) -> None:
@@ -1461,6 +1483,7 @@ async def _cancel_llm_call_on_client_disconnect(
 async def _await_llm_call_cancelling_on_disconnect(
     request: Request,
     llm_api_call: "asyncio.Future[_LlmCallT]",
+    request_data: Mapping[str, object],
 ) -> _LlmCallT:
     disconnect_event: Final = asyncio.Event()
     monitor: Final = asyncio.create_task(_cancel_llm_call_on_client_disconnect(request, llm_api_call, disconnect_event))
@@ -1468,6 +1491,14 @@ async def _await_llm_call_cancelling_on_disconnect(
         return await llm_api_call
     except asyncio.CancelledError:
         if disconnect_event.is_set():
+            # This cancellation never reaches litellm.utils.wrapper_async's own
+            # except block (asyncio.CancelledError is a BaseException, not an
+            # Exception, since Python 3.8), so async_log_failure_event never
+            # fires for it -- the same gap async_release_disconnect_state_hook
+            # was added for on the streaming path (see
+            # _finalize_streaming_generator_cleanup), just reached here via a
+            # cancelled non-streaming call instead of a mid-stream disconnect.
+            await _release_disconnect_state_on_all_callbacks(request_data)
             raise HTTPException(
                 status_code=499,
                 detail=_CLIENT_DISCONNECT_DETAIL,
@@ -2343,7 +2374,9 @@ class ProxyBaseLLMRequestProcessing:
 
         try:
             if general_settings.get("cancel_on_disconnect", False):
-                responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                responses = await _await_llm_call_cancelling_on_disconnect(  # rebind-ok: assigned in exactly one of these two mutually exclusive branches
+                    request, llm_responses, self.data
+                )
             else:
                 responses = await llm_responses
         finally:
@@ -3497,6 +3530,8 @@ class ProxyBaseLLMRequestProcessing:
                     and user_api_key_dict is not None
                 ):
                     await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
+                if not success_event_owns_slot_release:
+                    await _release_disconnect_state_on_all_callbacks(request_data)
 
             if hasattr(response, "aclose"):
                 try:
@@ -3585,9 +3620,8 @@ class ProxyBaseLLMRequestProcessing:
                 # so a GeneratorExit on client disconnect is raised there and any
                 # statement after the yield never runs. The slow-path hook is
                 # awaited above, so a cancellation during it still leaves this
-                # False and refunds. A keepalive ping carries no provider output,
-                # so it must not suppress that refund.
-                delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
+                # False and refunds.
+                delivered_chunk = True
                 yield serialize_chunk(chunk)
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:
@@ -3603,7 +3637,7 @@ class ProxyBaseLLMRequestProcessing:
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
-            if not delivered_chunk and not _withheld_provider_output(response):
+            if not delivered_chunk:
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
                 )

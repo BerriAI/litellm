@@ -4291,7 +4291,33 @@ class TestCancelOnDisconnect:
         llm_call.cancel()
 
         with pytest.raises(asyncio.CancelledError):
-            await _await_llm_call_cancelling_on_disconnect(request, llm_call)
+            await _await_llm_call_cancelling_on_disconnect(request, llm_call, {})
+
+    async def test_disconnect_releases_callback_state_before_499(self, monkeypatch):
+        """
+        asyncio.CancelledError is a BaseException, not an Exception, so it
+        never reaches litellm.utils.wrapper_async's own except block -- the
+        cancelled call's async_log_failure_event never fires, and the 499
+        this raises is later handled by post_call_failure_hook, a different
+        hook a CustomLogger like model_based_tag_rate_limits_hook doesn't implement. Without
+        an explicit release here, a callback that reserved per-request state
+        at admission (a concurrency slot) leaks it until that state's own
+        safety TTL. This mirrors the streaming disconnect case
+        (_finalize_streaming_generator_cleanup), just for a non-streaming
+        call cancelled via the opt-in cancel_on_disconnect flag.
+        """
+        recorder = _RecordingDisconnectHookLogger()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        request = self._request([{"type": "http.disconnect"}])
+        llm_call = asyncio.get_running_loop().create_future()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _await_llm_call_cancelling_on_disconnect(
+                request, llm_call, {"litellm_logging_obj": MagicMock()}
+            )
+
+        assert exc_info.value.status_code == 499
+        assert recorder.disconnect_hook_calls == 1
 
     async def _drive_base_process_llm_request(
         self, monkeypatch, general_settings: dict, llm_call, request: Request
@@ -5906,6 +5932,15 @@ class _RecordingSuccessLogger(CustomLogger):
         self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
 
 
+class _RecordingDisconnectHookLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.disconnect_hook_calls = 0
+
+    async def async_release_disconnect_state_hook(self, request_data: dict) -> None:
+        self.disconnect_hook_calls += 1
+
+
 class TestStreamingClientDisconnectBilling:
     """
     A client disconnect throws GeneratorExit into the proxy streaming
@@ -6299,6 +6334,64 @@ class TestStreamingClientDisconnectBilling:
         assert getattr(usage, "cache_creation_input_tokens", None) == 3
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 7
+
+    @pytest.mark.asyncio
+    async def test_disconnect_without_billable_chunks_releases_callback_state(self, monkeypatch):
+        """
+        A callback that reserves per-request state outside of the success/failure
+        logging callbacks (e.g. a concurrency slot admitted before the first
+        chunk) would otherwise leak it on a disconnect with nothing to bill,
+        since neither logging callback ever fires for it. The disconnect
+        cleanup must give every registered callback a chance to release such
+        state via async_release_disconnect_state_hook.
+        """
+        import types
+
+        response = await self._start_partial_stream()
+        empty_response = types.SimpleNamespace(chunks=[], messages=None)
+        recorder = _RecordingDisconnectHookLogger()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": response.logging_obj},
+            response=empty_response,
+            stream_completed=False,
+            client_disconnected=True,
+            user_api_key_dict=MagicMock(),
+            proxy_logging_obj=types.SimpleNamespace(
+                _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+            ),
+        )
+
+        assert recorder.disconnect_hook_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_disconnect_billing_skips_callback_disconnect_hook(self, monkeypatch):
+        """
+        When a disconnect-time success event already fired (partial billing
+        dispatched it), that event's own async_log_success_event already ran
+        for every registered callback. The disconnect hook must not also run
+        in that case, so a callback with idempotent-but-not-free release logic
+        does not do redundant work on every disconnect.
+        """
+        import types
+
+        recorder = _RecordingDisconnectHookLogger()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        response = await self._start_partial_stream()
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": response.logging_obj},
+            response=response,
+            stream_completed=False,
+            client_disconnected=True,
+            user_api_key_dict=MagicMock(),
+            proxy_logging_obj=types.SimpleNamespace(
+                _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+            ),
+        )
+
+        assert recorder.disconnect_hook_calls == 0
 
 
 def _apply_stream_usage_tracking(
