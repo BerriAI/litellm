@@ -1819,13 +1819,13 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     """Whether a header value is the master key or the key ``user_api_key_auth`` stored as ``api_key``."""
     from litellm.proxy.proxy_server import master_key
 
-    if master_key is None:
-        return False
     normalized: Final = _normalize_credential_value(value)
-    if hmac.compare_digest(normalized.encode(), master_key.encode()):
+    if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
         return True
     authenticated_key: Final = user_api_key_dict.api_key
     if authenticated_key is None:
+        return False
+    if master_key is None and not normalized.startswith("sk-"):
         return False
     stored_representation: Final = UserAPIKeyAuth._safe_hash_litellm_api_key(normalized)  # pyright: ignore[reportPrivateUsage]  # the exact transform auth applied when it stored api_key
     return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
