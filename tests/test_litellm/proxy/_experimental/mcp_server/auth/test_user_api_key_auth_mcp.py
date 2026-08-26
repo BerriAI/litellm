@@ -1084,10 +1084,43 @@ class TestMCPOAuth2AuthFlow:
             # LiteLLM key should be used for auth
             mock_auth.assert_called_once()
             call_args = mock_auth.call_args
-            assert call_args.kwargs["api_key"] == "sk-litellm-valid-key"
+            assert call_args.kwargs["api_key"] == "Bearer sk-litellm-valid-key"
 
             # OAuth2 headers should still contain the Authorization token
             assert oauth2_headers.get("Authorization") == "Bearer atlassian-oauth2-token"
+
+    @pytest.mark.parametrize(
+        "header_value",
+        [b"sk-litellm-valid-key", b"Bearer sk-litellm-valid-key", b"bearer sk-litellm-valid-key"],
+    )
+    async def test_x_litellm_api_key_survives_bearer_only_strip(self, header_value):
+        """
+        x-litellm-api-key accepts a raw key or a Bearer-prefixed one. The value handed
+        to user_api_key_auth must survive its Bearer-only strip (_get_bearer_token),
+        otherwise a raw key blanks to "" and the caller gets a misleading
+        "Ensure Key has Bearer prefix" 401.
+        """
+        from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/some_server",
+            "headers": [(b"x-litellm-api-key", header_value)],
+        }
+
+        async def mock_user_api_key_auth(api_key, request):
+            return UserAPIKeyAuth(api_key=api_key, user_id="test-user")
+
+        with patch(  # test-quality-ok: capturing the exact api_key handed to key validation is the regression under test
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=mock_user_api_key_auth,
+        ) as mock_auth:
+            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_called_once()
+        assert _get_bearer_token(api_key=mock_auth.call_args.kwargs["api_key"]) == "sk-litellm-valid-key"
+        assert auth_result.user_id == "test-user"
 
     async def test_litellm_key_in_authorization_backward_compat(self):
         """
@@ -3009,7 +3042,7 @@ class TestMCPCustomHeaderName:
                 # Verify the mock was called
                 mock_auth.assert_called_once()
                 call_args = mock_auth.call_args
-                assert call_args.kwargs["api_key"] == "test-api-key"
+                assert call_args.kwargs["api_key"] == "Bearer test-api-key"
 
     def test_get_mcp_server_auth_headers_from_headers(self):
         """Test _get_mcp_server_auth_headers_from_headers method"""
@@ -6036,7 +6069,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             ) = await MCPRequestHandler.process_mcp_request(scope)
 
         mock_auth.assert_called_once()
-        assert mock_auth.call_args.kwargs["api_key"] == "sk-explicit-litellm-key"
+        assert mock_auth.call_args.kwargs["api_key"] == "Bearer sk-explicit-litellm-key"
         # The explicit-key arm admitted; the envelope arm never ran, so no inner token is injected.
         assert auth_result.user_id == "litellm-key-user"
         assert mcp_server_auth_headers == {}
