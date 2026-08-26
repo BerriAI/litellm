@@ -3758,6 +3758,77 @@ def test_combine_usage_objects_sums_mirrored_cache_write_fields_once():
     assert combined_pair.prompt_tokens_details.cache_creation_tokens == 100
 
 
+def test_select_model_name_avoids_double_prefix_for_aliased_public_name(
+    _local_model_cost_map,
+):
+    """A ``model_list`` entry may expose a public alias whose name contains a
+    ``/`` whose leading segment is not a registered provider, e.g.
+
+        model_name: vertex/claude-3-5-sonnet
+        litellm_params:
+          model: vertex_ai/claude-3-5-sonnet
+
+    On streamed responses the assembled ``completion_response.model`` carries
+    the alias rather than the real deployment name. Naively prepending the
+    real provider prefix produced ``vertex_ai/vertex/claude-3-5-sonnet``,
+    which is not a key in ``litellm.model_cost``, so cost lookup silently
+    returned $0. Regression test for #38069.
+    """
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    resp = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-3-5-sonnet",
+    )
+    resp._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=resp,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/claude-3-5-sonnet"
+    assert selected in litellm.model_cost
+
+
+def test_select_model_name_keeps_prefix_when_alias_has_no_resolvable_tail(
+    _local_model_cost_map,
+):
+    """If neither the double-prefixed nor the tail-only form is in
+    ``litellm.model_cost``, fall back to the original prefixed name so
+    downstream callers see the same string they did before #38069."""
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    resp = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="alias/model-that-does-not-exist",
+    )
+    resp._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=resp,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/alias/model-that-does-not-exist"
+
+
 def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_cost_map):
     """Regression: an Anthropic /v1/messages response reports cache reads as top-level
     cache_read_input_tokens with input_tokens excluding them. Reading that usage as
