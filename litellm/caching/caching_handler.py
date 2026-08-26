@@ -141,10 +141,11 @@ async def _complete_cache_write_despite_cancellation(write_factory: Callable[[],
         raise
 
 
-def _create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> None:
+def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "asyncio.Task[None]":
     task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
     _PENDING_CACHE_WRITES.add(task)
     task.add_done_callback(_PENDING_CACHE_WRITES.discard)
+    return task
 
 
 def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
@@ -1030,14 +1031,14 @@ class LLMCachingHandler:
                     isinstance(result, EmbeddingResponse)
                     and not isinstance(cache.cache, S3Cache)  # s3 doesn't support bulk writing. Exclude.
                 ):
-                    _create_cache_write_task(
+                    create_cache_write_task(
                         lambda: cache.async_add_cache_pipeline(
                             result, dynamic_cache_object=self.dual_cache, **new_kwargs
                         )
                     )
                 else:
                     result_json: Final = result.model_dump_json()
-                    _create_cache_write_task(
+                    create_cache_write_task(
                         lambda: cache.async_add_cache(
                             result_json,
                             dynamic_cache_object=self.dual_cache,
@@ -1045,7 +1046,7 @@ class LLMCachingHandler:
                         )
                     )
             else:
-                _create_cache_write_task(lambda: cache.async_add_cache(result, **new_kwargs))
+                create_cache_write_task(lambda: cache.async_add_cache(result, **new_kwargs))
 
     def sync_set_cache(
         self,
