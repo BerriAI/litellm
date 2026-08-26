@@ -19,6 +19,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.resolvers.exceptions import NoDatabaseConnectionError
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -76,13 +77,18 @@ class UserAPIKeyAuthExceptionHandler:
         """
         from litellm.proxy.proxy_server import (
             general_settings,
+            is_prisma_initial_connect_recovery_pending,
+            prisma_client,
             proxy_logging_obj,
         )
 
-        if (
-            PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
-            and PrismaDBExceptionHandler.is_database_connection_error(e)
-        ):
+        configured_database_without_client: Final = isinstance(e, NoDatabaseConnectionError) and (
+            is_prisma_initial_connect_recovery_pending() or prisma_client is not None
+        )
+        database_unavailable: Final = (
+            PrismaDBExceptionHandler.is_database_connection_error(e) or configured_database_without_client
+        )
+        if PrismaDBExceptionHandler.should_allow_request_on_db_unavailable() and database_unavailable:
             # log this as a DB failure on prometheus
             proxy_logging_obj.service_logging_obj.service_failure_hook(
                 service=ServiceTypes.DB,
@@ -183,7 +189,7 @@ class UserAPIKeyAuthExceptionHandler:
                 )
             elif isinstance(e, ProxyException):
                 raise e
-            if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+            if PrismaDBExceptionHandler.is_database_service_unavailable_error(e) or configured_database_without_client:
                 raise ProxyException(
                     message=(
                         "Service Unavailable, the authentication database is "

@@ -18,6 +18,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from prisma.engine.errors import BinaryNotFoundError, MismatchedVersionsError
 
 
 import litellm
@@ -1443,10 +1444,22 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     from fastapi import FastAPI
 
     # Import happens here - this is when the module probably reads the config path
-    from litellm.proxy.proxy_server import proxy_startup_event
+    from litellm.proxy.proxy_server import ProxyStartupEvent, proxy_startup_event
 
     # Mock the Prisma import
     monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+    start_initial_prisma_recovery = MagicMock()
+    stop_initial_prisma_recovery = AsyncMock()
+    monkeypatch.setattr(
+        ProxyStartupEvent,
+        "start_initial_prisma_connect_recovery",
+        start_initial_prisma_recovery,
+    )
+    monkeypatch.setattr(
+        ProxyStartupEvent,
+        "stop_initial_prisma_connect_recovery",
+        stop_initial_prisma_recovery,
+    )
 
     # Create test app
     app = FastAPI()
@@ -1498,6 +1511,14 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         from litellm.proxy.proxy_server import master_key
 
         assert master_key == test_resolved_key
+
+    assert mock_prisma.await_count == 3
+    assert all(
+        call.kwargs["recovered_client_initializer"] == ProxyStartupEvent.initialize_recovered_prisma_services
+        for call in mock_prisma.await_args_list
+    )
+    assert start_initial_prisma_recovery.call_count == 3
+    assert stop_initial_prisma_recovery.await_count == 3
 
 
 def test_team_info_masking():
@@ -11022,23 +11043,274 @@ async def test_setup_prisma_client_raises_when_db_unavailable_is_not_allowed(mon
 
 
 @pytest.mark.asyncio
-async def test_setup_prisma_client_returns_none_when_connect_itself_fails(monkeypatch):
-    """Retaining only ever applies to a client that connected. If ``connect()``
-    failed there is no usable client and no watchdog to recover it, so the caller
-    must still get ``None``."""
-    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "False")
+@pytest.mark.parametrize(
+    "permanent_error",
+    [
+        pytest.param(
+            BinaryNotFoundError("query engine binary not found"),
+            id="binary-not-found",
+        ),
+        pytest.param(
+            MismatchedVersionsError(expected="1", got="2"),
+            id="version-mismatch",
+        ),
+    ],
+)
+async def test_setup_prisma_client_does_not_recover_permanent_initial_fault(
+    monkeypatch,
+    permanent_error,
+):
+    """Fail-open recovery is only for transient connection failures.
+
+    A missing or incompatible query engine cannot recover when the database
+    returns, so retaining it would keep the proxy Ready in degraded auth mode
+    indefinitely.
+    """
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+
+    mock_client = _mock_startup_prisma_client(connect_error=permanent_error)
+
+    with pytest.raises(type(permanent_error)):
+        await _run_setup_prisma_client(mock_client)
+
+    recovery_state = proxy_server_module._initial_prisma_connect_recovery_state
+    assert recovery_state.candidate is None
+    assert recovery_state.task is None
+    assert proxy_server_module.prisma_client is None
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_recovers_after_initial_connect_failure(monkeypatch):
+    """A failed initial connect must recover without publishing its disconnected client."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "True")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+
+    mock_client = _mock_startup_prisma_client(connect_error=httpx.ConnectError("connection refused"))
+    mock_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    recovered_client_initializer = AsyncMock()
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    monkeypatch.setattr(proxy_server_module, "PrismaClient", MagicMock(return_value=mock_client))
+    result = await ProxyStartupEvent._setup_prisma_client(
+        database_url="postgresql://litellm:litellm@localhost:5432/litellm",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        recovered_client_initializer=recovered_client_initializer,
+    )
+
+    assert result is None
+    assert proxy_server_module.prisma_client is None
+    assert proxy_server_module._initial_prisma_connect_recovery_state.task is None
+
+    ProxyStartupEvent.start_initial_prisma_connect_recovery()
+    recovery_task = proxy_server_module._initial_prisma_connect_recovery_state.task
+    if recovery_task is None:
+        pytest.fail("initial Prisma recovery task was not scheduled")
+    await recovery_task
+
+    mock_client.attempt_db_reconnect.assert_awaited_once()
+    assert proxy_server_module.prisma_client is mock_client
+    assert mock_client.connect.await_count == 1
+    mock_client.db.start_token_refresh_task.assert_awaited_once()
+    mock_client.start_db_health_watchdog_task.assert_awaited_once()
+    recovered_client_initializer.assert_awaited_once_with(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_initial_prisma_recovery_keeps_client_when_deferred_startup_fails(monkeypatch):
+    """Deferred startup is not collectively idempotent, so publish the recovered
+    client and log one initializer failure instead of retrying duplicate jobs."""
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "True")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+
+    mock_client = _mock_startup_prisma_client(connect_error=httpx.ConnectError("connection refused"))
+    mock_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    recovered_client_initializer = AsyncMock(side_effect=RuntimeError("deferred startup failed"))
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    monkeypatch.setattr(proxy_server_module, "PrismaClient", MagicMock(return_value=mock_client))
+    await ProxyStartupEvent._setup_prisma_client(
+        database_url="postgresql://litellm:litellm@localhost:5432/litellm",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        recovered_client_initializer=recovered_client_initializer,
+    )
+
+    ProxyStartupEvent.start_initial_prisma_connect_recovery()
+    recovery_task = proxy_server_module._initial_prisma_connect_recovery_state.task
+    if recovery_task is None:
+        pytest.fail("initial Prisma recovery task was not scheduled")
+    await recovery_task
+
+    assert proxy_server_module.prisma_client is mock_client
+    mock_client.attempt_db_reconnect.assert_awaited_once()
+    recovered_client_initializer.assert_awaited_once_with(mock_client)
+    assert proxy_server_module.is_prisma_initial_connect_recovery_pending() is False
+
+
+@pytest.mark.asyncio
+async def test_initial_prisma_connect_recovery_retries_and_initializes_once(monkeypatch):
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "True")
+    monkeypatch.setattr(
+        proxy_server_module,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+
+    mock_client = _mock_startup_prisma_client(connect_error=httpx.ConnectError("connection refused"))
+    mock_client._db_health_watchdog_interval_seconds = 0
+    mock_client.attempt_db_reconnect = AsyncMock(side_effect=[False, True])
+    recovered_client_initializer = AsyncMock()
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    monkeypatch.setattr(proxy_server_module, "PrismaClient", MagicMock(return_value=mock_client))
+    await ProxyStartupEvent._setup_prisma_client(
+        database_url="postgresql://litellm:litellm@localhost:5432/litellm",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        recovered_client_initializer=recovered_client_initializer,
+    )
+
+    ProxyStartupEvent.start_initial_prisma_connect_recovery()
+    recovery_task = proxy_server_module._initial_prisma_connect_recovery_state.task
+    if recovery_task is None:
+        pytest.fail("initial Prisma recovery task was not scheduled")
+    await recovery_task
+
+    assert mock_client.attempt_db_reconnect.await_count == 2
+    assert proxy_server_module.prisma_client is mock_client
+    recovered_client_initializer.assert_awaited_once_with(mock_client)
+
+
+@pytest.mark.asyncio
+async def test_initial_prisma_connect_recovery_is_singleton_and_stops_cleanly(monkeypatch):
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "True")
     monkeypatch.setattr(
         proxy_server_module,
         "general_settings",
         {"allow_requests_on_db_unavailable": True},
     )
 
+    reconnect_started = asyncio.Event()
+
+    async def _wait_for_database(*args, **kwargs):
+        reconnect_started.set()
+        await asyncio.Event().wait()
+
     mock_client = _mock_startup_prisma_client(connect_error=httpx.ConnectError("connection refused"))
-    result = await _run_setup_prisma_client(mock_client)
+    mock_client.attempt_db_reconnect = AsyncMock(side_effect=_wait_for_database)
+    mock_client.disconnect = AsyncMock()
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    monkeypatch.setattr(proxy_server_module, "PrismaClient", MagicMock(return_value=mock_client))
+    await ProxyStartupEvent._setup_prisma_client(
+        database_url="postgresql://litellm:litellm@localhost:5432/litellm",
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+    )
+
+    ProxyStartupEvent.start_initial_prisma_connect_recovery()
+    recovery_task = proxy_server_module._initial_prisma_connect_recovery_state.task
+    ProxyStartupEvent.start_initial_prisma_connect_recovery()
+
+    assert recovery_task is not None
+    assert proxy_server_module._initial_prisma_connect_recovery_state.task is recovery_task
+    await reconnect_started.wait()
+
+    await ProxyStartupEvent.stop_initial_prisma_connect_recovery()
+
+    assert recovery_task.cancelled()
+    assert proxy_server_module.is_prisma_initial_connect_recovery_pending() is False
+    mock_client.disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_without_database_does_not_schedule_recovery(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    prisma_constructor = MagicMock()
+    monkeypatch.setattr(proxy_server_module, "PrismaClient", prisma_constructor)
+    result = await ProxyStartupEvent._setup_prisma_client(
+        database_url=None,
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+    )
+
+    ProxyStartupEvent.start_initial_prisma_connect_recovery()
 
     assert result is None
-    assert mock_client.start_db_health_watchdog_task.await_count == 0
-    assert mock_client.health_check.await_count == 0
+    prisma_constructor.assert_not_called()
+    assert proxy_server_module.is_prisma_initial_connect_recovery_pending() is False
+    assert proxy_server_module._initial_prisma_connect_recovery_state.task is None
+
+
+@pytest.mark.asyncio
+async def test_recovered_prisma_client_runs_database_dependent_startup(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    mock_client = MagicMock()
+    coordination_cache = MagicMock()
+    worker_heartbeat = MagicMock()
+    start_migrations = MagicMock()
+    init_coordination_redis = AsyncMock(return_value=coordination_cache)
+    set_redis_usage_cache = MagicMock()
+    update_proxy_logging = MagicMock()
+    add_missing_proxy_hooks = MagicMock()
+    initialize_jobs = AsyncMock(return_value=worker_heartbeat)
+    update_default_budget = AsyncMock()
+    sync_ui_settings = AsyncMock()
+
+    monkeypatch.setattr(litellm, "max_budget", 0)
+    monkeypatch.setattr(proxy_server_module, "llm_router", None)
+    monkeypatch.setattr(
+        proxy_server_module._initial_prisma_connect_recovery_state,
+        "recovered_worker_heartbeat",
+        None,
+    )
+    monkeypatch.setattr(ProxyStartupEvent, "start_prisma_migrations", start_migrations)
+    monkeypatch.setattr(ProxyStartupEvent, "_init_coordination_redis_from_db", init_coordination_redis)
+    monkeypatch.setattr(proxy_server_module, "_set_redis_usage_cache", set_redis_usage_cache)
+    monkeypatch.setattr(proxy_server_module.proxy_logging_obj, "update_values", update_proxy_logging)
+    monkeypatch.setattr(
+        proxy_server_module.proxy_logging_obj,
+        "add_missing_proxy_hooks",
+        add_missing_proxy_hooks,
+    )
+    monkeypatch.setattr(ProxyStartupEvent, "initialize_scheduled_background_jobs", initialize_jobs)
+    monkeypatch.setattr(ProxyStartupEvent, "_update_default_team_member_budget", update_default_budget)
+    monkeypatch.setattr(ProxyStartupEvent, "_sync_ui_settings_to_general_settings", sync_ui_settings)
+
+    await ProxyStartupEvent.initialize_recovered_prisma_services(mock_client)
+
+    start_migrations.assert_called_once_with(mock_client)
+    init_coordination_redis.assert_awaited_once()
+    set_redis_usage_cache.assert_called_once_with(coordination_cache)
+    update_proxy_logging.assert_called_once_with(redis_cache=coordination_cache)
+    add_missing_proxy_hooks.assert_called_once_with(None)
+    initialize_jobs.assert_awaited_once()
+    update_default_budget.assert_awaited_once()
+    sync_ui_settings.assert_awaited_once()
+    assert proxy_server_module._initial_prisma_connect_recovery_state.recovered_worker_heartbeat is worker_heartbeat
 
 
 async def _run_scheduled_background_jobs():

@@ -27,8 +27,11 @@ from prisma.errors import (
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy import proxy_server as proxy_server_module
+from litellm.proxy._types import LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth import auth_exception_handler as auth_exception_handler_module
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.resolvers.exceptions import NoDatabaseConnectionError
 
 
 @pytest.mark.asyncio
@@ -64,6 +67,92 @@ async def test_handle_authentication_error_db_unavailable_connectivity(db_error)
         )
         assert result.key_name == "failed-to-connect-to-db"
         assert result.token == "failed-to-connect-to-db"
+
+
+@pytest.mark.asyncio
+async def test_initial_prisma_recovery_nil_client_uses_fail_open_identity(monkeypatch):
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"allow_requests_on_db_unavailable": True})
+    monkeypatch.setattr(proxy_server_module, "is_prisma_initial_connect_recovery_pending", lambda: True)
+    result = await handler._handle_authentication_error(
+        NoDatabaseConnectionError(),
+        MagicMock(),
+        {},
+        "/v1/models",
+        None,
+        "cached-jwt",
+    )
+
+    assert result.key_name == "failed-to-connect-to-db"
+    assert result.user_id == "__db_unavailable_fallback__"
+    assert result.user_role == LitellmUserRoles.INTERNAL_USER
+
+
+@pytest.mark.asyncio
+async def test_initial_prisma_recovery_nil_client_returns_503_when_fail_open_disabled(monkeypatch):
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    monkeypatch.setattr(auth_exception_handler_module, "seed_request_identity", MagicMock())
+    monkeypatch.setattr(proxy_server_module.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"allow_requests_on_db_unavailable": False})
+    monkeypatch.setattr(proxy_server_module, "is_prisma_initial_connect_recovery_pending", lambda: True)
+    with pytest.raises(ProxyException) as exc_info:
+        await handler._handle_authentication_error(
+            NoDatabaseConnectionError(),
+            MagicMock(),
+            {},
+            "/v1/models",
+            None,
+            "cached-jwt",
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_initial_prisma_recovery_snapshot_stays_fail_open_after_recovery_completes(monkeypatch):
+    """A request can retain a nil client while recovery publishes the global client."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"allow_requests_on_db_unavailable": True})
+    monkeypatch.setattr(proxy_server_module, "is_prisma_initial_connect_recovery_pending", lambda: False)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+    result = await handler._handle_authentication_error(
+        NoDatabaseConnectionError(),
+        MagicMock(),
+        {},
+        "/v1/models",
+        None,
+        "cached-jwt",
+    )
+
+    assert result.user_id == "__db_unavailable_fallback__"
+    assert result.user_role == LitellmUserRoles.INTERNAL_USER
+
+
+@pytest.mark.asyncio
+async def test_nil_client_without_configured_database_does_not_get_fail_open_identity(monkeypatch):
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    monkeypatch.setattr(auth_exception_handler_module, "seed_request_identity", MagicMock())
+    monkeypatch.setattr(proxy_server_module.proxy_logging_obj, "post_call_failure_hook", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"allow_requests_on_db_unavailable": True})
+    monkeypatch.setattr(proxy_server_module, "is_prisma_initial_connect_recovery_pending", lambda: False)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", None)
+    with pytest.raises(ProxyException) as exc_info:
+        await handler._handle_authentication_error(
+            NoDatabaseConnectionError(),
+            MagicMock(),
+            {},
+            "/v1/models",
+            None,
+            "cached-jwt",
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.auth_error
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.mark.asyncio

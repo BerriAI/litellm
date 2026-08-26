@@ -16,7 +16,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -872,6 +872,7 @@ def cleanup_router_config_variables():
     health_check_interval = None
     health_check_concurrency = None
     prisma_client = None
+    _initial_prisma_connect_recovery_state.reset()
 
 
 async def _flush_spend_logs_queue_on_shutdown() -> None:
@@ -1080,49 +1081,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             database_url=_db_url,
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
+            recovered_client_initializer=ProxyStartupEvent.initialize_recovered_prisma_services,
         )
 
     if prisma_client is not None:
-
-        async def _run_pw_migration():
-            try:
-                result: Final = await migrate_passwords_to_scrypt_async(prisma_client)
-                verbose_proxy_logger.info("Password migration: %s", result)
-            except Exception as e:
-                verbose_proxy_logger.warning("Password migration skipped: %s", e)
-
-        asyncio.create_task(_run_pw_migration())
-
-        async def _run_agent_grant_id_migration() -> None:
-            from litellm.proxy.agent_endpoints.agent_registry import (
-                global_agent_registry,
-                object_permission_table,
-            )
-
-            for attempt in range(3):
-                try:
-                    result = await global_agent_registry.migrate_legacy_grant_ids(
-                        table=object_permission_table(prisma_client)
-                    )
-                    if result.rewritten:
-                        verbose_proxy_logger.info(
-                            "Rewrote %s object_permission rows from legacy config agent ids", result.rewritten
-                        )
-                    if result.missed == 0:
-                        return
-                    verbose_proxy_logger.warning(
-                        "Legacy agent grant id migration attempt %s/3 left %s rows unmigrated",
-                        attempt + 1,
-                        result.missed,
-                    )
-                except Exception as e:  # noqa: BLE001  # startup task must survive any DB error and retry
-                    verbose_proxy_logger.warning(
-                        "Legacy agent grant id migration attempt %s/3 failed: %s", attempt + 1, e
-                    )
-                if attempt < 2:
-                    await asyncio.sleep(5)
-
-        asyncio.create_task(_run_agent_grant_id_migration())
+        ProxyStartupEvent.start_prisma_migrations(prisma_client)
 
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before
@@ -1255,11 +1218,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     # `llm_router.adaptive_routers` is empty. Per-router DB state is loaded
     # lazily by the flusher on first tick (see `_state_loaded` flag) so
     # hot-reloaded routers also get their persisted priors.
-    if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
-        for _tagged_routers in llm_router.adaptive_routers.values():
-            for _tagged in _tagged_routers:
-                await _tagged.strategy.load_state_from_db(prisma_client)
-                _tagged.strategy._state_loaded = True
+    await ProxyStartupEvent.load_adaptive_router_state(prisma_client)
     asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
@@ -1270,6 +1229,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
+
+    ProxyStartupEvent.start_initial_prisma_connect_recovery()
 
     # End of startup event
     yield
@@ -1286,6 +1247,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
         except Exception as e:
             verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
+
+    await ProxyStartupEvent.stop_initial_prisma_connect_recovery()
 
     # Shutdown event - stop RDS IAM token refresh background task
     if (
@@ -1311,7 +1274,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-    await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
+    await proxy_shutdown_event(
+        worker_heartbeat=worker_heartbeat or _initial_prisma_connect_recovery_state.recovered_worker_heartbeat
+    )
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -2244,7 +2209,30 @@ worker_config: Final = None
 master_key: str | None = None
 otel_logging = False
 prisma_client: PrismaClient | None = None
+
+
+class _InitialPrismaConnectRecoveryState:
+    def __init__(self) -> None:
+        self.candidate: PrismaClient | None = None
+        self.task: asyncio.Task[None] | None = None
+        self.recovered_initializer: Callable[[PrismaClient], Awaitable[None]] | None = None
+        self.recovered_worker_heartbeat: ProxyWorkerHeartbeat | None = None
+
+    def reset(self) -> None:
+        self.candidate = None
+        self.task = None
+        self.recovered_initializer = None
+        self.recovered_worker_heartbeat = None
+
+
+_initial_prisma_connect_recovery_state: Final = _InitialPrismaConnectRecoveryState()
 shared_aiohttp_session: Optional["ClientSession"] = None  # Global shared session for connection reuse
+
+
+def is_prisma_initial_connect_recovery_pending() -> bool:
+    return _initial_prisma_connect_recovery_state.candidate is not None
+
+
 user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -9562,25 +9550,203 @@ class ProxyStartupEvent:
                 await _scheduled_fallback_stats()
 
     @classmethod
+    def start_prisma_migrations(cls, client: PrismaClient) -> None:
+        async def _run_pw_migration() -> None:
+            try:
+                result: Final = await migrate_passwords_to_scrypt_async(client)
+                verbose_proxy_logger.info("Password migration: %s", result)
+            except Exception as migration_error:
+                verbose_proxy_logger.warning("Password migration skipped: %s", migration_error)
+
+        async def _run_agent_grant_id_migration() -> None:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+                object_permission_table,
+            )
+
+            for attempt in range(3):
+                try:
+                    result = await global_agent_registry.migrate_legacy_grant_ids(table=object_permission_table(client))
+                    if result.rewritten:
+                        verbose_proxy_logger.info(
+                            "Rewrote %s object_permission rows from legacy config agent ids", result.rewritten
+                        )
+                    if result.missed == 0:
+                        return
+                    verbose_proxy_logger.warning(
+                        "Legacy agent grant id migration attempt %s/3 left %s rows unmigrated",
+                        attempt + 1,
+                        result.missed,
+                    )
+                except Exception as migration_error:  # noqa: BLE001  # startup migration retries every DB failure
+                    verbose_proxy_logger.warning(
+                        "Legacy agent grant id migration attempt %s/3 failed: %s",
+                        attempt + 1,
+                        migration_error,
+                    )
+                if attempt < 2:
+                    await asyncio.sleep(5)
+
+        asyncio.create_task(_run_pw_migration())
+        asyncio.create_task(_run_agent_grant_id_migration())
+
+    @classmethod
+    async def initialize_recovered_prisma_services(cls, client: PrismaClient) -> None:
+        cls.start_prisma_migrations(client)
+
+        db_coordination_redis_cache: Final = await cls._init_coordination_redis_from_db(
+            litellm_settings=proxy_config.get_config_state().get("litellm_settings") or {},
+            llm_router=llm_router,
+        )
+        if db_coordination_redis_cache is not None:
+            _set_redis_usage_cache(db_coordination_redis_cache)
+            proxy_logging_obj.update_values(redis_cache=db_coordination_redis_cache)
+
+        proxy_logging_obj.add_missing_proxy_hooks(llm_router)
+
+        if litellm.max_budget > 0:
+            cls._add_proxy_budget_to_db()
+            asyncio.create_task(
+                cls._warm_global_spend_cache(
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=client,
+                )
+            )
+
+        _initial_prisma_connect_recovery_state.recovered_worker_heartbeat = (
+            await cls.initialize_scheduled_background_jobs(
+                general_settings=general_settings,
+                prisma_client=client,
+                proxy_budget_rescheduler_min_time=proxy_budget_rescheduler_min_time,
+                proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
+                proxy_batch_write_at=proxy_batch_write_at,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )
+        await cls._update_default_team_member_budget()
+        await cls._sync_ui_settings_to_general_settings()
+
+        await cls.load_adaptive_router_state(client)
+
+    @classmethod
+    async def load_adaptive_router_state(cls, client: PrismaClient | None) -> None:
+        if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
+            for tagged_routers in llm_router.adaptive_routers.values():
+                for tagged in tagged_routers:
+                    await tagged.strategy.load_state_from_db(client)
+                    tagged.strategy._state_loaded = True
+
+    @classmethod
+    async def _complete_prisma_client_setup(cls, prisma_client: PrismaClient) -> None:
+        if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
+            await prisma_client.db.start_token_refresh_task()
+
+        asyncio.create_task(prisma_client.check_view_exists())
+        asyncio.create_task(prisma_client._set_spend_logs_row_count_in_proxy_state())
+
+        if hasattr(prisma_client, "start_db_health_watchdog_task"):
+            await prisma_client.start_db_health_watchdog_task()
+
+        if get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False) is not True:
+            await prisma_client.health_check()
+
+    @classmethod
+    async def _recover_initial_prisma_connect(cls, candidate: PrismaClient) -> None:
+        global prisma_client  # noqa: PLW0603 - publish the recovered module singleton
+
+        retry_interval_value: Final = getattr(candidate, "_db_health_watchdog_interval_seconds", 30)
+        retry_interval_seconds: Final = (
+            float(retry_interval_value) if isinstance(retry_interval_value, (int, float)) else 30.0
+        )
+        while _initial_prisma_connect_recovery_state.candidate is candidate:
+            try:
+                recovered = await candidate.attempt_db_reconnect(
+                    reason="initial_prisma_connect_failure",
+                    force=True,
+                )
+                if recovered:
+                    if _initial_prisma_connect_recovery_state.candidate is not candidate:
+                        return
+                    await cls._complete_prisma_client_setup(candidate)
+                    cls._initialize_jwt_auth(
+                        general_settings=general_settings,
+                        prisma_client=candidate,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                    prisma_client = candidate
+                    _initial_prisma_connect_recovery_state.candidate = None
+                    recovered_initializer = _initial_prisma_connect_recovery_state.recovered_initializer
+                    _initial_prisma_connect_recovery_state.recovered_initializer = None
+                    if recovered_initializer is not None:
+                        try:
+                            await recovered_initializer(candidate)
+                        except Exception as initialization_error:  # noqa: BLE001  # keep the recovered client published
+                            verbose_proxy_logger.exception(
+                                "Prisma recovered, but deferred database startup failed: %s",
+                                initialization_error,
+                            )
+                    verbose_proxy_logger.info("Prisma connected after an initial startup failure")
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception as recovery_error:  # noqa: BLE001  # retry transient DB and engine failures
+                verbose_proxy_logger.warning(
+                    "Prisma initial connection recovery failed: %s",
+                    recovery_error,
+                )
+            await asyncio.sleep(retry_interval_seconds)
+
+    @classmethod
+    def start_initial_prisma_connect_recovery(cls) -> None:
+        candidate: Final = _initial_prisma_connect_recovery_state.candidate
+        current_task: Final = _initial_prisma_connect_recovery_state.task
+        if candidate is None or (current_task is not None and current_task.done() is False):
+            return
+        _initial_prisma_connect_recovery_state.task = asyncio.create_task(
+            cls._recover_initial_prisma_connect(candidate)
+        )
+
+    @classmethod
+    async def stop_initial_prisma_connect_recovery(cls) -> None:
+        recovery_task: Final = _initial_prisma_connect_recovery_state.task
+        if recovery_task is not None and recovery_task.done() is False:
+            recovery_task.cancel()
+            try:
+                await recovery_task
+            except asyncio.CancelledError:
+                pass
+        _initial_prisma_connect_recovery_state.candidate = None
+        _initial_prisma_connect_recovery_state.task = None
+        _initial_prisma_connect_recovery_state.recovered_initializer = None
+
+    @classmethod
     async def _setup_prisma_client(
         cls,
         database_url: str | None,
         proxy_logging_obj: ProxyLogging,
         user_api_key_cache: UserApiKeyCache,
+        recovered_client_initializer: Callable[[PrismaClient], Awaitable[None]] | None = None,
     ) -> PrismaClient | None:
         """
         - Sets up prisma client
         - Adds necessary views to proxy
         """
+        candidate_client: PrismaClient | None = None
         connected_client: PrismaClient | None = None
+        current_recovery_task: Final = _initial_prisma_connect_recovery_state.task
+        if current_recovery_task is not None and current_recovery_task.done():
+            _initial_prisma_connect_recovery_state.task = None
+        _initial_prisma_connect_recovery_state.candidate = None
+        _initial_prisma_connect_recovery_state.recovered_initializer = None
+        _initial_prisma_connect_recovery_state.recovered_worker_heartbeat = None
         try:
             if database_url is None:
                 return None
 
-            prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
+            candidate_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
 
             try:
-                await prisma_client.connect()
+                await candidate_client.connect()
             except Exception as e:
                 if "P3018" in str(e) or "P3009" in str(e):
                     verbose_proxy_logger.debug("CRITICAL: DATABASE MIGRATION FAILED")
@@ -9588,31 +9754,9 @@ class ProxyStartupEvent:
                     verbose_proxy_logger.debug("FIX: Run 'prisma migrate resolve --applied <migration_name>'")
                 raise e
 
-            connected_client = prisma_client
-
-            ## Start RDS IAM token refresh background task if enabled ##
-            # This proactively refreshes IAM tokens before they expire,
-            # preventing the 15-minute connection failure bug (#16220)
-            if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
-                await prisma_client.db.start_token_refresh_task()
-
-            ## Add necessary views to proxy ##
-            asyncio.create_task(
-                prisma_client.check_view_exists()
-            )  # check if all necessary views exist. Don't block execution
-
-            asyncio.create_task(
-                prisma_client._set_spend_logs_row_count_in_proxy_state()
-            )  # set the spend logs row count in proxy state. Don't block execution
-
-            if hasattr(prisma_client, "start_db_health_watchdog_task"):
-                await prisma_client.start_db_health_watchdog_task()
-
-            # run a health check to ensure the DB is ready
-            if get_secret_bool("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", False) is not True:
-                await prisma_client.health_check()
-
-            return prisma_client
+            connected_client = candidate_client
+            await cls._complete_prisma_client_setup(candidate_client)
+            return candidate_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
             if connected_client is not None:
@@ -9621,6 +9765,9 @@ class ProxyStartupEvent:
                     "The DB health watchdog keeps probing and reconnects once the database recovers.",
                     e,
                 )
+            elif candidate_client is not None:
+                _initial_prisma_connect_recovery_state.candidate = candidate_client
+                _initial_prisma_connect_recovery_state.recovered_initializer = recovered_client_initializer
             return connected_client
 
     @classmethod

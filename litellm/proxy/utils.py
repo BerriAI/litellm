@@ -783,13 +783,18 @@ class ProxyLogging:
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
-    def _add_proxy_hooks(self, llm_router: Router | None = None):
+    def add_missing_proxy_hooks(self, llm_router: Router | None = None):
         """
-        Add proxy hooks to litellm.callbacks
+        Add proxy hooks that have not already been initialized.
+
+        Database-dependent hooks can be skipped during fail-open startup and
+        installed later when the Prisma client recovers.
         """
         from litellm.proxy.proxy_server import prisma_client
 
         for hook in PROXY_HOOKS:
+            if hook in self.proxy_hook_mapping:
+                continue
             proxy_hook = get_proxy_hook(hook)
             expected_args = inspect.getfullargspec(proxy_hook).args
             if "prisma_client" in expected_args and prisma_client is None:
@@ -804,8 +809,16 @@ class ProxyLogging:
                 passed_in_args["prisma_client"] = prisma_client
             proxy_hook_obj = cast(CustomLogger, proxy_hook(**passed_in_args))
             litellm.logging_callback_manager.add_litellm_callback(proxy_hook_obj)
+            litellm.logging_callback_manager.add_litellm_success_callback(proxy_hook_obj)
+            litellm.logging_callback_manager.add_litellm_failure_callback(proxy_hook_obj)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(proxy_hook_obj)
+            litellm.logging_callback_manager.add_litellm_async_failure_callback(proxy_hook_obj)
 
             self.proxy_hook_mapping[hook] = proxy_hook_obj
+
+    def _add_proxy_hooks(self, llm_router: Router | None = None):
+        """Backward-compatible entry point for existing proxy setup callers."""
+        self.add_missing_proxy_hooks(llm_router)
 
     def get_proxy_hook(self, hook: str) -> CustomLogger | None:
         """
@@ -814,7 +827,7 @@ class ProxyLogging:
         return self.proxy_hook_mapping.get(hook)
 
     def _init_litellm_callbacks(self, llm_router: Router | None = None):
-        self._add_proxy_hooks(llm_router)
+        self.add_missing_proxy_hooks(llm_router)
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)
 
         # Track string callbacks and their initialized instances so we can

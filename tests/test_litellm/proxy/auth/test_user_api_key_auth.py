@@ -33,6 +33,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _ensure_parent_otel_span_on_request_state,
     _PendingAutoRegister,
     _matches_routing_override,
+    _resolve_jwt_to_virtual_key,
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
@@ -49,6 +50,35 @@ class _RoutingRequest:
         self.headers = headers or {}
         self.query_params = query_params or {}
         self.state = SimpleNamespace()
+
+
+@pytest.mark.asyncio
+async def test_jwt_virtual_key_mapping_uses_cached_key_during_initial_db_recovery():
+    token_hash = "cached-virtual-key-hash"
+    cache = DualCache()
+    await cache.async_set_cache("jwt_key_mapping:sub:jwt-user", token_hash)
+    await cache.async_set_cache(
+        token_hash,
+        UserAPIKeyAuth(token=token_hash, user_id="jwt-user", team_id="jwt-team"),
+    )
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    result = await _resolve_jwt_to_virtual_key(
+        jwt_claims={"sub": "jwt-user"},
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert isinstance(result, UserAPIKeyAuth)
+    assert result.user_id == "jwt-user"
+    assert result.team_id == "jwt-team"
 
 
 def test_get_api_key():

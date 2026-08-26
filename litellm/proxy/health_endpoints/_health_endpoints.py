@@ -7,10 +7,11 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Final, Literal, TypedDict, cast
+from typing import Any, Final, Literal, NotRequired, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -1317,6 +1318,7 @@ async def health_license_endpoint(
 class DBHealthCache(TypedDict):
     status: str
     last_updated: datetime
+    fail_open_safe: NotRequired[ReadOnly[bool]]
 
 
 db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.now()}
@@ -1333,14 +1335,26 @@ async def _db_health_readiness_check():
             return db_health_cache
 
         if prisma_client is None:
-            db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+            db_health_cache = {
+                "status": "disconnected",
+                "last_updated": datetime.now(),
+                "fail_open_safe": False,
+            }
             return db_health_cache
 
         await prisma_client.health_check()
-        db_health_cache = {"status": "connected", "last_updated": datetime.now()}
+        db_health_cache = {
+            "status": "connected",
+            "last_updated": datetime.now(),
+            "fail_open_safe": False,
+        }
         return db_health_cache
     except Exception as e:
-        db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
+        db_health_cache = {
+            "status": "disconnected",
+            "last_updated": datetime.now(),
+            "fail_open_safe": PrismaDBExceptionHandler.is_database_connection_error(e),
+        }
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             try:
                 verbose_proxy_logger.warning("_db_health_readiness_check: health_check failed, attempting reconnect")
@@ -1350,11 +1364,24 @@ async def _db_health_readiness_check():
                 db_health_cache = {
                     "status": "connected",
                     "last_updated": datetime.now(),
+                    "fail_open_safe": False,
                 }
                 return db_health_cache
-            except Exception:
+            except Exception as reconnect_error:
                 verbose_proxy_logger.error("_db_health_readiness_check: reconnect failed")
+                return {
+                    "status": "disconnected",
+                    "last_updated": db_health_cache["last_updated"],
+                    "fail_open_safe": PrismaDBExceptionHandler.is_database_connection_error(reconnect_error),
+                }
         return db_health_cache
+
+
+def _readiness_can_fail_open(db_health_status: DBHealthCache) -> bool:
+    return (
+        db_health_status.get("fail_open_safe") is True
+        and PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+    )
 
 
 @router.get(
@@ -1486,7 +1513,11 @@ async def _get_health_readiness_details(
     """
     Detailed health payload for authenticated diagnostics.
     """
-    from litellm.proxy.proxy_server import prisma_client, version
+    from litellm.proxy.proxy_server import (
+        is_prisma_initial_connect_recovery_pending,
+        prisma_client,
+        version,
+    )
 
     try:
         # get success callback
@@ -1525,11 +1556,13 @@ async def _get_health_readiness_details(
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status: Final = await _db_health_readiness_check()
-            # A configured DB that is not reachable means the worker cannot
-            # serve requests that depend on persisted state (keys, budgets,
-            # spend logs). Return 503 so orchestrators take this pod out of
-            # rotation; "Not connected" (no DB configured at all) stays 200.
-            if response is not None and db_health_status["status"] != "connected":
+            # A configured DB that is not reachable is unhealthy unless the
+            # operator explicitly opted into fail-open request handling.
+            if (
+                response is not None
+                and db_health_status["status"] != "connected"
+                and _readiness_can_fail_open(db_health_status) is False
+            ):
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
@@ -1543,9 +1576,16 @@ async def _get_health_readiness_details(
                 "show_no_redis_warning": show_no_redis_warning,
             }
         else:
+            initial_recovery_pending: Final = is_prisma_initial_connect_recovery_pending()
+            if (
+                response is not None
+                and initial_recovery_pending
+                and PrismaDBExceptionHandler.should_allow_request_on_db_unavailable() is False
+            ):
+                response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
-                "db": "Not connected",
+                "db": "disconnected" if initial_recovery_pending else "Not connected",
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
@@ -1614,13 +1654,16 @@ async def _resolve_public_readiness_db(response: Response) -> str:
     503 when a configured DB is unreachable. Mirrors the legacy values:
     "Not connected" (no DB configured), "connected", "disconnected".
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import is_prisma_initial_connect_recovery_pending, prisma_client
 
     if prisma_client is None:
-        return "Not connected"
+        initial_recovery_pending: Final = is_prisma_initial_connect_recovery_pending()
+        if initial_recovery_pending and PrismaDBExceptionHandler.should_allow_request_on_db_unavailable() is False:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return "disconnected" if initial_recovery_pending else "Not connected"
 
     db_health_status: Final = await _db_health_readiness_check()
-    if db_health_status["status"] != "connected":
+    if db_health_status["status"] != "connected" and _readiness_can_fail_open(db_health_status) is False:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return db_health_status["status"]
 
