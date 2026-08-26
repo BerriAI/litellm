@@ -332,7 +332,7 @@ class TestBedrockMantleResponsesTools:
         params = cfg.map_openai_params(
             response_api_optional_params={
                 "tools": [
-                    {"type": "web_search"},
+                    {"type": "unknown_future_tool"},
                     {"type": "function", "name": "exec_command"},
                 ]
             },
@@ -344,7 +344,7 @@ class TestBedrockMantleResponsesTools:
     def test_map_openai_params_removes_tools_when_all_unsupported(self):
         cfg = BedrockMantleResponsesAPIConfig()
         params = cfg.map_openai_params(
-            response_api_optional_params={"tools": [{"type": "web_search"}]},
+            response_api_optional_params={"tools": [{"type": "unknown_future_tool"}]},
             model="openai.gpt-5.5",
             drop_params=False,
         )
@@ -358,12 +358,43 @@ class TestBedrockMantleResponsesTools:
             "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
         ) as mock_warning:
             cfg.map_openai_params(
-                response_api_optional_params={"tools": [{"type": "web_search"}]},
+                response_api_optional_params={"tools": [{"type": "unknown_future_tool"}]},
                 model="openai.gpt-5.5",
                 drop_params=False,
             )
         assert mock_warning.call_count == 1
-        assert "web_search" in str(mock_warning.call_args)
+        assert "unknown_future_tool" in str(mock_warning.call_args)
+
+    @pytest.mark.parametrize(
+        "tool_type",
+        [
+            "web_search",
+            "web_search_2025_08_26",
+            "web_search_ga",
+            "web_search_preview",
+            "web_search_preview_2025_03_11",
+        ],
+    )
+    def test_map_openai_params_keeps_native_web_search_tools(self, tool_type):
+        cfg = BedrockMantleResponsesAPIConfig()
+        tool = {"type": tool_type, "search_context_size": "medium"}
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [tool]},
+            model="openai.gpt-5.6-luna",
+            drop_params=False,
+        )
+        assert params["tools"] == [tool]
+
+    def test_transform_request_sends_native_web_search_tool_to_mantle(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-luna",
+            input="who won the last race?",
+            response_api_optional_request_params={"tools": [{"type": "web_search"}]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [{"type": "web_search"}]
 
 
 def _codex_exec_tool():
@@ -551,7 +582,7 @@ class TestBedrockMantleCodexAdditionalTools:
                     "type": "additional_tools",
                     "role": "developer",
                     "tools": [
-                        {"type": "web_search"},
+                        {"type": "unknown_future_tool"},
                         {"type": "function", "name": "wait"},
                     ],
                 },
@@ -563,7 +594,7 @@ class TestBedrockMantleCodexAdditionalTools:
     def test_item_stripped_even_when_no_hoisted_tool_survives(self):
         body = self._transform(
             input=[
-                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+                {"type": "additional_tools", "role": "developer", "tools": [{"type": "unknown_future_tool"}]},
                 self._USER_MESSAGE,
             ]
         )

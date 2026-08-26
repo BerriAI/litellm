@@ -48,7 +48,20 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
 )
 
 # Per Bedrock Mantle Responses API validation errors.
-_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset(
+    {
+        "function",
+        "mcp",
+        "custom",
+        "namespace",
+        "tool_search",
+        "web_search",
+        "web_search_2025_08_26",
+        "web_search_ga",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+    }
+)
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 
