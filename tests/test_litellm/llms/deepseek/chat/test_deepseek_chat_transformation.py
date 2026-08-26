@@ -1,3 +1,4 @@
+import litellm
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
@@ -106,6 +107,254 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
 def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
     config = DeepSeekChatConfig()
     assert config._thinking_mode_active(model="deepseek-reasoner", optional_params={"thinking": True}) is False
+
+
+class TestDeepSeekVisionMultimodalContent:
+    """Image content lists are forwarded only for user messages on vision models."""
+
+    VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+    NON_VISION_MODEL = "deepseek/deepseek-chat"
+
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+        prior_entry = litellm.model_cost.get(self.VISION_MODEL)
+        self._prior_registry_entry = dict(prior_entry) if prior_entry is not None else None
+        litellm.register_model(
+            {
+                "deepseek/deepseek-v4-flash-vision-exp": {
+                    "litellm_provider": "deepseek",
+                    "mode": "chat",
+                    "input_cost_per_token": 4.4e-07,
+                    "output_cost_per_token": 1.32e-06,
+                    "supports_vision": True,
+                }
+            }
+        )
+
+    def teardown_method(self):
+        if self._prior_registry_entry is None:
+            litellm.model_cost.pop(self.VISION_MODEL, None)
+        else:
+            litellm.model_cost[self.VISION_MODEL] = self._prior_registry_entry
+
+    @staticmethod
+    def _image_message(role="user"):
+        return {
+            "role": role,
+            "content": [
+                {"type": "text", "text": "what is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.jpg", "detail": "auto"},
+                },
+            ],
+        }
+
+    def test_user_image_list_forwarded_on_vision_model(self):
+        result = self.config._transform_messages([self._image_message()], model=self.VISION_MODEL)
+
+        assert isinstance(result[0]["content"], list)
+        assert result[0]["content"][0]["type"] == "text"
+        assert result[0]["content"][1]["type"] == "image_url"
+        assert result[0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
+
+    def test_image_list_collapsed_on_non_vision_model(self):
+        result = self.config._transform_messages([self._image_message()], model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == "what is in this image?"
+
+    def test_image_list_collapsed_on_non_user_roles_even_on_vision_model(self):
+        for role in ("assistant", "system"):
+            result = self.config._transform_messages([self._image_message(role=role)], model=self.VISION_MODEL)
+
+            assert result[0]["content"] == "what is in this image?"
+
+    def test_audio_block_collapsed_even_on_vision_model(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe this"},
+                    {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "transcribe this"
+
+    def test_typeless_image_block_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this"},
+                    {"image_url": {"url": "https://example.com/image.jpg"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "what is this"
+
+    def test_text_only_content_list_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello "},
+                    {"type": "text", "text": "world"},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert isinstance(result[0]["content"], str)
+        assert result[0]["content"] == "Hello world"
+
+    def test_search_results_text_appended_on_forwarded_message(self):
+        message = self._image_message()
+        message["search_results"] = [{"source": "kb", "content": [{"text": "article body"}]}]
+
+        result = self.config._transform_messages([message], model=self.VISION_MODEL)
+
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert content[-1] == {"type": "text", "text": "kbarticle body"}
+        assert any(block.get("type") == "image_url" for block in content)
+        assert "search_results" not in result[0]
+
+    def test_search_results_text_kept_on_collapse(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "context: "}],
+                "search_results": [{"source": "kb", "content": [{"text": "article body"}]}],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == "context: kbarticle body"
+
+    def test_responses_shape_blocks_collapse_even_on_vision_model(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "what is this?"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "what is this?"
+
+    def test_image_block_missing_payload_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi"}, {"type": "image_url"}],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "hi"
+
+    def test_text_block_missing_text_field_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "text"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "hi"
+
+    def test_string_content_search_results_folded_into_string(self):
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "summarize the docs",
+                "search_results": [{"source": "kb", "content": [{"text": "article body"}]}],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == "summarize the docskbarticle body"
+
+    def test_plain_string_content_message_unchanged(self):
+        messages = [{"role": "user", "content": "hello"}]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0] is messages[0]
+
+    def test_empty_content_list_untouched(self):
+        messages = [{"role": "user", "content": []}]
+
+        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == []
+
+    def test_later_messages_still_collapsed_after_forwarded_one(self):
+        messages = [
+            self._image_message(),
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "and "},
+                    {"type": "text", "text": "then?"},
+                ],
+            },
+            self._image_message(),
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert isinstance(result[0]["content"], list)
+        assert result[1]["content"] == "and then?"
+        assert isinstance(result[2]["content"], list)
+
+    def test_transform_request_preserves_image_url_block(self):
+        body = self.config.transform_request(
+            model=self.VISION_MODEL,
+            messages=[self._image_message()],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = body["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert any(block.get("type") == "image_url" for block in content)
+
+    async def test_async_transform_request_preserves_image_url_block(self):
+        body = await self.config.async_transform_request(
+            model=self.VISION_MODEL,
+            messages=[self._image_message()],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = body["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert any(block.get("type") == "image_url" for block in content)
 
 
 class TestDeepSeekThinkingParams:
@@ -282,8 +531,6 @@ class TestDeepSeekThinkingParams:
 
         result = self.config._drop_unsupported_tools(optional_params)
 
-        assert result["tools"] == [
-            {"type": "function", "function": {"name": "get_weather"}}
-        ]
+        assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True
