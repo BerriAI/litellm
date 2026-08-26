@@ -23,6 +23,7 @@ from redis.credentials import CredentialProvider
 from litellm import get_secret, get_secret_str
 from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
+    ElastiCacheIAMCredentialProvider,
     GCPIAMCredentialProvider,
     _generate_gcp_iam_access_token,
 )
@@ -58,6 +59,10 @@ def _get_redis_kwargs():
         "azure_client_id",
         "azure_tenant_id",
         "azure_client_secret",
+        "aws_iam_auth",
+        "aws_iam_user_name",
+        "aws_iam_cache_name",
+        "aws_iam_region",
     }
 
     available_args: Final = {x for x in arg_spec.args if x not in exclude_args} | include_args
@@ -170,6 +175,32 @@ def _redis_kwargs_from_environment():
         if value is not None:
             return_dict[v] = value
     return return_dict
+
+
+def _is_true(value: object | None) -> bool:
+    return value is True or (isinstance(value, str) and value.lower() == "true")
+
+
+def _build_elasticache_iam_provider(redis_kwargs: dict) -> ElastiCacheIAMCredentialProvider | None:
+    if not _is_true(redis_kwargs.get("aws_iam_auth")):
+        return None
+
+    required_settings: Final = {
+        "aws_iam_user_name": redis_kwargs.get("aws_iam_user_name"),
+        "aws_iam_cache_name": redis_kwargs.get("aws_iam_cache_name"),
+        "aws_iam_region": redis_kwargs.get("aws_iam_region")
+        or get_secret_str("AWS_REGION")
+        or get_secret_str("AWS_DEFAULT_REGION"),
+    }
+    missing_settings: Final = tuple(name for name, value in required_settings.items() if not value)
+    if missing_settings:
+        raise ValueError("AWS ElastiCache IAM Redis authentication requires: " + ", ".join(missing_settings))
+
+    return ElastiCacheIAMCredentialProvider(
+        user_name=str(required_settings["aws_iam_user_name"]),
+        cache_name=str(required_settings["aws_iam_cache_name"]),
+        region=str(required_settings["aws_iam_region"]),
+    )
 
 
 def create_gcp_iam_redis_connect_func(
@@ -442,6 +473,7 @@ def _get_redis_client_logic(**env_overrides):
         _azure_redis_ad_token: Final = redis_kwargs.get("azure_redis_ad_token") or get_secret("REDIS_AZURE_AD_TOKEN")
 
         _azure_ad_enabled: Final = _azure_redis_ad_token is not None and str(_azure_redis_ad_token).lower() == "true"
+        _aws_iam_enabled: Final = _is_true(redis_kwargs.get("aws_iam_auth"))
 
         if _azure_ad_enabled and _gcp_service_account is not None:
             verbose_logger.warning(
@@ -462,12 +494,23 @@ def _get_redis_client_logic(**env_overrides):
                 azure_tenant_id=_azure_tenant_id,
                 azure_client_secret=_azure_client_secret,
             )
-            # Marker for async paths to detect Azure AD auth. The live credential
-            # object is attached separately as `_azure_credential` by
-            # `create_azure_ad_redis_connect_func`; the raw client_id/tenant_id/secret
-            # are intentionally NOT exposed on the function to avoid leaking
-            # credentials via inspection or logging.
             redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True
+
+        if _aws_iam_enabled and _gcp_service_account is not None:
+            verbose_logger.warning(
+                "Both GCP IAM (gcp_service_account) and AWS ElastiCache IAM (aws_iam_auth) are configured "
+                "for Redis. Using GCP IAM. Remove one to avoid misconfiguration."
+            )
+        elif _aws_iam_enabled and _azure_ad_enabled:
+            verbose_logger.warning(
+                "Both Azure AD (azure_redis_ad_token) and AWS ElastiCache IAM (aws_iam_auth) are configured "
+                "for Redis. Using Azure AD. Remove one to avoid misconfiguration."
+            )
+        elif _aws_iam_enabled:
+            aws_provider: Final = _build_elasticache_iam_provider(redis_kwargs)
+            if aws_provider is not None:
+                verbose_logger.debug("Setting up AWS ElastiCache IAM authentication for Redis.")
+                redis_kwargs["credential_provider"] = aws_provider
 
     redis_kwargs.pop("gcp_service_account", None)
     redis_kwargs.pop("gcp_ssl_ca_certs", None)
@@ -477,6 +520,10 @@ def _get_redis_client_logic(**env_overrides):
     redis_kwargs.pop("azure_client_id", None)
     redis_kwargs.pop("azure_tenant_id", None)
     redis_kwargs.pop("azure_client_secret", None)
+    redis_kwargs.pop("aws_iam_auth", None)
+    redis_kwargs.pop("aws_iam_user_name", None)
+    redis_kwargs.pop("aws_iam_cache_name", None)
+    redis_kwargs.pop("aws_iam_region", None)
 
     if redis_kwargs.get("credential_provider") is not None:
         redis_kwargs.pop("redis_connect_func", None)

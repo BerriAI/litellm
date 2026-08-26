@@ -2335,6 +2335,10 @@ class CoordinationRedisParams(LiteLLMPydanticObjectBase):
     )
     sentinel_password: str | None = Field(None, description="password for the sentinel nodes")
     service_name: str | None = Field(None, description="sentinel service name")
+    aws_iam_auth: bool | str | None = Field(None, description="enable AWS ElastiCache IAM authentication")
+    aws_iam_user_name: str | None = Field(None, description="AWS ElastiCache IAM user name")
+    aws_iam_cache_name: str | None = Field(None, description="AWS ElastiCache cache name")
+    aws_iam_region: str | None = Field(None, description="AWS region for ElastiCache IAM authentication")
 
     def has_connection_target(self) -> bool:
         return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))

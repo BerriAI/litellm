@@ -1,7 +1,8 @@
 import asyncio
 import threading
 import time
-from typing import Any, Final
+from typing import Any, Final, Protocol
+from urllib.parse import quote
 
 from redis.credentials import CredentialProvider
 
@@ -102,6 +103,88 @@ class GCPIAMCredentialProvider(CredentialProvider):
     async def get_credentials_async(self) -> tuple[str]:
         token: Final = await asyncio.to_thread(_get_cached_gcp_iam_token, self._gcp_service_account)
         return (token,)
+
+
+_ELASTICACHE_SERVICE_NAME: Final = "elasticache"
+_ELASTICACHE_TOKEN_TTL_SECONDS: Final = 900
+
+
+class _FrozenBotocoreCredentials(Protocol):
+    access_key: str
+    secret_key: str
+    token: str | None
+
+
+class _BotocoreCredentials(Protocol):
+    def get_frozen_credentials(self) -> _FrozenBotocoreCredentials: ...
+
+
+class _BotocoreCredentialsResolver(Protocol):
+    def __call__(self) -> _BotocoreCredentials | None: ...
+
+
+class ElastiCacheIAMCredentialProvider(CredentialProvider):
+    def __init__(
+        self,
+        user_name: str,
+        cache_name: str,
+        region: str,
+        credentials_resolver: _BotocoreCredentialsResolver | None = None,
+        token_lifetime_seconds: int = _ELASTICACHE_TOKEN_TTL_SECONDS,
+    ) -> None:
+        self._user_name = user_name
+        self._cache_name = cache_name
+        self._region = region
+        self._credentials_resolver = credentials_resolver or self._resolve_credentials
+        self._credentials: _BotocoreCredentials | None = None
+        self._token_lifetime_seconds = token_lifetime_seconds
+
+    @staticmethod
+    def _resolve_credentials() -> Any:
+        try:
+            import botocore.session
+        except ImportError as e:
+            raise ImportError(
+                "botocore is required for ElastiCache IAM Redis authentication. Install it with: pip install boto3"
+            ) from e
+
+        return botocore.session.get_session().get_credentials()
+
+    def _get_credentials(self) -> tuple[str, str]:
+        credentials: Final = self._credentials if self._credentials is not None else self._credentials_resolver()
+        if credentials is None:
+            raise RuntimeError("Unable to resolve AWS credentials for ElastiCache IAM Redis authentication")
+        self._credentials = credentials
+
+        frozen_credentials: Final = credentials.get_frozen_credentials()
+        if frozen_credentials is None:
+            raise RuntimeError("Unable to resolve AWS credentials for ElastiCache IAM Redis authentication")
+
+        try:
+            from botocore.auth import SigV4QueryAuth
+            from botocore.awsrequest import AWSRequest
+        except ImportError as e:
+            raise ImportError(
+                "botocore is required for ElastiCache IAM Redis authentication. Install it with: pip install boto3"
+            ) from e
+
+        request: Final = AWSRequest(
+            method="GET",
+            url=(f"https://{self._cache_name}/?Action=connect&User={quote(self._user_name, safe='')}"),
+        )
+        SigV4QueryAuth(
+            frozen_credentials,
+            _ELASTICACHE_SERVICE_NAME,
+            self._region,
+            expires=self._token_lifetime_seconds,
+        ).add_auth(request)
+        return self._user_name, request.url.removeprefix("https://")
+
+    def get_credentials(self) -> tuple[str, str]:
+        return self._get_credentials()
+
+    async def get_credentials_async(self) -> tuple[str, str]:
+        return await asyncio.to_thread(self._get_credentials)
 
 
 class AzureADCredentialProvider(CredentialProvider):
