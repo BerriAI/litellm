@@ -576,6 +576,57 @@ async def new_vector_store(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _reconcile_in_memory_vector_stores_with_db(
+    registry: "VectorStoreRegistry",
+    vector_stores_from_db: list[LiteLLM_ManagedVectorStore],
+    db_vector_store_ids: set,
+    vector_store_map: dict[str, LiteLLM_ManagedVectorStore],
+) -> None:
+    """Merge in-memory registry entries into ``vector_store_map`` and reconcile
+    the registry against the DB.
+
+    Rules:
+    - Config-loaded stores (no DB row by design) are always surfaced in the
+      response and never pruned.
+    - Non-config in-memory entries missing from the DB are treated as deleted
+      and evicted from the in-memory registry.
+    - DB rows are then written back over the in-memory registry so future
+      reads see the latest state.
+    """
+    in_memory_vector_stores = copy.deepcopy(registry.vector_stores)
+    config_loaded_ids = registry.config_loaded_vector_store_ids
+    vector_stores_to_delete_from_memory: list[str] = []
+
+    for vector_store in in_memory_vector_stores:
+        vector_store_id = vector_store.get("vector_store_id", None)
+        if not vector_store_id:
+            continue
+
+        if vector_store_id in config_loaded_ids:
+            # Config-loaded stores never had a DB row; surface and skip pruning.
+            if vector_store_id not in vector_store_map:
+                vector_store_map[vector_store_id] = vector_store
+            continue
+
+        if vector_store_id not in db_vector_store_ids:
+            verbose_proxy_logger.info(
+                "Vector store %s exists in memory but not in database - marking for deletion from cache",
+                vector_store_id,
+            )
+            vector_stores_to_delete_from_memory.append(vector_store_id)
+        elif vector_store_id not in vector_store_map:
+            vector_store_map[vector_store_id] = vector_store
+
+    for vs_id in vector_stores_to_delete_from_memory:
+        registry.delete_vector_store_from_registry(vector_store_id=vs_id)
+        verbose_proxy_logger.debug("Removed deleted vector store %s from in-memory registry", vs_id)
+
+    for vector_store in vector_stores_from_db:
+        vector_store_id = vector_store.get("vector_store_id", None)
+        if vector_store_id:
+            registry.update_vector_store_in_registry(vector_store_id=vector_store_id, updated_data=vector_store)
+
+
 @router.get(
     "/vector_store/list",
     tags=["vector store management"],
@@ -620,52 +671,16 @@ async def list_vector_stores(
                 vector_store_map[vector_store_id] = vector_store
                 db_vector_store_ids.add(vector_store_id)
 
-        # Process in-memory vector stores
+        # Process in-memory vector stores: merge into the response map and
+        # reconcile the in-memory registry against the DB. Extracted into a
+        # helper to keep list_vector_stores under the C901 complexity budget.
         if litellm.vector_store_registry is not None:
-            in_memory_vector_stores: Final = copy.deepcopy(litellm.vector_store_registry.vector_stores)
-            # Vector stores loaded from config.yaml have no DB row; they must be
-            # returned alongside DB-sourced entries and MUST NOT be pruned by the
-            # "in memory but not in DB → deleted" reconciliation below.
-            config_loaded_ids: Final = litellm.vector_store_registry.config_loaded_vector_store_ids
-
-            vector_stores_to_delete_from_memory: Final[list[str]] = []
-
-            for vector_store in in_memory_vector_stores:
-                vector_store_id = vector_store.get("vector_store_id", None)
-                if not vector_store_id:
-                    continue
-
-                # Config-loaded stores: surface them in the response but never
-                # treat them as "deleted from DB" — they never had a DB row.
-                if vector_store_id in config_loaded_ids:
-                    if vector_store_id not in vector_store_map:
-                        vector_store_map[vector_store_id] = vector_store
-                    continue
-
-                # If vector store is in memory but NOT in database, it was deleted
-                if vector_store_id not in db_vector_store_ids:
-                    verbose_proxy_logger.info(
-                        "Vector store %s exists in memory but not in database - marking for deletion from cache",
-                        vector_store_id,
-                    )
-                    vector_stores_to_delete_from_memory.append(vector_store_id)
-                # If not in our map yet, add it (only in-memory, not in DB)
-                elif vector_store_id not in vector_store_map:
-                    vector_store_map[vector_store_id] = vector_store
-
-            # Synchronize in-memory registry with database
-            # 1. Remove deleted vector stores from memory
-            for vs_id in vector_stores_to_delete_from_memory:
-                litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
-                verbose_proxy_logger.debug("Removed deleted vector store %s from in-memory registry", vs_id)
-
-            # 2. Update in-memory registry with database versions (for updates)
-            for vector_store in vector_stores_from_db:
-                vector_store_id = vector_store.get("vector_store_id", None)
-                if vector_store_id:
-                    litellm.vector_store_registry.update_vector_store_in_registry(
-                        vector_store_id=vector_store_id, updated_data=vector_store
-                    )
+            _reconcile_in_memory_vector_stores_with_db(
+                registry=litellm.vector_store_registry,
+                vector_stores_from_db=vector_stores_from_db,
+                db_vector_store_ids=db_vector_store_ids,
+                vector_store_map=vector_store_map,
+            )
 
         # Filter vector stores based on access control
         accessible_vector_stores: Final = []
