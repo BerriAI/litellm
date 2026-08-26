@@ -3312,6 +3312,61 @@ class TestPatchModelBlockedAuthGate:
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
 
 
+class TestPatchModelRowDeletedBeforeWrite:
+    """A row deleted between the read and the update makes prisma's `update`
+    return None. That must surface patch_model's own 404 not-found contract,
+    not a 500 from dereferencing the missing row."""
+
+    @pytest.mark.asyncio
+    async def test_patch_model_404s_when_update_returns_none(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+        from litellm.proxy.proxy_server import ProxyException
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "openai/gpt-4o-mini"}
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=None)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch(  # test-quality-ok: stubs the auth gate so the test exercises the not-found branch under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: stubs the cache write so the test observes only the DB result handling
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(
+                    return_value=ReconcileOutcome(still_desired=None, live_after=None)
+                ),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(blocked=True),
+                    user_api_key_dict=admin,
+                )
+
+        assert exc_info.value.code == "404"
+        assert exc_info.value.message == "Model m1 not found on proxy."
+
+
 class TestWriteSurfacesReloadDrop:
     """A model-write endpoint may report success only if every row it wrote is, after the
     reload it triggered, live in this pod's router or deliberately environment-inactive."""

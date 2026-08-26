@@ -3,7 +3,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Optional, cast
+from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import pytest
@@ -2202,6 +2202,100 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
         )
         assert update_call_kwargs.get("include", {}).get("object_permission") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name",
+    ["team_model_add", "team_model_delete", "update_team_member_permissions"],
+)
+async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
+    """A team deleted between the read and the write must 404.
+
+    Prisma's `update` returns None when no row matches `where`, and the team
+    row can be deleted between the read these endpoints do first and the
+    update that follows it. Without the guard, `team_model_add` /
+    `team_model_delete` hand that None to `_refresh_cached_team` (which
+    reads `team_row.team_id`) and `/team/permissions_update` returns None
+    out of a route declared to return a team, so a plain race turns into a
+    500 instead of the 404 every other not-found path in this file raises.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        TeamModelAddRequest,
+        TeamModelDeleteRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        team_model_add,
+        team_model_delete,
+        update_team_member_permissions,
+    )
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    existing_team = MagicMock()
+    existing_team.team_id = "team-1234"
+    existing_team.model_dump.return_value = {
+        "team_id": "team-1234",
+        "models": ["bedrock-claude-sonnet-4", "openai/*"],
+        "team_member_permissions": [],
+        "spend": 0.0,
+    }
+
+    call_endpoint_under_test: Final = {
+        "team_model_add": lambda: team_model_add(
+            data=TeamModelAddRequest(team_id="team-1234", models=["team-byok-1"]),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "team_model_delete": lambda: team_model_delete(
+            data=TeamModelDeleteRequest(team_id="team-1234", models=["openai/*"]),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "update_team_member_permissions": lambda: update_team_member_permissions(
+            data=UpdateTeamMemberPermissionsRequest(
+                team_id="team-1234",
+                team_member_permissions=["/key/generate"],
+            ),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+    }[endpoint_name]
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: stubs the cache write so the test observes only the DB result handling
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: stubs the collaborator so the test pins the endpoint's own error contract
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=existing_team,
+        ),
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=existing_team
+        )
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await call_endpoint_under_test()
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": "Team not found, passed team_id=team-1234"}
 
 
 @pytest.mark.asyncio

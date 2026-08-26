@@ -6,7 +6,9 @@ from typing import Final
 
 import anyio
 
-ANTHROPIC_PING_SSE_CHUNK: Final = 'event: ping\ndata: {"type": "ping"}\n\n'
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_CHUNK
+
+ANTHROPIC_PING_SSE_CHUNK: Final = STREAM_SSE_KEEPALIVE_PING_CHUNK
 SSE_COMMENT_PING: Final = ": ping\n\n"
 SSE_COMMENT_PING_BYTES: Final = SSE_COMMENT_PING.encode()
 # The byte form of proxy_server._SSE_FRAME_DELIMITERS, CR-only included: SSE

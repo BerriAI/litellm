@@ -352,6 +352,9 @@ async def add_team_callbacks(
             include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
         )
 
+        if new_team_row is None:
+            raise _callback_error(400, f"Team id = {team_id} does not exist. Please use a different team id.")
+
         # Without this a newly registered callback stays dormant for existing keys.
         await _refresh_cached_team(
             team_row=new_team_row,

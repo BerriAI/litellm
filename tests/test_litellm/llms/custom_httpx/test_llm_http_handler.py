@@ -2146,6 +2146,77 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     assert retry_authorization != first_attempt_headers["Authorization"]
 
 
+class TestServerFulfilledToolsInRequest:
+    """_server_fulfilled_tools_in_request gates the buffered (non-leaking) streaming
+    mode for server-fulfilled tools like headroom_retrieve."""
+
+    @staticmethod
+    def _logging_obj_with(callbacks):
+        logging_obj = Mock()
+        logging_obj.dynamic_success_callbacks = callbacks
+        return logging_obj
+
+    def test_should_hold_back_when_callback_owns_tool_in_request(self):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class RetrievalCallback(CustomLogger):
+            server_fulfilled_tool_names = frozenset({"headroom_retrieve"})
+
+        tools = [
+            {"name": "Bash", "input_schema": {"type": "object"}},
+            {"name": "headroom_retrieve", "input_schema": {"type": "object"}},
+        ]
+        assert BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+            logging_obj=self._logging_obj_with([RetrievalCallback()]), tools=tools
+        ) == frozenset({"headroom_retrieve"})
+
+    def test_should_stream_live_when_tool_absent_from_request(self):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class RetrievalCallback(CustomLogger):
+            server_fulfilled_tool_names = frozenset({"headroom_retrieve"})
+
+        tools = [{"name": "Bash", "input_schema": {"type": "object"}}]
+        assert (
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+                logging_obj=self._logging_obj_with([RetrievalCallback()]), tools=tools
+            )
+            == frozenset()
+        )
+
+    def test_should_stream_live_when_no_callback_declares_tool_names(self):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        tools = [{"name": "headroom_retrieve", "input_schema": {"type": "object"}}]
+        assert (
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+                logging_obj=self._logging_obj_with([CustomLogger()]), tools=tools
+            )
+            == frozenset()
+        )
+
+    def test_should_stream_live_without_tools(self):
+        assert (
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(logging_obj=self._logging_obj_with([]), tools=None)
+            == frozenset()
+        )
+
+    def test_interception_callbacks_declare_their_retrieval_tools(self):
+        from litellm.integrations.compression_interception.handler import (
+            LITELLM_CONTENT_RETRIEVE_TOOL_NAME,
+            CompressionInterceptionLogger,
+        )
+        from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
+            HEADROOM_RETRIEVE_TOOL_NAME,
+            HeadroomGuardrail,
+        )
+
+        assert HeadroomGuardrail.server_fulfilled_tool_names == frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
+        assert CompressionInterceptionLogger.server_fulfilled_tool_names == frozenset(
+            {LITELLM_CONTENT_RETRIEVE_TOOL_NAME}
+        )
+
+
 def _make_stub_direct_vector_store_config(response):
     from litellm.llms.base_llm.vector_store.transformation import (
         BaseDirectVectorStoreConfig,
