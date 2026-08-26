@@ -45,6 +45,11 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "replayable: edge-wired test whose provider traffic replays from a fixture bundle, so it makes "
+        "zero provider calls in replay mode; the record/replay CI lane selects it with -m replayable",
+    )
+    config.addinivalue_line(
+        "markers",
         "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
     )
     config.addinivalue_line(

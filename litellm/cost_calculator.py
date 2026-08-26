@@ -794,12 +794,8 @@ def _select_model_name_for_cost_calc(
         and custom_llm_provider is not None
         and not _model_contains_known_llm_provider(return_model)
     ):  # add provider prefix if not already present, to match model_cost
-        if region_name is not None:
-            return_model = f"{custom_llm_provider}/{region_name}/{return_model}"
-        else:
-            return_model = f"{custom_llm_provider}/{return_model}"
-
-        return_model = _strip_unregistered_leading_segments(return_model, region_name)
+        provider_prefix: Final = custom_llm_provider if region_name is None else f"{custom_llm_provider}/{region_name}"
+        return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", region_name)
 
     return return_model
 

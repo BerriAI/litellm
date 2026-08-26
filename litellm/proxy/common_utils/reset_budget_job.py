@@ -37,7 +37,7 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManage
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import ReadOnlyTable, SpendLinkedTable
+from litellm.repositories.prisma_protocols import SpendLinkedTable
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     TagRepository,
@@ -675,7 +675,7 @@ class ResetBudgetJob:
         rely on the default budget (litellm.max_end_user_budget_id) applied
         in-memory during auth checks.
         """
-        table: Final[ReadOnlyTable] = EndUserRepository(self.prisma_client).table
+        table: Final = EndUserRepository(self.prisma_client).table
         rows: Final = await self._with_db_retry(
             lambda: table.find_many(
                 where={
@@ -685,7 +685,7 @@ class ResetBudgetJob:
             ),
             reason="reset_budget_read_endusers_without_budget_id_failure",
         )
-        return [LiteLLM_EndUserTable.model_validate(row.dict()) for row in rows]
+        return [LiteLLM_EndUserTable.model_validate(row.model_dump()) for row in rows]
 
     async def _write_key_reset_updates(self, updated_keys: list[LiteLLM_VerificationToken]) -> None:
         """
@@ -1182,7 +1182,7 @@ class ResetBudgetJob:
             if not raw:
                 continue
             row_id: str = row[source.id_column]
-            windows: list = raw if isinstance(raw, list) else json.loads(raw)
+            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
             changed = False
             for window in windows:
                 counter_key = f"{source.counter_prefix}:{row_id}:window:{window['budget_duration']}"

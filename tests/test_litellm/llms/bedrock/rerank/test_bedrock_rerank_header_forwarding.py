@@ -77,7 +77,7 @@ def test_bedrock_rerank_header_forwarding_sync(model):
 
     with (
         patch.object(client, "post") as mock_post,
-        patch(
+        patch(  # test-quality-ok: boto credential lookup needs live AWS; the HTTP boundary is already a MockTransport
             "litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params",
             return_value=mock_credentials_info,
         ),
@@ -170,7 +170,7 @@ async def test_bedrock_rerank_header_forwarding_async(model):
 
     with (
         patch.object(client, "post", new_callable=AsyncMock) as mock_post,
-        patch(
+        patch(  # test-quality-ok: boto credential lookup needs live AWS; the HTTP boundary is already a MockTransport
             "litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params",
             return_value=mock_credentials_info,
         ),
@@ -241,7 +241,7 @@ def test_bedrock_rerank_timeout_sync():
 
     with (
         patch.object(client, "post") as mock_post,
-        patch(
+        patch(  # test-quality-ok: boto credential lookup needs live AWS; the HTTP boundary is already a MockTransport
             "litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params",
             return_value=mock_credentials_info,
         ),
@@ -285,7 +285,7 @@ async def test_bedrock_rerank_timeout_async():
 
     with (
         patch.object(client, "post", new_callable=AsyncMock) as mock_post,
-        patch(
+        patch(  # test-quality-ok: boto credential lookup needs live AWS; the HTTP boundary is already a MockTransport
             "litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params",
             return_value=mock_credentials_info,
         ),
@@ -340,7 +340,7 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
 
     with (
         patch.object(client, "post") as mock_post,
-        patch(
+        patch(  # test-quality-ok: boto credential lookup needs live AWS; the HTTP boundary is already a MockTransport
             "litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params",
             return_value=mock_credentials_info,
         ),
@@ -400,3 +400,32 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
 
         except Exception as e:
             pytest.fail(f"Failed to merge and forward headers: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_rerank_records_llm_api_duration():
+    """The bedrock rerank handler must feed httpx timing into the logging obj, so the
+    proxy can emit x-litellm-overhead-duration-ms / x-litellm-timing-* on /rerank."""
+    import httpx
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=bedrock_rerank_response)
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    with patch(  # test-quality-ok: boto credential lookup needs live AWS; the HTTP boundary is already a MockTransport
+        "litellm.llms.bedrock.rerank.handler.BedrockRerankHandler._get_boto_credentials_from_optional_params",
+        return_value=create_mock_credentials(),
+    ):
+        response = await litellm.arerank(
+            model="bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0",
+            query=test_query,
+            documents=test_documents,
+            top_n=3,
+            client=client,
+            aws_region_name="us-east-1",
+        )
+
+    assert response._hidden_params["litellm_overhead_time_ms"] is not None
+    assert response._hidden_params["_response_ms"] >= response._hidden_params["litellm_overhead_time_ms"]

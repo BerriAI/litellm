@@ -35,6 +35,7 @@ from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
+from types import MappingProxyType
 
 import dotenv
 import httpx
@@ -98,6 +99,43 @@ def _get_cached_custom_logger():
 
         _CustomLogger = CustomLogger
     return _CustomLogger
+
+
+@lru_cache(maxsize=None)
+def _accepts_fallback_depth_kwarg_for_class(cls: type) -> bool:
+    """
+    Whether cls's async_post_call_failure_deployment_hook override accepts a
+    fallback_depth keyword, cached per class so a signature the base class added after a
+    subscriber's override was written (e.g. the PR's own earlier 3-arg proof-of-fix
+    example) doesn't raise TypeError - swallowed at debug level - on every call.
+    """
+    params: Final = inspect.signature(cls.async_post_call_failure_deployment_hook).parameters
+    return "fallback_depth" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _snapshot_exception_for_hook(exception: Exception) -> Exception:
+    """
+    A same-class copy of exception that skips __init__ (many litellm exceptions require
+    constructor args beyond what .args carries, so copy.copy's pickle-based reconstruction
+    fails on them). Handed to failure-hook callbacks instead of the live object so a
+    callback setting e.g. exception.status_code cannot change the status code the real
+    caller actually receives. Falls back to the live object if snapshotting fails for a
+    type this doesn't anticipate, since the real exception must still reach the callback.
+    """
+    try:
+        cls: Final = type(exception)
+        snapshot: Final = cls.__new__(cls)
+        snapshot.__dict__.update(exception.__dict__)
+        snapshot.args = exception.args
+        snapshot.__traceback__ = exception.__traceback__
+        snapshot.__cause__ = exception.__cause__
+        snapshot.__context__ = exception.__context__
+        # Setting __cause__ implicitly forces __suppress_context__ to True (CPython
+        # behavior for `raise ... from ...`), so this must be set after, not before.
+        snapshot.__suppress_context__ = exception.__suppress_context__
+        return snapshot
+    except Exception:  # noqa: BLE001  # any snapshot failure must fall back to the live object, not break the failure path
+        return exception
 
 
 def _get_cached_custom_guardrail():
@@ -1253,6 +1291,59 @@ async def async_post_call_success_deployment_hook(
     return response
 
 
+async def async_post_call_failure_deployment_hook(
+    request_data: Mapping[str, object], exception: Exception, call_type: str
+) -> None:
+    """
+    Notify CustomLogger callbacks that a deployment attempt failed.
+
+    Unlike its pre-call/post-success siblings, this wraps each callback call
+    in its own try/except: it runs on the wrapper's exception path, so a
+    broken callback must never replace the real exception that's about to be
+    re-raised to the caller.
+
+    Reads ``fallback_depth`` off ``request_data`` (set by ``Router`` on each
+    fallback hop) and passes it through to the callback; ``None`` when
+    missing or not an int, since a bare SDK call has no fallback chain.
+
+    Callbacks receive a same-class snapshot of ``exception``, not the live
+    object that's about to be re-raised, so a callback setting an attribute
+    on it (e.g. ``status_code``) cannot change what the real caller sees.
+    ``request_data`` omits ``attempted_targets``: unlike the rest of this
+    attempt's own kwargs, it's the *same* object shared by reference across
+    every hop of the live fallback walk, so a callback calling ``.record()``
+    on it would make the router skip a deployment it hasn't actually tried.
+    """
+    try:
+        typed_call_type = CallTypes(call_type)
+    except ValueError:
+        typed_call_type = None  # unknown call type
+
+    _raw_fallback_depth: Final = request_data.get("fallback_depth")
+    fallback_depth: Final = _raw_fallback_depth if isinstance(_raw_fallback_depth, int) else None
+    safe_request_data: Final = MappingProxyType({k: v for k, v in request_data.items() if k != "attempted_targets"})
+    safe_exception: Final = _snapshot_exception_for_hook(exception)
+
+    CustomLogger: Final = _get_cached_custom_logger()
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            try:
+                if _accepts_fallback_depth_kwarg_for_class(type(callback)):
+                    await callback.async_post_call_failure_deployment_hook(
+                        safe_request_data, safe_exception, typed_call_type, fallback_depth=fallback_depth
+                    )
+                else:
+                    await callback.async_post_call_failure_deployment_hook(
+                        safe_request_data, safe_exception, typed_call_type
+                    )
+            except Exception as callback_error:  # noqa: BLE001  # a broken callback must not mask the real failure
+                verbose_logger.debug(
+                    "async_post_call_failure_deployment_hook error in %s: %s",
+                    type(callback).__name__,
+                    callback_error,
+                )
+
+
 def post_call_processing(
     original_response,
     model,
@@ -1670,6 +1761,9 @@ def client(original_function):
         is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
+        _deployment_call_end_time: datetime.datetime | None = (
+            None  # rebind-ok: set once, from inside the except below, only if the model call itself fails
+        )
 
         try:
             if logging_obj is None:
@@ -1758,7 +1852,19 @@ def client(original_function):
                     print_verbose(f"Error while checking max token limit: {e}")
 
             # MODEL CALL
-            result = await original_function(*args, **kwargs)
+            try:
+                result = await original_function(*args, **kwargs)
+            except Exception as deployment_error:
+                _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
+                try:
+                    await async_post_call_failure_deployment_hook(
+                        request_data=kwargs,
+                        exception=deployment_error,
+                        call_type=call_type,
+                    )
+                except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must never replace the real deployment failure, so there is nothing to do with what it raises
+                    pass
+                raise
             end_time = datetime.datetime.now()
 
             if _is_streaming_request(
@@ -1871,7 +1977,9 @@ def client(original_function):
             return result
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
-            end_time = datetime.datetime.now()
+            # Reuse the timestamp taken right when the deployment call itself failed, before
+            # the failure hook ran, so a slow callback doesn't inflate the reported duration.
+            end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
                 try:
                     logging_obj.failure_handler(
@@ -4130,7 +4238,7 @@ def get_optional_params(
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
     elif custom_llm_provider == "together_ai":
-        optional_params = litellm.TogetherAIConfig().map_openai_params(
+        optional_params = litellm.TogetherAIChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -5737,6 +5845,7 @@ def _get_model_info_helper(
                 tiered_pricing=_model_info.get("tiered_pricing", None),
                 litellm_provider=_model_info.get("litellm_provider", custom_llm_provider),
                 mode=_model_info.get("mode"),
+                supported_endpoints=_model_info.get("supported_endpoints", None),
                 supports_system_messages=_model_info.get("supports_system_messages", None),
                 supports_response_schema=_model_info.get("supports_response_schema", None),
                 supports_vision=_model_info.get("supports_vision", None),
@@ -7898,7 +8007,7 @@ class ProviderConfigManager:
             LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
             LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
-            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
+            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIChatConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
@@ -8610,6 +8719,12 @@ class ProviderConfigManager:
             )
 
             return BedrockPassthroughConfig()
+        elif LlmProviders.BEDROCK_MANTLE == provider:
+            from litellm.llms.bedrock_mantle.passthrough.transformation import (
+                BedrockMantlePassthroughConfig,
+            )
+
+            return BedrockMantlePassthroughConfig()
         elif LlmProviders.VLLM == provider or LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.vllm.passthrough.transformation import (
                 VLLMPassthroughConfig,

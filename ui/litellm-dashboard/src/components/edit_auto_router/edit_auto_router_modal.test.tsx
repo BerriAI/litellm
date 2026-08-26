@@ -245,7 +245,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     await user.click(await screen.findByText("Advanced: Classification Method"));
     await screen.findByText("Context Window Size");
     expect(screen.getByDisplayValue("5")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("300")).toBeInTheDocument();
+    expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 

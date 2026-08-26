@@ -17,6 +17,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
     DailyGuardrailUsageUnitsRepository,
@@ -30,13 +31,6 @@ from litellm.repositories.table_repositories import (
 if TYPE_CHECKING:
     from prisma import models as prisma_models
     from prisma import types as prisma_types
-    from prisma.actions import (
-        LiteLLM_DailyGuardrailMetricsActions,
-        LiteLLM_DailyGuardrailUsageUnitsActions,
-        LiteLLM_DailyPolicyMetricsActions,
-        LiteLLM_GuardrailsTableActions,
-        LiteLLM_PolicyTableActions,
-    )
 
     from litellm.proxy.utils import PrismaClient
     from litellm.types.guardrails import Guardrail
@@ -85,8 +79,8 @@ def _resolve_usage_window(start_date: str | None, end_date: str | None) -> tuple
 
 def _guardrails_table(
     prisma_client: "PrismaClient",
-) -> "LiteLLM_GuardrailsTableActions[prisma_models.LiteLLM_GuardrailsTable]":
-    guardrails_table: LiteLLM_GuardrailsTableActions[prisma_models.LiteLLM_GuardrailsTable] = GuardrailsRepository(
+) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
+    guardrails_table: Final[TableActions[prisma_models.LiteLLM_GuardrailsTable]] = GuardrailsRepository(
         prisma_client
     ).table
     return guardrails_table
@@ -94,28 +88,26 @@ def _guardrails_table(
 
 def _policies_table(
     prisma_client: "PrismaClient",
-) -> "LiteLLM_PolicyTableActions[prisma_models.LiteLLM_PolicyTable]":
-    policies_table: Final[LiteLLM_PolicyTableActions[prisma_models.LiteLLM_PolicyTable]] = PolicyRepository(
-        prisma_client
-    ).table
+) -> "TableActions[prisma_models.LiteLLM_PolicyTable]":
+    policies_table: Final[TableActions[prisma_models.LiteLLM_PolicyTable]] = PolicyRepository(prisma_client).table
     return policies_table
 
 
 def _daily_guardrail_metrics_table(
     prisma_client: "PrismaClient",
-) -> "LiteLLM_DailyGuardrailMetricsActions[prisma_models.LiteLLM_DailyGuardrailMetrics]":
-    metrics_table: Final[LiteLLM_DailyGuardrailMetricsActions[prisma_models.LiteLLM_DailyGuardrailMetrics]] = (
-        DailyGuardrailMetricsRepository(prisma_client).table
-    )
+) -> "TableActions[prisma_models.LiteLLM_DailyGuardrailMetrics]":
+    metrics_table: Final[TableActions[prisma_models.LiteLLM_DailyGuardrailMetrics]] = DailyGuardrailMetricsRepository(
+        prisma_client
+    ).table
     return metrics_table
 
 
 def _daily_policy_metrics_table(
     prisma_client: "PrismaClient",
-) -> "LiteLLM_DailyPolicyMetricsActions[prisma_models.LiteLLM_DailyPolicyMetrics]":
-    metrics_table: Final[LiteLLM_DailyPolicyMetricsActions[prisma_models.LiteLLM_DailyPolicyMetrics]] = (
-        DailyPolicyMetricsRepository(prisma_client).table
-    )
+) -> "TableActions[prisma_models.LiteLLM_DailyPolicyMetrics]":
+    metrics_table: Final[TableActions[prisma_models.LiteLLM_DailyPolicyMetrics]] = DailyPolicyMetricsRepository(
+        prisma_client
+    ).table
     return metrics_table
 
 
@@ -135,8 +127,8 @@ async def _find_daily_policy_metrics(
 
 def _daily_guardrail_usage_units_table(
     prisma_client: "PrismaClient",
-) -> "LiteLLM_DailyGuardrailUsageUnitsActions[prisma_models.LiteLLM_DailyGuardrailUsageUnits]":
-    units_table: Final[LiteLLM_DailyGuardrailUsageUnitsActions[prisma_models.LiteLLM_DailyGuardrailUsageUnits]] = (
+) -> "TableActions[prisma_models.LiteLLM_DailyGuardrailUsageUnits]":
+    units_table: Final[TableActions[prisma_models.LiteLLM_DailyGuardrailUsageUnits]] = (
         DailyGuardrailUsageUnitsRepository(prisma_client).table
     )
     return units_table
