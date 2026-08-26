@@ -2,6 +2,8 @@ import asyncio
 import base64
 import os
 import sys
+from importlib import metadata
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
@@ -24,9 +26,11 @@ from mcp.types import (
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
+    MCP_STREAMABLE_HTTP_REQUIREMENT,
     MCPClient,
     _as_read_timeout,
     _first_non_cancelled_cause,
+    missing_streamable_http_client_error,
     strip_auth_scheme,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
@@ -1047,3 +1051,42 @@ def test_openapi_byok_auth_header_emits_exactly_one_scheme(auth_type, auth_value
 
     assert server.is_byok is False
     assert _format_byok_openapi_auth_header(server, auth_value) == expected
+
+
+def test_missing_streamable_http_client_error_names_requirement_and_remedy():
+    message = str(missing_streamable_http_client_error())
+
+    assert MCP_STREAMABLE_HTTP_REQUIREMENT in message
+    assert "pip install 'litellm[mcp]'" in message
+    assert metadata.version("mcp") in message
+
+
+@pytest.mark.asyncio
+async def test_http_transport_without_streamable_http_client_raises_actionable_import_error():
+    client = MCPClient(
+        server_url="https://mcp-server.example.com",
+        transport_type=MCPTransport.http,
+    )
+
+    with patch.object(mcp_client_module, "streamable_http_client", None):  # test-quality-ok: simulates mcp<1.24.0 whose module lacks this import-time symbol; no HTTP boundary exists before the raise
+        with pytest.raises(ImportError, match=r"pip install 'litellm\[mcp\]'"):
+            await client.list_tools(raise_on_error=True)
+
+
+def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
+    tomllib = pytest.importorskip("tomllib")
+    from packaging.requirements import Requirement
+
+    pyproject_path = Path(__file__).parents[3] / "pyproject.toml"
+    with pyproject_path.open("rb") as f:
+        extras = tomllib.load(f)["project"]["optional-dependencies"]
+
+    mcp_extra = extras["mcp"]
+    assert len(mcp_extra) == 1
+
+    proxy_mcp_requirements = [req for req in extras["proxy"] if Requirement(req).name == "mcp"]
+    assert mcp_extra == proxy_mcp_requirements
+
+    specifier = Requirement(mcp_extra[0]).specifier
+    assert not specifier.contains("1.23.0")
+    assert specifier.contains("1.28.1")
