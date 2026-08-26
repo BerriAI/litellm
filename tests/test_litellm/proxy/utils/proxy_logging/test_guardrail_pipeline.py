@@ -847,7 +847,7 @@ async def test_process_prompt_template_aresponses_swaps_model_and_merges_input(p
             {},
         )
     )
-    data: Dict[str, Any] = {"input": "Who are you?", "model": "anthropic-haiku-4-5", "prompt_id": "x"}
+    data: dict[str, object] = {"input": "Who are you?", "model": "anthropic-haiku-4-5", "prompt_id": "x"}
     await proxy_logging._process_prompt_template(
         data=data,
         litellm_logging_obj=logging_obj,
