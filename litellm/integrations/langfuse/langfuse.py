@@ -164,9 +164,7 @@ class LangFuseLogger:
         if not (self.langfuse_host.startswith("http://") or self.langfuse_host.startswith("https://")):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.langfuse_host = "http://" + self.langfuse_host
-        _env_override: Final = (
-            str(langfuse_environment).strip() if langfuse_environment is not None else None
-        )
+        _env_override: Final = str(langfuse_environment).strip() if langfuse_environment is not None else None
         self.langfuse_environment = _env_override or os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
         if self.langfuse_environment:
             validate_langfuse_environment_value(self.langfuse_environment)

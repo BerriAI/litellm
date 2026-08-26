@@ -141,7 +141,6 @@ class LangFuseHandler:
             langfuse_environment=LangFuseHandler._meaningful_dynamic_environment(standard_callback_dynamic_params),
         )
 
-
     @staticmethod
     def _meaningful_dynamic_environment(
         standard_callback_dynamic_params: StandardCallbackDynamicParams,
