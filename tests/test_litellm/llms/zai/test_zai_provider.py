@@ -128,6 +128,36 @@ def test_glm47_cost_calculation(local_model_cost_map):
     assert math.isclose(completion_cost, 2.2, rel_tol=1e-6)
 
 
+def test_glm53_context_and_capabilities(local_model_cost_map):
+    """GLM-5.3 ships a 1M context with 128K max output, text in, reasoning always on"""
+
+    info = litellm.model_cost["zai/glm-5.3"]
+
+    assert info["max_input_tokens"] == 1000000
+    assert info["max_output_tokens"] == 128000
+    assert info["supports_reasoning"] is True
+    assert info["supports_prompt_caching"] is True
+    assert info.get("supports_vision") is not True
+
+
+def test_glm53_cost_calculation(local_model_cost_map):
+    """GLM-5.3 bills $1.4/M input, $4.4/M output, $0.26/M on a cache hit"""
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="zai/glm-5.3",
+        prompt_tokens=1000000,
+        completion_tokens=1000000,
+    )
+
+    assert math.isclose(prompt_cost, 1.4, rel_tol=1e-6)
+    assert math.isclose(completion_cost, 4.4, rel_tol=1e-6)
+    assert math.isclose(
+        litellm.model_cost["zai/glm-5.3"]["cache_read_input_token_cost"] * 1000000,
+        0.26,
+        rel_tol=1e-6,
+    )
+
+
 @pytest.mark.asyncio
 async def test_zai_completion_call(respx_mock, zai_response, monkeypatch):
     """Test completion call with zai provider using mocked response"""
