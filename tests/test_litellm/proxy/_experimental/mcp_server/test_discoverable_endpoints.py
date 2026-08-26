@@ -8854,6 +8854,78 @@ async def test_authorize_wall_names_the_issuer_for_anchored_servers():
     assert "idp.example.com" not in detail_text
 
 
+@pytest.mark.asyncio
+async def test_authorize_uses_admin_entered_github_oauth_urls_after_issuer_yield():
+    """GitHub MCP servers store Authorization URL and Token URL on the row. 1.99 can empty
+    the resolved authorization_url when a leftover issuer is treated as a pin (RFC 8414
+    yield). The UI authorize must still redirect to the admin-entered GitHub authorize URL
+    instead of 400ing that discovery against api.githubcopilot.com failed."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="ecac50c4-8eca-438a-af80-9bdebadafc69",
+        name="github_mcp",
+        alias="github_mcp",
+        server_name="github_mcp",
+        url="https://api.githubcopilot.com/mcp/",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="github-app-client",
+        authorization_url=None,
+        token_url=None,
+        issuer="https://github.com",
+        issuer_is_anchored=True,
+        configured_authorization_url="https://github.com/login/oauth/authorize",
+        configured_token_url="https://github.com/login/oauth/access_token",
+    )
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
+        mock_encrypt.return_value = "mocked_encrypted_state"
+        response = await authorize_with_server(
+            request=mock_request,
+            mcp_server=server,
+            client_id="github-app-client",
+            redirect_uri="http://127.0.0.1:60108/callback",
+            state="state123",
+        )
+
+    assert response.status_code == 307
+    assert "https://github.com/login/oauth/authorize" in response.headers["location"]
+    assert "client_id=github-app-client" in response.headers["location"]
+
+
+def test_oauth_endpoints_count_admin_entered_urls_as_resolved():
+    """A leftover issuer empties the resolved authorize/token fields but must not keep the
+    server on the deferred-discovery retry path when the admin already stored those URLs."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _oauth_endpoints_unresolved,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="github-configured",
+        name="github_mcp",
+        url="https://api.githubcopilot.com/mcp/",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        authorization_url=None,
+        token_url=None,
+        configured_authorization_url="https://github.com/login/oauth/authorize",
+        configured_token_url="https://github.com/login/oauth/access_token",
+    )
+    assert _oauth_endpoints_unresolved(server) is False
+
+
 def test_passthrough_authorization_code_round_trips_and_rejects_hostile_input():
     """The passthrough gateway code seals and recovers the ephemeral DCR client and upstream code,
     and is total over hostile input: a raw upstream code opens to None, and a tampered or

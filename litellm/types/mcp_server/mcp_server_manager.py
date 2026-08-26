@@ -184,6 +184,18 @@ class MCPServer(BaseModel):
         return self.__repr__()
 
     @property
+    def effective_authorization_url(self) -> str | None:
+        return self.authorization_url or self.configured_authorization_url
+
+    @property
+    def effective_token_url(self) -> str | None:
+        return self.token_url or self.configured_token_url
+
+    @property
+    def effective_registration_url(self) -> str | None:
+        return self.registration_url or self.configured_registration_url
+
+    @property
     def has_client_credentials(self) -> bool:
         """True if this server should use the OAuth2 client_credentials (M2M) flow.
 
