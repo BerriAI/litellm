@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   Ban,
+  Building2,
   Calendar,
   CircleCheck,
   Clock,
@@ -13,6 +14,7 @@ import {
   Timer,
   Trash2,
   User,
+  Users,
   Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +29,8 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import CopyButton from "@/components/shared/CopyButton";
+import { EntityLink } from "@/components/shared/EntityLink";
+import { orgDetailHref, teamDetailHref, userDetailHref } from "@/utils/entityLinks";
 import LabeledField from "../common_components/LabeledField";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 
@@ -36,7 +40,12 @@ export interface KeyInfoData {
   userId: string;
   userEmail: string;
   userAlias?: string | null;
+  teamId: string;
+  teamAlias?: string | null;
+  orgId: string;
+  orgAlias?: string | null;
   createdBy: string;
+  createdById: string;
   createdAt: string;
   lastUpdated: string;
   lastActive: string;
@@ -91,7 +100,7 @@ function UserField({ userAlias, userEmail, userId }: { userAlias?: string | null
         { label: "User ID", value: userId || null },
       ].map(({ label, value }) => (
         <div key={label} className="flex flex-col min-w-0">
-          <span className="text-gray-400">{label}</span>
+          <span className="text-muted-foreground">{label}</span>
           {value ? (
             <div className="flex min-w-0 items-center gap-1">
               <span className="min-w-0 flex-1 truncate font-mono text-xs" title={value}>
@@ -135,7 +144,11 @@ function UserField({ userAlias, userEmail, userId }: { userAlias?: string | null
       <div>
         <HoverCard>
           <HoverCardTrigger
-            render={<span className="block max-w-[200px] cursor-default truncate font-semibold">{displayValue}</span>}
+            render={
+              <span className="block max-w-[200px] cursor-default truncate font-semibold">
+                {userId ? <EntityLink href={userDetailHref(userId)}>{displayValue}</EntityLink> : displayValue}
+              </span>
+            }
           />
           <HoverCardContent side="bottom" align="start" className="w-auto">
             {popoverContent}
@@ -265,6 +278,7 @@ export function KeyInfoHeader({
             label="Created By"
             value={data.createdBy}
             icon={<ShieldCheck className="size-3.5" />}
+            href={data.createdById ? userDetailHref(data.createdById) : undefined}
             truncate
             copyable
             defaultUserIdCheck
@@ -276,6 +290,25 @@ export function KeyInfoHeader({
         <div className="flex min-w-0 flex-col gap-4">
           <LabeledField label="Last Updated" value={data.lastUpdated} icon={<Clock className="size-3.5" />} />
           <LabeledField label="Last Active" value={data.lastActive} icon={<Zap className="size-3.5" />} />
+        </div>
+
+        <Separator orientation="vertical" />
+
+        <div className="flex min-w-0 flex-col gap-4">
+          <LabeledField
+            label="Team"
+            value={data.teamAlias || data.teamId}
+            icon={<Users className="size-3.5" />}
+            href={data.teamId ? teamDetailHref(data.teamId) : undefined}
+            truncate
+          />
+          <LabeledField
+            label="Organization"
+            value={data.orgAlias || data.orgId}
+            icon={<Building2 className="size-3.5" />}
+            href={data.orgId ? orgDetailHref(data.orgId) : undefined}
+            truncate
+          />
         </div>
       </div>
     </div>

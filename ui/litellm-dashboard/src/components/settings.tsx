@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
 
-import { Field, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -19,7 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmailSettings from "./email_settings";
 import { Logo } from "@/components/molecules/logo/Logo";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
@@ -66,7 +66,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
   }
 
   return (
-    <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+    <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
         const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
@@ -82,7 +82,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
         return (
           <Field key={param} className="mb-4">
             <FieldLabel htmlFor={fieldId}>
-              <span className="text-sm font-medium text-gray-700">{fieldLabel} </span>
+              <span className="text-sm font-medium text-foreground">{fieldLabel} </span>
             </FieldLabel>
             {paramType === "password" ? (
               <Input
@@ -179,7 +179,7 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
                           className="w-6 h-6 rounded-sm object-contain"
                         />
                       </div>
-                      <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
+                      <span className="font-medium text-foreground">{callbackConfig.displayName}</span>
                     </div>
                   </ComboboxItem>
                 )}
@@ -264,7 +264,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         setCallbackConfigs(data || []);
       })
       .catch((error) => {
-        NotificationsManager.fromBackend("Failed to load callback configs: " + parseErrorMessage(error));
+        toast.fromError("Failed to load callback configs: " + parseErrorMessage(error));
       });
   }, [accessToken]);
 
@@ -296,6 +296,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
     region_outage_alerts: "Region Outage Alerts",
+    model_deprecation_warnings: "Model Deprecation Warnings",
   };
 
   useEffect(() => {
@@ -350,9 +351,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
     try {
       await setCallbacksCall(accessToken, payload);
-      NotificationsManager.success(
-        isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`,
-      );
+      toast.success(isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`);
 
       if (isEdit) {
         setShowEditCallback(false);
@@ -371,7 +370,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         setCallbacks(updatedData.callbacks);
       }
     } catch (error) {
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       if (isEdit) {
         setIsUpdatingCallback(false);
@@ -441,9 +440,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     try {
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     }
-    NotificationsManager.success("Alerts updated successfully");
+    toast.success("Alerts updated successfully");
   };
 
   const handleDeleteCallback = (callback: any) => {
@@ -459,7 +458,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     try {
       setIsDeletingCallback(true);
       await deleteCallback(accessToken, callbackToDelete.name);
-      NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
+      toast.success(`Callback ${callbackToDelete.name} deleted successfully`);
 
       // Refresh the callbacks list
       if (userID && userRole) {
@@ -471,7 +470,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setCallbackToDelete(null);
     } catch (error) {
       console.error("Failed to delete callback:", error);
-      NotificationsManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setIsDeletingCallback(false);
     }
@@ -492,7 +491,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <TabsTrigger value="alerting-settings">Alerting Settings</TabsTrigger>
             <TabsTrigger value="email-alerts">Email Alerts</TabsTrigger>
           </TabsList>
-          <TabsContent value="logging-callbacks">
+          <TabsContent value="logging-callbacks" keepMounted>
             <LoggingCallbacksTable
               callbacks={callbacks}
               availableCallbacks={allCallbacks}
@@ -506,19 +505,19 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               onTest={async (cb) => {
                 try {
                   await serviceHealthCheck(accessToken, cb.name);
-                  NotificationsManager.success("Health check triggered");
+                  toast.success("Health check triggered");
                 } catch (error) {
-                  NotificationsManager.fromBackend(parseErrorMessage(error));
+                  toast.fromError(parseErrorMessage(error));
                 }
               }}
             />
           </TabsContent>
-          <TabsContent value="cloudzero-cost-tracking">
+          <TabsContent value="cloudzero-cost-tracking" keepMounted>
             <div className="p-8">
               <CloudZeroCostTracking />
             </div>
           </TabsContent>
-          <TabsContent value="alerting-types">
+          <TabsContent value="alerting-types" keepMounted>
             <Card className="p-6">
               <p className="my-2">
                 Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
@@ -589,11 +588,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 onClick={async () => {
                   try {
                     await serviceHealthCheck(accessToken, "slack");
-                    NotificationsManager.success(
+                    toast.success(
                       "Alert test triggered. Test request to slack made - check logs/alerts on slack to verify",
                     );
                   } catch (error) {
-                    NotificationsManager.fromBackend(parseErrorMessage(error));
+                    toast.fromError(parseErrorMessage(error));
                   }
                 }}
                 className="mx-2"
@@ -602,10 +601,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               </Button>
             </Card>
           </TabsContent>
-          <TabsContent value="alerting-settings">
+          <TabsContent value="alerting-settings" keepMounted>
             <AlertingSettings accessToken={accessToken} premiumUser={premiumUser} />
           </TabsContent>
-          <TabsContent value="email-alerts">
+          <TabsContent value="email-alerts" keepMounted>
             <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
           </TabsContent>
         </Tabs>
@@ -640,7 +639,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 selectedCallback={selectedCallback}
               />
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={cancelAddCallback} disabled={isAddingCallback}>
                   Cancel
                 </Button>
@@ -681,7 +680,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 </>
               )}
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={closeEditCallbackModal} disabled={isUpdatingCallback}>
                   Cancel
                 </Button>

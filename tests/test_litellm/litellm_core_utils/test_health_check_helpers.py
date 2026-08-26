@@ -1,20 +1,64 @@
 """Test health check helper functions"""
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
+
+
+@pytest.mark.asyncio
+async def test_image_edit_health_check_handler_uses_png_and_prompt():
+    model_params = {"model": "openai/gpt-image-1", "api_key": "sk-test"}
+    mode_handlers = HealthCheckHelpers.get_mode_handlers(
+        model="gpt-image-1",
+        custom_llm_provider="openai",
+        model_params=model_params,
+    )
+
+    assert "image_edit" in mode_handlers
+
+    with patch(  # test-quality-ok: the public health-check path has no dependency injection seam
+        "litellm.aimage_edit", new_callable=AsyncMock, return_value={}
+    ) as mock_aimage_edit:
+        await mode_handlers["image_edit"]()
+        await HealthCheckHelpers.get_mode_handlers(
+            model="gpt-image-1",
+            custom_llm_provider="openai",
+            model_params=model_params,
+            prompt="edit this image",
+        )["image_edit"]()
+
+    assert mock_aimage_edit.call_count == 2
+    default_call = mock_aimage_edit.call_args_list[0].kwargs
+    explicit_call = mock_aimage_edit.call_args_list[1].kwargs
+    assert default_call["model"] == "openai/gpt-image-1"
+    assert default_call["prompt"] == "test"
+    assert explicit_call["prompt"] == "edit this image"
+    image = default_call["image"]
+    assert isinstance(image, bytes)
+    assert image.startswith(b"\x89PNG")
+    assert int.from_bytes(image[16:20], "big") == 512
+    assert int.from_bytes(image[20:24], "big") == 512
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_supports_image_edit_mode():
+    with patch(  # test-quality-ok: the public health-check path has no dependency injection seam
+        "litellm.aimage_edit", new_callable=AsyncMock, return_value={}
+    ):
+        result = await ahealth_check(
+            {"model": "gpt-image-1", "api_key": "sk-test"},
+            mode="image_edit",
+        )
+
+    assert "error" not in result
+    assert "Mode image_edit not supported" not in str(result)
 
 
 def test_update_model_params_with_health_check_tracking_information():

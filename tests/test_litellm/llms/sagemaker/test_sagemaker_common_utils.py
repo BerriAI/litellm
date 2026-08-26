@@ -1,12 +1,9 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
@@ -87,7 +84,6 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
     assert (
         shape is not None
     ), "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
-    shape: StructureShape = shape  # remove Optional
     assert isinstance(shape, StructureShape)
     assert shape.name == "InvokeEndpointWithResponseStreamOutput"
 

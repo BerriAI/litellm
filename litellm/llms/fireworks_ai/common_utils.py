@@ -13,6 +13,13 @@ class FireworksAIException(BaseLLMException):
 
 
 def get_fireworks_session_id(litellm_params: dict) -> str | None:
+    """
+    Session id to send as `x-session-affinity`, or None when the caller gave none.
+
+    Deliberately does not fall back to `litellm_trace_id`: that is generated per
+    request (`str(uuid.uuid4())` when absent), so using it pins every request to a
+    different Fireworks node and prompt caching never hits.
+    """
     params: Final = litellm_params
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
@@ -23,15 +30,15 @@ def get_fireworks_session_id(litellm_params: dict) -> str | None:
         value = metadata.get("session_id")
         if value:
             return str(value)
-    value = params.get("litellm_trace_id")
-    if value:
-        return str(value)
     return None
+
+
+AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX: Final = "FW-"
 
 
 def resolve_fireworks_resource_name(model: str) -> str:
     stripped: Final = model.removeprefix("fireworks_ai/")
-    if stripped.startswith("accounts/") or "#" in stripped:
+    if stripped.startswith(("accounts/", AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX)) or "#" in stripped:
         return stripped
     if stripped.startswith(("routers/", "models/")):
         return f"accounts/fireworks/{stripped}"

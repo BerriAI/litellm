@@ -1,5 +1,6 @@
 """Tests for the per-model PTU flat-cost daily rollup."""
 
+import json
 import types
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -195,10 +196,12 @@ async def test_rollup_writes_sentinel_row_with_hourly_cost():
 
 
 @pytest.mark.asyncio
-async def test_rollup_prunes_stale_row_when_config_is_gone():
+async def test_rollup_prunes_a_scanned_deployment_whose_ptu_config_is_gone():
+    """A deployment the run can still see, and can therefore judge, is the one case where
+    retracting the charge is justified."""
     prisma, table = _prisma_with_models(
-        [_model_row(model_info={"team_id": "team_x"})],
-        existing_sentinel_rows=[_sentinel_row("stale-1", "team_x", "gpt-4o-mini-ptu")],
+        [_model_row(model_id="m1", model_info={"team_id": "team_x"})],
+        existing_sentinel_rows=[_sentinel_row("stale-1", "team_x", "m1")],
     )
 
     result = await run_ptu_flat_cost_rollup(prisma, target_date=DAY)
@@ -209,8 +212,8 @@ async def test_rollup_prunes_stale_row_when_config_is_gone():
     where = table.delete_many.await_args.kwargs["where"]
     assert where["date"] == DAY.isoformat()
     assert where["api_key"] == PTU_SENTINEL_API_KEY
-    # the row is garbage because this run did not refresh it, not because of a key list
     assert "lt" in where["updated_at"]
+    assert where["model"]["in"] == ("m1",)
 
 
 @pytest.mark.asyncio
@@ -373,6 +376,182 @@ def test_parse_ptu_model_rejects_an_inverted_window():
     assert parsed is None
 
 
+def _router_entry(model_id="dep-1", model_name="gpt-4o-ptu", model_info=None, with_start=True):
+    """A deployment as the router stores one: a plain dict whose id lives in model_info."""
+    info = dict(model_info or {})
+    if (
+        with_start
+        and info.get("ptu_count") is not None
+        and info.get("cost_per_ptu_per_hour") is not None
+        and "ptu_effective_from" not in info
+    ):
+        info["ptu_effective_from"] = _DEFAULT_PTU_START
+    if model_id is not None:
+        info["id"] = model_id
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "azure/gpt-4o"},
+        "model_info": info,
+    }
+
+
+# A team-scoped deployment is stored under a synthetic routing key with the operator's name
+# in team_public_model_name, while the same deployment in config.yaml carries the operator's
+# name directly. Both must resolve to the same PTUModel or the two sources bill differently.
+_PARITY_CASES = (
+    (
+        "an iso string start against the datetime pydantic coerces it to",
+        {"ptu_effective_from": "2026-07-30T23:00:00Z"},
+        {"ptu_effective_from": datetime(2026, 7, 30, 23, 0)},
+        datetime(2026, 7, 30, 23, 0, tzinfo=timezone.utc),
+        None,
+    ),
+    (
+        "an open window, stored as null and dropped by exclude_none",
+        {"ptu_effective_from": "2026-07-01T00:00:00Z", "ptu_effective_to": None},
+        {"ptu_effective_from": datetime(2026, 7, 1, 0, 0)},
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        None,
+    ),
+    (
+        "a closed window",
+        {"ptu_effective_from": "2026-07-01T00:00:00Z", "ptu_effective_to": "2026-07-31T00:00:00Z"},
+        {
+            "ptu_effective_from": datetime(2026, 7, 1, 0, 0),
+            "ptu_effective_to": datetime(2026, 7, 31, 0, 0),
+        },
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 31, tzinfo=timezone.utc),
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "db_window, router_window, expected_from, expected_to",
+    [case[1:] for case in _PARITY_CASES],
+    ids=[case[0] for case in _PARITY_CASES],
+)
+def test_a_deployment_parses_identically_from_the_db_and_from_config_yaml(
+    db_window, router_window, expected_from, expected_to
+):
+    # The contract the router union is built on. If these ever diverge, a PTU deployment
+    # declared in config.yaml is billed differently from the identical one in the database.
+    from_db = _parse_ptu_model(
+        _model_row(
+            model_id="dep-1",
+            model_name="model_name_t_9f3c2b",
+            model_info={**_VALID_PTU, **db_window, "team_public_model_name": "gpt-4o-ptu"},
+            with_start=False,
+        )
+    )
+    from_router = _parse_ptu_model(
+        ptu_rollup._router_deployment(
+            _router_entry(model_id="dep-1", model_info={**_VALID_PTU, **router_window}, with_start=False)
+        )
+    )
+    expected = PTUModel(
+        model_id="dep-1",
+        model_name="gpt-4o-ptu",
+        team_id="t",
+        ptu_count=5,
+        cost_per_ptu_per_hour=2.0,
+        effective_from=expected_from,
+        effective_to=expected_to,
+    )
+    assert from_db == from_router == expected
+
+
+@pytest.mark.parametrize("model_id", [None, "", 12345], ids=["absent", "blank", "not a string"])
+def test_a_router_deployment_without_a_usable_id_is_dropped(model_id):
+    # model_id keys the sentinel row, so an unusable one would file every such deployment
+    # in a team onto one row and bill for a single reservation.
+    entry = _router_entry(model_id=None, model_info=dict(_VALID_PTU))
+    if model_id is not None:
+        entry["model_info"]["id"] = model_id
+    assert ptu_rollup._router_deployment(entry) is None
+
+
+def test_a_router_deployment_keeps_the_name_the_operator_wrote():
+    priced = _parse_ptu_model(
+        ptu_rollup._router_deployment(_router_entry(model_name="gpt-4o-ptu", model_info=dict(_VALID_PTU)))
+    )
+    assert priced is not None
+    assert priced.model_name == "gpt-4o-ptu"
+
+
+def test_a_team_alias_on_a_router_deployment_still_wins_over_the_routing_name():
+    # config.yaml can carry team_public_model_name to expose a team-facing alias, and the
+    # charge has to file under the name that team calls rather than the routing one.
+    priced = _parse_ptu_model(
+        ptu_rollup._router_deployment(
+            _router_entry(
+                model_name="routing-name",
+                model_info={**_VALID_PTU, "team_public_model_name": "public-alias"},
+            )
+        )
+    )
+    assert priced is not None
+    assert priced.model_name == "public-alias"
+
+
+def test_a_router_deployment_with_a_stringified_model_info_still_decodes():
+    entry = _router_entry(model_info=dict(_VALID_PTU))
+    entry["model_info"] = json.dumps(entry["model_info"])
+    parsed = _parse_ptu_model(ptu_rollup._router_deployment(entry))
+    assert parsed is not None
+    assert parsed.model_id == "dep-1"
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [None, "not json", 42, "[1, 2, 3]", '"a string"', "42", "true", "null"],
+    ids=[
+        "absent",
+        "unparseable",
+        "not a string or dict",
+        "json array",
+        "json string",
+        "json number",
+        "json bool",
+        "json null",
+    ],
+)
+def test_a_router_deployment_without_usable_model_info_is_dropped(model_info):
+    # Valid JSON that is not an object decodes to a list or a scalar, and reading fields
+    # off one raises rather than dropping the single bad deployment the rollup expects
+    assert ptu_rollup._router_deployment({"model_name": "x", "model_info": model_info}) is None
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    ["[1, 2, 3]", '"a string"', "42", "true", "null"],
+    ids=["json array", "json string", "json number", "json bool", "json null"],
+)
+def test_a_db_row_holding_non_object_json_is_dropped(model_info):
+    assert _parse_ptu_model(_model_row(model_info=model_info, with_start=False)) is None
+
+
+def test_a_router_deployment_does_not_alias_the_routers_own_model_info():
+    # The rollup runs on a cron while requests are in flight, and the router rewrites
+    # model_info in place, so a held record must neither observe nor cause those writes.
+    live = {"id": "dep-1", **_VALID_PTU}
+    record = ptu_rollup._router_deployment({"model_name": "x", "model_info": live})
+    assert record is not None
+
+    live["ptu_count"] = 999
+    assert record.model_info["ptu_count"] == _VALID_PTU["ptu_count"]
+
+    with pytest.raises(TypeError):
+        record.model_info["ptu_count"] = 1
+
+
+def test_a_raw_router_dict_is_not_a_deployment_record():
+    # The parser reads attributes, so a router dict passed straight to it returns None
+    # instead of raising. Skipping the factory would silently drop every config.yaml
+    # deployment while leaving the suite green.
+    assert _parse_ptu_model(_router_entry(model_info=dict(_VALID_PTU))) is None
+
+
 @pytest.mark.asyncio
 async def test_rollup_returns_empty_when_prisma_client_is_none():
     result = await run_ptu_flat_cost_rollup(None, target_date=DAY)
@@ -528,13 +707,20 @@ class _FakeSentinelTable:
     async def delete_many(self, where):
         self.delete_many_calls.append(where)
         cutoff = where["updated_at"]["lt"]
+        # honouring "model" matters: a fake that ignored an unknown clause would delete
+        # the row the prune-scoping test exists to protect and still report a pass
+        allowed = where.get("model", {}).get("in")
         doomed = [
             k
             for k, v in self.rows.items()
-            if k[1] == where["date"] and k[2] == where["api_key"] and v["updated_at"] < cutoff
+            if k[1] == where["date"]
+            and k[2] == where["api_key"]
+            and v["updated_at"] < cutoff
+            and (allowed is None or k[3] in allowed)
         ]
         for k in doomed:
             del self.rows[k]
+        return len(doomed)
 
     async def find_many(self, where=None):
         """Read back sentinel rows the way prisma would, honouring api_key and a date range."""
@@ -608,11 +794,11 @@ async def test_an_older_run_cannot_delete_a_newer_runs_row():
 
 @pytest.mark.asyncio
 async def test_a_later_clean_run_clears_the_row_the_race_left_behind():
-    """The race can leave a charge for a since-removed deployment in place for a day; the
-    next run, seeing only the current config, must sweep it."""
+    """The race can leave a charge for a no-longer-priced deployment in place for a day;
+    the next run, seeing only the current config, must sweep it."""
     table = _FakeSentinelTable()
     ptu = {"ptu_count": 10, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}
-    stale_key = ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-removed")
+    stale_key = ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-retired")
     table.rows[stale_key] = {
         "ptu_flat_cost": 480.0,
         "model_group": "retired",
@@ -620,7 +806,14 @@ async def test_a_later_clean_run_clears_the_row_the_race_left_behind():
     }
 
     await run_ptu_flat_cost_rollup(
-        _prisma_for([_model_row(model_id="dep-live", model_info=ptu)], table), target_date=DAY
+        _prisma_for(
+            [
+                _model_row(model_id="dep-live", model_info=ptu),
+                _model_row(model_id="dep-retired", model_info={"team_id": "t"}),
+            ],
+            table,
+        ),
+        target_date=DAY,
     )
 
     assert stale_key not in table.rows
@@ -1538,16 +1731,19 @@ async def test_a_run_holding_the_lock_still_prunes():
     """Losing the sweep entirely would leave stale charges forever, so the guarded path,
     which is the normal one, keeps it."""
     table = _FakeSentinelTable()
-    table.seed("t", DAY, "dep-gone", 480.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    table.seed("t", DAY, "dep-unpriced", 480.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
     prisma = _prisma_for(
-        [_model_row(model_id="dep-live", model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"})],
+        [
+            _model_row(model_id="dep-live", model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}),
+            _model_row(model_id="dep-unpriced", model_info={"team_id": "t"}),
+        ],
         table,
     )
 
     await run_scheduled_ptu_rollup(prisma, pod_lock_manager=_pod_lock(acquired=True), target_date=DAY)
 
     assert table.delete_many_calls != []
-    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-gone") not in table.rows
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-unpriced") not in table.rows
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-live") in table.rows
 
 
@@ -1560,7 +1756,7 @@ async def test_the_prune_cutoff_allows_for_clock_skew_between_hosts():
     just_written = datetime.now(timezone.utc) - timedelta(seconds=30)
     table.seed("t", DAY, "dep-concurrent", 480.0, updated_at=just_written)
     table.seed("t", DAY, "dep-stale", 480.0, updated_at=datetime.now(timezone.utc) - timedelta(hours=6))
-    prisma = _prisma_for([], table)
+    prisma = _prisma_for([_model_row(model_id="dep-concurrent"), _model_row(model_id="dep-stale")], table)
 
     await run_ptu_flat_cost_rollup(prisma, target_date=DAY)
 
@@ -1568,6 +1764,128 @@ async def test_the_prune_cutoff_allows_for_clock_skew_between_hosts():
         "a charge written 30s ago by a lagging pod was swept"
     )
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-stale") not in table.rows
+
+
+@pytest.mark.asyncio
+async def test_a_run_pricing_config_cannot_prune_a_row_it_did_not_scan(monkeypatch):
+    """Staleness alone stops being evidence once two hosts hold different configuration: a
+    row this run never considered belongs to a deployment another host is pricing from its
+    own file, and sweeping it drops that charge."""
+    table = _FakeSentinelTable()
+    table.seed("t", DAY, "dep-elsewhere", 480.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    entry = _router_entry(model_id="cfg-here", model_info=dict(_VALID_PTU))
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(entry))
+
+    await run_scheduled_ptu_rollup(_prisma_for([], table), pod_lock_manager=_pod_lock(acquired=True), target_date=DAY)
+
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-elsewhere") in table.rows
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "cfg-here") in table.rows
+    assert table.delete_many_calls[-1]["model"]["in"] == ("cfg-here",)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_deleted_from_the_table_keeps_the_day_it_was_charged(monkeypatch):
+    """The accepted cost of bounding the prune, driven through the sequence that produces
+    it: charge the day while the deployment exists, remove it, run the day again. Nothing
+    scans it now, so nothing may judge its row, and the amount it was billed stands."""
+    table = _FakeSentinelTable()
+    ptu = {"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}
+    live_row = _model_row(model_id="dep-live", model_info=ptu)
+    doomed_row = _model_row(model_id="dep-doomed", model_info=ptu)
+    charged_key = ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-doomed")
+    monkeypatch.setattr(
+        ptu_rollup, "_running_router", lambda: _router_holding(_router_entry(model_id="cfg", model_info=dict(ptu)))
+    )
+
+    await run_scheduled_ptu_rollup(
+        _prisma_for([live_row, doomed_row], table), pod_lock_manager=_pod_lock(acquired=True), target_date=DAY
+    )
+    billed = table.rows[charged_key]["ptu_flat_cost"]
+    table.rows[charged_key]["updated_at"] = datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+    await run_scheduled_ptu_rollup(
+        _prisma_for([live_row], table), pod_lock_manager=_pod_lock(acquired=True), target_date=DAY
+    )
+
+    assert table.rows[charged_key]["ptu_flat_cost"] == billed
+    assert "dep-doomed" not in table.delete_many_calls[-1]["model"]["in"]
+
+
+@pytest.mark.asyncio
+async def test_a_charge_the_run_cannot_reassess_is_left_alone():
+    """A written charge records capacity that was reserved. A deployment absent from every
+    source this run reads cannot be reassessed, and another host may be the one declaring
+    it, so retracting the charge would drop money the provider still invoiced."""
+    table = _FakeSentinelTable()
+    table.seed("t", DAY, "dep-gone", 480.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+    prisma = _prisma_for(
+        [_model_row(model_id="dep-live", model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"})],
+        table,
+    )
+
+    await run_scheduled_ptu_rollup(prisma, pod_lock_manager=_pod_lock(acquired=True), target_date=DAY)
+
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-gone") in table.rows
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-live") in table.rows
+
+
+@pytest.mark.asyncio
+async def test_every_deployment_that_prices_is_inside_the_set_that_bounds_the_prune():
+    """The bound has to be a superset of what the same run wrote, or a run's own charge
+    could fall outside its own delete filter and never be reconciled."""
+    table = _FakeSentinelTable()
+    prisma = _prisma_for(
+        [
+            _model_row(model_id="dep-a", model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}),
+            _model_row(model_id="dep-b", model_info={"ptu_count": 9, "cost_per_ptu_per_hour": 1.0, "team_id": "u"}),
+            _model_row(model_id="dep-unpriced", model_info={"team_id": "t"}),
+        ],
+        table,
+    )
+
+    loaded = await ptu_rollup._load_ptu_models(prisma)
+
+    assert {model.model_id for model in loaded.models} <= loaded.scanned_ids
+    assert loaded.scanned_ids == {"dep-a", "dep-b", "dep-unpriced"}
+
+
+@pytest.mark.asyncio
+async def test_a_priced_deployment_is_in_the_bound_even_with_an_id_the_scan_skips():
+    """The bound is built by construction rather than by coincidence. The row scan drops a
+    falsy id while the parser still prices one, and a charge outside its own run's delete
+    filter could never be reconciled by any later run."""
+    prisma = _prisma_for(
+        [_model_row(model_id="", model_info={"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"})],
+        _FakeSentinelTable(),
+    )
+
+    loaded = await ptu_rollup._load_ptu_models(prisma)
+
+    assert {model.model_id for model in loaded.models} <= loaded.scanned_ids
+
+
+@pytest.mark.asyncio
+async def test_the_prune_splits_the_id_set_across_statements(monkeypatch):
+    """Every id is one bind variable and the server refuses a statement carrying more than
+    32767, so a proxy with that many deployments would fail the prune outright, and with it
+    the rest of the scheduled run."""
+    monkeypatch.setattr(ptu_rollup, "_PRUNE_ID_CHUNK_SIZE", 2)
+    table = _FakeSentinelTable()
+    ptu = {"ptu_count": 5, "cost_per_ptu_per_hour": 2.0, "team_id": "t"}
+    deployments = [_model_row(model_id=f"dep-{n}", model_info=ptu) for n in range(4)]
+    monkeypatch.setattr(
+        ptu_rollup, "_running_router", lambda: _router_holding(_router_entry(model_id="dep-4", model_info=dict(ptu)))
+    )
+    table.seed("t", DAY, "dep-3", 480.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+    await run_scheduled_ptu_rollup(
+        _prisma_for(deployments, table), pod_lock_manager=_pod_lock(acquired=True), target_date=DAY
+    )
+
+    chunks = [call["model"]["in"] for call in table.delete_many_calls]
+    assert len(chunks) == 3
+    assert all(len(chunk) <= 2 for chunk in chunks)
+    assert sorted(i for chunk in chunks for i in chunk) == [f"dep-{n}" for n in range(5)]
 
 
 @pytest.mark.asyncio
@@ -1583,3 +1901,195 @@ async def test_scheduled_rollup_writes_nothing_when_ptu_attribution_is_disabled(
     assert result is None
     assert table.rows == {}
     assert table.upsert_keys == []
+
+
+# --- config.yaml deployments reach the rollup through the router ----------------
+
+
+def _router_holding(*entries):
+    """A stand-in for the proxy's router, carrying whatever model_list is passed."""
+    return types.SimpleNamespace(model_list=list(entries))
+
+
+@pytest.mark.asyncio
+async def test_a_config_declared_deployment_is_priced(monkeypatch):
+    """The whole point. A PTU deployment the proxy only knows from config.yaml is not in
+    LiteLLM_ProxyModelTable, so a DB-only scan bills the provider's reservation to nobody."""
+    entry = _router_entry(model_id="cfg-1", model_name="gpt-4o-ptu", model_info=dict(_VALID_PTU))
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(entry))
+
+    loaded = await ptu_rollup._load_ptu_models(_prisma_for([], _FakeSentinelTable()))
+
+    assert [(m.model_id, m.model_name, m.team_id) for m in loaded.models] == [("cfg-1", "gpt-4o-ptu", "t")]
+    assert "cfg-1" in loaded.scanned_ids
+
+
+@pytest.mark.asyncio
+async def test_a_database_backed_router_entry_is_not_counted_twice(monkeypatch):
+    """Every deployment loaded from the table is also in the router, flagged db_model. Pricing
+    both copies would write two charges for one reservation."""
+    row = _model_row(model_id="db-1", model_info=dict(_VALID_PTU))
+    mirrored = _router_entry(model_id="db-1", model_info={**_VALID_PTU, "db_model": True})
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(mirrored))
+
+    loaded = await ptu_rollup._load_ptu_models(_prisma_for([row], _FakeSentinelTable()))
+
+    assert [m.model_id for m in loaded.models] == ["db-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_router_entry_sharing_an_id_with_the_table_is_priced_once(monkeypatch):
+    """db_model is data the router carries rather than something this module controls, so the
+    id anti-join is what actually maps onto the failure: two charges under one id."""
+    row = _model_row(model_id="both-1", model_info=dict(_VALID_PTU))
+    unflagged = _router_entry(model_id="both-1", model_info=dict(_VALID_PTU))
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(unflagged))
+
+    loaded = await ptu_rollup._load_ptu_models(_prisma_for([row], _FakeSentinelTable()))
+
+    assert [m.model_id for m in loaded.models] == ["both-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_client_credential_clone_is_not_priced(monkeypatch):
+    """Supplying an api_key on a request mints a clone of the deployment under a fresh id,
+    carrying the source's PTU config. Pricing it bills one reservation per distinct caller key."""
+    source = _router_entry(model_id="cfg-1", model_info=dict(_VALID_PTU))
+    clone = _router_entry(model_id="cfg-1-clone", model_info={**_VALID_PTU, "original_model_id": "cfg-1"})
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(source, clone))
+
+    loaded = await ptu_rollup._load_ptu_models(_prisma_for([], _FakeSentinelTable()))
+
+    assert [m.model_id for m in loaded.models] == ["cfg-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_config_deployment_without_ptu_config_is_scanned_but_not_priced(monkeypatch):
+    """It has to stay in the scanned set or its leftover sentinel rows become unprunable."""
+    entry = _router_entry(model_id="cfg-plain", model_info={"team_id": "t"})
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(entry))
+
+    loaded = await ptu_rollup._load_ptu_models(_prisma_for([], _FakeSentinelTable()))
+
+    assert loaded.models == ()
+    assert "cfg-plain" in loaded.scanned_ids
+
+
+@pytest.mark.asyncio
+async def test_no_router_in_the_process_prices_the_database_alone(monkeypatch):
+    """The rollup is importable and callable outside a running proxy."""
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: None)
+
+    loaded = await ptu_rollup._load_ptu_models(
+        _prisma_for([_model_row(model_id="db-1", model_info=dict(_VALID_PTU))], _FakeSentinelTable())
+    )
+
+    assert [m.model_id for m in loaded.models] == ["db-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_config_deployment_is_charged_end_to_end(monkeypatch):
+    """Through the scheduled entry point, so the charge lands in a sentinel row rather than
+    stopping at the loader."""
+    table = _FakeSentinelTable()
+    entry = _router_entry(model_id="cfg-1", model_name="gpt-4o-ptu", model_info=dict(_VALID_PTU))
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(entry))
+
+    await run_scheduled_ptu_rollup(_prisma_for([], table), pod_lock_manager=_pod_lock(acquired=True), target_date=DAY)
+
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "cfg-1") in table.rows
+
+
+@pytest.mark.asyncio
+async def test_a_stale_database_backed_router_entry_is_not_treated_as_config(monkeypatch):
+    """The reconcile can leave a deployment on the router after its row is gone. The id
+    anti-join cannot see that one, so the flag is what keeps it from being priced as though
+    config.yaml had declared it."""
+    stale = _router_entry(model_id="db-gone", model_info={**_VALID_PTU, "db_model": True})
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(stale))
+
+    loaded = await ptu_rollup._load_ptu_models(_prisma_for([], _FakeSentinelTable()))
+
+    assert loaded.models == ()
+
+
+def test_the_router_lookup_reads_the_proxys_own_global():
+    """Every other config test replaces this helper, so without one test driving the real
+    body a typo in the module path or the attribute name leaves the whole feature dead in
+    production with the suite still green."""
+    import sys
+    import types as _types
+
+    assert ptu_rollup._running_router() is None or "litellm.proxy.proxy_server" in sys.modules
+
+    sentinel = object()
+    stub = _types.SimpleNamespace(llm_router=sentinel)
+    real = sys.modules.get("litellm.proxy.proxy_server")
+    sys.modules["litellm.proxy.proxy_server"] = stub
+    try:
+        assert ptu_rollup._running_router() is sentinel
+        del stub.llm_router
+        assert ptu_rollup._running_router() is None
+    finally:
+        if real is None:
+            del sys.modules["litellm.proxy.proxy_server"]
+        else:
+            sys.modules["litellm.proxy.proxy_server"] = real
+
+
+def test_the_router_lookup_returns_none_outside_a_proxy():
+    import sys
+
+    real = sys.modules.pop("litellm.proxy.proxy_server", None)
+    try:
+        assert ptu_rollup._running_router() is None
+    finally:
+        if real is not None:
+            sys.modules["litellm.proxy.proxy_server"] = real
+
+
+def test_the_prune_filter_is_a_plain_dict():
+    """The query builder serialises the mapping it is handed and rejects a read-only view of
+    one, which the in-memory table in these tests accepts happily. Only a live run caught it."""
+    chunk = ("dep-a", "dep-b")
+    predicate = ptu_rollup._prune_filter(date_str=DAY.isoformat(), cutoff=datetime.now(timezone.utc), chunk=chunk)
+
+    assert type(predicate) is dict
+    assert type(predicate["updated_at"]) is dict
+    assert type(predicate["model"]) is dict
+    assert predicate["model"]["in"] == chunk
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_scanned_nothing_issues_no_delete_statements():
+    """The window where a master-key rotation wipes and recreates the model table. A run that
+    can see no deployment can reassess none of them, so it must not reach for the day's rows."""
+    table = _FakeSentinelTable()
+    table.seed("t", DAY, "dep-orphan", 240.0, updated_at=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+    await run_ptu_flat_cost_rollup(_prisma_for([], table), target_date=DAY)
+
+    assert table.delete_many_calls == []
+    assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-orphan") in table.rows
+
+
+@pytest.mark.asyncio
+async def test_the_catch_up_pass_reaches_a_config_declared_deployment(monkeypatch):
+    """The catch-up shares the loader, so config deployments join it without being wired in.
+    That is what prices the elapsed days of a reservation declared before today."""
+    table = _FakeSentinelTable()
+    now = datetime.now(timezone.utc)
+    started = (now - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
+    entry = _router_entry(
+        model_id="cfg-back",
+        model_info={"ptu_count": 100, "cost_per_ptu_per_hour": 0.02, "team_id": "t", "ptu_effective_from": started},
+    )
+    monkeypatch.setattr(ptu_rollup, "_running_router", lambda: _router_holding(entry))
+
+    await run_scheduled_ptu_rollup(_prisma_for([], table), pod_lock_manager=_pod_lock(acquired=True))
+
+    charged = sorted(day for (_, day, _, model) in table.rows if model == "cfg-back")
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    assert len(charged) == 3, charged
+    assert charged[-1] == yesterday
+    assert all(row["ptu_flat_cost"] == pytest.approx(48.0) for row in table.rows.values())

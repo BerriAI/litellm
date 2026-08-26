@@ -1,13 +1,9 @@
 import json
 import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -50,7 +46,6 @@ test_image_base64 = "data:image/png,test_image_base64_data"
 )
 def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_response):
     """Test embedding functionality with bearer token authentication"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -98,7 +93,6 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
     model, input_type, embed_response
 ):
     """Test embedding functionality with bearer token from environment variable"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "env-bearer-token-12345"
 
@@ -130,7 +124,6 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
 @pytest.mark.asyncio
 async def test_async_bedrock_embedding_with_bearer_token():
     """Test async embedding functionality with bearer token authentication"""
-    litellm.set_verbose = True
     client = AsyncHTTPHandler()
     test_api_key = "async-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v1"
@@ -160,7 +153,6 @@ async def test_async_bedrock_embedding_with_bearer_token():
 
 def test_bedrock_embedding_with_sigv4():
     """Test embedding falls back to SigV4 auth when no bearer token is provided"""
-    litellm.set_verbose = True
     model = "bedrock/amazon.titan-embed-text-v1"
 
     with patch(
@@ -182,7 +174,6 @@ def test_bedrock_embedding_with_sigv4():
 
 def test_bedrock_titan_v2_encoding_format_float():
     """Test amazon.titan-embed-text-v2:0 with encoding_format=float parameter"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v2:0"
@@ -220,7 +211,6 @@ def test_bedrock_titan_v2_encoding_format_float():
 
 def test_bedrock_titan_v2_encoding_format_base64():
     """Test amazon.titan-embed-text-v2:0 with encoding_format=base64 parameter (maps to binary)"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v2:0"
@@ -260,7 +250,6 @@ def test_bedrock_titan_v2_encoding_format_base64():
 
 def test_twelvelabs_input_type_parameter_mapping():
     """Test that input_type parameter is correctly mapped to inputType for TwelveLabs models"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
@@ -300,7 +289,6 @@ def test_twelvelabs_input_type_parameter_mapping():
 
 def test_twelvelabs_input_type_parameter_mapping_async_invoke():
     """Test that input_type parameter is correctly mapped to inputType for TwelveLabs async invoke models"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
@@ -343,7 +331,6 @@ def test_twelvelabs_input_type_parameter_mapping_async_invoke():
 
 def test_twelvelabs_missing_input_type_error():
     """Test that missing input_type parameter defaults to 'text' for TwelveLabs models"""
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -422,7 +409,6 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
 
     Relevant Issue: https://github.com/BerriAI/litellm/pull/16042
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
 
@@ -489,7 +475,6 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
     This ensures that headers from kwargs (forwarded by proxy) and extra_headers
     (passed explicitly) are both included in the final headers sent to the provider.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/amazon.titan-embed-text-v1"
@@ -557,7 +542,6 @@ def test_bedrock_cohere_v4_embedding_response_parsing():
     Test parsing of Bedrock Cohere v4 embedding response which returns a dictionary of embeddings
     keyed by type (e.g. 'float', 'int8') instead of a direct list.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/cohere.embed-v4:0"
@@ -617,7 +601,6 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
 
     Relevant Issue: Custom headers not forwarded with IAM roles + custom api_base
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
 
     # Simulate IAM role credentials with session token
@@ -734,7 +717,6 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
     This is the async version of the test above, verifying the fix works for both
     sync and async embedding calls.
     """
-    litellm.set_verbose = True
     client = AsyncHTTPHandler()
 
     # Simulate IAM role credentials with session token
@@ -977,7 +959,6 @@ def test_bedrock_cohere_embedding_types_wrapped_as_list(
         Malformed input request: #/embedding_types: expected type: JSONArray, found: String
     when `encoding_format` is passed as a string.
     """
-    litellm.set_verbose = True
     client = HTTPHandler()
     model = "bedrock/cohere.embed-multilingual-v3"
 

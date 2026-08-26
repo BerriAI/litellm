@@ -17,22 +17,17 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: mockUseAuthorized,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: [] }),
+}));
+
 // Networking: wire the hoisted fns so we can assert calls later
 vi.mock("../networking", () => {
   return {
+    serverRootPath: "",
     keyUpdateCall: (...args: any[]) => keyUpdateCallMock(...args),
     keyDeleteCall: (...args: any[]) => keyDeleteCallMock(...args),
   };
-});
-
-// Notifications
-vi.mock("../molecules/notifications_manager", () => {
-  const Notifications = {
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  };
-  return { default: Notifications };
 });
 
 // Roles: ensure 'Admin' has write access and include all role helper functions
@@ -62,107 +57,6 @@ vi.mock("../callback_info_helpers", () => ({
 vi.mock("../shared/errorUtils", () => ({
   parseErrorMessage: (e: any) => String(e),
 }));
-
-// Tremor components -> async factory, local React import, and named passthroughs
-vi.mock("@tremor/react", async () => {
-  const React = await import("react");
-
-  const makeNamedPassthrough = (tag: any, name: string) => {
-    function Named(props: any) {
-      const { children, ...rest } = props;
-      return React.createElement(tag, rest, children);
-    }
-    (Named as any).displayName = name;
-    return Named;
-  };
-
-  const Card = makeNamedPassthrough("div", "Card");
-  const Text = makeNamedPassthrough("span", "Text");
-  const Grid = makeNamedPassthrough("div", "Grid");
-  const Col = makeNamedPassthrough("div", "Col");
-  const TabGroup = makeNamedPassthrough("div", "TabGroup");
-  const TabList = makeNamedPassthrough("div", "TabList");
-  const TabPanels = makeNamedPassthrough("div", "TabPanels");
-  const TabPanel = makeNamedPassthrough("div", "TabPanel");
-  const Title = makeNamedPassthrough("h1", "Title");
-  const Badge = makeNamedPassthrough("span", "Badge");
-
-  function Button(props: any) {
-    const { children, onClick, ...rest } = props;
-    return React.createElement("button", { onClick, ...rest }, children);
-  }
-  (Button as any).displayName = "Button";
-
-  function Tab(props: any) {
-    const { children, ...rest } = props;
-    return React.createElement("button", { ...rest }, children);
-  }
-  (Tab as any).displayName = "Tab";
-
-  function TextInput(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (TextInput as any).displayName = "TextInput";
-
-  function TremorSelect(props: any) {
-    return React.createElement("select", { ...props });
-  }
-  (TremorSelect as any).displayName = "TremorSelect";
-
-  return {
-    Card,
-    Text,
-    Button,
-    Grid,
-    Col,
-    Tab,
-    TabList,
-    TabGroup,
-    TabPanel,
-    TabPanels,
-    Title,
-    Badge,
-    TextInput,
-    Select: TremorSelect,
-  };
-});
-
-// antd bits -> async factory & local React
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-
-  const React = await import("react");
-
-  const Form = { useForm: () => [{}] };
-
-  function Input(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (Input as any).displayName = "AntdInput";
-
-  function InputNumber(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (InputNumber as any).displayName = "AntdInputNumber";
-
-  function Select(props: any) {
-    return React.createElement("select", { ...props });
-  }
-  (Select as any).displayName = "AntdSelect";
-
-  function Tooltip({ children }: any) {
-    return React.createElement(React.Fragment, null, children);
-  }
-  (Tooltip as any).displayName = "AntdTooltip";
-
-  function Button(props: any) {
-    const { children, onClick, ...rest } = props;
-    return React.createElement("button", { onClick, ...rest }, children);
-  }
-  (Button as any).displayName = "AntdButton";
-
-  return { ...actual, Form, Input, InputNumber, Select, Tooltip, Button };
-});
 
 // Icons -> async factory & local React
 vi.mock("@heroicons/react/outline", async () => {

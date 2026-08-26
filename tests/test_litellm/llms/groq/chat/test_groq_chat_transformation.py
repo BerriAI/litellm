@@ -21,14 +21,6 @@ WEB_SEARCH_MODELS = (
 COMPOUND_MODELS = ("compound", "compound-mini", "groq/compound", "groq/compound-mini")
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
-    yield
-    litellm.get_model_info.cache_clear()
-
 
 class TestGroqWebSearchOptions:
     @pytest.mark.parametrize("model", WEB_SEARCH_MODELS + COMPOUND_MODELS)

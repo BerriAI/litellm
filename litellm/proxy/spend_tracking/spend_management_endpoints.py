@@ -4,10 +4,22 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Protocol, TypedDict, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    cast,  # noqa: TID251  # prisma group_by returns untyped aggregate mappings
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -23,6 +35,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
@@ -30,6 +43,8 @@ from litellm.repositories.verification_token_repository import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.proxy_server import PrismaClient
     from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 else:
@@ -139,6 +154,18 @@ class _SessionSpendRow(TypedDict):
     mcp_tool_call_spend: float
 
 
+class _SpendSumAggregate(TypedDict, total=False):
+    spend: ReadOnly[float]
+
+
+class _SpendGroupByRow(TypedDict):
+    api_key: ReadOnly[str]
+    user: ReadOnly[str | None]
+    model: ReadOnly[str]
+    startTime: ReadOnly[object]
+    _sum: ReadOnly[_SpendSumAggregate]
+
+
 async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
     """Run a raw read query and return its rows as the row type the caller declares."""
     return await prisma_client.db.query_raw(sql_query, *args)
@@ -147,24 +174,6 @@ async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object)
 async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT] | None:
     """``_query_raw`` for the call sites that guard the result against ``None``."""
     return await _query_raw(prisma_client, sql_query, *args)
-
-
-class _SpendLogsTable(Protocol):
-    """The subset of the Prisma spend-logs table API this module uses."""
-
-    async def find_many(
-        self, *, where: Mapping[str, object], order: Mapping[str, str]
-    ) -> Sequence[_SupportsModelDump]: ...
-
-    async def find_unique(
-        self, *, where: Mapping[str, object], include: None = None
-    ) -> _SpendLogOwnershipRow | None: ...
-
-    async def count(self, *, where: Mapping[str, object]) -> int: ...
-
-    async def group_by(
-        self, *, by: Sequence[str], where: Mapping[str, object], count: Mapping[str, bool]
-    ) -> Sequence[_SessionCountRow]: ...
 
 
 class _TeamTable(Protocol):
@@ -183,7 +192,7 @@ class _VerificationTokenTable(Protocol):
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
-def _spend_logs_table(prisma_client: PrismaClient) -> _SpendLogsTable:
+def _spend_logs_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_SpendLogs"]:
     return SpendLogsRepository(prisma_client).table
 
 
@@ -221,11 +230,12 @@ async def _count_logs_per_session(
     prisma_client: PrismaClient, session_ids: Sequence[str | None]
 ) -> Sequence[_SessionCountRow]:
     """Count spend log rows per session for the given session ids."""
-    return await _spend_logs_table(prisma_client).group_by(
+    rows: Final = await _spend_logs_table(prisma_client).group_by(
         by=["session_id"],
         where={"session_id": {"in": session_ids}},
         count={"session_id": True},
     )
+    return cast(Sequence[_SessionCountRow], rows)  # cast-ok: group_by(count=) shape is fixed by the by/count args
 
 
 async def _find_team_row(prisma_client: PrismaClient, team_id: str) -> _SupportsModelDump | None:
@@ -2426,7 +2436,23 @@ async def ui_view_spend_logs(
                 user_api_key_dict=user_api_key_dict,
                 request_id=request_id,
             )
-        permitted_team_ids: list[str] | None = None
+        user_scope_applies: Final = (
+            not is_request_id_lookup
+            and not is_admin_view
+            and team_id is None
+            and _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+        )
+        permitted_team_ids: Final = (
+            await _get_permitted_team_ids_for_spend_logs_or_empty(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if user_scope_applies
+            else ()
+        )
+        explicit_user_requires_caller_scope: Final = (
+            user_scope_applies and not permitted_team_ids and user_id is not None
+        )
         if not is_request_id_lookup and not is_admin_view:
             if team_id is not None:
                 can_view_team: Final = await _can_team_member_view_log(
@@ -2440,25 +2466,22 @@ async def ui_view_spend_logs(
                         detail={"error": f"Not authorized to view team spend for team_id={team_id}"},
                     )
                 where_conditions["team_id"] = team_id
-                where_conditions.pop("user", None)
-            else:
-                if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
-                    try:
-                        permitted_team_ids = await _get_permitted_team_ids_for_spend_logs(
-                            prisma_client=prisma_client,
-                            user_api_key_dict=user_api_key_dict,
-                        )
-                    except Exception:
-                        permitted_team_ids = []
-                    if permitted_team_ids:
+            elif user_scope_applies:
+                if permitted_team_ids:
+                    if user_id is None:
                         where_conditions.pop("user", None)
-                        where_conditions["OR"] = [
-                            {"user": user_api_key_dict.user_id},
-                            {"team_id": {"in": permitted_team_ids}},
-                        ]
-                    else:
+                    where_conditions["OR"] = [
+                        {"user": user_api_key_dict.user_id},
+                        {"team_id": {"in": permitted_team_ids}},
+                    ]
+                else:
+                    if user_id is None:
                         where_conditions["user"] = user_api_key_dict.user_id
-                    where_conditions.pop("team_id", None)
+                    else:
+                        where_conditions["AND"] = where_conditions.get("AND", []) + [
+                            {"user": user_api_key_dict.user_id}
+                        ]
+                where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip: Final = (page - 1) * page_size
 
@@ -2502,12 +2525,16 @@ async def ui_view_spend_logs(
                 p += 1
 
         # Multi-team OR filter: (user = $X OR team_id = ANY($Y))
-        if permitted_team_ids is not None and len(permitted_team_ids) > 0:
+        if permitted_team_ids:
             or_clause: Final = f'("user" = ${p} OR team_id = ANY(${p + 1}::text[]))'
             sql_params.append(user_api_key_dict.user_id)
             sql_params.append(permitted_team_ids)
             p += 2
             sql_conditions.append(or_clause)
+        elif explicit_user_requires_caller_scope:
+            sql_conditions.append(f'"user" = ${p}')
+            sql_params.append(user_api_key_dict.user_id)
+            p += 1
 
         if session_id is not None and isinstance(session_id, str):
             like_escaped_session_id: Final = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -2957,8 +2984,9 @@ async def view_spend_logs(
             )
 
             if isinstance(response, list) and len(response) > 0 and isinstance(response[0], dict):
+                spend_rows: Final = cast(Sequence[_SpendGroupByRow], response)  # cast-ok: by/sum fix the shape
                 result: Final[dict] = {}
-                for record in response:
+                for record in spend_rows:
                     dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")
                     date = dt_object.date()
                     if date not in result:
@@ -4272,3 +4300,19 @@ async def _get_permitted_team_ids_for_spend_logs(
         ):
             permitted.append(team_obj.team_id)
     return permitted
+
+
+async def _get_permitted_team_ids_for_spend_logs_or_empty(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[str, ...]:
+    """Resolve permitted teams once, falling back to the caller's own-user scope."""
+    try:
+        return tuple(
+            await _get_permitted_team_ids_for_spend_logs(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+            )
+        )
+    except Exception:
+        return ()
