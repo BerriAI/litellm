@@ -787,7 +787,7 @@ def test_failed_routing_groups_update_keeps_previous_groups():
 
 
 def test_overlap_error_names_every_conflicting_model():
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="appears in") as exc_info:
         _build_router(
             routing_groups=[
                 {
@@ -834,7 +834,7 @@ def test_unbuildable_group_selector_keeps_previous_groups():
     )
     selector = router._group_selectors["g1"]["latency-based-routing"]
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError, match="ttl"):
         router.update_settings(
             routing_groups=[
                 {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
