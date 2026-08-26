@@ -155,10 +155,12 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/.well-known/oauth-",
             "/.well-known/openid-configuration",
             "/.well-known/jwks.json",
+            "/.well-known/litellm-cli-auth",
             "/authorize",
             "/token",
             "/callback",
             "/register",
+            "/revoke",
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),

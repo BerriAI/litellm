@@ -65,6 +65,41 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
 )
 
 
+def is_guardrail_intervention(e: Exception) -> bool:
+    """
+    Returns True if the exception represents an intentional guardrail block
+    (this was logged previously as an API failure - guardrail_failed_to_respond).
+
+    Guardrails signal intentional blocks by raising:
+    - GuardrailRaisedException (generic guardrail API, tool permission)
+    - BlockedPiiEntityError (Presidio PII detection)
+    - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
+    - HTTPException with a block-signalling status (400, 403, 422)
+    - ModifyResponseException (passthrough mode violation)
+
+    Only the statuses guardrails use in-tree to signal a deliberate rejection
+    count as an intervention: 400 (content policy), 403 (e.g. akto) and 422
+    (e.g. llm_as_a_judge). Other 4xx codes are commonly propagated from an
+    upstream guardrail provider response (401 bad key, 408 timeout, 429 rate
+    limit, or a raw upstream status), which are technical failures, not
+    blocks, so they stay guardrail_failed_to_respond.
+    """
+    if isinstance(e, ModifyResponseException):
+        return True
+    if isinstance(
+        e,
+        (
+            GuardrailRaisedException,
+            BlockedPiiEntityError,
+            SensitiveDataRouteException,
+        ),
+    ):
+        return True
+    if HTTPException is not None and isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES:
+        return True
+    return False
+
+
 def _strict_guardrail_modes_enabled() -> bool:
     """Whether guardrail-mode validation raises (default) or logs a warning.
 
@@ -101,6 +136,9 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
+
+    # If True, every proxy lifecycle event runs this guardrail's own hooks, not apply_guardrail.
+    use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
 
@@ -198,6 +236,7 @@ class CustomGuardrail(CustomLogger):
         violation_message: str,
         request_data: dict[str, Any],
         detection_info: dict[str, Any] | None = None,
+        original_response: object = None,
     ) -> None:
         """
         Raise a passthrough exception for guardrail violations.
@@ -213,6 +252,10 @@ class CustomGuardrail(CustomLogger):
             violation_message: The formatted violation message to return to the user
             request_data: The original request data dictionary
             detection_info: Optional dictionary with detection metadata (scores, rules, etc.)
+            original_response: The blocked LLM response when raising from a post-call
+                hook. It carries the real token usage the upstream call consumed, so
+                the synthetic block response reports it instead of zeros. Leave None
+                for pre-call/during-call blocks (the LLM was never invoked).
 
         Raises:
             ModifyResponseException: Always raises this exception to short-circuit
@@ -235,6 +278,7 @@ class CustomGuardrail(CustomLogger):
             request_data=request_data,
             guardrail_name=self.guardrail_name,
             detection_info=detection_info,
+            original_response=original_response,
         )
 
     def raise_sensitive_data_route_exception(
@@ -420,11 +464,13 @@ class CustomGuardrail(CustomLogger):
                         f"Sensitive data detected by {self.guardrail_name} (routing skipped: request has no session_id)"
                     ),
                     guardrail_name=self.guardrail_name,
+                    blocked_content=True,
                 )
         else:
             raise GuardrailRaisedException(
                 message=f"Sensitive data detected by {self.guardrail_name}",
                 guardrail_name=self.guardrail_name,
+                blocked_content=True,
             )
 
     @staticmethod
@@ -626,7 +672,7 @@ class CustomGuardrail(CustomLogger):
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
     def _deployment_pre_call_target(self) -> "CustomLogger":
-        if not self.uses_apply_guardrail_interface():
+        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
         try:
             from litellm.proxy.utils import unified_guardrail
@@ -1059,42 +1105,8 @@ class CustomGuardrail(CustomLogger):
 
     @staticmethod
     def _is_guardrail_intervention(e: Exception) -> bool:
-        """
-        Returns True if the exception represents an intentional guardrail block
-        (this was logged previously as an API failure - guardrail_failed_to_respond).
-
-        Guardrails signal intentional blocks by raising:
-        - GuardrailRaisedException (generic guardrail API, tool permission)
-        - BlockedPiiEntityError (Presidio PII detection)
-        - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
-        - HTTPException with a block-signalling status (400, 403, 422)
-        - ModifyResponseException (passthrough mode violation)
-
-        Only the statuses guardrails use in-tree to signal a deliberate rejection
-        count as an intervention: 400 (content policy), 403 (e.g. akto) and 422
-        (e.g. llm_as_a_judge). Other 4xx codes are commonly propagated from an
-        upstream guardrail provider response (401 bad key, 408 timeout, 429 rate
-        limit, or a raw upstream status), which are technical failures, not
-        blocks, so they stay guardrail_failed_to_respond.
-        """
-        if isinstance(e, ModifyResponseException):
-            return True
-        if isinstance(
-            e,
-            (
-                GuardrailRaisedException,
-                BlockedPiiEntityError,
-                SensitiveDataRouteException,
-            ),
-        ):
-            return True
-        if (
-            HTTPException is not None
-            and isinstance(e, HTTPException)
-            and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES
-        ):
-            return True
-        return False
+        """Retained spelling for existing callers; prefer ``is_guardrail_intervention``."""
+        return is_guardrail_intervention(e)
 
     def _process_error(
         self,

@@ -104,6 +104,11 @@
           "minimum": 0,
           "description": "Flex service-tier rate for the same-named base field."
         },
+        "cache_creation_input_token_cost_above_272k_tokens_priority": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Priority service-tier rate for the same-named base field."
+        },
         "cache_creation_input_token_cost_flex": {
           "type": "number",
           "minimum": 0,
@@ -185,6 +190,14 @@
         },
         "gemini_native_audio": {
           "type": "boolean"
+        },
+        "guardrail_cost_per_unit": {
+          "type": "object",
+          "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
         },
         "input_cost_per_audio_per_second": {
           "type": "number",
@@ -361,6 +374,7 @@
             "chat",
             "completion",
             "embedding",
+            "guardrail",
             "image_edit",
             "image_generation",
             "moderation",
@@ -416,6 +430,14 @@
           "minimum": 0
         },
         "output_cost_per_second_1080p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_480p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_4k": {
           "type": "number",
           "minimum": 0
         },
@@ -504,6 +526,11 @@
         "provider_specific_entry": {
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
+        },
+        "regional_endpoint_uplift_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%)."
         },
         "regional_processing_uplift_multiplier_eu": {
           "type": "number",
@@ -611,6 +638,9 @@
         "supports_image_size": {
           "type": "boolean"
         },
+        "supports_legacy_thinking": {
+          "type": "boolean"
+        },
         "supports_low_reasoning_effort": {
           "type": "boolean"
         },
@@ -650,6 +680,9 @@
         "supports_pdf_input": {
           "type": "boolean"
         },
+        "supports_prompt_cache_breakpoint": {
+          "type": "boolean"
+        },
         "supports_prompt_caching": {
           "type": "boolean"
         },
@@ -671,6 +704,9 @@
         "supports_tool_choice": {
           "type": "boolean"
         },
+        "supports_tool_search": {
+          "type": "boolean"
+        },
         "supports_url_context": {
           "type": "boolean"
         },
@@ -684,6 +720,9 @@
           "type": "boolean"
         },
         "supports_xhigh_reasoning_effort": {
+          "type": "boolean"
+        },
+        "thinking_always_on": {
           "type": "boolean"
         },
         "tiered_pricing": {
@@ -725,6 +764,10 @@
                 "minimum": 0
               },
               "cache_read_input_token_cost": {
+                "type": "number",
+                "minimum": 0
+              },
+              "cache_creation_input_token_cost": {
                 "type": "number",
                 "minimum": 0
               },

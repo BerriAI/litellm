@@ -123,7 +123,7 @@ function CredentialsHeader() {
           <div className="flex flex-col gap-3">
             <span className="text-sm font-medium text-foreground">Credential types</span>
             <div className="flex flex-col gap-1">
-              <span className="flex items-center gap-1.5 text-sm font-medium text-blue-600">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-info">
                 <RefreshCw className="size-3.5" />
                 Reusable
               </span>
@@ -158,7 +158,7 @@ function CredentialsCell({ credentialName }: { credentialName: string | undefine
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-blue-600" title={credentialName}>
+    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-info" title={credentialName}>
       <RefreshCw className="size-3 shrink-0" />
       <span className="truncate">{credentialName}</span>
     </span>
@@ -220,7 +220,7 @@ function AccessGroupsCell({ accessGroups }: { accessGroups: string[] | null }) {
 
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <Badge variant="outline" className="max-w-36 truncate border-blue-200 bg-blue-50 font-normal text-blue-600">
+      <Badge variant="outline" className="max-w-36 truncate border-info/20 bg-info/10 font-normal text-info">
         {first}
       </Badge>
       {overflow.length > 0 && (
@@ -453,8 +453,8 @@ export const getModelsTableColumns = ({
   {
     id: STATUS_COLUMN_ID,
     accessorFn: (row) => row.model_info.db_model,
-    meta: { title: "Status", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Status" />,
+    meta: { title: "Source", skeleton: "badge" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Source" />,
     enableSorting: true,
     size: 140,
     minSize: 100,

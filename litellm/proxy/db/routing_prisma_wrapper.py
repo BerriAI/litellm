@@ -104,6 +104,17 @@ class RoutingPrismaWrapper:
         return self._reader
 
     @property
+    def read_target(self) -> PrismaWrapper:
+        """The wrapper `_TOP_LEVEL_READ_METHODS` dispatch to right now.
+
+        Callers that need to reason about the engine a read actually ran on
+        (e.g. recovering from prepared statements that went stale on it) must
+        consult this rather than `writer`, and `__getattr__` routes through it
+        so the two cannot drift apart.
+        """
+        return self._writer if self._reader_unavailable else self._reader
+
+    @property
     def reader_unavailable(self) -> bool:
         return self._reader_unavailable
 
@@ -237,14 +248,14 @@ class RoutingPrismaWrapper:
     async def _recreate_reader(self, http_client: Any | None = None) -> None:
         """Resolve the reader URL and recreate its Prisma client.
 
-        IAM-enabled readers regenerate their token (host/port/user came from
-        the parsed reader URL at construction time). Non-IAM readers reuse
-        the URL stored in `DATABASE_URL_READ_REPLICA`.
+        Token-authenticated readers regenerate their token (host/port/user came
+        from the parsed reader URL at construction time). Password-authenticated
+        readers reuse the URL stored in `DATABASE_URL_READ_REPLICA`.
         """
         if self._reader.iam_token_db_auth:
             new_reader_url: Final = self._reader.get_rds_iam_token()
             if not new_reader_url:
-                raise RuntimeError("Failed to generate fresh IAM token for read replica")
+                raise RuntimeError(f"Failed to generate fresh {self._reader.token_label} for read replica")
             await self._reader.recreate_prisma_client(new_reader_url, http_client=http_client)
             return
         reader_url: Final = os.getenv("DATABASE_URL_READ_REPLICA", "")
@@ -254,8 +265,7 @@ class RoutingPrismaWrapper:
 
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:
-            target: Final = self._writer if self._reader_unavailable else self._reader
-            return getattr(target, name)
+            return getattr(self.read_target, name)
         writer_attr: Final = getattr(self._writer, name)
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /

@@ -1,7 +1,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException
 
@@ -18,26 +18,9 @@ from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.utils import PrismaClient
-
-
-class _ManagedObjectRow(Protocol):
-    model_object_id: str
-    unified_object_id: str | None
-    file_purpose: str | None
-    created_by: str | None
-
-
-class _ManagedObjectTable(Protocol):
-    async def find_unique(self, *, where: Mapping[str, str]) -> _ManagedObjectRow | None: ...
-
-    async def find_first(self, *, where: Mapping[str, str]) -> _ManagedObjectRow | None: ...
-
-    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_ManagedObjectRow]: ...
-
-    async def create(self, *, data: Mapping[str, str]) -> _ManagedObjectRow: ...
-
-    async def update(self, *, where: Mapping[str, str], data: Mapping[str, str]) -> _ManagedObjectRow | None: ...
 
 
 CONTAINER_OBJECT_PURPOSE: Final = "container"
@@ -220,7 +203,7 @@ async def record_container_owner(
         verbose_proxy_logger.warning("Skipping container ownership tracking because prisma_client is None")
         return response
 
-    table: Final[_ManagedObjectTable] = ManagedObjectRepository(prisma_client).table
+    table: Final = ManagedObjectRepository(prisma_client).table
     existing: Final = await table.find_unique(where={"model_object_id": model_object_id})
     if existing is not None:
         if getattr(existing, "file_purpose", None) != CONTAINER_OBJECT_PURPOSE:
@@ -272,8 +255,8 @@ async def _get_container_owner(original_container_id: str, custom_llm_provider: 
     if prisma_client is None:
         return None
 
-    table: Final[_ManagedObjectTable] = ManagedObjectRepository(prisma_client).table
-    row: Final[_ManagedObjectRow | None] = await table.find_first(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    row: Final[prisma_models.LiteLLM_ManagedObjectTable | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
@@ -309,8 +292,8 @@ async def _get_stored_container_id(original_container_id: str, custom_llm_provid
     if prisma_client is None:
         return None
 
-    table: Final[_ManagedObjectTable] = ManagedObjectRepository(prisma_client).table
-    row: Final[_ManagedObjectRow | None] = await table.find_first(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    row: Final[prisma_models.LiteLLM_ManagedObjectTable | None] = await table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
@@ -394,8 +377,8 @@ async def _get_allowed_container_ids(
     if prisma_client is None:
         return set()
 
-    table: Final[_ManagedObjectTable] = ManagedObjectRepository(prisma_client).table
-    rows: Final[Sequence[_ManagedObjectRow]] = await table.find_many(
+    table: Final = ManagedObjectRepository(prisma_client).table
+    rows: Final[Sequence[prisma_models.LiteLLM_ManagedObjectTable]] = await table.find_many(
         where={
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
             "created_by": {"in": owner_scopes},

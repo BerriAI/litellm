@@ -749,7 +749,10 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "When True, unified guardrails skip system-role messages when building "
             "evaluation inputs (texts and structured_messages). When False, system "
             "messages are included even if litellm_settings sets a global skip. When "
-            "None, use the global litellm.skip_system_message_in_guardrail setting."
+            "None, use the global litellm.skip_system_message_in_guardrail setting. "
+            "For Anthropic /v1/messages, the flag applies only to the trusted top-level "
+            "system prompt. In-sequence system entries are untrusted client input and remain "
+            "in texts and structured_messages."
         ),
     )
 
