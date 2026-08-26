@@ -308,7 +308,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
-        if "x-api-key" not in headers and "authorization" not in headers:
+        header_names: Final = frozenset(name.lower() for name in headers)
+        if "x-api-key" not in header_names and "authorization" not in header_names:
             auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
             if auth_header is None:
                 raise AuthenticationError(
