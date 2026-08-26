@@ -398,6 +398,16 @@ def _is_retriable_anthropic_status(status_code: int) -> bool:
     return status_code == 429 or status_code >= 500
 
 
+def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
+    """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
+    failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        is_server_fulfilled_tool_leak_error,
+    )
+
+    return is_server_fulfilled_tool_leak_error(chunk)
+
+
 def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error: "MidStreamFallbackError") -> bool:
     """
     A MidStreamFallbackError raised directly by the source iterator (the
@@ -5018,6 +5028,7 @@ class Router:
                         not has_generated_content
                         and error_event is not None
                         and _is_retriable_anthropic_status(error_event[2])
+                        and not _anthropic_stream_error_is_gateway_verdict(chunk)
                     )
                     if not has_generated_content and not retriable_pending_error and error_event is None:
                         buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)

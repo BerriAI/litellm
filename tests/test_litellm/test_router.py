@@ -15,11 +15,15 @@ import litellm
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
+)
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     FallbackAwareAnthropicMessagesStream,
     _anthropic_stream_commits_now,
     _anthropic_stream_should_decline_fallback,
+    _anthropic_stream_error_is_gateway_verdict,
     _anthropic_stream_forwards_ping_live,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
@@ -9546,6 +9550,30 @@ async def test_anthropic_messages_leading_ping_does_not_disqualify_fallback():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_hold_back_retrieval_failure_reaches_client_without_fallback():
+    """The hold-back iterator's own retrieval-failure frame is the gateway's verdict, not a
+    provider failure: a configured fallback stays untouched and the client reads the error
+    right after the live keepalive."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_ping_chunk(), SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+    )
+    fallback = AsyncMock(
+        return_value=_AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
+    )
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils", new=fallback):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    fallback.assert_not_called()
+    assert collected == [_anthropic_messages_ping_chunk(), SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_pre_content_buffer_cap_forces_commit():
     """Bugbot regression: a hostile or pathological upstream that never emits
     real content or an error must not grow the pre-content lifecycle buffer
@@ -9881,6 +9909,12 @@ def test_anthropic_stream_forwards_ping_live_direct_call():
     assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=1) is False
     assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True, buffered_chunk_count=0) is False
     assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False, buffered_chunk_count=0) is False
+
+
+def test_anthropic_stream_error_is_gateway_verdict_direct_call():
+    assert _anthropic_stream_error_is_gateway_verdict(SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES) is True
+    assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_overloaded_error_chunk()) is False
+    assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_ping_chunk()) is False
 
 
 def test_fallback_aware_stream_reports_withheld_output_of_its_current_source():
