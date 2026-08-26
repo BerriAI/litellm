@@ -58,7 +58,17 @@ def safe_divide(
     return numerator / denominator
 
 
+def _is_proxy_rejection(exception: BaseException) -> bool:
+    try:
+        from starlette.exceptions import HTTPException
+    except ImportError:
+        return False
+    return isinstance(exception, HTTPException)
+
+
 def _is_provider_originated(exception: BaseException) -> bool:
+    if _is_proxy_rejection(exception):
+        return False
     if getattr(exception, "llm_provider", None):
         return True
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -74,6 +84,8 @@ def is_expected_client_error(exception: BaseException | None) -> bool:
     client error and keeps its traceback: a mapped litellm exception carries
     ``llm_provider``, and the raw ``BaseLLMException`` that provider handlers
     raise before mapping (the /v1/messages route surfaces it as-is) is one too.
+    The proxy's own limiters raise ``HTTPException`` subclasses that also carry
+    an ``llm_provider``, so any ``HTTPException`` stays a proxy rejection.
 
     ProxyException stores the status on .code (as a str), HTTPException and
     litellm exceptions on .status_code.

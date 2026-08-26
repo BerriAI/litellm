@@ -286,6 +286,7 @@ class TestIsExpectedClientError:
         from litellm.exceptions import AuthenticationError, RateLimitError
         from litellm.litellm_core_utils.core_helpers import is_expected_client_error
         from litellm.llms.anthropic.common_utils import AnthropicError
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
         provider_auth_failure = AuthenticationError(
             message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
@@ -297,6 +298,12 @@ class TestIsExpectedClientError:
 
         unmapped_provider_failure = AnthropicError(status_code=401, message='{"type":"authentication_error"}')
         assert is_expected_client_error(unmapped_provider_failure) is False
+
+        proxy_rate_limit = ProxyRateLimitError(
+            detail={"error": "Max parallel requests reached"}, model="claude-haiku-4-5", llm_provider="anthropic"
+        )
+        assert proxy_rate_limit.llm_provider == "anthropic"
+        assert is_expected_client_error(proxy_rate_limit) is True
 
         class RouterRejection(Exception):
             def __init__(self):
