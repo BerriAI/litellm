@@ -99,6 +99,8 @@ describe("AccessGroupsPage", () => {
     renderWithProviders(<AccessGroupsPage />);
     expect(screen.getByRole("heading", { name: "Access Groups" })).toBeInTheDocument();
     expect(screen.getByText("Manage resource permissions for your organization")).toBeInTheDocument();
+    expect(document.querySelector(".lucide-boxes")).not.toBeNull();
+    expect(screen.getByText("Manage resource permissions for your organization")).toBeInTheDocument();
   });
 
   it("shows the Create Access Group button for an admin", () => {
