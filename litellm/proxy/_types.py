@@ -3546,6 +3546,8 @@ class SpendLogsMetadata(TypedDict):
     litellm_overhead_time_ms: float | None  # LiteLLM overhead time in milliseconds
     attempted_retries: int | None  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: int | None  # Max retries configured for this request
+    attempted_fallbacks: ReadOnly[int | None]  # Number of fallbacks attempted (0 = primary model group served)
+    original_model_group: ReadOnly[str | None]  # Model group requested before any fallbacks
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed

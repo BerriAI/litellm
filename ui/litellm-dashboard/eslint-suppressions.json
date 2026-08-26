@@ -2133,6 +2133,11 @@
       "count": 1
     }
   },
+  "src/components/ui/alert.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/avatar.tsx": {
     "local/filename-pascal-case": {
       "count": 1

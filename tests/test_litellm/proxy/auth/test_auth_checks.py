@@ -4869,10 +4869,9 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
       3. When team_alias is None, NO alias-key operation happens (no
          delete of an empty-keyed entry, no spurious write).
       4. DELETES the team_id-keyed entry from the internal usage cache
-         BEFORE the fresh write (LIT-4391). `_get_team_object_from_cache`
-         consults the internal usage cache first, so a leftover copy there
-         (backfilled from a Redis shared with `user_api_key_cache`) would
-         keep serving the pre-update team allowlist.
+         BEFORE the fresh write (LIT-4391). `_get_team_object_from_cache` no
+         longer reads the internal usage cache (LIT-5944), but the delete
+         protects mixed-version rolling deploys where older workers still do.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -4981,8 +4980,10 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
     Regression test for LIT-4391: keys with models=["all-team-models"] kept
     getting 403 team_model_access_denied for models added via /team/update.
 
-    `_get_team_object_from_cache` consults the internal usage cache BEFORE
-    `user_api_key_cache`. When both share one Redis (enable_redis_auth_cache),
+    `_get_team_object_from_cache` used to consult the internal usage cache
+    BEFORE `user_api_key_cache` (removed in LIT-5944; this test now also
+    guards against reintroducing that read).
+    When both share one Redis (enable_redis_auth_cache),
     any team read backfills the internal cache's in-memory tier with the team
     object. `_cache_team_object` (the /team/update refresh) only wrote
     `user_api_key_cache`, so that backfilled copy kept shadowing the update
@@ -5051,6 +5052,75 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
         "The shared Redis lost the refreshed team object — the internal-cache "
         "invalidation must run BEFORE the fresh write, not after. "
         f"Got: {redis_copy}"
+    )
+
+
+class _CountingFakeRedis(_SharedFakeRedis):
+    """Counts per-key Redis round-trips so tests can pin the number of
+    network operations a code path issues."""
+
+    def __init__(self):
+        super().__init__()
+        self.get_calls: int = 0
+
+    async def async_get_cache(self, key, **kwargs):
+        self.get_calls += 1
+        return await super().async_get_cache(key, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_warm_team_object_reads_issue_no_redis_ops_lit_5944():
+    """
+    Regression test for LIT-5944: project/team-scoped virtual-key requests
+    paid ~4 awaited Redis GETs per request just to re-read the team object.
+
+    `_get_team_object_from_cache` used to consult
+    `proxy_logging_obj.internal_usage_cache.dual_cache` (in-memory TTL 1s,
+    Redis-backed) BEFORE `user_api_key_cache`. Nothing writes team objects
+    into that internal cache — `_cache_team_object` only DELETES the key
+    there — so when `user_api_key_cache` has no Redis tier the shared Redis
+    key stays absent forever and every team lookup in the auth hot path
+    (4 call sites per chat-completion request) became a guaranteed-miss
+    Redis round-trip, saturating the event loop at high TPS.
+
+    Pins: once `_cache_team_object` has cached a team, repeated
+    `get_team_object` reads are served from `user_api_key_cache`'s in-memory
+    tier and issue ZERO Redis operations.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import _cache_team_object, get_team_object
+
+    team_id = "team-lit-5944"
+    counting_redis = _CountingFakeRedis()
+    user_api_key_cache = UserApiKeyCache()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache = DualCache(
+        redis_cache=counting_redis,
+        default_in_memory_ttl=1,
+    )
+    prisma_client = MagicMock()
+
+    await _cache_team_object(
+        team_id=team_id,
+        team_table=LiteLLM_TeamTableCachedObj(team_id=team_id, models=["model-a"]),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    for _ in range(4):
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert team_obj is not None and team_obj.models == ["model-a"]
+
+    assert counting_redis.get_calls == 0, (
+        "Warm team-object reads must be served from user_api_key_cache's "
+        "in-memory tier without any Redis round-trips. "
+        f"Got {counting_redis.get_calls} Redis GETs for 4 get_team_object calls."
     )
 
 
@@ -6940,6 +7010,86 @@ def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is
     router = _router_with_a_group_priced_through_model_info()
 
     assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False
+
+
+@pytest.mark.parametrize(
+    "user_route, expected",
+    [
+        ("/internal-models/v1/chat/completions", True),
+        ("/internal-models/newly-registered-model/predict", True),
+        ("/internal-models-other/v1/chat/completions", False),
+        ("/anthropic/v1/messages", False),
+    ],
+)
+def test_team_allowed_routes_wildcard_prefix_matches_unregistered_passthrough_routes(user_route, expected):
+    """A `/prefix/*` entry in `team_allowed_routes` must cover every route under that prefix, so
+    passthrough endpoints registered after the proxy config was written are reachable without an
+    exact-route config change."""
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=user_route,
+            litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/*"]),
+        )
+        is expected
+    )
+
+
+def test_team_allowed_routes_exact_route_does_not_become_a_prefix_grant():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/model-a"])
+
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-a", litellm_proxy_roles=roles)
+        is True
+    )
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-b", litellm_proxy_roles=roles)
+        is False
+    )
+
+
+def test_admin_allowed_routes_wildcard_prefix_is_honored():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(admin_allowed_routes=["/internal-models/*"])
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/internal-models/anything", litellm_proxy_roles=roles
+        )
+        is True
+    )
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/other/anything", litellm_proxy_roles=roles
+        )
+        is False
+    )
+
+
+def test_team_allowed_routes_named_route_group_still_resolves():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(team_allowed_routes=["openai_routes"])
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM, user_route="/v1/chat/completions", litellm_proxy_roles=roles
+        )
+        is True
+    )
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/key/generate", litellm_proxy_roles=roles)
+        is False
+    )
 
 
 @pytest.mark.asyncio

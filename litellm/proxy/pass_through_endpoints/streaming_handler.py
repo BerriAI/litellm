@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject
 
@@ -101,7 +102,7 @@ class PassThroughStreamingHandler:
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
-                    complete_frames, pending = PassThroughStreamingHandler._split_complete_sse_frames(
+                    complete_frames, pending = split_complete_sse_frames(
                         pending + chunk
                     )  # rebind-ok: SSE frame reassembly buffer across transport chunks
                     if complete_frames:
@@ -138,17 +139,6 @@ class PassThroughStreamingHandler:
                     )
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
-
-    @staticmethod
-    def _split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
-        lf_boundary_end: Final = pending.rfind(b"\n\n") + 2
-        crlf_boundary_end: Final = pending.rfind(b"\r\n\r\n") + 4
-        boundary_end: Final = max(
-            lf_boundary_end if lf_boundary_end >= 2 else 0, crlf_boundary_end if crlf_boundary_end >= 4 else 0
-        )
-        if boundary_end == 0:
-            return b"", pending
-        return pending[:boundary_end], pending[boundary_end:]
 
     @staticmethod
     async def _route_streaming_logging_to_handler(

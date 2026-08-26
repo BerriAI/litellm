@@ -199,6 +199,15 @@ class _UserModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
+class _TokenTeamModels(Protocol):
+    @property
+    def team_models(self) -> list[str]: ...
+
+
+def _token_team_models(valid_token: _TokenTeamModels) -> list[str]:
+    return valid_token.team_models
+
+
 async def _read_user_model_max_budget(
     user_id: str | None,
     prisma_client: PrismaClient | None,
@@ -1992,7 +2001,7 @@ async def _user_api_key_auth_builder(
                             include={"litellm_budget_table": True},
                         )
                         if _db_member is not None:
-                            team_member_info = LiteLLM_TeamMembership(**_db_member.dict())
+                            team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
                             await user_api_key_cache.async_set_cache(
                                 key=_cache_key,
                                 value=team_member_info,
@@ -2149,6 +2158,7 @@ async def _user_api_key_auth_builder(
                             proxy_logging_obj=proxy_logging_obj,
                         )
                 except HTTPException:
+                    token_team_models: Final = _token_team_models(valid_token)
                     _team_obj = LiteLLM_TeamTableCachedObj(
                         team_id=valid_token.team_id,
                         max_budget=valid_token.team_max_budget,
@@ -2157,7 +2167,7 @@ async def _user_api_key_auth_builder(
                         tpm_limit=valid_token.team_tpm_limit,
                         rpm_limit=valid_token.team_rpm_limit,
                         blocked=valid_token.team_blocked,
-                        models=valid_token.team_models,
+                        models=token_team_models,
                         metadata=valid_token.team_metadata,
                         object_permission_id=valid_token.team_object_permission_id,
                         object_permission=await _resolve_object_permission_for_unresolvable_team(
@@ -2301,6 +2311,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     UserAPIKeyAuth. Only called when valid_token.team_id is known to be
     non-None (the caller gates on it)."""
     assert valid_token.team_id is not None
+    token_team_models: Final = _token_team_models(valid_token)
     return LiteLLM_TeamTableCachedObj(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
@@ -2309,7 +2320,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         tpm_limit=valid_token.team_tpm_limit,
         rpm_limit=valid_token.team_rpm_limit,
         blocked=valid_token.team_blocked,
-        models=valid_token.team_models,
+        models=token_team_models,
         metadata=valid_token.team_metadata,
         object_permission_id=valid_token.team_object_permission_id,
     )
