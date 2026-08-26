@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
 from .base import GuardrailConfigModel
 
 
