@@ -850,17 +850,20 @@ async def invoke_agent_a2a(
                 agent_extra_headers=agent_extra_headers,
             )
 
+            post_call_succeeded = False
             try:
                 response = await proxy_logging_obj.post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
                     response=response,
                 )
+                post_call_succeeded = True
             finally:
                 _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
                 if _enqueue_fn is not None:
                     logging_obj._enqueue_deferred_logging = None
-                    _enqueue_fn(response)
+                    if post_call_succeeded:
+                        _enqueue_fn(response)
 
             response_dict: Final[dict[str, Any]] = (
                 response.model_dump(mode="json", exclude_none=True)

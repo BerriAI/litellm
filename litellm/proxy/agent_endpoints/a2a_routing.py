@@ -459,14 +459,17 @@ def _get_agent_dynamic_headers(
     return dynamic_headers
 
 
-def _get_agent_identity_headers(user_api_key_dict: UserAPIKeyAuth | None) -> dict[str, str]:
-    if user_api_key_dict is None:
-        return {}
+def _get_agent_identity_headers(
+    user_api_key_dict: UserAPIKeyAuth | None,
+    trace_id: object | None = None,
+) -> dict[str, str]:
     headers: dict[str, str] = {}
-    if user_api_key_dict.user_id:
+    if user_api_key_dict is not None and user_api_key_dict.user_id:
         headers["X-LiteLLM-User-Id"] = user_api_key_dict.user_id
-    if user_api_key_dict.team_id:
+    if user_api_key_dict is not None and user_api_key_dict.team_id:
         headers["X-LiteLLM-Team-Id"] = user_api_key_dict.team_id
+    if trace_id:
+        headers["X-LiteLLM-Trace-Id"] = str(trace_id)
     return headers
 
 
@@ -585,7 +588,7 @@ async def route_a2a_agent_request(
         )
     registered_static_headers = merge_agent_headers(
         dynamic_headers=registered_static_headers,
-        static_headers=_get_agent_identity_headers(user_api_key_dict),
+        static_headers=_get_agent_identity_headers(user_api_key_dict, data.get("litellm_trace_id")),
     )
     if (
         registered_provider

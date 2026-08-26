@@ -210,12 +210,25 @@ class WatsonxOrchestrateHandler:
         client: AsyncHTTPHandler,
         max_attempts: int = _MAX_POLL_ATTEMPTS,
         interval_s: float = _POLL_INTERVAL_S,
+        timeout: float | None = None,
     ) -> _WXORun:
         url: Final = f"{base_url}/v1/orchestrate/runs/{run_id}"
+        deadline: float | None = time.monotonic() + max(timeout, 0) if timeout is not None else None
 
         for attempt in range(max_attempts):
-            await asyncio.sleep(interval_s)
-            response = await client.get(url, headers=auth_headers)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError(f"WXO run '{run_id}' exceeded timeout of {timeout}s")
+                if interval_s > 0:
+                    await asyncio.sleep(min(interval_s, remaining))
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError(f"WXO run '{run_id}' exceeded timeout of {timeout}s")
+                response = await asyncio.wait_for(client.get(url, headers=auth_headers), timeout=remaining)
+            else:
+                await asyncio.sleep(interval_s)
+                response = await client.get(url, headers=auth_headers)
             response.raise_for_status()
             result = WatsonxOrchestrateHandler._run_body(response)
             status = result.get("status", "")
@@ -233,6 +246,7 @@ class WatsonxOrchestrateHandler:
         base_url: str,
         auth_headers: dict[str, str],
         client: AsyncHTTPHandler,
+        timeout: float | None = None,
     ) -> _WXORun:
         status = run_data.get("status", "")
         if status not in WatsonxOrchestrateTransformation.TERMINAL_STATES:
@@ -244,6 +258,7 @@ class WatsonxOrchestrateHandler:
                 run_id=run_id,
                 auth_headers=auth_headers,
                 client=client,
+                timeout=timeout,
             )
             status = run_data.get("status", "")
 
@@ -341,6 +356,7 @@ class WatsonxOrchestrateHandler:
             base_url=base_url,
             auth_headers=auth_headers,
             client=client,
+            timeout=timeout,
         )
 
         response_text: Final = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(run_data)
@@ -418,6 +434,7 @@ class WatsonxOrchestrateHandler:
                 base_url=base_url,
                 auth_headers=auth_headers,
                 client=client,
+                timeout=timeout,
             )
             accumulated_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result)
         else:

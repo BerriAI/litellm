@@ -38,6 +38,7 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
             params=params,
             litellm_params=litellm_params,
             agent_extra_headers=kwargs.get("agent_extra_headers"),
+            timeout=kwargs.get("timeout"),
         )
 
     async def handle_streaming(
@@ -58,5 +59,6 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
             params=params,
             litellm_params=litellm_params,
             agent_extra_headers=kwargs.get("agent_extra_headers"),
+            timeout=kwargs.get("timeout"),
         ):
             yield chunk

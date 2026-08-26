@@ -1180,6 +1180,15 @@ class CustomStreamWrapper:
         completion_obj: dict[str, Any],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
+        if isinstance(chunk, ModelResponseStream) and self.custom_llm_provider == "a2a":
+            model_response = chunk
+            model_response.model = self.model
+            finish_reasons = [getattr(choice, "finish_reason", None) for choice in chunk.choices]
+            if finish_reasons and all(isinstance(reason, str) and reason for reason in finish_reasons):
+                self.received_finish_reason = finish_reasons[0]
+                self.sent_last_chunk = True
+            return _ProviderChunkEarlyReturn(model_response)
+
         if (
             isinstance(chunk, ModelResponseStream)
             and self.custom_llm_provider is not None
@@ -1219,6 +1228,9 @@ class CustomStreamWrapper:
                     raise StopIteration
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
             completion_obj["content"] = anthropic_response_obj["text"]
+            chunk_index = anthropic_response_obj.get("index")
+            if isinstance(chunk_index, int):
+                model_response.choices[0].index = chunk_index
             if anthropic_response_obj["is_finished"]:
                 self.received_finish_reason = anthropic_response_obj["finish_reason"]
 

@@ -6,6 +6,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     A2ACompletionBridgeHandler,
 )
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
+from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.llms.langflow.a2a import merge_a2a_session_into_litellm_params
 
 
@@ -28,11 +29,16 @@ class LangFlowA2AConfig(BaseA2AProviderConfig):
         litellm_params = merge_a2a_session_into_litellm_params(
             litellm_params, params, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)
         )
+        forwarded_headers = merge_agent_headers(
+            dynamic_headers=kwargs.get("agent_extra_headers"),
+            static_headers=kwargs.get("agent_static_headers"),
+        )
         return await A2ACompletionBridgeHandler.handle_non_streaming(
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
+            agent_extra_headers=forwarded_headers,
             _skip_a2a_provider_routing=True,
         )
 
@@ -51,11 +57,16 @@ class LangFlowA2AConfig(BaseA2AProviderConfig):
         litellm_params = merge_a2a_session_into_litellm_params(
             litellm_params, params, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)
         )
+        forwarded_headers = merge_agent_headers(
+            dynamic_headers=kwargs.get("agent_extra_headers"),
+            static_headers=kwargs.get("agent_static_headers"),
+        )
         async for chunk in A2ACompletionBridgeHandler.handle_streaming(
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
+            agent_extra_headers=forwarded_headers,
             _skip_a2a_provider_routing=True,
         ):
             yield chunk

@@ -31,6 +31,7 @@ class BedrockAgentCoreA2AHandler:
         params: dict[str, Any],
         litellm_params: dict[str, Any],
         agent_extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """
         Handle non-streaming A2A request to AgentCore.
@@ -62,6 +63,7 @@ class BedrockAgentCoreA2AHandler:
             url,
             headers=headers,
             data=body,
+            timeout=timeout,
         )
         response.raise_for_status()
         response_data: Final = response.json()
@@ -77,6 +79,7 @@ class BedrockAgentCoreA2AHandler:
         params: dict[str, Any],
         litellm_params: dict[str, Any],
         agent_extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Handle streaming A2A request to AgentCore.
@@ -110,6 +113,7 @@ class BedrockAgentCoreA2AHandler:
             headers=headers,
             data=body,
             stream=True,
+            timeout=timeout,
         )
         response.raise_for_status()
 

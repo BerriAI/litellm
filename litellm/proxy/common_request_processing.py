@@ -1890,6 +1890,13 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
                 trust_client_model_info=False,
             )
+            if isinstance(self.data.get("model"), str) and self.data["model"].startswith("a2a/"):
+                self.data = await proxy_logging_obj.pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=self.data,
+                    call_type=route_type,
+                    guardrails_only=True,
+                )
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
