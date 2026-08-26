@@ -74,15 +74,11 @@ def _load(path: Path) -> dict[str, dict[str, object]]:
 
 @pytest.fixture
 def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    original_model_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.parametrize("model", ALL_KEYS)
