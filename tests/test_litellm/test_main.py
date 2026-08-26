@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 
 import urllib.parse
+from typing_extensions import ReadOnly, TypedDict
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -2959,15 +2960,40 @@ async def test_acompletion_resolves_provider_from_api_base():
     assert response.choices[0].message.content == "resolved"
 
 
-OPENAI_HOST = "api.openai.com"
+OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 A_STREAMED_MODEL = "gpt-4o"
 
 
-def _sse(chunks: list[dict]) -> str:
+class _StreamedDelta(TypedDict, total=False):
+    content: ReadOnly[str]
+
+
+class _StreamedChoice(TypedDict):
+    index: ReadOnly[int]
+    delta: ReadOnly[_StreamedDelta]
+    finish_reason: ReadOnly[str | None]
+
+
+class _StreamedUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class _StreamedChunk(TypedDict, total=False):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    choices: ReadOnly[list[_StreamedChoice]]
+    usage: ReadOnly[_StreamedUsage]
+
+
+def _sse(chunks: list[_StreamedChunk]) -> str:
     return "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
 
 
-def _content_chunk(text: str, finish_reason: str | None = None) -> dict:
+def _content_chunk(text: str, finish_reason: str | None = None) -> _StreamedChunk:
     return {
         "id": "chatcmpl-stream",
         "object": "chat.completion.chunk",
@@ -2977,7 +3003,7 @@ def _content_chunk(text: str, finish_reason: str | None = None) -> dict:
     }
 
 
-def _usage_chunk(prompt_tokens: int, completion_tokens: int) -> dict:
+def _usage_chunk(prompt_tokens: int, completion_tokens: int) -> _StreamedChunk:
     return {
         "id": "chatcmpl-stream",
         "object": "chat.completion.chunk",
@@ -2993,7 +3019,7 @@ def _usage_chunk(prompt_tokens: int, completion_tokens: int) -> dict:
 
 
 def _a_stream(deltas: tuple[str, ...], prompt_tokens: int, completion_tokens: int) -> str:
-    body = [_content_chunk(delta) for delta in deltas[:-1]]
+    body: list[_StreamedChunk] = [_content_chunk(delta) for delta in deltas[:-1]]
     body.append(_content_chunk(deltas[-1], finish_reason="stop"))
     body.append(_usage_chunk(prompt_tokens, completion_tokens))
     return _sse(body)
@@ -3001,8 +3027,8 @@ def _a_stream(deltas: tuple[str, ...], prompt_tokens: int, completion_tokens: in
 
 @contextlib.contextmanager
 def _openai_streaming(body: str):
-    with respx.mock:
-        respx.route(host=OPENAI_HOST).mock(
+    with respx.mock(assert_all_called=True) as router:
+        router.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
             return_value=httpx.Response(
                 200, text=body, headers={"content-type": "text/event-stream"}
             )
