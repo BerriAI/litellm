@@ -6929,14 +6929,15 @@ class Router:
         status_code: Final = getattr(error, "status_code", None)
         if status_code is not None and not litellm._should_retry(status_code):
             # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403):
+            # 404 means the provider does not serve this model, so the retry loop is
+            # allowed to advance to the next-priority deployment. The
+            # `_num_healthy_deployments <= 0` guard at the end of this method still
+            # raises once nothing else is left to try, and the capability cache in
+            # async_get_healthy_deployments keeps the 404-ing deployment out of the
+            # candidate list on subsequent attempts.
+            if status_code not in (401, 403, 404):
                 raise error
 
-        # HTTP 404 (litellm.NotFoundError) means the provider does not support
-        # this model. We allow the retry loop to continue so that order-based
-        # deployment fallback can advance to the next-priority provider.
-        # The capability cache in async_get_healthy_deployments ensures the
-        # incapable deployment is filtered out on the next attempt.
         # Error we should only retry if there are other deployments
         if isinstance(error, openai.RateLimitError):
             if (
