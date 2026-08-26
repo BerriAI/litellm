@@ -724,3 +724,45 @@ class TestMergePromptManagementInputReshape:
         )
 
         assert result == merged
+
+    def test_normalize_function_call_ids_in_input(self):
+        gemini_call_id = "call_23299__thought__AY89a1/99Gfdof9LKq6xxiUuaq9LU4xpSCaJtDlrvFKWqtFcg"
+        input_data = [
+            {
+                "type": "function_call",
+                "id": "call_123",
+                "call_id": gemini_call_id,
+                "name": "get_weather",
+                "arguments": '{"city": "Tokyo"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": gemini_call_id,
+                "output": "22C",
+            },
+        ]
+
+        normalized_openai = ResponsesAPIRequestUtils.normalize_function_call_ids_in_input(
+            request_input=input_data,
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        assert isinstance(normalized_openai, list)
+        assert normalized_openai[0]["call_id"] == "call_23299"
+        assert normalized_openai[0]["id"] == "fc_123"
+        assert normalized_openai[1]["call_id"] == "call_23299"
+
+        gemini_input = [
+            {
+                "type": "function_call",
+                "id": "call_123",
+                "call_id": gemini_call_id,
+            }
+        ]
+        normalized_gemini = ResponsesAPIRequestUtils.normalize_function_call_ids_in_input(
+            request_input=gemini_input,
+            model="gemini/gemini-2.5-flash",
+            custom_llm_provider="gemini",
+        )
+        assert isinstance(normalized_gemini, list)
+        assert normalized_gemini[0]["call_id"] == gemini_call_id

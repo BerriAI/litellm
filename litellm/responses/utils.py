@@ -525,6 +525,91 @@ class ResponsesAPIRequestUtils:
         return request_input
 
     @staticmethod
+    def normalize_call_id_for_provider(
+        call_id: str,
+        model: str | None,
+        custom_llm_provider: str | None,
+    ) -> str:
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        is_gemini: Final[bool] = custom_llm_provider == "gemini" or (model is not None and "gemini" in model.lower())
+        if is_gemini:
+            return call_id
+        if THOUGHT_SIGNATURE_SEPARATOR in call_id:
+            return call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        return call_id
+
+    @staticmethod
+    def normalize_function_call_item_id_for_provider(
+        item_id: str,
+        model: str | None,
+        custom_llm_provider: str | None,
+    ) -> str:
+        cleaned_id: Final[str] = ResponsesAPIRequestUtils.normalize_call_id_for_provider(
+            call_id=item_id,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        if custom_llm_provider != "openai":
+            return cleaned_id
+
+        if cleaned_id.startswith("call_"):
+            return f"fc_{cleaned_id[len('call_') :]}"
+        if cleaned_id.startswith("tooluse_"):
+            return f"fc_{cleaned_id[len('tooluse_') :]}"
+        if cleaned_id.startswith("toolu_vrtx_"):
+            return f"fc_{cleaned_id[len('toolu_vrtx_') :]}"
+
+        if not cleaned_id.startswith("fc_"):
+            return f"fc_{cleaned_id}"
+
+        return cleaned_id
+
+    @staticmethod
+    def normalize_function_call_ids_in_input(
+        request_input: object,
+        model: str | None,
+        custom_llm_provider: str | None,
+    ) -> object:
+        if not isinstance(request_input, list):
+            return request_input
+
+        for item in request_input:
+            if not isinstance(item, dict):
+                continue
+
+            item_type: Final = item.get("type")
+            if item_type == "function_call":
+                call_id: Final = item.get("call_id")
+                if isinstance(call_id, str):
+                    item["call_id"] = ResponsesAPIRequestUtils.normalize_call_id_for_provider(  # pyright: ignore[reportGeneralTypeIssues,reportUnnecessaryIsInstance]  # in-place rewrite on input dict
+                        call_id=call_id,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+
+                item_id: Final = item.get("id")
+                if isinstance(item_id, str):
+                    item["id"] = ResponsesAPIRequestUtils.normalize_function_call_item_id_for_provider(  # pyright: ignore[reportGeneralTypeIssues,reportUnnecessaryIsInstance]  # in-place rewrite on input dict
+                        item_id=item_id,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+            elif item_type == "function_call_output":
+                call_id_output: Final = item.get("call_id")
+                if isinstance(call_id_output, str):
+                    item["call_id"] = ResponsesAPIRequestUtils.normalize_call_id_for_provider(  # pyright: ignore[reportGeneralTypeIssues,reportUnnecessaryIsInstance]  # in-place rewrite on input dict
+                        call_id=call_id_output,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+
+        return request_input
+
+    @staticmethod
     def _build_responses_api_response_id(
         custom_llm_provider: str | None,
         model_id: str | None,
