@@ -282,7 +282,9 @@ PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS: Final[frozenset[str]]
         "litellm_deployment_success_responses",
         "litellm_deployment_failure_responses",
         "litellm_request_total_latency_metric",
+        "litellm_llm_api_latency_metric",
         "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_queue_time_seconds",
         "litellm_overhead_latency_metric",
         "litellm_deployment_latency_per_output_token",
     }

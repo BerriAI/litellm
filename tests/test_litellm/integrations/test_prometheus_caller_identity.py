@@ -277,7 +277,10 @@ def test_successful_request_emits_configured_identity_on_real_counter_and_histog
         "end_time": end_time,
         "litellm_params": {
             "custom_llm_provider": "openai",
-            "metadata": {"model_info": {"id": "deployment-id"}},
+            "metadata": {
+                "model_info": {"id": "deployment-id"},
+                "queue_time_seconds": 0.05,
+            },
         },
         "standard_logging_object": payload,
     }
@@ -304,7 +307,9 @@ def test_successful_request_emits_configured_identity_on_real_counter_and_histog
         "litellm_deployment_total_requests_total",
         "litellm_deployment_success_responses_total",
         "litellm_request_total_latency_metric_count",
+        "litellm_llm_api_latency_metric_count",
         "litellm_llm_api_time_to_first_token_metric_count",
+        "litellm_request_queue_time_seconds_count",
         "litellm_overhead_latency_metric_count",
         "litellm_deployment_latency_per_output_token_count",
     )
