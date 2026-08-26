@@ -48,7 +48,7 @@ import { z } from "zod/v4";
 import GuardrailsSelect from "./GuardrailsSelect";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
@@ -1258,9 +1258,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           {({ id, value, onChange }) => (
                             <BudgetDurationDropdown
                               id={id}
-                              placeholder="Never resets"
-                              value={value}
-                              onChange={(next) => onChange(next ?? null)}
+                              showNeverResets
+                              placeholder="Inherit team reset period"
+                              value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
+                              onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next)}
                             />
                           )}
                         </FormField>
