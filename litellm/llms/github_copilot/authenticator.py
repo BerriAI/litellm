@@ -38,7 +38,7 @@ class Authenticator:
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
         self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
-        self._session_cache: dict[str, dict[str, Any]] = {}
+        self._session_cache: dict[str, dict[str, Any]] = {}  # mutable-ok: session cache
 
     def get_access_token(self, access_token: str | None = None) -> str:
         """
@@ -58,23 +58,23 @@ class Authenticator:
 
         try:
             with open(self.access_token_file, "r") as f:
-                access_token = f.read().strip()
-                if access_token:
-                    return access_token
+                saved_token: Final = f.read().strip()
+                if saved_token:
+                    return saved_token
         except OSError:
             verbose_logger.warning("No existing access token found or error reading file")
 
         for attempt in range(3):
             verbose_logger.debug("Access token acquisition attempt %s/3", attempt + 1)
             try:
-                access_token = self._login()
+                new_token: Final = self._login()
                 try:
                     self._ensure_token_dir()
                     with open(self.access_token_file, "w") as f:
-                        f.write(access_token)
+                        f.write(new_token)
                 except OSError:
                     verbose_logger.error("Error saving access token to file")
-                return access_token
+                return new_token
             except (GetDeviceCodeError, GetAccessTokenError, RefreshAPIKeyError) as e:
                 verbose_logger.warning("Failed attempt %s: %s", attempt + 1, e)
                 continue
@@ -99,14 +99,14 @@ class Authenticator:
         """
         # When an explicit access_token is provided, isolate in memory to prevent sharing a cached key across callers
         if access_token:
-            cached_info = self._session_cache.get(access_token)
+            cached_info: Final = self._session_cache.get(access_token)
             if cached_info and cached_info.get("expires_at", 0) > time.time():
-                token = cached_info.get("token")
+                token: Final = cached_info.get("token")
                 if token:
                     return token
 
             try:
-                api_key_info = self._refresh_api_key(access_token)
+                api_key_info: Final = self._refresh_api_key(access_token)
                 self._session_cache[access_token] = api_key_info
                 token: Final = api_key_info.get("token")
                 if token:
@@ -125,7 +125,7 @@ class Authenticator:
         # Fallback to single-user local file storage when no explicit token is passed
         try:
             with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
+                api_key_info: Final = json.load(f)
                 if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
                     return api_key_info.get("token")
                 else:
@@ -142,7 +142,7 @@ class Authenticator:
             pass  # Already logged in the try block
 
         try:
-            api_key_info = self._refresh_api_key()
+            api_key_info: Final = self._refresh_api_key()
             try:
                 self._ensure_token_dir()
                 with open(self.api_key_file, "w") as f:
@@ -231,7 +231,7 @@ class Authenticator:
                 self.token_dir,
                 e,
             )
-            uid = os.getuid() if hasattr(os, "getuid") else "user"
+            uid: Final = os.getuid() if hasattr(os, "getuid") else "user"
             self.token_dir = os.path.join(tempfile.gettempdir(), f"litellm_{uid}", "github_copilot")
             try:
                 os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
