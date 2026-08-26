@@ -3838,3 +3838,16 @@ def test_completion_cost_together_unmapped_model_still_uses_size_bucket(_local_m
     )
 
     assert cost == pytest.approx((23 + 15) * 9e-07, rel=1e-9)
+
+
+def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_local_model_cost_map):
+    assert "input_cost_per_token" not in litellm.model_cost["together_ai/togethercomputer/CodeLlama-34b-Instruct"]
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="togethercomputer/CodeLlama-34b-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 8e-07, rel=1e-9)

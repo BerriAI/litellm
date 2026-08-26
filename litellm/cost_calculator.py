@@ -77,7 +77,7 @@ from litellm.llms.tencent.cost_calculator import (
 )
 from litellm.llms.together_ai.cost_calculator import (
     get_model_params_and_category,
-    has_together_registry_entry,
+    has_together_registry_pricing,
 )
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
@@ -1556,7 +1556,7 @@ def completion_cost(
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
-                ) and not has_together_registry_entry(model, litellm.model_cost):
+                ) and not has_together_registry_pricing(model, litellm.model_cost):
                     model = get_model_params_and_category(model, call_type=CallTypes(call_type))
 
                 # replicate llms are calculate based on time for request running
