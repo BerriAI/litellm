@@ -111,9 +111,9 @@ def parse_databricks_oauth_config(
     scope: Final = _resolve_secret(raw.get("scope")) or _DEFAULT_SCOPE
 
     return DatabricksAppOAuthConfig(
-        client_id=client_id,  # type: ignore[arg-type]
-        client_secret=client_secret,  # type: ignore[arg-type]
-        token_url=_token_url_from_workspace(workspace_url),  # type: ignore[arg-type]
+        client_id=client_id,
+        client_secret=client_secret,
+        token_url=_token_url_from_workspace(workspace_url),
         scope=scope,
     )
 

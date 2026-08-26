@@ -166,9 +166,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         try:
             response_json: Final = raw_response.json()
 
-            response_object: Final = GeminiCreateFilesResponseObject(
-                **response_json.get("file", {})  # type: ignore
-            )
+            response_object: Final = GeminiCreateFilesResponseObject(**response_json.get("file", {}))
 
             # Extract file information from Gemini response
 

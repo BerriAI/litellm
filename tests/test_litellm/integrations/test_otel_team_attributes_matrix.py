@@ -31,8 +31,6 @@ Strategy
 """
 
 import asyncio
-import os
-import sys
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -43,7 +41,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.integrations.opentelemetry import (
     LITELLM_PROXY_REQUEST_SPAN_NAME,

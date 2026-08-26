@@ -8,12 +8,14 @@ Provides real-time threat detection, DLP, URL filtering, content masking, and po
 import json
 import os
 import re
+from collections.abc import AsyncIterable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -22,23 +24,71 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+)
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
+    add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    ChatCompletionToolCallChunk,
     Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
     ModelResponseStream,
 )
+
+ToolCallLike: TypeAlias = (
+    ChatCompletionMessageToolCall
+    | ChatCompletionDeltaToolCall
+    | ChatCompletionMessageCustomToolCall
+    | ChatCompletionDeltaCustomToolCall
+    | ChatCompletionToolCallChunk
+)
+
+
+class _ToolCallFunctionSlice(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    name: str | None = None
+    arguments: str | None = None
+
+    @field_validator("name", "arguments", mode="before")
+    @classmethod
+    def _coerce_to_scannable_text(cls, value: object) -> str | None:
+        """Accept any shape a client can put here and render it scannable.
+
+        The OpenAI request path forwards client-supplied ``tool_calls`` verbatim, so a
+        client can post a dict for ``arguments`` or a non-string for ``name``. Rejecting
+        either would fail validation for the whole slice, which reads as an unscannable
+        tool call and skips it silently -- the one outcome a scanner must never have.
+        A caller could otherwise suppress the scan on a tool call just by sending
+        ``"name": 123``.
+        """
+        if value is None or isinstance(value, str):
+            return value
+        return json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+
+
+class _ToolCallSlice(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    function: _ToolCallFunctionSlice | None = None
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -65,6 +115,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     _PROVIDER_NAME = "panw_prisma_airs"
 
+    #: AIRS fields withheld from the client-visible error detail.
+    #: ``response_masked_data`` is the model's own generation. The block branch that builds
+    #: this detail is only reached when ``mask_response_content`` is False, so echoing it
+    #: back would hand the caller exactly the text the operator declined to deliver.
+    #: ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
+    #: and it is one of the fields the ticket asks for.
+    _CLIENT_HIDDEN_SCAN_FIELDS: Final = frozenset({"response_masked_data"})
+
     def __init__(
         self,
         guardrail_name: str,
@@ -79,6 +137,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
         violation_message_template: str | None = None,
+        http_client: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         """Initialize PANW Prisma AIRS guardrail handler."""
@@ -126,6 +185,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_name,
             )
 
+        self.http_client = http_client
         self.fallback_on_error = fallback_on_error
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
@@ -163,7 +223,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         GuardrailEventHooks.during_mcp_call: GuardrailEventHooks.during_call,
     }
 
-    def should_run_guardrail(self, data: Any, event_type: GuardrailEventHooks) -> bool:
+    def should_run_guardrail(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
         if super().should_run_guardrail(data, event_type):
             return True
         compat: Final = self._MCP_COMPAT_MAP.get(event_type)
@@ -172,7 +232,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 return True
         return False
 
-    def _extract_text_from_messages(self, messages: list[dict[str, Any]]) -> str:
+    def _extract_text_from_messages(self, messages: Sequence[Mapping[str, object]]) -> str:
         """Extract text content from messages array."""
         if not isinstance(messages, list) or not messages:
             return ""
@@ -239,10 +299,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         self,
         content: str = "",
         is_response: bool = False,
-        metadata: dict[str, Any] | None = None,
-        call_id: str | None = None,
+        metadata: Mapping[str, object] | None = None,
+        call_id: object = None,
         tool_event: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Call PANW Prisma AIRS API to scan content or a tool_event."""
 
         if tool_event is None and not content.strip():
@@ -272,7 +332,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         else:
             app_name_value = self.app_name  # Defaults to "LiteLLM"
 
-        panw_metadata: Final = {
+        panw_metadata: Final[dict[str, object]] = {
             "app_user": (
                 (metadata.get("app_user") or metadata.get("user") or "litellm_user") if metadata else "litellm_user"
             ),
@@ -292,13 +352,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             panw_metadata["litellm_trace_id"] = metadata["litellm_trace_id"]
 
         # Build contents: tool_event takes priority, else prompt/response text
-        contents: list[dict[str, Any]]
+        contents: Sequence[Mapping[str, object]]
         if tool_event is not None:
             contents = [{"tool_event": tool_event}]
         else:
             contents = [{"response" if is_response else "prompt": content}]
 
-        payload: Final = {
+        payload: Final[dict[str, object]] = {
             "metadata": panw_metadata,
             "contents": contents,
         }
@@ -322,7 +382,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # If neither profile_name nor profile_id is provided, PANW API will use the
         # profile linked to the API key (if configured in Strata Cloud Manager)
         if profile_name or profile_id:
-            ai_profile: Final = {}
+            ai_profile: Final[dict[str, object]] = {}
             if profile_id:
                 ai_profile["profile_id"] = profile_id
             if profile_name:
@@ -330,7 +390,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             payload["ai_profile"] = ai_profile
 
         if is_response and tool_event is None:
-            payload["metadata"]["is_response"] = True  # type: ignore[call-overload, index]
+            panw_metadata["is_response"] = True
 
         headers: Final = {
             "Content-Type": "application/json",
@@ -340,10 +400,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         try:
             # Use LiteLLM's async HTTP client
-            async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+            async_client: Final = self.http_client or get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.GuardrailCallback
+            )
 
             # Bypass wrapper to access follow_redirects parameter
-            response: Final = await async_client.client.post(  # type: ignore[attr-defined]
+            response: Final = await async_client.client.post(
                 f"{self.api_base}/v1/scan/sync/request",
                 headers=headers,
                 json=payload,
@@ -352,7 +414,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
             response.raise_for_status()
 
-            result: Final = response.json()
+            result: Final[dict[str, object]] = response.json()
 
             # Validate response format
             if "action" not in result:
@@ -486,7 +548,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
             return "unknown"
 
-    def _get_masked_text(self, scan_result: dict[str, Any], is_response: bool = False) -> str | None:
+    def _get_masked_text(self, scan_result: Mapping[str, object], is_response: bool = False) -> str | None:
         """Extract masked text from PANW scan result."""
         masked_key: Final = "response_masked_data" if is_response else "prompt_masked_data"
         masked_data: Final = scan_result.get(masked_key)
@@ -508,7 +570,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     @staticmethod
     def _apply_mcp_masking(
         request_data: dict,
-        original_args: Any,
+        original_args: object,
         masked_text: str,
         *,
         is_blocked: bool = True,
@@ -541,7 +603,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # If the original args were structured, preserve the type.
         if isinstance(original_args, (dict, list)):
             try:
-                parsed: Final = json.loads(masked_text)
+                parsed: Final[object] = json.loads(masked_text)
             except (json.JSONDecodeError, TypeError):
                 raise HTTPException(
                     status_code=400,
@@ -553,7 +615,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                         }
                     },
                 )
-            masked_value: Any = parsed
+            masked_value: object = parsed
         else:
             masked_value = masked_text
 
@@ -569,7 +631,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         else:
             verbose_proxy_logger.info("PANW Prisma AIRS: MCP request allowed with PII masking applied")
 
-    def _apply_masking_to_messages(self, messages: list[dict[str, Any]], masked_text: str) -> list[dict[str, Any]]:
+    def _apply_masking_to_messages(
+        self, messages: list[dict[str, object]], masked_text: str
+    ) -> Sequence[Mapping[str, object]]:
         """Apply masked text to the last user message."""
         if not messages:
             return messages
@@ -606,9 +670,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     if isinstance(content, str):
                         choice.message.content = masked_text
                     elif isinstance(content, list):
-                        choice.message.content = self._mask_content_list(  # type: ignore
-                            content, masked_text
-                        )
+                        choice.message.content = self._mask_content_list(content, masked_text)
 
                 # Mask tool call arguments
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
@@ -621,11 +683,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     if hasattr(choice.message.function_call, "arguments"):
                         choice.message.function_call.arguments = masked_text
 
-    def _build_error_detail(self, scan_result: dict[str, Any], is_response: bool = False) -> dict[str, Any]:
+    def _build_error_detail(
+        self,
+        scan_result: Mapping[str, object],
+        is_response: bool = False,
+    ) -> Mapping[str, Mapping[str, object]]:
         """Build enhanced error detail with scan information."""
         action_type: Final = "Response" if is_response else "Prompt"
         code_suffix: Final = "_response_blocked" if is_response else "_blocked"
-        detection_key: Final = "response_detected" if is_response else "prompt_detected"
 
         category: Final = scan_result.get("category", "unknown")
         default_msg: Final = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
@@ -641,8 +706,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-        error_detail: Final = {
+        return {
             "error": {
+                **{
+                    key: value
+                    for key, value in scan_result.items()
+                    if not key.startswith("_") and key not in self._CLIENT_HIDDEN_SCAN_FIELDS
+                },
                 "message": error_msg,
                 "type": "guardrail_violation",
                 "code": f"panw_prisma_airs{code_suffix}",
@@ -651,32 +721,19 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
         }
 
-        # Add optional fields if present
-        optional_fields: Final = [
-            "scan_id",
-            "report_id",
-            "profile_name",
-            "profile_id",
-            "tr_id",
-        ]
-        for field in optional_fields:
-            if scan_result.get(field):
-                error_detail["error"][field] = scan_result[field]
-
-        # Add detection details
-        if scan_result.get(detection_key):
-            error_detail["error"][detection_key] = scan_result[detection_key]
-
-        return error_detail
+    def _record_scan_id(self, request_data: dict[str, Any], scan_result: Mapping[str, object]) -> None:
+        """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
+        scan_id: Final = scan_result.get("scan_id")
+        add_guardrail_scan_id(request_data=request_data, scan_id=str(scan_id) if scan_id else None)
 
     def _handle_api_error_with_logging(
         self,
-        scan_result: dict[str, Any],
-        data: dict[str, Any],
+        scan_result: dict[str, object],
+        data: dict[str, object],
         start_time: datetime,
         event_type: GuardrailEventHooks,
         is_response: bool = False,
-    ) -> dict[str, Any] | None:
+    ) -> None:
         """Handle API errors with fail-open/fail-closed logic."""
         end_time: Final = datetime.now()
         duration: Final = (end_time - start_time).total_seconds()
@@ -721,7 +778,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header(
                 request_data=data, guardrail_name=f"{self.guardrail_name}:unscanned"
             )
-            return None
+            return
 
         raise HTTPException(
             status_code=500,
@@ -782,7 +839,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return metadata
 
     @staticmethod
-    def _extract_text_from_sse_bytes(chunks: list[bytes]) -> str:
+    def _extract_text_from_sse_bytes(chunks: Sequence[bytes]) -> str:
         """Extract text from Anthropic SSE byte chunks (content_block_delta → text_delta)."""
         texts: Final[list[str]] = []
         raw: Final = b"".join(chunks).decode("utf-8", errors="replace")
@@ -803,7 +860,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return "".join(texts)
 
     @staticmethod
-    def _extract_text_from_streaming_events(chunks: list) -> str:
+    def _extract_text_from_streaming_events(chunks: Sequence[object]) -> str:
         """Extract text from /v1/responses streaming events (object or dict)."""
 
         def _attr(c, key):
@@ -891,6 +948,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             event_type=GuardrailEventHooks.post_call,
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+        self._record_scan_id(request_data, scan_result)
 
     def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
         """
@@ -959,7 +1017,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         cache: DualCache,
         data: dict[str, Any],
         call_type: CallTypesLiteral,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """
         Pre-call hook to scan user prompts before sending to LLM.
 
@@ -1020,6 +1078,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.pre_call,
             )
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1074,10 +1133,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict[str, Any],
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-    ) -> Any:
+        response: object,
+    ) -> object:
         """
         Post-call hook to scan LLM responses before returning to user.
 
@@ -1140,6 +1199,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.post_call,
             )
+            self._record_scan_id(data, scan_result)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1192,7 +1252,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         assembled_model_response: ModelResponse,
         request_data: dict,
         start_time: datetime,
-    ) -> tuple[bool, ModelResponse, dict[str, Any]]:
+    ) -> tuple[bool, ModelResponse, dict[str, object]]:
         """
         Scan assembled streaming response and apply masking if needed.
         Returns (content_was_modified, response, scan_result).
@@ -1254,8 +1314,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
+        response: AsyncIterable[object],
+        request_data: dict[str, object],
     ):
         """
         Process streaming response chunks and scan the assembled response.
@@ -1341,6 +1401,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     duration=(end_time - start_time).total_seconds(),
                     event_type=GuardrailEventHooks.post_call,
                 )
+                self._record_scan_id(request_data, scan_result)
 
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(
@@ -1366,7 +1427,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             # returns a proper JSON error response with the correct status code.
             # (Raising from a generator hits create_response's generic except → 500.)
             detail: Final = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
-            error_obj: Final[dict[str, Any]] = dict(detail.get("error", detail))  # type: ignore[arg-type]
+            error_obj: Final[dict[str, object]] = dict(detail.get("error", detail))
             error_obj["code"] = e.status_code
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
         except Exception as e:
@@ -1377,60 +1438,30 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         self,
         tool_calls: list,
         is_response: bool,
-        metadata: dict[str, Any],
-        call_id: str,
+        metadata: Mapping[str, object],
+        call_id: object,
         request_data: dict,
         start_time: datetime,
     ) -> None:
-        """Scan tool call arguments with allow/block/mask treatment (in-place modification).
+        """Scan tool calls with allow/block/mask treatment (in-place modification).
 
-        Each tool call is sent as a ``tool_event`` using the canonical PANW
-        AIRS schema::
-
-            {
-                "metadata": {
-                    "ecosystem": "openai",
-                    "method": "tools/call",
-                    "server_name": "litellm",
-                    "tool_invoked": "<function_name>",
-                },
-                "input": "<args_json>",   # optional, omitted for empty args
-            }
-
-        Empty-arg invocations are still reported (without ``input``) so AIRS
-        can enforce tool-name-based policies.
+        Tool name and arguments go out as plain prompt/response text, newline separated:
+        the AIRS ``tool_event`` schema only accepts ``ecosystem: "mcp"``, which
+        OpenAI-format tool calls are not. A name-only call is still scanned so
+        tool-name policies keep firing on empty arguments.
         """
         for tool_call in tool_calls:
-            # --- extract tool_name and args_text --------------------------
-            tool_name: str | None = None
-            args_text: str | None = None
-
-            if hasattr(tool_call, "function") and hasattr(tool_call.function, "arguments"):
-                args_text = tool_call.function.arguments
-                tool_name = getattr(tool_call.function, "name", None)
-            elif isinstance(tool_call, dict):
-                func = tool_call.get("function", {})
-                if isinstance(func, dict):
-                    args_text = func.get("arguments")
-                    tool_name = func.get("name")
-
-            # --- build tool_event payload (canonical PANW schema) -----------
-            tool_event: dict[str, Any] = {
-                "metadata": {
-                    "ecosystem": "openai",
-                    "method": "tools/call",
-                    "server_name": "litellm",
-                    "tool_invoked": tool_name or "unknown",
-                },
-            }
-            if args_text and args_text.strip():
-                tool_event["input"] = args_text
+            tool_name, args_text = self._get_tool_call_function(tool_call)
+            scanned_args = args_text if args_text and args_text.strip() else None
+            scan_text = "\n".join(part for part in (tool_name, scanned_args) if part)
+            if not scan_text.strip():
+                continue
 
             scan_result = await self._call_panw_api(
-                is_response=False,  # tool_event is always request-side in AIRS schema
+                content=scan_text,
+                is_response=is_response,
                 metadata=metadata,
                 call_id=call_id,
-                tool_event=tool_event,
             )
 
             if scan_result.get("_is_transient") or scan_result.get("_always_block"):
@@ -1442,36 +1473,72 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     event_type=event_type,
                     is_response=is_response,
                 )
-                continue  # fallback_on_error="allow" — leave args unchanged
+                continue
+
+            self._record_scan_id(request_data, scan_result)
 
             action = scan_result.get("action", "block")
-            # Always is_response=False for masked data lookup because
-            # tool_event scans are request-side in AIRS schema and
-            # AIRS returns prompt_masked_data for them.
-            masked_text = self._get_masked_text(scan_result, is_response=False)
+            masked_args = self._masked_tool_call_arguments(
+                self._get_masked_text(scan_result, is_response=is_response),
+                scanned_name=bool(tool_name),
+                scanned_args=scanned_args,
+            )
 
             if action == "allow":
-                if masked_text:
-                    self._set_tool_call_arguments(tool_call, masked_text)
-            elif masked_text and (
+                if masked_args:
+                    self._set_tool_call_arguments(tool_call, masked_args)
+            elif masked_args and (
                 (is_response and self.mask_response_content) or (not is_response and self.mask_request_content)
             ):
-                self._set_tool_call_arguments(tool_call, masked_text)
+                self._set_tool_call_arguments(tool_call, masked_args)
             else:
+                # Tool calls now go out as ordinary prompt/response text, so a
+                # response-side scan reports the model's arguments under
+                # response_masked_data, which _CLIENT_HIDDEN_SCAN_FIELDS already
+                # withholds. prompt_masked_data is the caller's own input again and
+                # must keep reaching them -- it is one of the fields LIT-5638 asks for.
                 error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
 
     @staticmethod
-    def _set_tool_call_arguments(tool_call, masked_text: str) -> None:
-        """Set masked text on a tool call's function arguments, handling both object and dict forms."""
-        if hasattr(tool_call, "function"):
-            tool_call.function.arguments = masked_text
-        elif isinstance(tool_call, dict) and isinstance(tool_call.get("function"), dict):
+    def _masked_tool_call_arguments(
+        masked_text: str | None,
+        *,
+        scanned_name: bool,
+        scanned_args: str | None,
+    ) -> str | None:
+        """Recover the arguments slice of a masked scan, or None when it cannot be applied."""
+        if masked_text is None or scanned_args is None:
+            return None
+        if not scanned_name:
+            return masked_text
+        _, separator, masked_args = masked_text.partition("\n")
+        return masked_args if separator else None
+
+    @staticmethod
+    def _get_tool_call_function(tool_call: ToolCallLike) -> tuple[str | None, str | None]:
+        """Read a tool call's function name and arguments; (None, None) for non-function shapes."""
+        try:
+            parsed: Final = _ToolCallSlice.model_validate(tool_call, from_attributes=True)
+        except ValidationError:
+            return (None, None)
+        if parsed.function is None:
+            return (None, None)
+        return (parsed.function.name, parsed.function.arguments)
+
+    @staticmethod
+    def _set_tool_call_arguments(tool_call: ToolCallLike, masked_text: str) -> None:
+        """Set masked text on the function arguments of a call that _get_tool_call_function accepted."""
+        if isinstance(tool_call, dict):
             tool_call["function"]["arguments"] = masked_text
+            return
+        if isinstance(tool_call, ChatCompletionMessageCustomToolCall | ChatCompletionDeltaCustomToolCall):
+            return
+        tool_call.function.arguments = masked_text
 
     @staticmethod
     def _is_anthropic_request(
-        request_data: dict,
+        request_data: Mapping[str, object],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> bool:
         """Detect if the current request is an Anthropic /v1/messages call."""
@@ -1496,7 +1563,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     def _use_latest_user_only(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> bool:
         """Resolve whether to scan only the latest user message.
@@ -1514,8 +1581,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     @staticmethod
     def _get_latest_user_text_indices(
-        texts: list[str],
-        messages: list,
+        texts: Sequence[str],
+        messages: Sequence[object],
     ) -> set | None:
         """Return text indices belonging to only the latest scannable human-authored (user or developer) message.
 
@@ -1563,10 +1630,13 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return scannable
 
+    def supports_scan_only_tool_results(self) -> bool:
+        return False
+
     @staticmethod
     def _get_scannable_text_indices(
-        texts: list[str],
-        structured_messages: list,
+        texts: Sequence[str],
+        structured_messages: Sequence[object],
     ) -> set | None:
         """Derive which ``texts`` indices originate from user/system messages.
 
@@ -1623,7 +1693,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -1718,6 +1788,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
+                if (
+                    scannable_indices is not None
+                    and not scannable_indices
+                    and effective_scan_only_tool_results_for_guardrail(self)
+                ):
+                    verbose_proxy_logger.warning(
+                        "PANW Prisma AIRS scans only user, system, and developer messages, "
+                        "so scan_only_tool_results leaves nothing to scan for this request"
+                    )
 
         for i, text in enumerate(texts):
             if not text or not text.strip():
@@ -1749,6 +1828,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 # If we reach here, fallback_on_error="allow"
                 new_texts.append(text)
                 continue
+
+            self._record_scan_id(request_data, scan_result)
 
             action = scan_result.get("action", "block")
             masked_text = self._get_masked_text(scan_result, is_response=is_response)
@@ -1785,7 +1866,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # "mcp_tool_name"/"mcp_arguments". Check canonical first, then fallback.
         mcp_tool_name: Final = request_data.get("mcp_tool_name") or self._mcp_name_fallback(request_data)
         if mcp_tool_name and input_type == "request":
-            mcp_tool_event: Final[dict[str, Any]] = {
+            mcp_tool_event: Final[dict[str, object]] = {
                 "metadata": {
                     "ecosystem": "mcp",
                     "method": "tools/call",
@@ -1820,6 +1901,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 # If we reach here, fallback_on_error="allow"
             else:
+                self._record_scan_id(request_data, mcp_scan_result)
                 action = mcp_scan_result.get("action", "block")
                 masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
                 if action == "allow":

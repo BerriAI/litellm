@@ -23,6 +23,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
         "auto_router_config_path",
         "auto_router_default_model",
         "auto_router_embedding_model",
+        "auto_router_max_input_chars",
         "complexity_router_config",
         "complexity_router_default_model",
         "adaptive_router_config",

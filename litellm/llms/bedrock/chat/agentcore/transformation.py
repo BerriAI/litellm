@@ -313,7 +313,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
         metadata: Final = event_payload.get("metadata")
         if metadata and "usage" in metadata:
-            return metadata["usage"]  # type: ignore
+            return metadata["usage"]
 
         return None
 
@@ -412,18 +412,16 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # Strategy 1: {"result": {"content": [{"text": "..."}]}} - standard AgentCore format
         if "result" in response_json and isinstance(response_json["result"], dict):
             result: Final = response_json["result"]
-            content = self._extract_content_from_message(result)  # type: ignore
+            content = self._extract_content_from_message(result)
             return AgentCoreParsedResponse(
                 content=content,
                 usage=None,
-                final_message=result,  # type: ignore
+                final_message=result,
             )
 
         # Strategy 2: {"response": [{"text": "..."}]} - Strands agent content blocks
         if "response" in response_json and isinstance(response_json["response"], list):
-            content = self._extract_content_from_message(
-                {"content": response_json["response"]}  # type: ignore
-            )
+            content = self._extract_content_from_message({"content": response_json["response"]})
             return AgentCoreParsedResponse(
                 content=content,
                 usage=None,
@@ -503,7 +501,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
             # Check for final complete message
             if "message" in data and isinstance(data["message"], dict):
-                final_message = data["message"]  # type: ignore
+                final_message = data["message"]
                 verbose_logger.debug("Found final message")
 
             # Process event data
@@ -597,7 +595,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                     delta=Delta(),
                                 )
                             ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                            usage_data: AgentCoreUsage = metadata["usage"]
                             setattr(
                                 chunk,
                                 "usage",
@@ -810,7 +808,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                                     delta=Delta(),
                                 )
                             ]
-                            usage_data: AgentCoreUsage = metadata["usage"]  # type: ignore
+                            usage_data: AgentCoreUsage = metadata["usage"]
                             setattr(
                                 chunk,
                                 "usage",

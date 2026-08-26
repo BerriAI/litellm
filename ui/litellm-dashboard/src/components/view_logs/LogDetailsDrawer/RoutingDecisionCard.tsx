@@ -17,6 +17,7 @@ export interface RoutingDecision {
   routed_model?: string;
   cause?: string;
   tier?: string;
+  tier_label?: string;
   request_type?: string;
   score?: number;
   signals?: string[];
@@ -25,6 +26,7 @@ export interface RoutingDecision {
   classifier_model?: string;
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
+  reasoning_override_min_score?: number;
 }
 
 const ROUTER_TYPE_LABELS: Record<string, string> = {
@@ -38,7 +40,11 @@ const ROUTER_TYPE_LABELS: Record<string, string> = {
  * the decision was made. Rendered as the bracket that explains a score, so it must
  * use the snapshot rather than today's config.
  */
-function describeScoreAgainstBoundaries(score: number, boundaries?: RoutingDecisionTierBoundaries): string | null {
+function describeScoreAgainstBoundaries(
+  score: number,
+  boundaries?: RoutingDecisionTierBoundaries,
+  renamed?: boolean,
+): string | null {
   if (!boundaries) return null;
   const {
     simple_medium: simpleMedium,
@@ -47,26 +53,47 @@ function describeScoreAgainstBoundaries(score: number, boundaries?: RoutingDecis
   } = boundaries;
   if (simpleMedium === undefined || mediumComplex === undefined || complexReasoning === undefined) return null;
 
-  if (score < simpleMedium) return `below ${simpleMedium}, SIMPLE`;
-  if (score < mediumComplex) return `${simpleMedium} to ${mediumComplex}, MEDIUM`;
-  if (score < complexReasoning) return `${mediumComplex} to ${complexReasoning}, COMPLEX`;
-  return `at or above ${complexReasoning}, REASONING`;
+  const named = (range: string, tier: string): string => (renamed ? range : `${range}, ${tier}`);
+  if (score < simpleMedium) return named(`below ${simpleMedium}`, "SIMPLE");
+  if (score < mediumComplex) return named(`${simpleMedium} to ${mediumComplex}`, "MEDIUM");
+  if (score < complexReasoning) return named(`${mediumComplex} to ${complexReasoning}`, "COMPLEX");
+  return named(`at or above ${complexReasoning}`, "REASONING");
+}
+
+function describePlanModeFloor(matchedKeyword: string | undefined): string {
+  if (matchedKeyword === "exit_plan_mode") return "Plan-mode floor (exit_plan_mode tool)";
+  if (matchedKeyword) return `Plan-mode floor: "${matchedKeyword}"`;
+  return "Plan-mode floor";
+}
+
+/** Rows logged before the floor was recorded name what it tracked back then instead of a number. */
+function describeReasoningOverride(tierLabel: string | undefined, floor: number | undefined): string {
+  const stated = floor === undefined ? "the Simple to Medium boundary" : String(floor);
+  return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers, score of at least ${stated})`;
 }
 
 function describeCause(decision: RoutingDecision): string {
-  const { cause, classifier_model: classifierModel, matched_keyword: matchedKeyword } = decision;
+  const {
+    cause,
+    classifier_model: classifierModel,
+    matched_keyword: matchedKeyword,
+    tier_label: tierLabel,
+    reasoning_override_min_score: overrideFloor,
+  } = decision;
 
   switch (cause) {
     case "heuristic_scorer":
       return "Heuristic scorer";
     case "reasoning_override":
-      return "Heuristic, REASONING override (2 or more reasoning markers)";
+      return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
     case "literal_keyword_match":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
     case "semantic_keyword_match":
       return "Semantic keyword match";
+    case "plan_mode":
+      return describePlanModeFloor(matchedKeyword);
     case "session_affinity_pin":
       return "Pinned to session";
     case "session_affinity_escalation":
@@ -79,6 +106,10 @@ function describeCause(decision: RoutingDecision): string {
       return "Adaptive bandit";
     case "default_fallback":
       return "Default model, no route matched";
+    case "classifier_fallback":
+      return "Fallback tier, LLM classifier failed";
+    case "default_model_fallback":
+      return "Default model, LLM classifier failed";
     default:
       return cause ?? "Unknown";
   }
@@ -118,6 +149,7 @@ export function RoutingDecisionCard({
     router_type: routerType,
     routed_model: routedModel,
     tier,
+    tier_label: tierLabel,
     request_type: requestType,
     score,
     signals,
@@ -130,12 +162,12 @@ export function RoutingDecisionCard({
   // boundary would claim something untrue. Keyed off the cause rather than a marker
   // inside `signals`, which redaction can remove.
   const scoreExplanation =
-    score !== undefined && decision.cause !== "reasoning_override"
-      ? describeScoreAgainstBoundaries(score, tierBoundaries)
+    score !== undefined && decision.cause !== "reasoning_override" && decision.cause !== "plan_mode"
+      ? describeScoreAgainstBoundaries(score, tierBoundaries, tierLabel !== undefined)
       : null;
 
   return (
-    <div className={cn("mb-6 w-full max-w-full overflow-hidden rounded-lg bg-white shadow-sm", className)}>
+    <div className={cn("mb-6 w-full max-w-full overflow-hidden rounded-lg bg-card shadow-sm", className)}>
       <div className="border-b px-4 py-2.5 text-sm font-medium">Routing</div>
       <div className="px-4 py-3">
         {routerModelName && (
@@ -153,7 +185,7 @@ export function RoutingDecisionCard({
         {tier && (
           <Row label="Tier">
             <Badge variant="secondary" className="font-normal">
-              {tier}
+              {tierLabel ?? tier}
             </Badge>
           </Row>
         )}

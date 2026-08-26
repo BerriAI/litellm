@@ -4525,6 +4525,66 @@
           "title": "PluginListItem",
           "type": "object"
         },
+        "PluginResponse": {
+          "description": "Plugin information in API responses.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "enabled": {
+              "description": "Whether plugin is enabled",
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "id": {
+              "description": "Plugin unique ID",
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "description": "Plugin name",
+              "title": "Name",
+              "type": "string"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Git source reference",
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin version",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "source",
+            "enabled"
+          ],
+          "title": "PluginResponse",
+          "type": "object"
+        },
         "RegisterPluginRequest": {
           "description": "Request body for registering a plugin in the marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket and referenced by their git source.",
           "properties": {
@@ -4643,14 +4703,163 @@
             }
           },
           "required": [
-            "name",
-            "source"
+            "source",
+            "name"
           ],
           "title": "RegisterPluginRequest",
           "type": "object"
         },
+        "RegisterPluginResponse": {
+          "description": "Response from plugin registration.",
+          "properties": {
+            "action": {
+              "description": "Action taken (created/updated)",
+              "title": "Action",
+              "type": "string"
+            },
+            "plugin": {
+              "$ref": "#/components/schemas/PluginResponse",
+              "description": "Plugin information"
+            },
+            "status": {
+              "description": "Operation status",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "action",
+            "plugin"
+          ],
+          "title": "RegisterPluginResponse",
+          "type": "object"
+        },
+        "UpdatePluginRequest": {
+          "description": "Request body for replacing an existing plugin.\n\nThe plugin name is the resource identity and is supplied as the path\nparameter, so it cannot be changed here. This is a full replace: omitted\nfields reset to their defaults, so version is cleared rather than\ndefaulting to the create-time \"1.0.0\".",
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin author"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin category",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill domain (e.g., 'Productivity')",
+              "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin homepage URL",
+              "title": "Homepage"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search keywords",
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill namespace within domain (e.g., 'workflows')",
+              "title": "Namespace"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Git source reference. Supported formats:\n- GitHub: {'source': 'github', 'repo': 'org/repo'}\n- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}",
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Semantic version; cleared if omitted",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "title": "UpdatePluginRequest",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -4754,7 +4963,7 @@
           ]
         },
         "post": {
-          "description": "Register a plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -4770,7 +4979,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -4882,6 +5093,62 @@
             }
           ],
           "summary": "Get Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        },
+        "put": {
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePluginRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Plugin",
           "tags": [
             "claude_code_marketplace"
           ]
@@ -11082,6 +11349,40 @@
           "title": "UpdateGuardrailRequest",
           "type": "object"
         },
+        "UsageChartPoint": {
+          "properties": {
+            "blocked": {
+              "title": "Blocked",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "passed": {
+              "title": "Passed",
+              "type": "integer"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Score"
+            }
+          },
+          "required": [
+            "date",
+            "passed",
+            "blocked"
+          ],
+          "title": "UsageChartPoint",
+          "type": "object"
+        },
         "UsageDetailResponse": {
           "properties": {
             "avgLatency": {
@@ -11143,8 +11444,7 @@
             },
             "time_series": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Time Series",
               "type": "array"
@@ -11156,6 +11456,40 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usage_units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usage Units",
+              "type": "object"
+            },
+            "usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Usage Units By Key",
+              "type": "object"
+            },
+            "usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Usage Units By Team",
+              "type": "object"
+            },
+            "usage_units_daily": {
+              "items": {
+                "$ref": "#/components/schemas/UsageUnitsDailyPoint"
+              },
+              "title": "Usage Units Daily",
+              "type": "array"
             }
           },
           "required": [
@@ -11170,7 +11504,11 @@
             "status",
             "trend",
             "description",
-            "time_series"
+            "time_series",
+            "usage_units",
+            "usage_units_daily",
+            "usage_units_by_team",
+            "usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -11305,8 +11643,7 @@
           "properties": {
             "chart": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Chart",
               "type": "array"
@@ -11329,6 +11666,13 @@
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totalusageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -11336,7 +11680,8 @@
             "chart",
             "totalRequests",
             "totalBlocked",
-            "passRate"
+            "passRate",
+            "totalUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -11396,6 +11741,13 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -11408,9 +11760,31 @@
             "avgScore",
             "avgLatency",
             "status",
-            "trend"
+            "trend",
+            "usageUnits"
           ],
           "title": "UsageOverviewRow",
+          "type": "object"
+        },
+        "UsageUnitsDailyPoint": {
+          "properties": {
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Units",
+              "type": "object"
+            }
+          },
+          "required": [
+            "date",
+            "units"
+          ],
+          "title": "UsageUnitsDailyPoint",
           "type": "object"
         },
         "ValidationError": {
@@ -21210,6 +21584,13 @@
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totalusageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -21217,7 +21598,8 @@
             "chart",
             "totalRequests",
             "totalBlocked",
-            "passRate"
+            "passRate",
+            "totalUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -21277,6 +21659,13 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -21289,7 +21678,8 @@
             "avgScore",
             "avgLatency",
             "status",
-            "trend"
+            "trend",
+            "usageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
@@ -23148,7 +23538,7 @@
     "paths": {
       "/prompts": {
         "post": {
-          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"json_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED\n            \"prompt_directory\": \"/path/to/dotprompt/folder\",\n            \"prompt_data\": {\"json_prompt\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
+          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"my_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            \"prompt_data\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
           "operationId": "create_prompt_prompts_post",
           "requestBody": {
             "content": {

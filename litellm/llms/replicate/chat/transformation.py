@@ -259,7 +259,7 @@ class ReplicateConfig(BaseConfig):
 
         ## Building RESPONSE OBJECT
         if len(response_str) >= 1:
-            model_response.choices[0].message.content = response_str  # type: ignore
+            model_response.choices[0].message.content = response_str
 
         # Calculate usage
         prompt_tokens: Final = token_counter(model=model, messages=messages)

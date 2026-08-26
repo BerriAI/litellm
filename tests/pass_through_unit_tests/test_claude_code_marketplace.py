@@ -7,15 +7,12 @@ Tests:
 """
 
 import json
-import os
-import sys
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -168,11 +165,11 @@ async def test_register_plugin(mock_prisma_client):
         user_api_key_dict=user_api_key_dict,
     )
 
-    assert response["status"] == "success"
-    assert response["action"] == "created"
-    assert response["plugin"]["name"] == plugin_name
-    assert response["plugin"]["version"] == "1.0.0"
-    assert response["plugin"]["enabled"] is True
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.version == "1.0.0"
+    assert response.plugin.enabled is True
 
     # Verify the plugin was stored in the mock
     stored_plugin = (
@@ -274,16 +271,16 @@ async def test_register_plugin_git_subdir(mock_prisma_client):
         user_api_key_dict=user_api_key_dict,
     )
 
-    assert response["status"] == "success"
-    assert response["action"] == "created"
-    assert response["plugin"]["name"] == plugin_name
-    assert response["plugin"]["source"]["source"] == "git-subdir"
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.source["source"] == "git-subdir"
     assert (
-        response["plugin"]["source"]["url"]
+        response.plugin.source["url"]
         == "https://github.com/test-org/monorepo.git"
     )
-    assert response["plugin"]["source"]["path"] == "plugins/my-plugin"
-    assert response["plugin"]["enabled"] is True
+    assert response.plugin.source["path"] == "plugins/my-plugin"
+    assert response.plugin.enabled is True
 
     # Cleanup
     await mock_prisma_client.db.litellm_claudecodeplugintable.delete(

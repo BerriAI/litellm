@@ -1,10 +1,8 @@
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
+import pytest
+
+import litellm
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -135,3 +133,65 @@ class TestXAIUsageNormalization:
         XAIChatConfig._normalize_openai_compatible_usage_totals(usage)
 
         assert usage["total_tokens"] == 200
+
+
+class TestXAIChatWebSearchBilling:
+    _TOOL_DETAILS = {
+        "web_search_calls": 3,
+        "x_search_calls": 0,
+        "code_interpreter_calls": 0,
+        "file_search_calls": 0,
+        "mcp_calls": 0,
+        "document_search_calls": 0,
+    }
+
+    @staticmethod
+    def _response_with_usage() -> ModelResponse:
+        response = ModelResponse(model="grok-4")
+        setattr(
+            response,
+            "usage",
+            Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+        )
+        return response
+
+    def test_enhance_copies_details_and_mirrors_web_search_requests(self):
+        response = self._response_with_usage()
+
+        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
+            response,
+            {"usage": {"server_side_tool_usage_details": self._TOOL_DETAILS}},
+        )
+
+        usage = response.usage
+        assert getattr(usage, "server_side_tool_usage_details") == self._TOOL_DETAILS
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.web_search_requests == 3
+
+    def test_enhance_noop_without_details(self):
+        response = self._response_with_usage()
+
+        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
+            response, {"usage": {"prompt_tokens": 100}}
+        )
+
+        assert response.usage.prompt_tokens_details is None
+        assert getattr(response.usage, "server_side_tool_usage_details", None) is None
+
+    def test_completion_cost_bills_chat_web_search_calls(self):
+        billed = self._response_with_usage()
+        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
+            billed,
+            {"usage": {"server_side_tool_usage_details": self._TOOL_DETAILS}},
+        )
+
+        with_search = litellm.completion_cost(
+            completion_response=billed, model="xai/grok-4", custom_llm_provider="xai"
+        )
+        without_search = litellm.completion_cost(
+            completion_response=self._response_with_usage(),
+            model="xai/grok-4",
+            custom_llm_provider="xai",
+        )
+
+        assert with_search - without_search == pytest.approx(3 * 5.0 / 1000.0)

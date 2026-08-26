@@ -1,8 +1,9 @@
+import ssl
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
-import httpx  # type: ignore
+import httpx
 from aiohttp import ClientSession, FormData
 
 import litellm
@@ -18,6 +19,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
+    get_ssl_configuration,
 )
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
@@ -56,7 +58,11 @@ class BaseLLMAIOHTTPHandler:
 
         # Create a transport using AsyncHTTPHandler's logic
         try:
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport()
+            ssl_config: Final = get_ssl_configuration()
+            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+                ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
+            )
             self._owns_transport = True
             return self.transport
         except Exception:
@@ -79,20 +85,19 @@ class BaseLLMAIOHTTPHandler:
 
     def _create_client_session_with_transport(self) -> ClientSession:
         """Create a new client session using transport or connector configuration."""
-        connector: Final = self._get_connector()
+        if self.transport is None:
+            connector: Final = self._get_connector()
+            if connector:
+                return aiohttp.ClientSession(connector=connector)
 
-        if self.transport and hasattr(self.transport, "_get_valid_client_session"):
-            # Use transport's session creation if available
-            session = self.transport._get_valid_client_session()
-            return session
-        elif connector:
-            # Use provided connector
-            session = aiohttp.ClientSession(connector=connector)
-            return session
-        else:
-            # Default session creation
-            session = aiohttp.ClientSession()
-            return session
+        transport: Final = self.transport or self._get_or_create_transport()
+        if transport is not None and hasattr(transport, "_get_valid_client_session"):
+            try:
+                return transport._get_valid_client_session()
+            except RuntimeError:
+                pass
+
+        return aiohttp.ClientSession()
 
     def _get_async_client_session(self, dynamic_client_session: ClientSession | None = None) -> ClientSession:
         if dynamic_client_session:
@@ -221,7 +226,7 @@ class BaseLLMAIOHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                     files=files,
-                    content=content,
+                    content=content if content is not None else None,
                     params=params,
                 )
             except httpx.HTTPStatusError as e:
@@ -275,9 +280,9 @@ class BaseLLMAIOHTTPHandler:
             litellm_params=litellm_params,
             stream=False,
         )
-        _transformed_response: Final = await provider_config.transform_response(  # type: ignore
+        _transformed_response: Final = await provider_config.transform_response(
             model=model,
-            raw_response=_response,  # type: ignore
+            raw_response=_response,
             model_response=model_response,
             logging_obj=logging_obj,
             api_key=api_key,
@@ -377,7 +382,7 @@ class BaseLLMAIOHTTPHandler:
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
-                headers=headers,  # type: ignore
+                headers=headers,
                 data=data,
                 model=model,
                 messages=messages,
@@ -616,7 +621,7 @@ class BaseLLMAIOHTTPHandler:
                 litellm_params=litellm_params,
                 image=image,
                 provider_config=provider_config,
-            )  # type: ignore
+            )
 
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = _get_httpx_client()

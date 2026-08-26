@@ -138,7 +138,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    async def _fetch_end_user_object(end_user_id: str):  # type: ignore[return]
+    async def _fetch_end_user_object(end_user_id: str):
         """
         Fetch end user object via the same cached path used during auth.
         No extra DB round-trip when the cache is warm.

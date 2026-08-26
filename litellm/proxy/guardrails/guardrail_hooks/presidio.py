@@ -14,9 +14,10 @@ import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
 
 import aiohttp
+from typing_extensions import NotRequired, ReadOnly
 
 import litellm
 from litellm import get_secret
@@ -53,9 +54,18 @@ from litellm.utils import (
 )
 
 
+class _PresidioAnonymizeItem(TypedDict, total=False):
+    entity_type: ReadOnly[str | None]
+
+
+class _PresidioAnonymizeResponse(TypedDict):
+    text: ReadOnly[str]
+    items: ReadOnly[NotRequired[list[_PresidioAnonymizeItem]]]
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
-    ad_hoc_recognizers = None
+    ad_hoc_recognizers: list[str] | None = None
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -72,7 +82,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     def __init__(
         self,
         mock_testing: bool = False,
-        mock_redacted_text: dict | None = None,
+        mock_redacted_text: _PresidioAnonymizeResponse | None = None,
         presidio_analyzer_api_base: str | None = None,
         presidio_anonymizer_api_base: str | None = None,
         output_parse_pii: bool | None = False,
@@ -91,7 +101,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
         self.guardrail_provider = "presidio"
-        self.pii_tokens: dict = {}  # mapping of PII token to original text - only used with Presidio `replace` operation
+        self.pii_tokens: dict[
+            str, str
+        ] = {}  # mapping of PII token to original text - only used with Presidio `replace` operation
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
@@ -148,10 +160,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     ):
         self.presidio_analyzer_api_base: str | None = presidio_analyzer_api_base or get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
-        )  # type: ignore
+        )
         self.presidio_anonymizer_api_base: str | None = presidio_anonymizer_api_base or litellm.get_secret(
             "PRESIDIO_ANONYMIZER_API_BASE", None
-        )  # type: ignore
+        )
 
         if self.presidio_analyzer_api_base is None:
             raise Exception("Missing `PRESIDIO_ANALYZER_API_BASE` from environment")
@@ -265,7 +277,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text: str,
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict,
-    ) -> list[PresidioAnalyzeResponseItem] | dict:
+    ) -> list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse:
         """
         Send text to the Presidio analyzer endpoint and get analysis results
         """
@@ -385,7 +397,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # contain API keys or other secrets) in error responses.
             raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
 
-    async def _post_presidio_anonymize(self, text: str, analyze_results: Any) -> Any:
+    async def _post_presidio_anonymize(
+        self,
+        text: str,
+        analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
+    ) -> _PresidioAnonymizeResponse | None:
         """POST to Presidio anonymize; returns parsed JSON body."""
         # Use shared session to prevent memory leak (issue #14540)
         async with self._get_session_iterator() as session:
@@ -417,7 +433,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def _finalize_presidio_anonymize_simple(
         self,
-        redacted_text: dict[str, Any],
+        redacted_text: _PresidioAnonymizeResponse,
         masked_entity_count: dict[str, int],
     ) -> str:
         # No need to build numbered tokens — just use Presidio's
@@ -483,7 +499,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def anonymize_text(
         self,
         text: str,
-        analyze_results: Any,
+        analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse,
         output_parse_pii: bool,
         masked_entity_count: dict[str, int],
         request_data: dict | None = None,
@@ -517,8 +533,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             raise Exception(f"Presidio PII anonymization failed: {type(e).__name__}") from e
 
     def filter_analyze_results_by_score(
-        self, analyze_results: list[PresidioAnalyzeResponseItem] | dict
-    ) -> list[PresidioAnalyzeResponseItem] | dict:
+        self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
+    ) -> list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse:
         """
         Drop detections that fall below configured per-entity score thresholds
         or match an entity type in the deny list.
@@ -556,7 +572,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return filtered_results
 
-    def raise_exception_if_blocked_entities_detected(self, analyze_results: list[PresidioAnalyzeResponseItem] | dict):
+    def raise_exception_if_blocked_entities_detected(
+        self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
+    ):
         """
         Raise an exception if blocked entities are detected
         """
@@ -590,7 +608,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
         """
         start_time: Final = datetime.now()
-        analyze_results: list[PresidioAnalyzeResponseItem] | dict | None = None
+        analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse | None = None
         status: GuardrailStatus = "success"
         masked_entity_count: Final[dict[str, int]] = {}
         exception_str: str = ""
@@ -770,7 +788,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
         """
-        Masks the input before logging to langfuse, datadog, etc.
+        Masks the input and output before logging to langfuse, datadog, etc.
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
             messages: Final[list | None] = kwargs.get("messages", None)
@@ -829,9 +847,22 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
 
+            if (
+                isinstance(result, ModelResponse)
+                and result.choices
+                and not isinstance(result.choices[0], StreamingChoices)
+            ):
+                await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
+            elif self._is_anthropic_message_response(result):
+                await self._process_anthropic_response_for_pii(
+                    response=cast(dict, result),  # cast-ok: _is_anthropic_message_response narrows via isinstance
+                    request_data=kwargs,
+                    mode="mask",
+                )
+
         return kwargs, result
 
-    async def async_post_call_success_hook(  # type: ignore
+    async def async_post_call_success_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -895,7 +926,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return text
 
     @staticmethod
-    def _is_anthropic_message_response(response: Any) -> bool:
+    def _is_anthropic_message_response(
+        response: ModelResponse | EmbeddingResponse | ImageResponse | dict[str, object],
+    ) -> bool:
         """Check if the response is an Anthropic native message dict."""
         return (
             isinstance(response, dict)
@@ -1069,7 +1102,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    yield chunk  # type: ignore[misc]
+                    yield chunk
                     continue
                 else:
                     if all_chunks:
@@ -1202,9 +1235,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     if pii_tokens:
-                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)  # type: ignore[misc]
+                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)
                     else:
-                        yield chunk  # type: ignore[misc]
+                        yield chunk
                     continue
                 else:
                     # /v1/responses events: unmask response.completed text in-place.
@@ -1251,7 +1284,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in remaining_chunks:
                 yield chunk
 
-    async def async_post_call_streaming_iterator_hook(  # type: ignore[override]
+    async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
@@ -1283,8 +1316,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     @staticmethod
     def _preserve_usage_from_last_chunk(
-        assembled_model_response: Any,
-        chunks: list[Any],
+        assembled_model_response: ModelResponse,
+        chunks: list[ModelResponseStream],
     ) -> None:
         """Copy usage metadata from the last chunk when stream_chunk_builder misses it."""
         if not getattr(assembled_model_response, "usage", None) and chunks:

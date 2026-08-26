@@ -2,29 +2,42 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Form, Modal, Tag } from "antd";
+import { ArrowLeft } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EntityLink } from "@/components/shared/EntityLink";
+import { teamDetailHref } from "@/utils/entityLinks";
 import { KeyInfoHeader } from "./KeyInfoHeader";
+import KeySavingsTab from "./KeySavingsTab";
 import { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
+import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { useSetKeyBlockedState } from "@/app/(dashboard)/hooks/keys/useSetKeyBlockedState";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useQueryClient } from "@tanstack/react-query";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
+import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 
 interface KeyInfoViewProps {
@@ -70,14 +83,15 @@ export default function KeyInfoView({
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
+  const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
+  const { data: allMcpServers } = useMCPServers();
+  const { data: allMcpToolsets } = useMCPToolsets();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
-  const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
   const [isResetSpendModalOpen, setIsResetSpendModalOpen] = useState(false);
   const [isBlockModalOpen, setIsBlockModalOpen] = useState(false);
@@ -86,6 +100,9 @@ export default function KeyInfoView({
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
+  const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
+    null,
+  );
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
@@ -145,10 +162,11 @@ export default function KeyInfoView({
   if (!currentKeyData) {
     return (
       <div className="p-4">
-        <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="size-4" />
           {backButtonText}
         </Button>
-        <Text>Key not found</Text>
+        <p className="text-sm">Key not found</p>
       </div>
     );
   }
@@ -201,33 +219,26 @@ export default function KeyInfoView({
         delete formValues.vector_stores;
       }
 
-      if (formValues.mcp_servers_and_groups !== undefined) {
-        const { servers, accessGroups, toolsets } = formValues.mcp_servers_and_groups || {
-          servers: [],
-          accessGroups: [],
-          toolsets: [],
-        };
-        formValues.object_permission = {
-          ...currentKeyData.object_permission,
-          mcp_servers: servers || [],
-          mcp_access_groups: accessGroups || [],
-          mcp_toolsets: toolsets || [],
-        };
-        // Remove mcp_servers_and_groups from the top level as it should be in object_permission
-        delete formValues.mcp_servers_and_groups;
-      }
-
-      // Handle MCP tool permissions
-      if (formValues.mcp_tool_permissions !== undefined) {
-        const mcpToolPermissions = formValues.mcp_tool_permissions || {};
-        if (Object.keys(mcpToolPermissions).length > 0) {
-          formValues.object_permission = {
-            ...formValues.object_permission,
-            mcp_tool_permissions: mcpToolPermissions,
-          };
+      const mcpEntitlement = extractMcpEntitlement(formValues, allMcpServers ?? [], allMcpToolsets ?? []);
+      if (mcpEntitlement) {
+        // Without a catalog the grants an allowlist key still has are unresolvable, so nothing is
+        // pruned and a revocation would save as a no-op while reporting success. Refuse instead.
+        const unresolvableSelection =
+          allMcpServers === undefined ||
+          mcpEntitlement.mcp_toolsets.some(
+            (toolsetId) => !(allMcpToolsets ?? []).some((toolset) => toolset.toolset_id === toolsetId),
+          );
+        if (unresolvableSelection && Object.keys(mcpEntitlement.mcp_tool_permissions).length > 0) {
+          toast.error("MCP server or toolset list is unavailable, so MCP permissions cannot be saved yet. Retry.");
+          return;
         }
-        delete formValues.mcp_tool_permissions;
+        formValues.object_permission = {
+          ...(formValues.object_permission ?? currentKeyData.object_permission),
+          ...mcpEntitlement,
+        };
       }
+      delete formValues.mcp_servers_and_groups;
+      delete formValues.mcp_tool_permissions;
 
       // Handle agent permissions
       if (formValues.agents_and_groups !== undefined) {
@@ -268,7 +279,7 @@ export default function KeyInfoView({
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
-          NotificationManager.error("Invalid metadata JSON");
+          toast.error("Invalid metadata JSON");
           return;
         }
       } else {
@@ -314,11 +325,11 @@ export default function KeyInfoView({
       if (onKeyDataUpdate) {
         onKeyDataUpdate(newKeyValues);
       }
-      NotificationManager.success("Key updated successfully");
+      toast.success("Key updated successfully");
       setIsEditing(false);
       // Refresh key data here if needed
     } catch (error) {
-      NotificationManager.fromBackend(parseErrorMessage(error));
+      toast.fromError(parseErrorMessage(error));
       console.error("Error updating key:", error);
     }
   };
@@ -328,7 +339,7 @@ export default function KeyInfoView({
       setDeleteLoading(true);
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
-      NotificationManager.success("Key deleted successfully");
+      toast.success("Key deleted successfully");
       await queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
       if (onDelete) {
         onDelete();
@@ -336,15 +347,15 @@ export default function KeyInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the key:", error);
-      NotificationManager.fromBackend(error);
+      toast.fromError(error);
     } finally {
       setDeleteLoading(false);
       setIsDeleteModalOpen(false);
-      setDeleteConfirmInput("");
     }
   };
 
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
+    const regeneratedAt = new Date();
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
       if (!prevData) return undefined;
@@ -352,20 +363,26 @@ export default function KeyInfoView({
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
-        created_at: new Date().toLocaleString(),
+        created_at: regeneratedAt.toLocaleString(),
       };
       return newData;
     });
 
     // Track regeneration timestamp
-    setLastRegeneratedAt(new Date());
+    setLastRegeneratedAt(regeneratedAt);
     setIsRecentlyRegenerated(true);
 
-    if (onKeyDataUpdate) {
-      onKeyDataUpdate({
-        ...updatedKeyData,
-        created_at: new Date().toLocaleString(),
-      });
+    setKeyDataUpdateHeldUntilModalClose({
+      ...updatedKeyData,
+      created_at: regeneratedAt.toLocaleString(),
+    });
+  };
+
+  const handleRegenerateModalClose = () => {
+    setIsRegenerateModalOpen(false);
+    if (keyDataUpdateHeldUntilModalClose) {
+      setKeyDataUpdateHeldUntilModalClose(null);
+      onKeyDataUpdate?.(keyDataUpdateHeldUntilModalClose);
     }
   };
 
@@ -414,11 +431,11 @@ export default function KeyInfoView({
         if (onKeyDataUpdate) {
           onKeyDataUpdate({ spend: 0 });
         }
-        NotificationManager.success("Key spend reset to $0");
+        toast.success("Key spend reset to $0");
         setIsResetSpendModalOpen(false);
       },
       onError: (error) => {
-        NotificationManager.fromBackend(parseErrorMessage(error));
+        toast.fromError(parseErrorMessage(error));
         console.error("Error resetting key spend:", error);
       },
     });
@@ -436,25 +453,26 @@ export default function KeyInfoView({
           if (onKeyDataUpdate) {
             onKeyDataUpdate({ blocked });
           }
-          NotificationManager.success(blocked ? "Key blocked" : "Key unblocked");
+          toast.success(blocked ? "Key blocked" : "Key unblocked");
           setIsBlockModalOpen(false);
         },
         onError: (error) => {
-          NotificationManager.fromBackend(parseErrorMessage(error));
+          toast.fromError(parseErrorMessage(error));
           console.error("Error updating key blocked state:", error);
         },
       },
     );
   };
 
-  const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
+  const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
-  const budgetDisplay =
-    currentKeyData.max_budget !== null
-      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-      : parentTeam?.max_budget != null
-        ? `$${formatNumberWithCommas(parentTeam.max_budget, 2)} (Team: ${parentTeam.team_alias || parentTeam.team_id}${parentTeam.budget_duration ? ` / ${parentTeam.budget_duration}` : ""})`
-        : "Unlimited";
+  const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
+  const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
+  const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
+
+  const hasOwnBudget = currentKeyData.max_budget !== null;
+  const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
+  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -465,13 +483,18 @@ export default function KeyInfoView({
           userId: currentKeyData.user_id || "",
           userEmail: currentKeyData.user_email || "",
           userAlias: currentKeyData.user?.user_alias ?? null,
+          teamId: currentKeyData.team_id || "",
+          teamAlias: parentTeam?.team_alias ?? null,
+          orgId,
+          orgAlias: parentOrg?.organization_alias ?? null,
           createdBy:
             currentKeyData.created_by_user?.user_alias ||
             currentKeyData.created_by_user?.user_email ||
             currentKeyData.created_by ||
             "",
+          createdById: currentKeyData.created_by_user?.user_id || currentKeyData.created_by || "",
           createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
-          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastUpdated: lastConfiguredAt ? formatTimestamp(lastConfiguredAt) : "",
           lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
           expires: currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never",
         }}
@@ -493,7 +516,7 @@ export default function KeyInfoView({
       <RegenerateKeyModal
         selectedToken={currentKeyData}
         visible={isRegenerateModalOpen}
-        onClose={() => setIsRegenerateModalOpen(false)}
+        onClose={handleRegenerateModalClose}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 
@@ -526,7 +549,6 @@ export default function KeyInfoView({
         ]}
         onCancel={() => {
           setIsDeleteModalOpen(false);
-          setDeleteConfirmInput("");
         }}
         onOk={handleDelete}
         confirmLoading={deleteLoading}
@@ -534,93 +556,121 @@ export default function KeyInfoView({
       />
 
       {/* Reset Spend Confirmation Modal */}
-      <Modal
-        title="Reset Key Spend"
-        open={isResetSpendModalOpen}
-        onOk={handleResetSpend}
-        onCancel={() => setIsResetSpendModalOpen(false)}
-        okText="Reset"
-        okButtonProps={{ danger: true }}
-        confirmLoading={resetSpendLoading}
-      >
-        <p>
-          Reset spend for <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong> to{" "}
-          <strong>$0</strong>?
-        </p>
-        <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
-          Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is preserved
-          in logs. This resets the current period spend counter, the same as an automatic budget reset.
-        </p>
-      </Modal>
+      <Dialog open={isResetSpendModalOpen} onOpenChange={(open) => setIsResetSpendModalOpen(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset Key Spend</DialogTitle>
+          </DialogHeader>
+          <p>
+            Reset spend for <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong> to{" "}
+            <strong>$0</strong>?
+          </p>
+          <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
+            Current spend: <strong>${formatNumberWithCommas(currentKeyData.spend, 4)}</strong>. Spend history is
+            preserved in logs. This resets the current period spend counter, the same as an automatic budget reset.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsResetSpendModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleResetSpend} disabled={resetSpendLoading}>
+              Reset
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <Modal
-        title={isBlocked ? "Unblock Key" : "Block Key"}
-        open={isBlockModalOpen}
-        onOk={handleToggleBlocked}
-        onCancel={() => setIsBlockModalOpen(false)}
-        okText={isBlocked ? "Unblock" : "Block"}
-        okButtonProps={isBlocked ? undefined : { danger: true }}
-        confirmLoading={blockLoading}
-      >
-        <p>
-          {isBlocked ? "Unblock" : "Block"}{" "}
-          <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong>?
-        </p>
-        <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
-          {isBlocked
-            ? "Requests using this key will be accepted again."
-            : "Requests using this key will be rejected with a 401 error until it is unblocked. The key is not deleted and can be unblocked at any time."}
-        </p>
-      </Modal>
+      <Dialog open={isBlockModalOpen} onOpenChange={(open) => setIsBlockModalOpen(open)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{isBlocked ? "Unblock Key" : "Block Key"}</DialogTitle>
+          </DialogHeader>
+          <p>
+            {isBlocked ? "Unblock" : "Block"}{" "}
+            <strong>{currentKeyData?.key_alias || currentKeyData?.token_id || "this key"}</strong>?
+          </p>
+          <p style={{ color: "#666", fontSize: "0.875rem", marginTop: 8 }}>
+            {isBlocked
+              ? "Requests using this key will be accepted again."
+              : "Requests using this key will be rejected with a 401 error until it is unblocked. The key is not deleted and can be unblocked at any time."}
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsBlockModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant={isBlocked ? "default" : "destructive"}
+              onClick={handleToggleBlocked}
+              disabled={blockLoading}
+            >
+              {isBlocked ? "Unblock" : "Block"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-      <TabGroup>
-        <TabList className="mb-4">
-          <Tab>Overview</Tab>
-          <Tab>Settings</Tab>
-        </TabList>
+      <Tabs defaultValue="overview">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
+            Savings
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+            Settings
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
+        <div>
           {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
-                <Text>Spend</Text>
+          <TabsContent value="overview" keepMounted>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              <Card className="block p-6">
+                <p className="text-sm">Spend</p>
                 <div className="mt-2">
-                  <Title>${formatNumberWithCommas(currentKeyData.spend, 4)}</Title>
-                  <Text>of {budgetDisplay}</Text>
+                  <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
+                  <p className="text-sm">
+                    of {budgetDisplay}
+                    <InheritedBudgetHint gates={inheritedGates} />
+                  </p>
                   {currentKeyData.budget_reset_at && (
-                    <Text>Resets {formatTimestamp(currentKeyData.budget_reset_at)}</Text>
+                    <p className="text-sm">Resets {formatTimestamp(currentKeyData.budget_reset_at)}</p>
                   )}
                 </div>
               </Card>
 
-              <Card>
-                <Text>Rate Limits</Text>
+              <Card className="block p-6">
+                <p className="text-sm">Rate Limits</p>
                 <div className="mt-2">
-                  <Text>TPM: {currentKeyData.tpm_limit !== null ? currentKeyData.tpm_limit : "Unlimited"}</Text>
-                  <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
+                  <p className="text-sm">
+                    TPM: {currentKeyData.tpm_limit !== null ? currentKeyData.tpm_limit : "Unlimited"}
+                  </p>
+                  <p className="text-sm">
+                    RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
+                  </p>
                   {Boolean(currentKeyData.metadata?.throttle_on_budget_exceeded) && (
-                    <Text>Throttle on budget exceeded: Yes</Text>
+                    <p className="text-sm">Throttle on budget exceeded: Yes</p>
                   )}
                 </div>
               </Card>
 
-              <Card>
-                <Text>Models</Text>
+              <Card className="block p-6">
+                <p className="text-sm">Models</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {currentKeyData.models && currentKeyData.models.length > 0 ? (
                     currentKeyData.models.map((model, index) => (
-                      <Badge key={index} color="red">
+                      <Badge key={index} variant="secondary" className="min-w-0 break-words">
                         {model}
                       </Badge>
                     ))
                   ) : (
-                    <Text>No models specified</Text>
+                    <p className="text-sm">No models specified</p>
                   )}
                 </div>
               </Card>
 
-              <Card>
+              <Card className="block p-6">
                 <ObjectPermissionsView
                   objectPermission={currentKeyData.object_permission}
                   variant="inline"
@@ -628,43 +678,45 @@ export default function KeyInfoView({
                 />
               </Card>
 
-              <Card>
-                <Text className="font-medium mb-3">Guardrails</Text>
+              <Card className="block p-6">
+                <p className="text-sm font-medium mb-3">Guardrails</p>
                 {Array.isArray(currentKeyData.metadata?.guardrails) && currentKeyData.metadata.guardrails.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {currentKeyData.metadata.guardrails.map((guardrail: string, index: number) => (
-                      <Badge key={index} color="blue">
+                      <Badge key={index} variant="secondary" className="min-w-0 break-words">
                         {guardrail}
                       </Badge>
                     ))}
                   </div>
                 ) : (
-                  <Text className="text-gray-500">No guardrails configured</Text>
+                  <p className="text-sm text-muted-foreground">No guardrails configured</p>
                 )}
                 {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
                   currentKeyData.metadata.disable_global_guardrails === true && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
-                      <Badge color="yellow">Global Guardrails Disabled</Badge>
+                    <div className="mt-3 pt-3 border-t border-border">
+                      <Badge variant="destructive">Global Guardrails Disabled</Badge>
                     </div>
                   )}
               </Card>
 
-              <Card>
-                <Text className="font-medium mb-3">Policies</Text>
+              <Card className="block p-6">
+                <p className="text-sm font-medium mb-3">Policies</p>
                 {Array.isArray(currentKeyData.metadata?.policies) && currentKeyData.metadata.policies.length > 0 ? (
                   <div className="space-y-4">
                     {currentKeyData.metadata.policies.map((policy: string, index: number) => (
                       <div key={index} className="space-y-2">
                         <div className="flex items-center gap-2">
-                          <Badge color="purple">{policy}</Badge>
-                          {loadingPolicies && <Text className="text-xs text-gray-400">Loading guardrails...</Text>}
+                          <Badge variant="secondary" className="min-w-0 break-words">
+                            {policy}
+                          </Badge>
+                          {loadingPolicies && <p className="text-xs text-muted-foreground">Loading guardrails...</p>}
                         </div>
                         {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
-                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
-                            <Text className="text-xs text-gray-500 mb-1">Resolved Guardrails:</Text>
+                          <div className="ml-4 pl-3 border-l-2 border-border">
+                            <p className="text-xs text-muted-foreground mb-1">Resolved Guardrails:</p>
                             <div className="flex flex-wrap gap-1">
                               {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
-                                <Badge key={gIndex} color="blue" size="xs">
+                                <Badge key={gIndex} variant="secondary" className="min-w-0 break-words">
                                   {guardrail}
                                 </Badge>
                               ))}
@@ -675,7 +727,7 @@ export default function KeyInfoView({
                     ))}
                   </div>
                 ) : (
-                  <Text className="text-gray-500">No policies configured</Text>
+                  <p className="text-sm text-muted-foreground">No policies configured</p>
                 )}
               </Card>
 
@@ -697,15 +749,30 @@ export default function KeyInfoView({
                 nextRotationAt={currentKeyData.next_rotation_at}
                 variant="card"
               />
-            </Grid>
-          </TabPanel>
+            </div>
+          </TabsContent>
+
+          {/* Savings Panel. No keepMounted: this tab sweeps the daily rollup, and staying mounted
+              would fire that request on every key page open for people who never look at it. */}
+          <TabsContent value="savings">
+            <KeySavingsTab
+              accessToken={accessToken}
+              keyToken={currentKeyData.token}
+              userId={userID}
+              userRole={userRole}
+            />
+          </TabsContent>
 
           {/* Settings Panel */}
-          <TabPanel>
-            <Card>
+          <TabsContent value="settings" keepMounted>
+            <Card className="block p-6">
               <div className="flex justify-between items-center mb-4">
-                <Title>Key Settings</Title>
-                {!isEditing && canModifyKey && <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>}
+                <h3 className="text-lg font-medium">Key Settings</h3>
+                {!isEditing && canModifyKey && (
+                  <Button variant="outline" onClick={() => setIsEditing(true)}>
+                    Edit Settings
+                  </Button>
+                )}
               </div>
 
               {isEditing ? (
@@ -722,29 +789,37 @@ export default function KeyInfoView({
               ) : (
                 <div className="space-y-4">
                   <div>
-                    <Text className="font-medium">Key ID</Text>
-                    <Text className="font-mono">{currentKeyData.token_id || currentKeyData.token}</Text>
+                    <p className="text-sm font-medium">Key ID</p>
+                    <p className="text-sm font-mono">{currentKeyData.token_id || currentKeyData.token}</p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Key Alias</Text>
-                    <Text>{currentKeyData.key_alias || "Not Set"}</Text>
+                    <p className="text-sm font-medium">Key Alias</p>
+                    <p className="text-sm">{currentKeyData.key_alias || "Not Set"}</p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Secret Key</Text>
-                    <Text className="font-mono">{currentKeyData.key_name}</Text>
+                    <p className="text-sm font-medium">Secret Key</p>
+                    <p className="text-sm font-mono">{currentKeyData.key_name}</p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Team ID</Text>
-                    <Text>{currentKeyData.team_id || "Not Set"}</Text>
+                    <p className="text-sm font-medium">Team ID</p>
+                    <p className="text-sm">
+                      {currentKeyData.team_id ? (
+                        <EntityLink href={teamDetailHref(currentKeyData.team_id)} className="font-normal">
+                          {currentKeyData.team_id}
+                        </EntityLink>
+                      ) : (
+                        "Not Set"
+                      )}
+                    </p>
                   </div>
 
                   {enableProjectsUI && (
                     <div>
-                      <Text className="font-medium">Project</Text>
-                      <Text>
+                      <p className="text-sm font-medium">Project</p>
+                      <p className="text-sm">
                         {currentKeyData.project_id
                           ? (() => {
                               const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
@@ -753,36 +828,45 @@ export default function KeyInfoView({
                                 : currentKeyData.project_id;
                             })()
                           : "Not Set"}
-                      </Text>
+                      </p>
                     </div>
                   )}
 
                   <div>
-                    <Text className="font-medium">Organization</Text>
-                    <Text>{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</Text>
+                    <p className="text-sm font-medium">Organization</p>
+                    <p className="text-sm">{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Created</Text>
-                    <Text>{formatTimestamp(currentKeyData.created_at)}</Text>
+                    <p className="text-sm font-medium">Created</p>
+                    <p className="text-sm">{formatTimestamp(currentKeyData.created_at)}</p>
                   </div>
 
                   {lastRegeneratedAt && (
                     <div>
-                      <Text className="font-medium">Last Regenerated</Text>
+                      <p className="text-sm font-medium">Last Regenerated</p>
                       <div className="flex items-center gap-2">
-                        <Text>{formatTimestamp(lastRegeneratedAt)}</Text>
-                        <Badge color="green" size="xs">
-                          Recent
-                        </Badge>
+                        <p className="text-sm">{formatTimestamp(lastRegeneratedAt)}</p>
+                        <Badge variant="secondary">Recent</Badge>
                       </div>
                     </div>
                   )}
 
                   <div>
-                    <Text className="font-medium">Expires</Text>
-                    <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
+                    <p className="text-sm font-medium">Expires</p>
+                    <p className="text-sm">
+                      {currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}
+                    </p>
                   </div>
+
+                  {Boolean(currentKeyData.metadata?.enable_prompt_caching) && (
+                    <div>
+                      <p className="text-sm font-medium">Prompt Caching</p>
+                      <p className="text-sm">
+                        Enabled (auto-injects cache_control markers on Anthropic and Bedrock Claude requests)
+                      </p>
+                    </div>
+                  )}
 
                   <AutoRotationView
                     autoRotate={currentKeyData.auto_rotate}
@@ -791,40 +875,40 @@ export default function KeyInfoView({
                     keyRotationAt={currentKeyData.key_rotation_at}
                     nextRotationAt={currentKeyData.next_rotation_at}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
 
                   <div>
-                    <Text className="font-medium">Spend</Text>
-                    <Text>${formatNumberWithCommas(currentKeyData.spend, 4)} USD</Text>
+                    <p className="text-sm font-medium">Spend</p>
+                    <p className="text-sm">${formatNumberWithCommas(currentKeyData.spend, 4)} USD</p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Budget</Text>
-                    <Text>
+                    <p className="text-sm font-medium">Budget</p>
+                    <p className="text-sm">
                       {currentKeyData.max_budget !== null
                         ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
                         : "Unlimited"}
-                    </Text>
+                    </p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Budget Reset</Text>
-                    <Text>
+                    <p className="text-sm font-medium">Budget Reset</p>
+                    <p className="text-sm">
                       {currentKeyData.budget_reset_at
                         ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
                         : "Never"}
-                    </Text>
+                    </p>
                   </div>
 
                   {currentKeyData.budget_fallbacks && Object.keys(currentKeyData.budget_fallbacks).length > 0 && (
                     <div>
-                      <Text className="font-medium">Budget Fallbacks</Text>
+                      <p className="text-sm font-medium">Budget Fallbacks</p>
                       <div className="mt-1 space-y-1">
                         {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
-                          <div key={model} className="text-xs text-gray-600">
+                          <div key={model} className="text-xs text-muted-foreground">
                             <span className="font-medium">{model}</span>
-                            <span className="mx-1 text-gray-400">-&gt;</span>
+                            <span className="mx-1 text-muted-foreground">-&gt;</span>
                             {fallbacks.join(", ")}
                           </div>
                         ))}
@@ -832,12 +916,21 @@ export default function KeyInfoView({
                     </div>
                   )}
 
+                  {hasRouterSettings(currentKeyData.router_settings) && (
+                    <div>
+                      <p className="text-sm font-medium">Router Settings</p>
+                      <div className="mt-1">
+                        <RouterSettingsSummary routerSettings={currentKeyData.router_settings} />
+                      </div>
+                    </div>
+                  )}
+
                   <div>
-                    <Text className="font-medium">Tags</Text>
+                    <p className="text-sm font-medium">Tags</p>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {tag}
                             </span>
                           ))
@@ -846,107 +939,123 @@ export default function KeyInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Prompts</Text>
-                    <Text>
+                    <p className="text-sm font-medium">Prompts</p>
+                    <p className="text-sm">
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {prompt}
                             </span>
                           ))
                         : "No prompts specified"}
-                    </Text>
+                    </p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Allowed Routes</Text>
+                    <p className="text-sm font-medium">Allowed Routes</p>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
                         currentKeyData.allowed_routes.map((route, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                             {route}
                           </span>
                         ))
                       ) : (
-                        <Tag color="green">All routes allowed</Tag>
+                        <Badge variant="secondary">All routes allowed</Badge>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Allowed Pass Through Routes</Text>
-                    <Text>
+                    <p className="text-sm font-medium">Allowed Pass Through Routes</p>
+                    <p className="text-sm">
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
                       currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded-sm text-xs">
+                            <span key={index} className="px-2 mr-2 py-1 bg-info/15 rounded-sm text-xs">
                               {route}
                             </span>
                           ))
                         : "No pass through routes specified"}
-                    </Text>
+                    </p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Disable Global Guardrails</Text>
-                    <Text>
+                    <p className="text-sm font-medium">Disable Global Guardrails</p>
+                    <p className="text-sm">
                       {currentKeyData.metadata?.disable_global_guardrails === true ? (
-                        <Badge color="yellow">Enabled - Global guardrails bypassed</Badge>
+                        <Badge variant="destructive">Enabled - Global guardrails bypassed</Badge>
                       ) : (
-                        <Badge color="green">Disabled - Global guardrails active</Badge>
+                        <Badge variant="secondary">Disabled - Global guardrails active</Badge>
                       )}
-                    </Text>
+                    </p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Models</Text>
+                    <p className="text-sm font-medium">Models</p>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span key={index} className="px-2 py-1 bg-blue-100 rounded-sm text-xs">
+                          <span key={index} className="px-2 py-1 bg-info/15 rounded-sm text-xs">
                             {model}
                           </span>
                         ))
                       ) : (
-                        <Text>No models specified</Text>
+                        <p className="text-sm">No models specified</p>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Rate Limits</Text>
-                    <Text>TPM: {currentKeyData.tpm_limit !== null ? currentKeyData.tpm_limit : "Unlimited"}</Text>
-                    <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
-                    <Text>
+                    <p className="text-sm font-medium">Rate Limits</p>
+                    <p className="text-sm">
+                      TPM: {currentKeyData.tpm_limit !== null ? currentKeyData.tpm_limit : "Unlimited"}
+                    </p>
+                    <p className="text-sm">
+                      RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}
+                    </p>
+                    <p className="text-sm">
                       Max Parallel Requests:{" "}
                       {currentKeyData.max_parallel_requests !== null
                         ? currentKeyData.max_parallel_requests
                         : "Unlimited"}
-                    </Text>
-                    <Text>
+                    </p>
+                    <p className="text-sm">
                       Model TPM Limits:{" "}
                       {currentKeyData.metadata?.model_tpm_limit
                         ? JSON.stringify(currentKeyData.metadata.model_tpm_limit)
                         : "Unlimited"}
-                    </Text>
-                    <Text>
+                    </p>
+                    <p className="text-sm">
                       Model RPM Limits:{" "}
                       {currentKeyData.metadata?.model_rpm_limit
                         ? JSON.stringify(currentKeyData.metadata.model_rpm_limit)
                         : "Unlimited"}
-                    </Text>
-                    <Text>
+                    </p>
+                    <p className="text-sm">
                       Tag RPM Limits:{" "}
                       {currentKeyData.metadata?.tag_rpm_limit &&
                       Object.keys(currentKeyData.metadata.tag_rpm_limit).length > 0
                         ? JSON.stringify(currentKeyData.metadata.tag_rpm_limit)
                         : "Unlimited"}
-                    </Text>
+                    </p>
+                    <p className="text-sm">
+                      Estimated Output Tokens:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens != null
+                        ? String(currentKeyData.metadata.default_estimated_output_tokens)
+                        : "Default"}
+                    </p>
+                    <p className="text-sm">
+                      Estimated Output Tokens Per Model:{" "}
+                      {currentKeyData.metadata?.default_estimated_output_tokens_per_model
+                        ? JSON.stringify(currentKeyData.metadata.default_estimated_output_tokens_per_model)
+                        : "Default"}
+                    </p>
                   </div>
 
                   <div>
-                    <Text className="font-medium">Metadata</Text>
-                    <pre className="bg-gray-100 p-2 rounded-sm text-xs overflow-auto mt-1">
+                    <p className="text-sm font-medium">Metadata</p>
+                    <pre className="bg-muted p-2 rounded-sm text-xs overflow-auto mt-1">
                       {formatMetadataForDisplay(stripTagsFromMetadata(currentKeyData.metadata))}
                     </pre>
                   </div>
@@ -954,7 +1063,7 @@ export default function KeyInfoView({
                   <ObjectPermissionsView
                     objectPermission={currentKeyData.object_permission}
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                     accessToken={accessToken}
                   />
 
@@ -966,14 +1075,14 @@ export default function KeyInfoView({
                         : []
                     }
                     variant="inline"
-                    className="pt-4 border-t border-gray-200"
+                    className="pt-4 border-t border-border"
                   />
                 </div>
               )}
             </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          </TabsContent>
+        </div>
+      </Tabs>
     </div>
   );
 }

@@ -29,6 +29,7 @@ class BedrockRerankHandler(BaseAWSLLM):
     async def arerank(
         self,
         prepared_request: BedrockPreparedRequest,
+        logging_obj: LitellmLogging,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ):
@@ -40,6 +41,7 @@ class BedrockRerankHandler(BaseAWSLLM):
                 headers=dict(prepared_request["prepped"].headers),
                 data=prepared_request["body"],
                 timeout=timeout,
+                logging_obj=logging_obj,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -98,9 +100,10 @@ class BedrockRerankHandler(BaseAWSLLM):
         if _is_async:
             return self.arerank(
                 prepared_request,
+                logging_obj=logging_obj,
                 timeout=timeout,
                 client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None,
-            )  # type: ignore
+            )
 
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()

@@ -281,7 +281,7 @@ def fetch_credentials(
                 if vcap_service
                 else None
             ),
-        ),  # type: ignore[arg-type]
+        ),
     ]
 
     credentials: Final = resolve_credentials(sources)
@@ -360,11 +360,11 @@ def _request_token(
         if cert_pair:
             with httpx.Client(cert=cert_pair) as raw_client:
                 handler = HTTPHandler(client=raw_client)
-                resp = handler.post(auth_url, data=data, timeout=timeout)  # type: ignore[arg-type]
+                resp = handler.post(auth_url, data=data, timeout=timeout)
                 payload = resp.json()
         else:
             handler = _get_httpx_client()
-            resp = handler.post(auth_url, data=data, timeout=timeout)  # type: ignore[arg-type]
+            resp = handler.post(auth_url, data=data, timeout=timeout)
             payload = resp.json()
         access_token: Final = payload["access_token"]
         expires_in: Final = int(payload.get("expires_in", 3600))
@@ -434,8 +434,8 @@ def get_token_creator(
         # Case 1: secret-based auth
         if client_secret:
             return _request_token(
-                auth_url=auth_url,  # type: ignore[arg-type]
-                client_id=client_id,  # type: ignore[arg-type]
+                auth_url=auth_url,
+                client_id=client_id,
                 timeout=timeout,
                 client_secret=client_secret,
             )
@@ -451,16 +451,16 @@ def get_token_creator(
                 with open(key_path, "w") as f:
                     f.write(key_str_fixed)
                 return _request_token(
-                    auth_url=auth_url,  # type: ignore[arg-type]
-                    client_id=client_id,  # type: ignore[arg-type]
+                    auth_url=auth_url,
+                    client_id=client_id,
                     timeout=timeout,
                     cert_pair=(cert_path, key_path),
                 )
         # Case 3: file-based cert/key
         if cert_file_path is not None and key_file_path is not None:
             return _request_token(
-                auth_url=auth_url,  # type: ignore[arg-type]
-                client_id=client_id,  # type: ignore[arg-type]
+                auth_url=auth_url,
+                client_id=client_id,
                 timeout=timeout,
                 cert_pair=(cert_file_path, key_file_path),
             )

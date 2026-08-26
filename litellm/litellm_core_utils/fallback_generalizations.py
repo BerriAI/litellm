@@ -48,7 +48,7 @@ O(number of rules); callers must only invoke them on a cache miss.
 
 import re
 from dataclasses import dataclass
-from typing import Final, Union
+from typing import Final
 
 from litellm._logging import verbose_logger
 
@@ -100,7 +100,7 @@ class _CapabilityRule:
     model_info: dict
 
 
-_CompiledRule = Union[_RoutingRule, _CapabilityRule]
+_CompiledRule = _RoutingRule | _CapabilityRule
 
 
 def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:

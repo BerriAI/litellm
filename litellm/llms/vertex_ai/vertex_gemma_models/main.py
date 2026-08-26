@@ -22,7 +22,7 @@ https://{ENDPOINT_NUMBER}.{location}-{REGION_NUMBER}.prediction.vertexai.goog/v1
 from collections.abc import Callable
 from typing import Final
 
-import httpx  # type: ignore
+import httpx
 
 from litellm.utils import ModelResponse
 

@@ -19,7 +19,6 @@ from pydantic import BaseModel, ConfigDict
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
-from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -175,13 +174,13 @@ def append_query_params(url: str | None, params: dict) -> str:
     parsed_query.update(params)
     encoded_query: Final = urlparse.urlencode(parsed_query, doseq=True)
     modified_url: Final = urlparse.urlunparse(parsed_url._replace(query=encoded_query))
-    return modified_url  # type: ignore
+    return modified_url
 
 
 class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
-        pkg_version: Final = importlib.metadata.version("litellm")  # type: ignore
+        pkg_version: Final = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
 
     @staticmethod
@@ -360,14 +359,14 @@ class ProxyInitializationHelpers:
             original_iter: Final = StatReload.iter_py_files
             patched_paths = set()
 
-            def _iter_with_extra(self):  # type: ignore[no-untyped-def]
+            def _iter_with_extra(self):
                 yield from original_iter(self)
                 for path in StatReload._litellm_patched_config_paths:
                     if path.exists():
                         yield path
 
-            StatReload.iter_py_files = _iter_with_extra  # type: ignore[assignment]
-            StatReload._litellm_patched_config_paths = patched_paths  # type: ignore[attr-defined]
+            StatReload.iter_py_files = _iter_with_extra
+            StatReload._litellm_patched_config_paths = patched_paths
 
         patched_paths.update(resolved)
         return True
@@ -421,7 +420,7 @@ class ProxyInitializationHelpers:
                 config.ciphers = ciphers
 
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
-        asyncio.run(serve(app, config))  # type: ignore
+        asyncio.run(serve(app, config))
 
     @staticmethod
     def _init_granian_server(
@@ -791,6 +790,12 @@ class ProxyInitializationHelpers:
     help="Connects to RDS DB with IAM token",
 )
 @click.option(
+    "--azure_postgresql_auth",
+    default=False,
+    is_flag=True,
+    help="Connects to Azure Database for PostgreSQL with a Microsoft Entra ID token",
+)
+@click.option(
     "--num_requests",
     default=10,
     type=int,
@@ -916,6 +921,7 @@ class ProxyInitializationHelpers:
         "path that can cause schema thrashing during rolling deploys where two "
         "LiteLLM versions contend for the same DB. Default is the v1 resolver."
     ),
+    envvar="USE_V2_MIGRATION_RESOLVER",
 )
 @click.option(
     "--reload",
@@ -950,6 +956,7 @@ def run_server(
     granian_threads,
     test_async,
     iam_token_db_auth,
+    azure_postgresql_auth: bool,
     num_requests,
     use_queue,
     health,
@@ -1079,31 +1086,27 @@ def run_server(
         db_statement_timeout: float | None = None
         db_lock_timeout: float | None = None
         general_settings = {}
-        ### GET DB TOKEN FOR IAM AUTH ###
+        ### GET DB TOKEN FOR RDS IAM / AZURE ENTRA AUTH ###
 
-        if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
-            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+        from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+        from litellm.proxy.db.token_auth import (
+            AZURE_POSTGRESQL_AUTH_ENV_VAR,
+            IAM_TOKEN_DB_AUTH_ENV_VAR,
+            token_auth_flag_enabled,
+        )
 
-            db_host: Final = os.getenv("DATABASE_HOST")
-            # Default to the Postgres standard port. Without a default,
-            # `db_port=None` flows into `boto.generate_db_auth_token(Port=None)`
-            # and botocore stringifies it to `"None"` while building the
-            # presigned URL, which then blows up with `ValueError: Port could
-            # not be cast to integer value as 'None'` during signing.
-            db_port: Final = os.getenv("DATABASE_PORT", "5432")
-            db_user: Final = os.getenv("DATABASE_USER")
-            db_name: Final = os.getenv("DATABASE_NAME")
-            db_schema: Final = os.getenv("DATABASE_SCHEMA")
-
-            token: Final = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
-
-            # print(f"token: {token}")
-            _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
-            if db_schema:
-                _db_url += f"?schema={db_schema}"
-
-            os.environ["DATABASE_URL"] = _db_url
-            os.environ["IAM_TOKEN_DB_AUTH"] = "True"
+        wants_rds_iam: Final = iam_token_db_auth or token_auth_flag_enabled(
+            os.getenv(IAM_TOKEN_DB_AUTH_ENV_VAR), env_var=IAM_TOKEN_DB_AUTH_ENV_VAR
+        )
+        wants_azure_entra: Final = azure_postgresql_auth or token_auth_flag_enabled(
+            os.getenv(AZURE_POSTGRESQL_AUTH_ENV_VAR), env_var=AZURE_POSTGRESQL_AUTH_ENV_VAR
+        )
+        if wants_rds_iam:
+            os.environ[IAM_TOKEN_DB_AUTH_ENV_VAR] = "True"
+        if wants_azure_entra:
+            os.environ[AZURE_POSTGRESQL_AUTH_ENV_VAR] = "True"
+        if wants_rds_iam or wants_azure_entra:
+            DatabaseURLSettings.from_env().apply_writer_url_to_env()
 
         ### DECRYPT ENV VAR ###
 
@@ -1221,6 +1224,8 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
+                add_missing_query_params,
+                reader_shareable_params,
                 unsupported_db_scheme,
                 unsupported_db_scheme_message,
             )
@@ -1270,6 +1275,24 @@ def run_server(
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
                     os.environ["DIRECT_URL"] = modified_url
+                # The reader pool is a real pool against the same configured cap, so it
+                # gets the allowlisted pool params. Schema-affecting ones, including any
+                # the operator smuggled in through database_extra_connection_params, stay
+                # on the writer. Anything pinned on the replica URL wins, unlike the
+                # writer where the config is applied on top.
+                read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+                if read_replica_url:
+                    reader_options: Final[str] = _pg_options_with_timeouts(
+                        _url_query_value(read_replica_url, "options"),
+                        db_statement_timeout,
+                        db_lock_timeout,
+                    )
+                    os.environ["DATABASE_URL_READ_REPLICA"] = add_missing_query_params(
+                        _with_query_value(read_replica_url, "options", reader_options)
+                        if reader_options
+                        else read_replica_url,
+                        reader_shareable_params(connection_url_params),
+                    )
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
             except FileNotFoundError:
@@ -1338,7 +1361,7 @@ def run_server(
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
-            litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
+            litellm_settings=litellm_settings if config else None,
         )
 
         # Skip server startup if requested (after all setup is done)

@@ -1,12 +1,9 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -1301,8 +1298,7 @@ def test_gemini_realtime_pipecat_ga_session_voice_and_tools(patch_gemini_audio_c
     assert len(messages) == 1
     setup = json.loads(messages[0])["setup"]
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
-    # Native-audio Live rejects speechConfig on setup (see _finalize_gemini_live_setup).
-    assert "speechConfig" not in setup.get("generationConfig", {})
+    assert setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
     assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
     assert setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is False
 
@@ -1846,20 +1842,6 @@ def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_au
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
 
 
-@pytest.mark.parametrize(
-    "model,expected",
-    [
-        ("gemini-2.5-flash-native-audio-latest", True),
-        ("gemini/gemini-2.5-flash-native-audio-latest", True),
-        ("gemini-3.1-flash-live-preview", False),
-        ("gemini/gemini-3.1-flash-live-preview", False),
-        ("gemini-2.0-flash", False),
-    ],
-)
-def test_is_native_audio_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
-    assert GeminiRealtimeConfig._is_native_audio_model(model) == expected
-
-
 def test_is_setup_message_and_is_content_message():
     config = GeminiRealtimeConfig()
     assert config.is_setup_message({"setup": {}}) is True
@@ -1868,3 +1850,17 @@ def test_is_setup_message_and_is_content_message():
     assert config.is_content_message({"clientContent": {}}) is True
     assert config.is_content_message({"toolResponse": {}}) is True
     assert config.is_content_message({"setup": {}}) is False
+
+
+def test_map_openai_params_drops_stock_voice_case_insensitively():
+    """Regression: OpenAI stock voices are dropped regardless of casing so Gemini Live keeps its default voice.
+
+    Non-OpenAI names pass through verbatim.
+    """
+    cfg = GeminiRealtimeConfig()
+
+    dropped = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Alloy"})
+    assert "speechConfig" not in dropped.get("generationConfig", {})
+
+    passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
+    assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"

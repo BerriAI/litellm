@@ -96,7 +96,7 @@ class DotpromptManager(CustomPromptManagement):
         if prompt_id is None:
             return False
         try:
-            return prompt_id in self.prompt_manager.list_prompts()
+            return self.prompt_manager.get_prompt(prompt_id) is not None
         except Exception:
             # If there's any error accessing prompts, don't run prompt management
             return False
@@ -311,7 +311,7 @@ class DotpromptManager(CustomPromptManagement):
     def _create_message(self, role: str, content: str) -> AllMessageValues:
         """Create a message with the specified role and content."""
         return {
-            "role": role,  # type: ignore
+            "role": role,
             "content": content,
         }
 

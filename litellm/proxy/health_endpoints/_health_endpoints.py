@@ -5,9 +5,9 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Final, Literal, TypedDict, Union, cast
+from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -29,8 +29,12 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.auth.auth_utils import (
+    _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
@@ -43,6 +47,11 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.router_utils.clientside_credential_handler import (
+    _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
+    clientside_credential_keys,
+)
+from litellm.secret_managers.main import get_secret_bool
 
 #### Health ENDPOINTS ####
 
@@ -80,6 +89,45 @@ def _reject_os_environ_references(params: dict) -> None:
                 stack.append(value)
 
 
+_CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
+    (
+        *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,
+        *clientside_credential_keys,
+        "litellm_credential_name",
+    )
+)
+
+
+def _config_base_for_health_check(
+    config_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    allow_client_side_credentials: bool = False,
+) -> dict[str, object]:
+    """Return the configured parameters to merge under a connection-test request.
+
+    A request that sets its own connection fields describes a connection of its
+    own, so the configuration's credentials are not carried into it: they belong
+    to the endpoint the configuration names. Anything the request does not set
+    still comes from the configuration, which is what lets a request name a
+    configured model and test it as configured.
+
+    ``litellm_credential_name`` is dropped alongside the literal credential
+    fields: it names a stored credential that ``load_credentials_from_list``
+    resolves into the same secrets further down the call, so leaving it in place
+    would reintroduce them by reference.
+
+    ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
+    opt-in for callers supplying their own connection parameters. Where an admin
+    has enabled it, a request may pair its own endpoint with the configured
+    credentials, as it could before.
+    """
+    if allow_client_side_credentials:
+        return dict(config_params)
+    if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
+        return dict(config_params)
+    return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
+
+
 def get_callback_identifier(callback):
     """
     Get the callback identifier string, handling both strings and objects.
@@ -110,7 +158,7 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
-services = Union[
+services = (
     Literal[
         "slack_budget_alerts",
         "langfuse",
@@ -127,9 +175,9 @@ services = Union[
         "galileo",
         "newrelic",
         "sqs",
-    ],
-    str,
-]
+    ]
+    | str
+)
 
 
 @router.get(
@@ -1401,6 +1449,37 @@ def callback_name(callback):
             return str(callback)
 
 
+DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
+
+
+async def _show_no_redis_warning() -> bool:
+    """
+    Whether the UI should warn that no Redis is configured.
+
+    Redis is what makes rate limits, budgets, router state, and cache
+    invalidation consistent across workers, so a proxy running without it is
+    only safe as a single worker. Both places a Redis can land count: the
+    coordination cache (from a Redis response cache, general_settings.
+    coordination_redis, or the REDIS_* env fallback) and the router's own
+    Redis (router_settings.redis_host), which backs cooldowns and usage-based
+    routing on its own. A deployment whose worker-heartbeat census proves it
+    is exactly one worker needs no cross-worker coordination, so it never
+    warns; when the census is unavailable or shows more than one worker, the
+    warning stands unless LITELLM_DISABLE_NO_REDIS_WARNING=true silences it.
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client, redis_usage_cache
+
+    if redis_usage_cache is not None:
+        return False
+    if llm_router is not None and llm_router.cache.redis_cache is not None:
+        return False
+    if get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True:
+        return False
+    if prisma_client is None:
+        return True
+    return await count_live_proxy_workers(prisma_client) != 1
+
+
 async def _get_health_readiness_details(
     response: Response | None = None,
 ) -> dict[str, Any]:
@@ -1435,12 +1514,13 @@ async def _get_health_readiness_details(
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
-                cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
+                    index_info = "index does not exist - error: " + str(e)
+                cache_type = {"type": cache_type, "index_info": index_info}
 
         # check log level
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
+        show_no_redis_warning: Final = await _show_no_redis_warning()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1460,6 +1540,7 @@ async def _get_health_readiness_details(
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
+                "show_no_redis_warning": show_no_redis_warning,
             }
         else:
             return {
@@ -1471,6 +1552,7 @@ async def _get_health_readiness_details(
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
+                "show_no_redis_warning": show_no_redis_warning,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")
@@ -1714,6 +1796,7 @@ async def test_model_connection(
         "audio_speech",
         "audio_transcription",
         "image_generation",
+        "image_edit",
         "video_generation",
         "batch",
         "rerank",
@@ -1785,7 +1868,12 @@ async def test_model_connection(
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
-    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        premium_user,
+        prisma_client,
+    )
     from litellm.types.router import Deployment, LiteLLM_Params
 
     try:
@@ -1801,6 +1889,8 @@ async def test_model_connection(
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
         _reject_os_environ_references(request_litellm_params)
+        if model_info:
+            _reject_os_environ_references(model_info)
         model_name: Final = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
@@ -1854,25 +1944,31 @@ async def test_model_connection(
                 )
 
         # Merge: config params (from proxy config) as base, request params override
-        # This allows users to override specific params while using config for credentials
-        litellm_params = {**config_litellm_params, **request_litellm_params}
+        litellm_params = {
+            **_config_base_for_health_check(
+                config_litellm_params,
+                request_litellm_params,
+                allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+            ),
+            **request_litellm_params,
+        }
 
-        ## Auth check
-        auth_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        litellm_params = _update_litellm_params_for_health_check(
+            model_info=resolved_model_info or {},
+            litellm_params=litellm_params,
+        )
+
+        ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
-                model_info=auth_model_info,
+                model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-        )
-        # Include health_check_params if provided
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
-            litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
 

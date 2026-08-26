@@ -4,6 +4,7 @@ and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 import logging
 import re
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -14,6 +15,7 @@ from litellm.integrations.otel import (
     Error,
     GenAI,
     GenAIOperation,
+    GenAIOutputType,
     HTTP,
     LiteLLM,
     OpenTelemetryV2Config,
@@ -21,10 +23,16 @@ from litellm.integrations.otel import (
     is_otel_v2_enabled,
     promoted_baggage,
     resolve_operation,
+    resolve_output_type,
     resolve_provider,
 )
+from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
-from litellm.integrations.otel.model.payloads import LLMCallSpanData, RequestIdentity
+from litellm.integrations.otel.model.payloads import (
+    LLMCallSpanData,
+    RequestIdentity,
+    _upstream_address_port,
+)
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -177,6 +185,7 @@ def test_mcp_attribute_vocabulary_is_complete():
         "mcp.resource.uri",
         "jsonrpc.request.id",
         "jsonrpc.protocol.version",
+        "rpc.system",
         "rpc.response.status_code",
         "gen_ai.operation.name",
         "gen_ai.tool.name",
@@ -257,6 +266,74 @@ def test_vector_store_file_management_is_not_chat(call_type):
     they get their own vendor value instead of sharing one bucket."""
     assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT
     assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
+
+
+_NON_CHAT_ROUTES: Final = (
+    ("image_generation", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.IMAGE),
+    ("speech", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.SPEECH),
+    ("transcription", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.TEXT),
+    ("ocr", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.TEXT),
+    ("moderation", GenAIOperation.LITELLM_MODERATION, None),
+)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "operation", "output_type"),
+    [
+        (f"{prefix}{call_type}", operation, output_type)
+        for call_type, operation, output_type in _NON_CHAT_ROUTES
+        for prefix in ("", "a")
+    ],
+)
+def test_non_chat_inference_routes_follow_genai_semconv(call_type, operation, output_type):
+    """Image generation, speech, transcription and OCR all produce content, so the
+    convention names them ``generate_content`` and separates them by the requested
+    output modality rather than by an invented operation. Moderation classifies
+    instead of generating and the convention names nothing for it, so it keeps a
+    vendor value. Either way the spans must not land in the chat series a dashboard
+    reads."""
+    assert resolve_operation(call_type) is operation
+    assert resolve_output_type(call_type) is output_type
+
+
+@pytest.mark.parametrize(
+    ("call_type", "operation", "output_type"),
+    [(f"a{call_type}", operation, output_type) for call_type, operation, output_type in _NON_CHAT_ROUTES],
+)
+def test_non_chat_route_spans_carry_semconv_name_and_modality(call_type, operation, output_type):
+    """The emitted span, not just the mapping table: name is
+    ``{gen_ai.operation.name} {gen_ai.request.model}``, the modality rides
+    ``gen_ai.output.type``, and the route stays recoverable from
+    ``litellm.call_type`` now that several routes share one operation."""
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(call_type=call_type, model="some-model", custom_llm_provider="openai")
+    )
+    attrs = GenAIMapper().map(data)
+
+    assert spans_mod.llm_call_span_name(data) == f"{operation.value} some-model"
+    assert attrs[GenAI.OPERATION_NAME] == operation.value
+    assert attrs[GenAI.PROVIDER_NAME] == "openai"
+    assert attrs[GenAI.REQUEST_MODEL] == "some-model"
+    assert attrs[LiteLLM.CALL_TYPE] == call_type
+    assert attrs.get(GenAI.OUTPUT_TYPE) == (output_type.value if output_type else None)
+
+
+def test_non_chat_route_error_span_keeps_error_attributes():
+    """Modality mapping must not cost the failure signal: a failed non-chat call
+    still carries the error type alongside the standardized operation."""
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(
+            call_type="aspeech",
+            model="tts-1",
+            status="failure",
+            error_information={"error_class": "BadRequestError"},
+        )
+    )
+    attrs = GenAIMapper().map(data)
+
+    assert attrs[GenAI.OPERATION_NAME] == GenAIOperation.GENERATE_CONTENT.value
+    assert attrs[GenAI.OUTPUT_TYPE] == GenAIOutputType.SPEECH.value
+    assert attrs[Error.TYPE] == "BadRequestError"
 
 
 def test_vendor_operation_values_are_namespaced():
@@ -808,3 +885,34 @@ def test_promoted_baggage_is_bounded_allowlist():
     # http.* is never a promoted key
     assert HTTP.ROUTE not in promoted
     assert HTTP.REQUEST_METHOD not in promoted
+
+
+@pytest.mark.parametrize(
+    "resource, expected",
+    [
+        ("https://weather.example.com", ("weather.example.com", 443)),
+        ("http://weather.example.com", ("weather.example.com", 80)),
+        ("https://weather.example.com:8443", ("weather.example.com", 8443)),
+        ("mcp://weather.example.com", ("weather.example.com", None)),
+        ("http://::1:8080", (None, None)),
+        ("http://fe80::1%25eth0:80", (None, None)),
+        (None, (None, None)),
+        ("", (None, None)),
+    ],
+    ids=[
+        "https-default",
+        "http-default",
+        "explicit-port",
+        "no-default-port",
+        "ipv6-unbracketed",
+        "ipv6-zone-scoped",
+        "none",
+        "empty",
+    ],
+)
+def test_upstream_address_port(resource, expected):
+    """The redacted MCP origin resolves to the address and port a consumer names its
+    dependency from. A scheme outside the default-port map yields no port, and an IPv6
+    origin yields nothing at all because the redactor rebuilds it without its brackets;
+    both are why the mapper gates ``rpc.system`` on the complete pair."""
+    assert _upstream_address_port(resource) == expected

@@ -5,7 +5,9 @@ This is an enterprise feature and requires a premium license.
 """
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
 
@@ -20,7 +22,7 @@ from fastapi import (
     Response,
 )
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -164,9 +166,19 @@ class UserProvisionerHelpers:
         """
         Check if a user with the given email already exists and update them if found.
 
+        The matched row keeps its existing user_id even when the SCIM userName differs.
+        Virtual keys, team rosters, team/organization memberships and spend logs all
+        reference that id, so re-keying the user row would strand every one of them and
+        make removals against rosters holding the old id no-op. SCIM ids are opaque to
+        the client, which reads the stable id back from the response.
+
         When admin_group is configured the resolved global role on new_user_request
         is persisted too, so re-upserting an existing email demotes a user who is no
         longer in the admin group instead of leaving the stale role.
+
+        IdPs like Entra manage membership exclusively through /Groups and never send
+        ``groups`` on POST /Users, so a request without teams means "unspecified",
+        not "remove from every team": existing memberships are preserved then.
 
         Args:
             prisma_client: Database client
@@ -186,23 +198,25 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
-        new_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
 
         if new_user_request.user_id != existing_user.user_id:
-            await _table(UserRepository(prisma_client)).update(
-                where={"user_id": existing_user.user_id},
-                data={"user_id": new_user_request.user_id},
+            verbose_proxy_logger.info(
+                "SCIM: email %s already provisioned as user_id=%s, keeping that id instead of re-keying to %s",
+                new_user_request.user_email,
+                existing_user.user_id,
+                new_user_request.user_id,
             )
 
         await _handle_team_membership_changes(
-            user_id=new_user_request.user_id,
+            user_id=existing_user.user_id,
             existing_teams=existing_user.teams or [],
             new_teams=new_teams,
-            raise_on_error=True,
         )
 
         updated_user: Final = await _table(UserRepository(prisma_client)).update(
-            where={"user_id": new_user_request.user_id},
+            where={"user_id": existing_user.user_id},
             data={
                 "user_email": new_user_request.user_email,
                 "user_alias": new_user_request.user_alias,
@@ -478,13 +492,18 @@ class _UnknownMember(NamedTuple):
     value: str
 
 
-_ClassifiedGroupMember = Union[_ResolvedUserMember, _SkippedGroupMember, _UnknownMember]
+class _AmbiguousMember(NamedTuple):
+    value: str
+
+
+_ClassifiedGroupMember = Union[_ResolvedUserMember, _SkippedGroupMember, _UnknownMember, _AmbiguousMember]
 
 
 class _PartitionedMembers(NamedTuple):
     resolved_ids: tuple[str, ...]
     skipped: tuple[_SkippedGroupMember, ...]
     unknown_ids: tuple[str, ...]
+    ambiguous_values: tuple[str, ...]
 
 
 def _member_value(member: SCIMMember) -> str:
@@ -527,6 +546,44 @@ def _team_metadata_has_scim_provenance(team_metadata: object) -> bool:
     return bool(fields.get(SCIM_MANAGED_TEAM_METADATA_KEY)) or fields.get(SCIM_TEAM_DATA_METADATA_KEY) is not None
 
 
+class _CaseInsensitiveMatch(TypedDict):
+    equals: ReadOnly[str]
+    mode: ReadOnly[str]
+
+
+async def _users_named_by_member_value(
+    value: str, prisma_client: PrismaClient, *, take: int | None = 2
+) -> tuple[str, ...]:
+    """Every user id this member value names, by SSO identity or by email.
+
+    Both fields are searched in one pass, because searching either first would hide a
+    value that names one account by its SSO identity and another by its email, and
+    hand the group to whichever field was searched first.
+
+    They are not compared alike. An email is matched the way ``new_user`` matches one
+    before it accepts a new account, case-insensitively: matching more strictly than
+    the layer that would reject the placeholder is what turned a member id whose
+    casing differed from the stored email into a 500 on the whole push. An SSO
+    identity is matched exactly, because OIDC defines ``sub`` as case-sensitive and
+    nothing folds its case on the way in, so treating two subjects that differ in case
+    as one would hand the group to an account the provider never named.
+
+    ``take`` bounds the read for a caller that only needs to know whether the value
+    names one account or several; ``user_email`` carries no index, so letting the scan
+    stop early is worth the two rows. A caller that has to know *which* accounts, as a
+    removal does, passes None. That set is the accounts sharing one identity, which is
+    a handful at worst.
+    """
+    subject: Final = value.strip()
+    email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
+    rows: Final = await _table(UserRepository(prisma_client)).find_many(
+        # mutable-ok: the Prisma serializer requires concrete dicts and a concrete list
+        where={"OR": [{"sso_user_id": subject}, {"user_email": email}]},
+        take=take,
+    )
+    return tuple(dict.fromkeys(row.user_id for row in rows))
+
+
 async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient) -> _ClassifiedGroupMember:
     """
     Decide what a single SCIM group member refers to.
@@ -548,6 +605,20 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
       one the identity provider writes. An id the IdP called a User is a user
       even if some team happens to share the id, and a team created here rather
       than through SCIM is not evidence of anything about the member.
+
+    When those checks miss on an otherwise user-shaped member, its value is looked
+    up as an SSO identity or an email, and a match resolves to that user's
+    ``user_id``. A value that names more than one account is ambiguous rather than
+    unknown: it names a real person we cannot identify, so it is neither guessed at
+    nor provisioned.
+
+    An exact ``user_id`` hit is checked the same way rather than trusted outright. A
+    value can be one account's id and another's SSO identity or email, and taking the
+    id on sight would hand the group to whichever account happened to be keyed by it.
+    The placeholders this bug provisioned are that shape exactly, since they are keyed
+    by the very id the provider keeps pushing, so on a tenant that already has them
+    the membership is refused and named rather than silently landing on the
+    placeholder again.
     """
     value: Final = _member_value(member)
     member_type: Final = _normalized_member_type(member)
@@ -557,6 +628,18 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
 
     user: Final = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": value})
     if user is not None:
+        shared_with: Final = tuple(
+            other for other in await _users_named_by_member_value(value, prisma_client) if other != value
+        )
+        if shared_with:
+            verbose_proxy_logger.warning(
+                "SCIM: group member '%s' is one account's user id and is also account '%s' by SSO identity or email, "
+                "so the membership cannot be attributed. A placeholder an earlier release provisioned under this id "
+                "looks exactly like this and should be deleted so the real account can be matched",
+                value,
+                shared_with[0],
+            )
+            return _AmbiguousMember(value=value)
         return _ResolvedUserMember(user_id=value)
 
     if member_type is not None and member_type != "user":
@@ -567,6 +650,22 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
         if team is not None and _team_metadata_has_scim_provenance(team.metadata):
             return _SkippedGroupMember(value=value, reason="existing_team")
 
+    named: Final = await _users_named_by_member_value(value, prisma_client)
+    if len(named) == 1:
+        verbose_proxy_logger.info(
+            "SCIM: group member '%s' matched user_id '%s' by SSO identity or email",
+            value,
+            named[0],
+        )
+        return _ResolvedUserMember(user_id=named[0])
+    if len(named) > 1:
+        verbose_proxy_logger.warning(
+            "SCIM: group member '%s' names more than one account by SSO identity or email and cannot be resolved "
+            "unambiguously",
+            value,
+        )
+        return _AmbiguousMember(value=value)
+
     return _UnknownMember(value=value)
 
 
@@ -574,11 +673,13 @@ def _bucketed_member(entry: _ClassifiedGroupMember) -> _PartitionedMembers:
     """The single-member partition one classified entry contributes."""
     match entry:
         case _ResolvedUserMember(user_id=user_id):
-            return _PartitionedMembers(resolved_ids=(user_id,), skipped=(), unknown_ids=())
+            return _PartitionedMembers(resolved_ids=(user_id,), skipped=(), unknown_ids=(), ambiguous_values=())
         case _SkippedGroupMember():
-            return _PartitionedMembers(resolved_ids=(), skipped=(entry,), unknown_ids=())
+            return _PartitionedMembers(resolved_ids=(), skipped=(entry,), unknown_ids=(), ambiguous_values=())
         case _UnknownMember(value=value):
-            return _PartitionedMembers(resolved_ids=(), skipped=(), unknown_ids=(value,))
+            return _PartitionedMembers(resolved_ids=(), skipped=(), unknown_ids=(value,), ambiguous_values=())
+        case _AmbiguousMember(value=value):
+            return _PartitionedMembers(resolved_ids=(), skipped=(), unknown_ids=(), ambiguous_values=(value,))
         case _:
             assert_never(entry)
 
@@ -590,6 +691,7 @@ def _partition_classified_members(classified: Iterable[_ClassifiedGroupMember]) 
         resolved_ids=tuple(chain.from_iterable(bucket.resolved_ids for bucket in bucketed)),
         skipped=tuple(chain.from_iterable(bucket.skipped for bucket in bucketed)),
         unknown_ids=tuple(chain.from_iterable(bucket.unknown_ids for bucket in bucketed)),
+        ambiguous_values=tuple(chain.from_iterable(bucket.ambiguous_values for bucket in bucketed)),
     )
 
 
@@ -599,7 +701,7 @@ def _admitted_member_id(entry: _ClassifiedGroupMember, created_ids: frozenset[st
             return user_id
         case _UnknownMember(value=value):
             return value if value in created_ids else None
-        case _SkippedGroupMember():
+        case _SkippedGroupMember() | _AmbiguousMember():
             return None
         case _:
             assert_never(entry)
@@ -619,6 +721,104 @@ def _admitted_member_ids(classified: Iterable[_ClassifiedGroupMember], created_i
     )
 
 
+class _UserIdWhere(TypedDict):
+    user_id: ReadOnly[str]
+
+
+class _ScimErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+async def _ensure_group_member_user(
+    user_id: str,
+    created_via: str,
+    prisma_client: PrismaClient,
+) -> NewUserResponse | None:
+    """The created user, or None when the id already resolves to a user row (a
+    concurrent provisioning request won the creation race after our lookup missed).
+
+    Raises:
+        HTTPException: 500 when the user can neither be created nor found. The
+        request has to fail so the identity provider retries, instead of recording
+        success for a member the roster silently dropped.
+    """
+    created: Final = await _create_user_if_not_exists(user_id=user_id, created_via=created_via)
+    if created is not None:
+        return created
+    where: Final[_UserIdWhere] = {"user_id": user_id}
+    existing: Final = await _table(UserRepository(prisma_client)).find_unique(where=where)
+    if existing is not None:
+        return None
+    detail: Final[_ScimErrorDetail] = {
+        "error": f"Failed to create user '{user_id}' while provisioning group membership."
+    }
+    raise HTTPException(status_code=500, detail=detail)
+
+
+def _roster_entries_named_by(value: str, roster: frozenset[str], resolved: tuple[str, ...]) -> tuple[str, ...]:
+    """The members of this group a removal value names.
+
+    Both ways of naming one count together. The id as written counts when the roster
+    holds it verbatim, which is how an earlier release recorded a member it could not
+    match, and the accounts it resolves to count when they are on the roster. Counting
+    only the resolved ones would let a value that is one member's canonical id and
+    another member's email revoke both, since each looks singular on its own.
+    """
+    return tuple(
+        dict.fromkeys(
+            chain(
+                (value,) if value in roster else (),
+                (user_id for user_id in resolved if user_id in roster),
+            )
+        )
+    )
+
+
+async def _member_ids_to_drop(
+    members: Sequence[SCIMMember], roster: frozenset[str], prisma_client: PrismaClient
+) -> frozenset[str]:
+    """The members a ``remove`` clears, one per id the request names.
+
+    The roster holds canonical user ids, so a directory that added someone by their
+    email or SSO identity has to be able to remove them by that same value, and a
+    member an earlier release recorded under the raw id has to stay removable by it.
+
+    Ambiguity is a property of the table as it stands, not of the value, so a value
+    that named one person when they were admitted can name two later. Resolving a
+    removal against the whole table would then drop nobody while answering 200, and
+    the person the directory just took out of the group would keep the team. So a
+    removal keeps only the accounts already on the roster: one is unambiguous however
+    many strangers share the address, none means there is nothing to revoke, and only
+    a value naming two of this group's own members is genuinely undecidable. That last
+    case fails rather than reporting a removal it did not perform, or revoking both.
+
+    Raises:
+        HTTPException: 400 when a member id names more than one current member.
+    """
+    written: Final = frozenset(_member_value(member) for member in members)
+    matched: Final = tuple(
+        [
+            (
+                value,
+                _roster_entries_named_by(
+                    value, roster, await _users_named_by_member_value(value, prisma_client, take=None)
+                ),
+            )
+            for value in sorted(written)
+        ]
+    )
+    undecidable: Final = tuple(value for value, entries in matched if len(entries) > 1)
+    if undecidable:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Member ID '{undecidable[0]}' names more than one member of this group, so the removal "
+                "cannot be attributed. Send the LiteLLM user ID as the member value, or resolve the duplicate."
+            },
+        )
+    return frozenset(chain.from_iterable(entries for _, entries in matched))
+
+
 async def _resolve_group_member_ids(
     members: Sequence[SCIMMember],
     created_via: str,
@@ -627,16 +827,18 @@ async def _resolve_group_member_ids(
     """
     Resolve SCIM group members to LiteLLM user ids, dropping members that are not users.
 
-    Only the operations that put ids onto a roster resolve their members: an id
-    that resolves to nothing is created when litellm_settings.scim_upsert_user is
-    True (default) and rejected per SCIM 2.0 otherwise. Removals do not come
-    through here; dropping an id is idempotent, so it needs neither a lookup nor a
-    user to drop.
+    Member ids are matched by ``user_id`` first, then by SSO identity or email. An
+    id that resolves to nothing is created when litellm_settings.scim_upsert_user is
+    True (default) and rejected per SCIM 2.0 otherwise. Removals do not come through
+    here: they resolve through ``_member_ids_to_drop`` instead, which neither creates
+    a user nor fails on an id it cannot place.
 
     Raises:
-        HTTPException: 400 when a member id is empty, or when scim_upsert_user is
-        False and a member id is neither an existing user, an existing team, nor a
-        member declared to be something other than a user.
+        HTTPException: 400 when a member id is empty, when a member id names more
+        than one user, or when scim_upsert_user is False and a member id is neither
+        an existing user, an existing team, nor a member declared to be something
+        other than a user. 500 when a member's user row can neither be created nor
+        found.
     """
     classified: Final = tuple([await _classify_group_member(member, prisma_client) for member in members])
     partition: Final = _partition_classified_members(classified)
@@ -648,6 +850,16 @@ async def _resolve_group_member_ids(
             skipped.reason,
         )
 
+    if partition.ambiguous_values:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Member ID '{partition.ambiguous_values[0]}' names more than one LiteLLM user, so the "
+                "group membership cannot be attributed. Resolve the duplicate, which for an id that also matches a "
+                "SCIM-provisioned placeholder means deleting that placeholder."
+            },
+        )
+
     if partition.unknown_ids and not await _get_scim_upsert_user_setting():
         raise HTTPException(
             status_code=400,
@@ -657,10 +869,21 @@ async def _resolve_group_member_ids(
             },
         )
 
+    unique_unknown_ids: Final = tuple(dict.fromkeys(partition.unknown_ids))
+    for user_id in unique_unknown_ids:
+        verbose_proxy_logger.warning(
+            "SCIM: creating placeholder user for group member '%s'; matched no user by user_id, sso_user_id or "
+            "user_email. An SSO-provisioned user's real account stays teamless if this is a mismatch",
+            user_id,
+        )
+
     creations: Final = tuple(
         [
-            (user_id, await _create_user_if_not_exists(user_id=user_id, created_via=created_via))
-            for user_id in partition.unknown_ids
+            (
+                user_id,
+                await _ensure_group_member_user(user_id=user_id, created_via=created_via, prisma_client=prisma_client),
+            )
+            for user_id in unique_unknown_ids
         ]
     )
     created_users: Final = tuple(created for _, created in creations if created is not None)
@@ -668,10 +891,7 @@ async def _resolve_group_member_ids(
     return GroupMemberExtractionResult(
         existing_member_ids=partition.resolved_ids,
         created_users=created_users,
-        all_member_ids=_admitted_member_ids(
-            classified,
-            frozenset(user_id for user_id, created in creations if created is not None),
-        ),
+        all_member_ids=_admitted_member_ids(classified, frozenset(unique_unknown_ids)),
     )
 
 
@@ -715,9 +935,12 @@ async def _handle_team_membership_changes(
     user_id: str,
     existing_teams: list[str],
     new_teams: list[str],
-    raise_on_error: bool = False,
 ) -> None:
-    """Handle adding/removing user from teams based on changes."""
+    """Handle adding/removing user from teams based on changes.
+
+    Roster write failures propagate so the SCIM endpoint returns an error the IdP
+    retries, instead of persisting a ``teams`` array the roster never received.
+    """
     existing_teams_set: Final = set(existing_teams)
     new_teams_set: Final = set(new_teams)
 
@@ -729,7 +952,7 @@ async def _handle_team_membership_changes(
             user_id=user_id,
             teams_ids_to_add_user_to=list(teams_to_add),
             teams_ids_to_remove_user_from=list(teams_to_remove),
-            raise_on_error=raise_on_error,
+            raise_on_error=True,
         )
 
 
@@ -1852,6 +2075,87 @@ def _is_user_not_in_team_error(exc: HTTPException) -> bool:
     return isinstance(detail, dict) and detail.get("error") == "User not found in team"
 
 
+@dataclass(frozen=True, slots=True)
+class RosterWriteFailure:
+    description: str
+    status_code: int
+
+
+def _roster_write_status(exc: Exception) -> int:
+    if isinstance(exc, HTTPException):
+        return exc.status_code
+    if isinstance(exc, ProxyException):
+        return int(exc.code) if exc.code.isdigit() else 500
+    return 500
+
+
+class SCIMRosterSyncError(Exception):
+    """Every roster write in the batch was attempted; these are the ones that did not land.
+
+    Rolling the successful ones back is not safe, since the compensating write can fail
+    too and can strip a membership that pre-dated the push. Naming the exact failures
+    instead lets the IdP's next push, which is idempotent, close the gap. handle_exception_on_proxy
+    reads ``status_code`` off this, so a unanimous failure keeps its own status and a mixed
+    batch reports 500.
+    """
+
+    def __init__(self, failures: tuple[RosterWriteFailure, ...], attempted: int) -> None:
+        statuses: Final = frozenset(failure.status_code for failure in failures)
+        self.failures: Final[tuple[RosterWriteFailure, ...]] = failures
+        self.status_code: Final[int] = next(iter(statuses)) if len(statuses) == 1 else 500
+        super().__init__(
+            f"SCIM roster sync failed on {len(failures)} of {attempted} team membership writes, "
+            f"leaving the roster partially updated. Retry the push to reconcile it. "
+            f"Failed writes: {'; '.join(failure.description for failure in failures)}"
+        )
+
+
+async def _attempt_roster_write(label: str, write: Callable[[], Awaitable[object]]) -> tuple[RosterWriteFailure, ...]:
+    """Run one roster write and return what failed, so the caller can keep going."""
+    try:
+        await write()
+    except SCIMRosterSyncError as e:
+        return e.failures
+    except Exception as e:  # noqa: BLE001  # this boundary turns any write failure into a value so the batch continues
+        verbose_proxy_logger.exception("SCIM roster write failed (%s): %s", label, e)
+        return (RosterWriteFailure(description=f"{label}: {e}", status_code=_roster_write_status(e)),)
+    return ()
+
+
+async def _collect_roster_write_failures(
+    writes: Sequence[tuple[str, Callable[[], Awaitable[object]]]],
+) -> tuple[RosterWriteFailure, ...]:
+    per_write: Final = tuple([await _attempt_roster_write(label, write) for label, write in writes])
+    return tuple(chain.from_iterable(per_write))
+
+
+async def _add_user_to_team(user_id: str, team_id: str) -> None:
+    try:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=team_id,
+                member=Member(user_id=user_id, role="user"),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    except ProxyException as e:
+        if e.type != ProxyErrorTypes.team_member_already_in_team:
+            raise
+        verbose_proxy_logger.debug("User %s is already in team %s, skipping add", user_id, team_id)
+
+
+async def _remove_user_from_team(user_id: str, team_id: str) -> None:
+    try:
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=team_id, user_id=user_id),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    except HTTPException as e:
+        if not _is_user_not_in_team_error(e):
+            raise
+        verbose_proxy_logger.debug("User %s is not in team %s, skipping remove", user_id, team_id)
+
+
 async def patch_team_membership(
     user_id: str,
     teams_ids_to_add_user_to: list[str],
@@ -1865,49 +2169,26 @@ async def patch_team_membership(
     A user already being in a team (on add) or already absent from it (on
     remove) is treated as a no-op, not an error.
 
-    When ``raise_on_error`` is True a genuine add or remove failure (anything
-    other than those idempotent no-ops) propagates instead of being swallowed,
-    so a caller can avoid persisting a teams array the roster never received.
+    Every team is attempted before anything is reported, so one failing team cannot
+    strand the others unattempted. When ``raise_on_error`` is True the writes that did
+    not land are reported together, instead of a teams array the roster never received
+    being persisted as a success.
     """
-    for _team_id in teams_ids_to_add_user_to:
-        try:
-            await team_member_add(
-                data=TeamMemberAddRequest(
-                    team_id=_team_id,
-                    member=Member(user_id=user_id, role="user"),
-                ),
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-            )
-        except ProxyException as e:
-            # Handle duplicate membership gracefully - this is idempotent
-            if e.type == ProxyErrorTypes.team_member_already_in_team:
-                verbose_proxy_logger.debug("User %s is already in team %s, skipping add", user_id, _team_id)
-            elif raise_on_error:
-                raise
-            else:
-                verbose_proxy_logger.exception("Error adding user to team %s: %s", _team_id, e)
-        except Exception as e:
-            if raise_on_error:
-                raise
-            verbose_proxy_logger.exception("Error adding user to team %s: %s", _team_id, e)
-
-    for _team_id in teams_ids_to_remove_user_from:
-        try:
-            await team_member_delete(
-                data=TeamMemberDeleteRequest(team_id=_team_id, user_id=user_id),
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-            )
-        except HTTPException as e:
-            if _is_user_not_in_team_error(e):
-                verbose_proxy_logger.debug("User %s is not in team %s, skipping remove", user_id, _team_id)
-            elif raise_on_error:
-                raise
-            else:
-                verbose_proxy_logger.exception("Error removing user from team %s: %s", _team_id, e)
-        except Exception as e:
-            if raise_on_error:
-                raise
-            verbose_proxy_logger.exception("Error removing user from team %s: %s", _team_id, e)
+    writes: Final = tuple(
+        chain(
+            (
+                (f"add {user_id} to {team_id}", partial(_add_user_to_team, user_id, team_id))
+                for team_id in teams_ids_to_add_user_to
+            ),
+            (
+                (f"remove {user_id} from {team_id}", partial(_remove_user_from_team, user_id, team_id))
+                for team_id in teams_ids_to_remove_user_from
+            ),
+        )
+    )
+    failures: Final = await _collect_roster_write_failures(writes)
+    if failures and raise_on_error:
+        raise SCIMRosterSyncError(failures, attempted=len(writes))
 
     return True
 
@@ -2322,7 +2603,9 @@ async def _process_group_patch_operations(
             )
 
             if op_type == "remove":
-                final_members = final_members - {_member_value(member) for member in patched_members}
+                final_members = final_members - await _member_ids_to_drop(
+                    patched_members, frozenset(final_members), prisma_client
+                )
             else:
                 member_result = await _resolve_group_member_ids(
                     members=patched_members,
@@ -2370,28 +2653,52 @@ async def _apply_group_patch_updates(group_id: str, update_data: dict[str, objec
     return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
 
 
-async def _handle_group_membership_changes(group_id: str, current_members: set[str], final_members: set[str]):
-    """Handle adding/removing members from the group."""
-    members_to_add: Final = final_members - current_members
-    members_to_remove: Final = current_members - final_members
+async def _handle_group_membership_changes(group_id: str, current_members: set[str], final_members: set[str]) -> None:
+    """Reconcile the group roster, attempting every member before reporting failures.
+
+    Aborting on the first failure would leave the remaining members unattempted on top
+    of unrolled-back, so every member is written and the ones that failed are named for
+    the IdP's next push to reconcile.
+    """
+    members_to_add: Final = sorted(final_members - current_members)
+    members_to_remove: Final = sorted(current_members - final_members)
 
     verbose_proxy_logger.debug("members_to_add: %s", members_to_add)
     verbose_proxy_logger.debug("members_to_remove: %s", members_to_remove)
 
-    # Use existing helper functions for team membership changes
-    for member_id in members_to_add:
-        await patch_team_membership(
-            user_id=member_id,
-            teams_ids_to_add_user_to=[group_id],
-            teams_ids_to_remove_user_from=[],
+    writes: Final = tuple(
+        chain(
+            (
+                (
+                    f"add {member_id} to {group_id}",
+                    partial(
+                        patch_team_membership,
+                        user_id=member_id,
+                        teams_ids_to_add_user_to=[group_id],
+                        teams_ids_to_remove_user_from=[],
+                        raise_on_error=True,
+                    ),
+                )
+                for member_id in members_to_add
+            ),
+            (
+                (
+                    f"remove {member_id} from {group_id}",
+                    partial(
+                        patch_team_membership,
+                        user_id=member_id,
+                        teams_ids_to_add_user_to=[],
+                        teams_ids_to_remove_user_from=[group_id],
+                        raise_on_error=True,
+                    ),
+                )
+                for member_id in members_to_remove
+            ),
         )
-
-    for member_id in members_to_remove:
-        await patch_team_membership(
-            user_id=member_id,
-            teams_ids_to_add_user_to=[],
-            teams_ids_to_remove_user_from=[group_id],
-        )
+    )
+    failures: Final = await _collect_roster_write_failures(writes)
+    if failures:
+        raise SCIMRosterSyncError(failures, attempted=len(writes))
 
 
 @scim_router.patch(
@@ -2458,6 +2765,12 @@ async def patch_group(
         final_team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": group_id})
         if final_team:
             updated_team = final_team
+
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Group not found with ID: {group_id}"},  # mutable-ok: FastAPI detail contract
+            )
 
         # Convert to SCIM format and return
         scim_group: Final = await ScimTransformations.transform_litellm_team_to_scim_group(
