@@ -508,6 +508,33 @@ class TestPiiMaskingSafetyGuard:
         assert result["messages"][0] == SYSTEM_MSG
         assert "[MASKED" in result["messages"][1]["content"]
 
+    async def test_pii_only_violation_with_uppercase_skipped_role_masks_without_raising(self):
+        """
+        Greptile finding on BerriAI/litellm#34940: filter_messages_by_skip_flags
+        normalizes role casing (via _message_role's .lower()), but the scope-index
+        helper compared roles case-sensitively. A "System"-cased role survived the
+        scope-index filter while the shared filter correctly excluded it from what's
+        sent to Lakera, so scope_indices and the masked results came back different
+        lengths and the strict positional zip raised, turning a maskable PII-only
+        violation into an unhandled request failure instead of a masked response."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", skip_system_message_in_guardrail=True)
+        uppercase_system_msg = {"role": "System", "content": "be nice"}
+        data = {
+            "messages": [uppercase_system_msg.copy(), USER_MSG.copy()],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (PII_ONLY_LAKERA_RESPONSE, {})
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="completion",
+            )
+        assert result["messages"][0] == uppercase_system_msg
+        assert "[MASKED" in result["messages"][1]["content"]
+
     async def test_pii_only_violation_with_empty_text_message_masks_and_leaves_it_untouched(self):
         """build_inspection_messages drops empty-text messages before the skip filter
         ever sees them. The scope-index merge must leave that untouched empty message

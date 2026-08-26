@@ -117,7 +117,11 @@ def _pre_masking_scope_indices(
     Preserved in original order, so it lines up positionally with the
     ``messages_for_lakera`` list _build_lakera_inspection_messages/skip-filtering
     produces from the same input: both apply the identical "has text" and
-    "not skipped by role" predicates over the same original sequence."""
+    "not skipped by role" predicates over the same original sequence. Role
+    comparison is lowercased to match filter_messages_by_skip_flags's own
+    normalization (via its _message_role helper) -- an uppercase-cased
+    "System"/"TOOL" role must be excluded by both or the two lists disagree
+    on length and the caller's strict positional zip raises."""
     skip_system: Final = effective_skip_system_message_for_guardrail(guardrail)
     skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail)
     return tuple(
@@ -126,8 +130,8 @@ def _pre_masking_scope_indices(
         if isinstance(message, dict)
         and isinstance(message.get("content"), str)
         and message["content"]
-        and not (skip_system and message.get("role") == "system")
-        and not (skip_tool and message.get("role") == "tool")
+        and not (skip_system and str(message.get("role") or "").lower() == "system")
+        and not (skip_tool and str(message.get("role") or "").lower() == "tool")
     )
 
 

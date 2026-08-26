@@ -34,8 +34,8 @@ def init_guardrails_v2(
                 source="config",
             )
         except (ValueError, TypeError) as init_error:
-            verbose_proxy_logger.warning(
-                "Skipping guardrail '%s': invalid configuration: %s",
+            verbose_proxy_logger.error(
+                "Skipping guardrail '%s': invalid configuration, proxy is starting WITHOUT this guardrail: %s",
                 guardrail.get("guardrail_name"),
                 init_error,
             )
