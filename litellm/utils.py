@@ -5781,6 +5781,7 @@ def _get_model_info_helper(
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
+                input_cost_per_request=_model_info.get("input_cost_per_request", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
@@ -6444,6 +6445,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("PERPLEXITYAI_API_KEY")
+        elif custom_llm_provider == "parallel_ai":
+            if "PARALLEL_AI_API_KEY" in os.environ or "PARALLEL_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("PARALLEL_AI_API_KEY")
         elif custom_llm_provider == "voyage":
             if "VOYAGE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8579,6 +8585,8 @@ class ProviderConfigManager:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
+        elif litellm.LlmProviders.PARALLEL_AI == provider:
+            return litellm.ParallelAIResponsesConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             # Databricks Responses API is only compatible with OpenAI GPT models
             if model and "gpt" in model.lower():

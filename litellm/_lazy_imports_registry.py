@@ -239,6 +239,7 @@ LLM_CONFIG_NAMES: Final = (
     "HostedVLLMResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
+    "ParallelAIResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "BedrockMantleResponsesAPIConfig",
@@ -966,6 +967,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "PerplexityResponsesConfig": (
         ".llms.perplexity.responses.transformation",
         "PerplexityResponsesConfig",
+    ),
+    "ParallelAIResponsesConfig": (
+        ".llms.parallel_ai.responses.transformation",
+        "ParallelAIResponsesConfig",
     ),
     "DatabricksResponsesAPIConfig": (
         ".llms.databricks.responses.transformation",
