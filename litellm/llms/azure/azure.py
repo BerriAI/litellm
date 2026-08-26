@@ -1113,6 +1113,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_version=api_version,
             )
 
+        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+            return BaseAzureLLM._get_base_azure_url(
+                api_base=api_base,
+                litellm_params={"api_version": api_version},
+                route="/openai/images/generations",
+            )
+
         if "/openai/deployments/" in api_base:
             base_url_with_deployment = api_base
         else:

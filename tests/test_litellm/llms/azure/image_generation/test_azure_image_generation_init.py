@@ -433,3 +433,35 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
         wire_json = post_kwargs.get("json") or {}
         assert "model" not in wire_json
         assert data.get("model") == base_model
+
+
+@pytest.mark.parametrize("api_version", ["v1", "preview", "latest"])
+def test_azure_image_generation_v1_api_version_uses_v1_route(api_version):
+    """The v1 Azure surface exposes /openai/v1/images/generations and routes by body ``model``."""
+    url = AzureChatCompletion().create_azure_base_url(
+        azure_client_params={
+            "azure_endpoint": "https://my-resource.openai.azure.com",
+            "api_version": api_version,
+        },
+        model="gpt-image-1",
+        base_model=None,
+    )
+    assert url == f"https://my-resource.openai.azure.com/openai/v1/images/generations?api-version={api_version}"
+    data = {"model": "gpt-image-1", "prompt": "x"}
+    assert azure_deployment_image_generation_json_body(url, data) == data
+
+
+def test_azure_image_generation_dated_api_version_uses_deployment_route():
+    url = AzureChatCompletion().create_azure_base_url(
+        azure_client_params={
+            "azure_endpoint": "https://my-resource.openai.azure.com",
+            "api_version": "2024-10-21",
+        },
+        model="gpt-image-1",
+        base_model=None,
+    )
+    assert (
+        url
+        == "https://my-resource.openai.azure.com/openai/deployments/gpt-image-1/images/generations?api-version=2024-10-21"
+    )
+    assert "model" not in azure_deployment_image_generation_json_body(url, {"model": "gpt-image-1", "prompt": "x"})
