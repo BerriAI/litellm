@@ -270,6 +270,55 @@ def test_image_tokens_fallback_to_base_cost():
     assert round(completion_cost, 12) == round(expected_completion_cost, 12)
 
 
+def test_generic_cost_per_token_does_not_double_bill_overlapping_cached_image_tokens():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/37281.
+
+    Some OpenAI-compatible providers report `image_tokens` as a subset of
+    `prompt_tokens` that is not guaranteed to be disjoint from `cached_tokens` (a
+    cached image's tokens are counted in both). When the model has no distinct
+    `input_cost_per_image_token`, image tokens must bill at the same rate as text
+    either way, so they should never be billed a second time on top of the
+    cache-hit tokens that already cover them.
+    """
+    from unittest.mock import patch
+
+    mock_model_info = {
+        "input_cost_per_token": 1e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "output_cost_per_token": 2e-6,
+        # No input_cost_per_image_token defined - image tokens share the text rate.
+    }
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=None,
+            cached_tokens=90,
+            image_tokens=80,
+        ),
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
+        return_value=mock_model_info,
+    ):
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model="test-model", usage=usage, custom_llm_provider="openai"
+        )
+
+    # 10 uncached tokens at the base rate + 90 cache-hit tokens at the cache rate.
+    # Before the fix, the 70 overlapping tokens were billed once via cache_hit_tokens
+    # and again via image_tokens, producing 89e-6 instead of 19e-6.
+    expected_prompt_cost = 10 * 1e-6 + 90 * 1e-7
+    expected_completion_cost = 10 * 2e-6
+
+    assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
+    assert round(completion_cost, 12) == round(expected_completion_cost, 12)
+
+
 def test_video_output_tokens_gemini_omni_flash_preview():
     """Video output tokens are billed at output_cost_per_video_token, not the text rate and not zero."""
     model = "gemini-omni-flash-preview"

@@ -818,6 +818,47 @@ def _resolve_reasoning_token_cost(
     return standard_reasoning_cost if standard_reasoning_cost is not None else completion_base_cost
 
 
+def _fold_undistinguished_input_modality_tokens(
+    prompt_tokens_details: PromptTokensDetailsResult,
+    model_info: ModelInfo,
+) -> PromptTokensDetailsResult:
+    """
+    Some providers report per-modality input token counts (image/audio/video) that are
+    not guaranteed to be disjoint from cache_hit_tokens -- e.g. a cached image's tokens
+    are counted in both ``cached_tokens`` and ``image_tokens``. A modality with no
+    distinct per-token rate bills at the same rate as plain text either way, so folding
+    its tokens into ``text_tokens`` up front removes the overlap entirely instead of
+    risking it being billed once as cache_hit_tokens and again as that modality's
+    tokens. Modalities with an explicit distinct rate are left untouched: resolving
+    their overlap with cache_hit_tokens needs a per-modality cache breakdown the
+    aggregate usage fields don't provide.
+    """
+    text_tokens = prompt_tokens_details["text_tokens"]
+    image_tokens = prompt_tokens_details["image_tokens"]
+    audio_tokens = prompt_tokens_details["audio_tokens"]
+    video_tokens = prompt_tokens_details["video_tokens"]
+
+    if image_tokens and model_info.get("input_cost_per_image_token") is None:
+        text_tokens += image_tokens
+        image_tokens = 0
+    if audio_tokens and model_info.get("input_cost_per_audio_token") is None:
+        text_tokens += audio_tokens
+        audio_tokens = 0
+    if video_tokens and model_info.get("input_cost_per_video_token") is None:
+        text_tokens += video_tokens
+        video_tokens = 0
+
+    return PromptTokensDetailsResult(
+        **{
+            **prompt_tokens_details,
+            "text_tokens": text_tokens,
+            "image_tokens": image_tokens,
+            "audio_tokens": audio_tokens,
+            "video_tokens": video_tokens,
+        }
+    )
+
+
 def generic_cost_per_token(
     model: str,
     usage: Usage,
@@ -872,6 +913,7 @@ def generic_cost_per_token(
     )
     if usage.prompt_tokens_details:
         prompt_tokens_details = parse_prompt_tokens_details(usage)
+        prompt_tokens_details = _fold_undistinguished_input_modality_tokens(prompt_tokens_details, model_info)
 
     ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
     ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
