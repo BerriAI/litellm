@@ -810,11 +810,8 @@ def _strip_unregistered_leading_segments(model: str, region_name: str | None) ->
     head_len: Final = 2 if region_name is not None and len(segments) > 2 and segments[1] == region_name else 1
     head: Final = "/".join(segments[:head_len])
     tail: Final = segments[head_len:]
-    strippable: Final = next(
-        (index for index, segment in enumerate(tail) if segment in LlmProvidersSet or segment == region_name),
-        len(tail),
-    )
-    candidates: Final = tuple(f"{head}/{'/'.join(tail[start:])}" for start in range(min(strippable, len(tail) - 1) + 1))
+    strippable: Final = next((index for index, segment in enumerate(tail) if segment in LlmProvidersSet), len(tail))
+    candidates: Final = (f"{head}/{'/'.join(tail[start:])}" for start in range(min(strippable, len(tail) - 1) + 1))
     return next((candidate for candidate in candidates if candidate in litellm.model_cost), model)
 
 
