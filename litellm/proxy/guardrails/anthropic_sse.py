@@ -148,6 +148,11 @@ def rewrite_anthropic_sse_text(all_chunks: Sequence[object], replacement: str) -
     not model, such as the cache, server-tool-use and service-tier usage fields Anthropic sends in
     ``message_start``. Rewriting the frames in place keeps them. Returns None when the stream holds
     no text delta to replace.
+
+    Model Armor sanitizes the whole assistant text as one string, so a response split over several
+    text blocks gets all of its sanitized text in the first block and the later text blocks come out
+    empty. Block order and every start/stop pair still hold, and concatenating the text yields
+    exactly what Model Armor returned.
     """
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,

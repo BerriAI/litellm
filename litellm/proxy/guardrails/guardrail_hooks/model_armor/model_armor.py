@@ -929,8 +929,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             rewrite_anthropic_sse_text,
         )
 
-        # Collect all chunks
-        all_chunks: Final[list[object]] = []
+        all_chunks: Final[list[object]] = []  # mutable-ok: the whole stream has to be held to assemble it
         async for chunk in response:
             all_chunks.append(chunk)
 

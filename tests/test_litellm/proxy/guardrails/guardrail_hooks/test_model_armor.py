@@ -770,6 +770,61 @@ async def test_streaming_hook_masks_raw_anthropic_sse():
 
 
 @pytest.mark.asyncio
+async def test_masked_multi_block_anthropic_stream_keeps_every_block():
+    """Model Armor sanitizes the whole text at once, so block 1 carries it and block 2 empties out.
+
+    The blocks and their start/stop pairs still have to survive in order, otherwise a client
+    tracking content block indexes breaks.
+    """
+    multi_block_chunks = (
+        _ANTHROPIC_SSE_CHUNKS[0],
+        _ANTHROPIC_SSE_CHUNKS[1],
+        _ANTHROPIC_SSE_CHUNKS[2],
+        _ANTHROPIC_SSE_CHUNKS[3],
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":1,'
+        b'"content_block":{"type":"text","text":""}}\n\n',
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,'
+        b'"delta":{"type":"text_delta","text":" and my card is 4111111111111111"}}\n\n',
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        _ANTHROPIC_SSE_CHUNKS[4],
+        _ANTHROPIC_SSE_CHUNKS[5],
+    )
+    guardrail = _sse_armor_guardrail(mask_response_content=True)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        AsyncMock(
+            return_value=_armor_api_response(
+                {
+                    "filterMatchState": "MATCH_FOUND",
+                    "filterResults": {
+                        "sdp": {
+                            "sdpFilterResult": {
+                                "deidentifyResult": {
+                                    "matchState": "MATCH_FOUND",
+                                    "data": {"text": "my ssn is [REDACTED] and my card is [REDACTED]"},
+                                }
+                            }
+                        }
+                    },
+                }
+            )
+        ),
+    ):
+        delivered = await _drain_armor_streaming_hook(guardrail, multi_block_chunks)
+
+    body = b"".join(chunk for chunk in delivered if isinstance(chunk, bytes))
+    assert b"123-45-6789" not in body
+    assert b"4111111111111111" not in body
+    assert b"my ssn is [REDACTED] and my card is [REDACTED]" in body
+    assert body.count(b'"type":"content_block_start"') == 2
+    assert body.count(b'"type": "content_block_delta"') == 1
+    assert body.count(b'"type":"content_block_stop"') == 2
+    assert body.index(b'"index":1,"content_block"') > body.index(b'"index":0,"content_block"')
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_passes_through_responses_api_events():
     """/v1/responses streams deliver event objects stream_chunk_builder cannot assemble.
 
