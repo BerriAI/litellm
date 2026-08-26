@@ -1,3 +1,6 @@
+from copy import deepcopy
+from unittest.mock import patch
+
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
@@ -101,6 +104,47 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
 
     assert [tool["type"] for tool in body["tools"]] == ["function"]
     assert body["tools"][0]["function"]["name"] == "shell"
+
+
+def test_transform_request_warns_once_per_replayed_history_and_preserves_history():
+    messages = [
+        {"role": "user", "content": "Use both tools."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "first"}],
+            "reasoning_content": "",
+        },
+        {"role": "tool", "tool_call_id": "first", "content": "first result"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "second"}],
+            "reasoning_content": "",
+        },
+        {"role": "tool", "tool_call_id": "second", "content": "second result"},
+        {"role": "user", "content": "Continue."},
+    ]
+    original_messages = deepcopy(messages)
+    config = DeepSeekChatConfig()
+
+    warning_path = "litellm.llms.deepseek.chat.transformation.litellm.verbose_logger.warning"
+    with patch(warning_path) as warning:
+        results = [
+            config.transform_request(
+                model="deepseek-reasoner",
+                messages=messages,
+                optional_params={"thinking": {"type": "enabled"}},
+                litellm_params={},
+                headers={},
+            )
+            for _ in range(2)
+        ]
+
+    assert warning.call_count == 2
+    for result in results:
+        assert [result["messages"][index]["reasoning_content"] for index in (1, 3)] == [" ", " "]
+    assert messages == original_messages
 
 
 def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
