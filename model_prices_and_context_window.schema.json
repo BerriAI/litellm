@@ -191,6 +191,11 @@
         "gemini_native_audio": {
           "type": "boolean"
         },
+        "google_maps_grounding_cost_per_query": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+        },
         "guardrail_cost_per_unit": {
           "type": "object",
           "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
