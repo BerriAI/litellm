@@ -23538,7 +23538,7 @@
     "paths": {
       "/prompts": {
         "post": {
-          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"json_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED\n            \"prompt_directory\": \"/path/to/dotprompt/folder\",\n            \"prompt_data\": {\"json_prompt\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
+          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"my_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            \"prompt_data\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
           "operationId": "create_prompt_prompts_post",
           "requestBody": {
             "content": {
