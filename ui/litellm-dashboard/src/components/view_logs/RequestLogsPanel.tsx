@@ -72,10 +72,9 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
 
-  const [excludeInternalHealthChecks, setExcludeInternalHealthChecks] = useState<boolean>(() => {
-    const storedValue = sessionStorage.getItem("excludeInternalHealthChecks");
-    return storedValue !== null ? JSON.parse(storedValue) : false;
-  });
+  const [excludeInternalHealthChecks, setExcludeInternalHealthChecks] = useState<boolean>(
+    () => sessionStorage.getItem("excludeInternalHealthChecks") === "true",
+  );
 
   useEffect(() => {
     sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
