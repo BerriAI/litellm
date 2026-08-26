@@ -25730,6 +25730,26 @@ export interface components {
          */
         CoordinationRedisParams: {
             /**
+             * Aws Iam Auth
+             * @description enable AWS ElastiCache IAM authentication
+             */
+            aws_iam_auth?: boolean | string | null;
+            /**
+             * Aws Iam Cache Name
+             * @description AWS ElastiCache cache name
+             */
+            aws_iam_cache_name?: string | null;
+            /**
+             * Aws Iam Region
+             * @description AWS region for ElastiCache IAM authentication
+             */
+            aws_iam_region?: string | null;
+            /**
+             * Aws Iam User Name
+             * @description AWS ElastiCache IAM user name
+             */
+            aws_iam_user_name?: string | null;
+            /**
              * Host
              * @description Redis hostname
              */

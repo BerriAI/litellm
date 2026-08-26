@@ -1,10 +1,18 @@
+from __future__ import annotations
+
 import asyncio
 import threading
 import time
-from typing import Any, Final, Protocol
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import quote
 
 from redis.credentials import CredentialProvider
+
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+else:
+    Credentials = Any  # rebind-ok: runtime alias for the type-checking-only botocore import
 
 # Azure AD scope for Redis Cache for Azure.
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
@@ -109,38 +117,24 @@ _ELASTICACHE_SERVICE_NAME: Final = "elasticache"
 _ELASTICACHE_TOKEN_TTL_SECONDS: Final = 900
 
 
-class _FrozenBotocoreCredentials(Protocol):
-    access_key: str
-    secret_key: str
-    token: str | None
-
-
-class _BotocoreCredentials(Protocol):
-    def get_frozen_credentials(self) -> _FrozenBotocoreCredentials: ...
-
-
-class _BotocoreCredentialsResolver(Protocol):
-    def __call__(self) -> _BotocoreCredentials | None: ...
-
-
 class ElastiCacheIAMCredentialProvider(CredentialProvider):
     def __init__(
         self,
         user_name: str,
         cache_name: str,
         region: str,
-        credentials_resolver: _BotocoreCredentialsResolver | None = None,
+        credentials_resolver: Callable[[], Credentials | None] | None = None,
         token_lifetime_seconds: int = _ELASTICACHE_TOKEN_TTL_SECONDS,
     ) -> None:
         self._user_name = user_name
         self._cache_name = cache_name
         self._region = region
         self._credentials_resolver = credentials_resolver or self._resolve_credentials
-        self._credentials: _BotocoreCredentials | None = None
+        self._credentials: Credentials | None = None
         self._token_lifetime_seconds = token_lifetime_seconds
 
     @staticmethod
-    def _resolve_credentials() -> Any:
+    def _resolve_credentials() -> Credentials | None:
         try:
             import botocore.session
         except ImportError as e:
@@ -187,6 +181,14 @@ class ElastiCacheIAMCredentialProvider(CredentialProvider):
         return await asyncio.to_thread(self._get_credentials)
 
 
+class _AzureToken(Protocol):
+    token: str
+
+
+class _AzureCredential(Protocol):
+    def get_token(self, scope: str) -> _AzureToken: ...
+
+
 class AzureADCredentialProvider(CredentialProvider):
     """
     redis.credentials.CredentialProvider implementation that supplies Azure AD
@@ -198,7 +200,7 @@ class AzureADCredentialProvider(CredentialProvider):
     fail authentication after the initial token expired (~1 hour TTL).
     """
 
-    def __init__(self, credential: Any, username: str | None = None) -> None:
+    def __init__(self, credential: _AzureCredential, username: str | None = None) -> None:
         self._credential = credential
         self._username = username
 

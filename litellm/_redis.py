@@ -181,25 +181,24 @@ def _is_true(value: object | None) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
-def _build_elasticache_iam_provider(redis_kwargs: dict) -> ElastiCacheIAMCredentialProvider | None:
-    if not _is_true(redis_kwargs.get("aws_iam_auth")):
-        return None
-
-    required_settings: Final = {
-        "aws_iam_user_name": redis_kwargs.get("aws_iam_user_name"),
-        "aws_iam_cache_name": redis_kwargs.get("aws_iam_cache_name"),
-        "aws_iam_region": redis_kwargs.get("aws_iam_region")
-        or get_secret_str("AWS_REGION")
-        or get_secret_str("AWS_DEFAULT_REGION"),
-    }
-    missing_settings: Final = tuple(name for name, value in required_settings.items() if not value)
+def _build_elasticache_iam_provider(
+    user_name: object | None,
+    cache_name: object | None,
+    region: object | None,
+) -> ElastiCacheIAMCredentialProvider:
+    required_settings: Final = (
+        ("aws_iam_user_name", user_name),
+        ("aws_iam_cache_name", cache_name),
+        ("aws_iam_region", region),
+    )
+    missing_settings: Final = tuple(name for name, value in required_settings if not value)
     if missing_settings:
         raise ValueError("AWS ElastiCache IAM Redis authentication requires: " + ", ".join(missing_settings))
 
     return ElastiCacheIAMCredentialProvider(
-        user_name=str(required_settings["aws_iam_user_name"]),
-        cache_name=str(required_settings["aws_iam_cache_name"]),
-        region=str(required_settings["aws_iam_region"]),
+        user_name=str(user_name),
+        cache_name=str(cache_name),
+        region=str(region),
     )
 
 
@@ -507,10 +506,14 @@ def _get_redis_client_logic(**env_overrides):
                 "for Redis. Using Azure AD. Remove one to avoid misconfiguration."
             )
         elif _aws_iam_enabled:
-            aws_provider: Final = _build_elasticache_iam_provider(redis_kwargs)
-            if aws_provider is not None:
-                verbose_logger.debug("Setting up AWS ElastiCache IAM authentication for Redis.")
-                redis_kwargs["credential_provider"] = aws_provider
+            verbose_logger.debug("Setting up AWS ElastiCache IAM authentication for Redis.")
+            redis_kwargs["credential_provider"] = _build_elasticache_iam_provider(
+                user_name=redis_kwargs.get("aws_iam_user_name"),
+                cache_name=redis_kwargs.get("aws_iam_cache_name"),
+                region=redis_kwargs.get("aws_iam_region")
+                or get_secret_str("AWS_REGION")
+                or get_secret_str("AWS_DEFAULT_REGION"),
+            )
 
     redis_kwargs.pop("gcp_service_account", None)
     redis_kwargs.pop("gcp_ssl_ca_certs", None)
