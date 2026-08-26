@@ -76,10 +76,22 @@ class LoggingWorker:
             if inspect.getcoroutinestate(task["coroutine"]) == inspect.CORO_CREATED
         )
 
+    def _requeue_unstarted_dequeued(self, new_queue: "asyncio.Queue[LoggingTask]") -> int:
+        revived: Final = self._unstarted_dequeued_tasks()
+        self._dequeued_tasks.clear()
+        for index, revived_task in enumerate(revived):
+            try:
+                new_queue.put_nowait(revived_task)
+            except asyncio.QueueFull:
+                for leftover in revived[index:]:
+                    self._track_dequeued(leftover)
+                return index
+        return len(revived)
+
     def _run_coroutine_silently(self, loop: asyncio.AbstractEventLoop, coroutine: Coroutine) -> bool:
         try:
             loop.run_until_complete(asyncio.wait_for(coroutine, timeout=self.timeout))
-        except Exception:  # noqa: BLE001  # atexit flush must never break the user's program
+        except (Exception, asyncio.CancelledError):  # noqa: BLE001  # atexit flush must never break the user's program
             return False
         return True
 
@@ -112,10 +124,12 @@ class LoggingWorker:
             new_queue: Final[asyncio.Queue[LoggingTask]] = asyncio.Queue(maxsize=self.max_queue_size)
             for carried_task in carried_over:
                 new_queue.put_nowait(carried_task)
-            if carried_over:
+            revived_count: Final = self._requeue_unstarted_dequeued(new_queue)
+            if carried_over or revived_count:
                 verbose_logger.warning(
-                    "LoggingWorker: event loop changed; carried %d pending logging task(s) onto the new loop",
+                    "LoggingWorker: event loop changed; carried %d pending and revived %d dequeued logging task(s) onto the new loop",
                     len(carried_over),
+                    revived_count,
                 )
             else:
                 verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")

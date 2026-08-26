@@ -144,6 +144,53 @@ class TestLoggingWorker:
         assert processed == ["ran"]
         assert worker._queue.empty()
 
+    def test_loop_change_revives_dequeued_coroutine_on_new_loop(self):
+        """
+        A callback dequeued but never started before its loop closed must run on the
+        next event loop's worker instead of staying stranded until process exit.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        fired = []
+
+        async def marker(name):
+            fired.append(name)
+
+        async def first_script():
+            worker.ensure_initialized_and_enqueue(marker("first"))
+
+        asyncio.run(first_script())
+        assert fired == [], "precondition: the callback was dequeued but never ran before loop close"
+
+        async def second_script():
+            worker.ensure_initialized_and_enqueue(marker("second"))
+            assert worker._queue is not None
+            await asyncio.wait_for(worker._queue.join(), timeout=5)
+
+        asyncio.run(second_script())
+
+        assert sorted(fired) == ["first", "second"]
+
+    def test_flush_on_exit_swallows_cancellation_and_drains_remaining(self):
+        """A callback raising CancelledError must not abort the atexit flush of later events."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        processed = []
+
+        async def cancels_during_flush():
+            raise asyncio.CancelledError()
+
+        async def records_during_flush():
+            processed.append("ran")
+
+        worker.enqueue(cancels_during_flush())
+        worker.enqueue(records_during_flush())
+
+        worker._flush_on_exit()
+
+        assert processed == ["ran"]
+        assert worker._queue.empty()
+
     @pytest.mark.asyncio
     async def test_worker_handles_cancellation_gracefully(self, logging_worker):
         """Test that the worker handles cancellation without throwing exceptions."""
