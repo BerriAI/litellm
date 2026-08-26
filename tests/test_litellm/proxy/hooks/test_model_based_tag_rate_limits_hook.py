@@ -3007,6 +3007,95 @@ async def test_successful_hops_own_request_increment_is_not_refunded(time_contro
 
 
 @pytest.mark.asyncio
+async def test_a_hops_own_rejection_on_a_different_check_does_not_undercount_the_prior_hops_request_charge(
+    time_controller,
+):
+    """
+    Regression test for Cursor Bugbot's follow-up finding on this exact fix:
+    an earlier version refunded the prior hop's "requests" charge
+    unconditionally at the top of the next hop's admission, before knowing
+    whether that next hop would itself be admitted. If the next hop then
+    failed a *different* check (here, concurrency) before ever reaching its
+    own requests renewal, the refund had already committed with nothing to
+    replace it -- a logical request that genuinely made one real attempt
+    (hop 1) would end up charged zero, letting a caller bypass the requests
+    cap simply by having a later hop collide with someone else's
+    concurrency slot.
+
+    Fixed by folding the renewal into the same all-or-nothing atomic batch
+    as every other check on that hop: a "requests" key matching an earlier
+    hop's charge renews at zero net cost instead of being refunded first,
+    so a batch-wide rollback (concurrency's own rejection here) refunds that
+    zero-cost renewal -- a genuine no-op -- leaving hop 1's real charge
+    exactly as it was.
+    """
+    # Two independent tag identities: "requests" is scoped to end_user_id
+    # (private to our own request, never shared with the unrelated
+    # contender below), "concurrency" is scoped to a separate shared_pool
+    # tag that both our request and the unrelated contender carry, so they
+    # compete for the same slot without also colliding on the requests cap.
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per_period", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    },
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "shared_pool", "limit": 1, "period_seconds": 300}]
+                    },
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    # Hop 1 of our request admits (claiming both the requests unit and the
+    # only concurrency slot), then fails for real -- its concurrency
+    # reservation is released the normal way, but its requests charge is
+    # left queued as this-hop's-own-charge, not refunded.
+    request_kwargs, kwargs = _call_context(["end_user_id:u1", "shared_pool:pool-a"])
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    await limiter.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # A second, unrelated request -- no end_user_id tag at all, so it never
+    # touches the requests bucket -- now claims the concurrency slot our
+    # hop 1 just released, and holds it.
+    other_request_kwargs, other_kwargs = _call_context(["shared_pool:pool-a"])
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=other_request_kwargs
+    )
+
+    # Hop 2 of our original request: its own "requests" renewal would
+    # trivially succeed alone (net zero cost), but the concurrency slot is
+    # now held by the unrelated request above, so the whole atomic batch
+    # must reject -- and must NOT leave hop 1's requests charge refunded.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    # The unrelated request finishes, freeing the concurrency slot again.
+    await limiter.async_log_success_event(kwargs=other_kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # A fresh probe against the same end_user_id tag, with concurrency now
+    # free, must still be rejected by the requests cap: hop 1's real attempt
+    # already spent the only unit for this period, and it must not have
+    # been silently erased by hop 2's unrelated, different-check rejection.
+    probe_request_kwargs, _probe_kwargs = _call_context(["end_user_id:u1"])
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=probe_request_kwargs
+        )
+
+
+@pytest.mark.asyncio
 async def test_own_rejection_does_not_release_a_live_reservation(time_controller):
     """
     Security regression test: Router.async_callback_filter_deployments fires

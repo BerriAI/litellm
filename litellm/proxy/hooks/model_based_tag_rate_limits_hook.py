@@ -1301,7 +1301,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             return healthy_deployments
 
         resolved_request_kwargs: Final = request_kwargs or _EMPTY_MAPPING
-        await self._release_stale_hop_reservations(resolved_request_kwargs)
+        stale_request_keys: Final = await self._release_stale_hop_reservations(resolved_request_kwargs)
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
         team_id: Final = _extract_team_id(resolved_request_kwargs, metadata_variable_name)
         # Built from the full routing-group membership, not `healthy_deployments`
@@ -1372,7 +1372,15 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                         partition.internal_usage_cache,
                         key,
                         configured_limit.entry.limit,
-                        1.0,
+                        # A "requests" key matching one already charged by a
+                        # superseded earlier hop of this same request (see
+                        # _release_stale_hop_reservations) renews that same
+                        # charge at zero net cost instead of adding a second
+                        # unit on top of it -- folded into this same
+                        # all-or-nothing batch so a hop that goes on to fail
+                        # a *different* check here never commits a refund
+                        # with nothing to replace it.
+                        0.0 if configured_limit.unit == "requests" and key in stale_request_keys else 1.0,
                         self._ttl_for(configured_limit),
                     )
                     for partition, (configured_limit, _tag_value, key) in zip(atomic_partitions, atomic_checks)
@@ -1572,7 +1580,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                     "model_based_tag_rate_limits_hook: failed to release concurrency slot %s: %s", key, e
                 )
 
-    async def _release_stale_hop_reservations(self, request_kwargs: Mapping[str, object]) -> None:
+    async def _release_stale_hop_reservations(self, request_kwargs: Mapping[str, object]) -> frozenset[str]:
         """
         A concurrency reservation still queued when a *new* hop's admission
         runs can only belong to an earlier hop of this same request that
@@ -1594,23 +1602,26 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         closes that residual case instead, via the cache mirror
         `_PENDING_RESERVATIONS_CACHE_KEY_PREFIX` documents.
 
-        The identical invariant -- a queued entry still present here can only
-        belong to an already-failed earlier hop -- holds for a "requests"
-        atomic increment too, so this also refunds any stale entry queued
-        under `_PENDING_REQUEST_INCREMENTS_FIELD`; see that field's own
-        docstring for why, unlike concurrency, a hop that goes on to succeed
-        (or is the chain's own final failure) is deliberately never refunded.
+        A "requests" atomic increment queued under
+        `_PENDING_REQUEST_INCREMENTS_FIELD` is never refunded here, even
+        though the identical staleness invariant holds for it too: an
+        unconditional refund followed by this hop's own admission is not one
+        atomic operation, so a hop that goes on to fail a *different* check
+        (a read-only limit, or another entry in the same atomic batch) would
+        leave the refund committed with nothing to replace it, undercounting
+        a logical request that genuinely made an earlier, real attempt. The
+        returned keys let `async_filter_deployments` fold the swap into its
+        own atomic batch instead -- see its own comment for how.
         """
         logging_obj: Final = request_kwargs.get("litellm_logging_obj")
         model_call_details: Final = getattr(logging_obj, "model_call_details", None)
         if not isinstance(model_call_details, dict):
-            return
+            return frozenset()
         release_keys: Final = await self._pop_pending_concurrency_keys(model_call_details)
         if release_keys:
             await self._release_keys(release_keys)
         stale_request_increments: Final = _pop_reservations(model_call_details, _PENDING_REQUEST_INCREMENTS_FIELD)
-        if stale_request_increments:
-            await self._release_keys(stale_request_increments)
+        return frozenset(key for key, _partition_key in stale_request_increments)
 
     async def _pop_pending_concurrency_keys(
         self, kwargs: Mapping[str, object]
