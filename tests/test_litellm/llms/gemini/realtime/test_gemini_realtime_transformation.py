@@ -1298,8 +1298,7 @@ def test_gemini_realtime_pipecat_ga_session_voice_and_tools(patch_gemini_audio_c
     assert len(messages) == 1
     setup = json.loads(messages[0])["setup"]
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
-    # Native-audio Live rejects speechConfig on setup (see _finalize_gemini_live_setup).
-    assert "speechConfig" not in setup.get("generationConfig", {})
+    assert setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
     assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
     assert setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is False
 
@@ -1841,20 +1840,6 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
 )
 def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
-
-
-@pytest.mark.parametrize(
-    "model,expected",
-    [
-        ("gemini-2.5-flash-native-audio-latest", True),
-        ("gemini/gemini-2.5-flash-native-audio-latest", True),
-        ("gemini-3.1-flash-live-preview", False),
-        ("gemini/gemini-3.1-flash-live-preview", False),
-        ("gemini-2.0-flash", False),
-    ],
-)
-def test_is_native_audio_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
-    assert GeminiRealtimeConfig._is_native_audio_model(model) == expected
 
 
 def test_is_setup_message_and_is_content_message():
