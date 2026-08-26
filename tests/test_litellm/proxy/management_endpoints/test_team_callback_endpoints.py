@@ -1170,6 +1170,44 @@ async def test_delete_team_callback_404s_for_unknown_team():
 
 
 @pytest.mark.asyncio
+async def test_add_team_callbacks_rejects_team_deleted_before_write():
+    """A team deleted between the existence check and the write must be rejected.
+
+    Prisma's update returns None for a row that is gone, and add_team_callbacks
+    used to hand that None to the cache refresh and report success with a null
+    body. The rejection reuses this endpoint's own missing-team contract, so a
+    caller sees the same 400 whether the team vanished before or after the read.
+    """
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata={}))
+    mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    data = AddTeamCallback(
+        callback_name="langfuse",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk-demo",
+            "langfuse_secret_key": "sk-demo",
+        },
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.master_key", None),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await add_team_callbacks(
+                data=data,
+                http_request=MagicMock(spec=Request),
+                team_id="team-1",
+                user_api_key_dict=_admin_auth(),
+            )
+
+    mock_prisma.db.litellm_teamtable.update.assert_called_once()
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {"error": "Team id = team-1 does not exist. Please use a different team id."}
+
+
+@pytest.mark.asyncio
 async def test_delete_team_callback_keeps_last_removal_from_reviving_legacy_shape():
     """Removing the last entry must leave metadata["logging"] present and empty.
 

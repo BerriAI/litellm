@@ -1861,6 +1861,38 @@ def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_nam
 
 
 @pytest.mark.asyncio
+async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
+    """
+    Regression test: /key/generate mints keys without a LiteLLM_UserTable row, so
+    find_unique returns None for such a user. That miss must neither raise (a 400
+    here, or the AttributeError on `user_row.teams` that used to surface as a 500)
+    nor leak team models: the user belongs to no team, so only the models they
+    added themselves come back.
+    """
+    from litellm.proxy.proxy_server import non_admin_all_models
+
+    user_added_model = {"model_name": "my-model", "model_info": {"id": "user-model-1"}}
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
+
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        user_added_model,
+        {"model_name": "team-model", "model_info": {"id": "team-model-1", "team_id": "team-a"}},
+    ]
+
+    result = await non_admin_all_models(
+        all_models=[user_added_model],
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="ghost-user"),
+        prisma_client=prisma_client,
+    )
+
+    assert result == [user_added_model]
+
+
+@pytest.mark.asyncio
 async def test_apply_search_filter_matches_team_public_model_name():
     """
     Regression test: team BYOK models persist an internal model_name
