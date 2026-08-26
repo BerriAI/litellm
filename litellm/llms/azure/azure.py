@@ -1091,9 +1091,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             AzureFoundryMAIImageGenerationConfig,
         )
 
-        api_base: str = azure_client_params.get("azure_endpoint", "")  # "https://example-endpoint.openai.azure.com"
-        if api_base.endswith("/"):
-            api_base = api_base.rstrip("/")
+        # deployment-scoped endpoints are moved to "base_url" by select_azure_base_url_or_endpoint
+        api_base: str = (azure_client_params.get("azure_endpoint") or azure_client_params.get("base_url") or "").rstrip(
+            "/"
+        )
         api_version: Final[str] = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
