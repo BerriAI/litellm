@@ -120,6 +120,15 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
     assert generalized["supports_adaptive_thinking"] is True
 
 
+def test_get_model_info_surfaces_supported_endpoints(local_model_cost_map):
+    """supported_endpoints ships in the cost map and is declared on ModelInfoBase,
+    but the constructor never copied it, so get_model_info always returned None.
+    The realtime health check reads it to spot GA-only transcription models
+    (LIT-6240)."""
+    info = litellm.get_model_info(model="gpt-realtime-whisper", custom_llm_provider="azure")
+    assert info["supported_endpoints"] == ["/v1/realtime", "/v1/realtime/transcription_sessions"]
+
+
 def test_potential_model_names_keeps_provider_prefixed_candidate():
     """A provider whose own model ids repeat the litellm provider name (Perplexity's
     Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
