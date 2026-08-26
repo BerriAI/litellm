@@ -477,3 +477,15 @@ def test_azure_image_generation_v1_api_version_replaces_deployment_scoped_api_ba
         base_model=None,
     )
     assert url == "https://my-resource.openai.azure.com/openai/v1/images/generations?api-version=preview"
+
+
+def test_azure_image_generation_v1_api_version_uses_base_url_client_param():
+    url = AzureChatCompletion().create_azure_base_url(
+        azure_client_params={
+            "base_url": "https://my-resource.openai.azure.com/openai/deployments/gpt-image-1?api-version=2024-10-21",
+            "api_version": "preview",
+        },
+        model="gpt-image-1",
+        base_model=None,
+    )
+    assert url == "https://my-resource.openai.azure.com/openai/v1/images/generations?api-version=preview"

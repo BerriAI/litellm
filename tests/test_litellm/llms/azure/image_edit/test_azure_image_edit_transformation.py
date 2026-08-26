@@ -286,7 +286,7 @@ def test_v1_api_version_replaces_deployment_scoped_api_base(monkeypatch):
 
     url = AzureImageEditConfig().get_complete_url(
         model=_FALLBACK_MODEL,
-        api_base=f"{_FALLBACK_API_BASE}/openai/deployments/{_FALLBACK_MODEL}/images/edits",
+        api_base=f"{_FALLBACK_API_BASE}/openai/deployments/{_FALLBACK_MODEL}/images/edits?api-version=2024-10-21",
         litellm_params={"api_version": "preview"},
     )
 

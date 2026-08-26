@@ -794,7 +794,8 @@ class BaseAzureLLM(BaseOpenAILLM):
     def get_azure_v1_image_url(api_base: str, api_version: str | None, route: str) -> str | None:
         """
         Azure's v1 surface serves images at ``/openai/v1/images/{generations,edits}`` and routes by
-        ``model`` in the request body, so any deployment path in ``api_base`` has to be dropped.
+        ``model`` in the request body, so any deployment path and stale ``api-version`` in
+        ``api_base`` have to be dropped.
 
         Returns None when ``api_version`` is a dated one, which still uses the deployment route.
         """
@@ -803,8 +804,11 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         base_url: Final = httpx.URL(api_base)
         openai_path_start: Final = base_url.path.find("/openai")
-        resource_base: Final = (
-            api_base if openai_path_start == -1 else str(base_url.copy_with(path=base_url.path[:openai_path_start]))
+        resource_base: Final = str(
+            base_url.copy_with(
+                path=base_url.path if openai_path_start == -1 else base_url.path[:openai_path_start],
+                params=httpx.QueryParams({k: v for k, v in base_url.params.items() if k != "api-version"}),
+            )
         )
         return BaseAzureLLM._get_base_azure_url(
             api_base=resource_base,
