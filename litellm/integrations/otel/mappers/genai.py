@@ -18,6 +18,7 @@ from litellm.integrations.otel.mappers.utils import (
     serialize_messages,
     tool_definition_attrs,
 )
+from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -27,7 +28,6 @@ from litellm.integrations.otel.model.payloads import (
     ToolDefinition,
 )
 from litellm.integrations.otel.model.semconv import (
-    DB,
     MCP,
     Error,
     GenAI,
@@ -36,13 +36,13 @@ from litellm.integrations.otel.model.semconv import (
     RpcSystem,
     Server,
 )
-from litellm.integrations.otel.model.spans import db_system
 
 
 class GenAIMapper:
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
+        GenAI.OUTPUT_TYPE: lambda d: d.output_type.value if d.output_type else None,
         GenAI.REQUEST_MODEL: lambda d: d.request_model or None,
         GenAI.REQUEST_TEMPERATURE: lambda d: d.request_params.temperature,
         GenAI.REQUEST_TOP_P: lambda d: d.request_params.top_p,
@@ -66,6 +66,7 @@ class GenAIMapper:
         Server.ADDRESS: lambda d: d.server.address if d.server else None,
         Server.PORT: lambda d: d.server.port if d.server else None,
         LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
+        LiteLLM.CALL_TYPE: lambda d: d.call_type,
         # The provider/underlying model is only known once routing has picked a
         # deployment, so it can't ride identity Baggage (seeded at auth, before
         # routing) onto the boundary-born LLM span — stamp it directly here.
@@ -182,12 +183,8 @@ class GenAIMapper:
     def _service(cls, data: ServiceSpanData) -> AttributeMap:
         attrs: Final = collect(cls._SERVICE_ATTRS, data)
         # An outbound datastore call (DB_CALL / CLIENT span) also carries db.*
-        # semconv. Internal services (router, budget jobs, …) have no db.system,
-        # so they get only the litellm.service.* keys above.
-        system: Final = db_system(data.service_name)
-        if system is not None:
-            attrs[DB.SYSTEM_NAME] = system
-            if data.call_type:
-                attrs[DB.OPERATION_NAME] = data.call_type
+        # semconv naming the server it reached. Internal services (router, budget
+        # jobs, …) have no db.system, so they get only the litellm.service.* keys.
+        attrs.update(db_span_attributes(data.service_name, data.call_type))
         attrs.update({f"{LiteLLM.METADATA_PREFIX}{key}": value for key, value in data.event_metadata.items()})
         return attrs

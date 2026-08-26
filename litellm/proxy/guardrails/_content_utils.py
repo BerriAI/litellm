@@ -8,7 +8,7 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any, Final
 
 # Call types whose body carries free-form chat / prompt text that
@@ -33,13 +33,25 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
-TEXT_PART_TYPES: Final[frozenset[str]] = frozenset({"text", "input_text", "output_text"})
+TEXT_PART_TYPES: Final[frozenset[str]] = frozenset(
+    {"text", "input_text", "output_text", "summary_text", "reasoning_text"}
+)
 
 # Responses-API item types whose ``output`` field carries user/tool text
 # that guardrails should inspect.  ``function_call_output`` is the
 # built-in shape; ``custom_tool_call_output`` is the custom-tool
 # counterpart (see ``ChatCompletionCustomToolCallOutput``).
 _OUTPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset({"function_call_output", "custom_tool_call_output"})
+
+
+def _part_text(part: Mapping[str, object]) -> str | None:
+    """Return non-empty plaintext from any content part that carries ``text``."""
+    if not isinstance(part, dict):
+        return None
+    text = part.get("text")
+    if isinstance(text, str) and text:
+        return text
+    return None
 
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
@@ -58,10 +70,9 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                 continue
             if not isinstance(part, dict):
                 continue
-            if part.get("type") in TEXT_PART_TYPES:
-                text = part.get("text")
-                if isinstance(text, str) and text:
-                    yield text
+            text = _part_text(part)
+            if text is not None:
+                yield text
 
 
 def _coerce_input_to_messages(input_value: Any) -> list[dict[str, Any]]:
@@ -75,8 +86,23 @@ def _coerce_input_to_messages(input_value: Any) -> list[dict[str, Any]]:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
         elif isinstance(item, dict):
-            if item.get("type") in TEXT_PART_TYPES:
+            if _part_text(item) is not None:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
+            elif item.get("type") == "reasoning":
+                if "content" in item:
+                    messages.append(
+                        {  # mutable-ok: append reasoning content
+                            "role": item.get("role") or "assistant",
+                            "content": item["content"],
+                        }
+                    )
+                if isinstance(item.get("summary"), list):
+                    messages.append(
+                        {  # mutable-ok: append reasoning summary
+                            "role": item.get("role") or "assistant",
+                            "content": item["summary"],
+                        }
+                    )
             elif "content" in item:
                 messages.append({"role": item.get("role") or "user", "content": item["content"]})
             elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
@@ -126,12 +152,7 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
                 if isinstance(part, str) and part:
                     visited += 1
                     new_parts.append(visit(part))
-                elif (
-                    isinstance(part, dict)
-                    and part.get("type") in TEXT_PART_TYPES
-                    and isinstance(part.get("text"), str)
-                    and part["text"]
-                ):
+                elif isinstance(part, dict) and _part_text(part) is not None:
                     visited += 1
                     new_parts.append({**part, "text": visit(part["text"])})
                 else:
@@ -158,10 +179,14 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
                     visited += 1
                     input_value[idx] = visit(item)
             elif isinstance(item, dict):
-                if item.get("type") in TEXT_PART_TYPES:
-                    if isinstance(item.get("text"), str) and item["text"]:
-                        visited += 1
-                        input_value[idx] = {**item, "text": visit(item["text"])}
+                if _part_text(item) is not None:
+                    visited += 1
+                    input_value[idx] = {**item, "text": visit(item["text"])}  # mutable-ok: rewrite text part in place
+                elif item.get("type") == "reasoning":
+                    if "content" in item:
+                        item["content"] = _rewrite_content(item["content"])
+                    if isinstance(item.get("summary"), list):
+                        item["summary"] = _rewrite_content(item["summary"])
                 elif "content" in item:
                     item["content"] = _rewrite_content(item["content"])
                 elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:

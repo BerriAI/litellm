@@ -1,7 +1,7 @@
 # What is this?
 ## Helper utilities
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -56,6 +56,67 @@ def safe_divide(
     if denominator == 0:
         return default
     return numerator / denominator
+
+
+def _is_litellm_limit_rejection(exception: BaseException) -> bool:
+    from litellm.exceptions import RateLimitErrorCategory
+
+    litellm_limit_categories: Final = frozenset(
+        (RateLimitErrorCategory.LITELLM_RATE_LIMIT.value, RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT.value)
+    )
+    return getattr(exception, "category", None) in litellm_limit_categories
+
+
+def _is_proxy_rejection(exception: BaseException) -> bool:
+    if _is_litellm_limit_rejection(exception):
+        return True
+    try:
+        from starlette.exceptions import HTTPException
+    except ImportError:
+        return False
+    return isinstance(exception, HTTPException)
+
+
+def _is_provider_originated(exception: BaseException) -> bool:
+    if _is_proxy_rejection(exception):
+        return False
+    if getattr(exception, "llm_provider", None):
+        return True
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    return isinstance(exception, BaseLLMException)
+
+
+def is_expected_client_error(exception: BaseException | None) -> bool:
+    """
+    True when the proxy itself rejected the request with an HTTP 4xx before any
+    provider call (bad key, budget, unknown model, guardrail). A 4xx returned by
+    a provider is an upstream or deployment problem, so it is never an expected
+    client error and keeps its traceback: a mapped litellm exception carries
+    ``llm_provider``, and the raw ``BaseLLMException`` that provider handlers
+    raise before mapping (the /v1/messages route surfaces it as-is) is one too.
+    The proxy's own limiters raise ``HTTPException`` subclasses that also carry
+    an ``llm_provider``, so any ``HTTPException`` stays a proxy rejection, and
+    so does any exception whose unified rate-limit ``category`` names litellm's
+    own limiter (``BudgetExceededError`` is a plain ``Exception`` that the auth
+    handler decorates with the requested model's provider).
+
+    ProxyException stores the status on .code (as a str), HTTPException and
+    litellm exceptions on .status_code.
+    """
+    if exception is None:
+        return False
+    if _is_provider_originated(exception):
+        return False
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    if status_code is None or isinstance(status_code, bool):
+        return False
+    try:
+        status: Final = int(str(status_code))
+    except ValueError:
+        return False
+    return 400 <= status < 500
 
 
 def coerce_token_limit(value: object) -> int | None:
@@ -181,7 +242,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
 
 
 def get_metadata_variable_name_from_kwargs(
-    kwargs: dict,
+    kwargs: Mapping[str, object],
 ) -> Literal["metadata", "litellm_metadata"]:
     """
     Helper to return what the "metadata" field should be called in the request data

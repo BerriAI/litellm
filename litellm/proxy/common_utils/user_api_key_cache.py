@@ -170,6 +170,51 @@ def object_permission_cache_key(object_permission_id: str) -> str:
     return f"object_permission_id:{object_permission_id}"
 
 
+#: Cached under ``tag_registry_cache_key`` when the table exceeds ``TAG_REGISTRY_MAX_SIZE``:
+#: registry unusable, fall back to the per-tag lookup.
+TAG_REGISTRY_OVERFLOW_SENTINEL: Final = "__tag_registry_overflow__"
+
+
+def tag_cache_key(tag_name: str) -> str:
+    """Cache key one tag row is stored under; shared so its five reader/writer modules cannot drift."""
+    return f"tag:{tag_name}"
+
+
+def tag_registry_cache_key() -> str:
+    """Cache key for the set of tag names that exist in ``LiteLLM_TagTable``."""
+    return "tag_registry"
+
+
+#: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
+#: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
+END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
+
+
+def end_user_cache_key(end_user_id: str) -> str:
+    """Cache key one end-user row is stored under; shared so auth and spend tracking cannot drift."""
+    return f"end_user_id:{end_user_id}"
+
+
+def end_user_restricted_registry_cache_key() -> str:
+    """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
+    return "end_user_restricted_registry"
+
+
+def team_membership_auth_cache_key(team_id: str, user_id: str) -> str:
+    """Cache key one team member's ``LiteLLM_TeamMembership`` row is stored under for the admission check."""
+    return f"{team_id}_{user_id}"
+
+
+def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
+    """Cache key the pre-call budget reservation stores the same ``LiteLLM_TeamMembership`` row under.
+
+    Deliberately not unified with ``team_membership_auth_cache_key``: the two readers wrote independent
+    keys before this file existed, so a fix that invalidates one must invalidate both explicitly rather
+    than assume a single write is visible to both.
+    """
+    return f"team_membership:{user_id}:{team_id}"
+
+
 def get_management_object_ttl(cache: DualCache) -> float:
     """
     In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).

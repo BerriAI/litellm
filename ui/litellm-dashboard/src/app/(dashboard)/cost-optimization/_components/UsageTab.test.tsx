@@ -13,6 +13,12 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: useAuthorizedMock,
 }));
 
+// useCan reaches useOrganizations (react-query) through useIsOrgAdmin; stub the
+// org-admin leg so role gating flows through hasCapability without a QueryClient
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  default: () => false,
+}));
+
 vi.mock("@/components/networking", () => ({
   getToolSpend: (...args: unknown[]) => mockGetToolSpend(...args),
 }));
@@ -115,6 +121,9 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
         results,
         loading: false,
         isFetchingMore: false,
+        progress: { currentPage: 1, totalPages: 1 },
+        cancelled: false,
+        cancel: vi.fn(),
       }}
     />,
   );
@@ -212,7 +221,7 @@ describe("UsageTab", () => {
 
     // Per day switches to a bar chart of the unaccumulated daily savings, with no
     // synthetic anchor prepended.
-    expect(queryByTestId("area-chart")).toBeNull();
+    expect(queryByTestId("area-chart")).not.toBeInTheDocument();
     const series = readSeries(getByTestId("bar-chart"));
     expect(series).toHaveLength(2);
     expect(series[0]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
@@ -258,7 +267,7 @@ describe("UsageTab", () => {
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
     const bars = getByTestId("bar-chart");
-    expect(bars.getAttribute("data-stack")).toBe("false");
+    expect(bars).toHaveAttribute("data-stack", "false");
     expect(readSeries(bars)[0]).toMatchObject({ "Auto-router": -0.05 });
   });
 
@@ -284,7 +293,7 @@ describe("UsageTab", () => {
     expect(before.action.contains(getByRole("tablist"))).toBe(true);
     // the subtitle lives outside that slot, so its length cannot reposition the controls
     expect(before.action.contains(before.description)).toBe(false);
-    expect(before.description.textContent).toContain("Running total saved");
+    expect(before.description).toHaveTextContent(/Running total saved/);
 
     await userEvent.click(getByRole("tab", { name: "Per day" }));
 
@@ -292,8 +301,8 @@ describe("UsageTab", () => {
     expect(after.action).toBe(before.action);
     expect(after.cardHeader).toBe(before.cardHeader);
     expect(after.action.contains(after.description)).toBe(false);
-    expect(after.description.textContent).toContain("Saved per day");
-    expect(container.textContent).toContain("Savings");
+    expect(after.description).toHaveTextContent(/Saved per day/);
+    expect(container).toHaveTextContent(/Savings/);
   });
 
   it("subtracts a losing auto-router route from the total and keeps it out of the donut", () => {
@@ -313,7 +322,7 @@ describe("UsageTab", () => {
 
     const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices.map((d: { driver: string }) => d.driver)).toEqual(["Compression", "Prompt caching"]);
-    expect(getByTestId("donut-chart").getAttribute("data-label")).toBe("$0.1200");
+    expect(getByTestId("donut-chart")).toHaveAttribute("data-label", "$0.1200");
   });
 
   it("carries auto-router savings into the summary card, donut slice, and cumulative series", () => {
@@ -364,7 +373,7 @@ describe("UsageTab", () => {
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
     // The 64px bar cap is this card's opt-in; the shared BarChart must not cap
     // by default (other consumers keep their pre-existing geometry).
-    expect(bars[0].getAttribute("data-max-bar-size")).toBe("64");
+    expect(bars[0]).toHaveAttribute("data-max-bar-size", "64");
   });
 
   it("renders the tool legend once outside the charts, with both charts sharing the tool colors", async () => {
@@ -381,8 +390,8 @@ describe("UsageTab", () => {
 
     const bars = await findAllByTestId("bar-chart");
     const [totalByTool, dailyByTool] = bars.slice(-2);
-    expect(dailyByTool.getAttribute("data-show-legend")).toBe("false");
-    expect(totalByTool.getAttribute("data-colors")).toBe(dailyByTool.getAttribute("data-colors"));
+    expect(dailyByTool).toHaveAttribute("data-show-legend", "false");
+    expect(totalByTool).toHaveAttribute("data-colors", dailyByTool.getAttribute("data-colors"));
 
     const toolLegends = getAllByTestId("chart-legend").filter((legend) => legend.textContent === "search,read_file");
     expect(toolLegends).toHaveLength(1);

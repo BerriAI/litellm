@@ -1,30 +1,30 @@
 {
   "ANN001": {
-    "limit": 3106
+    "limit": 3014
   },
   "ANN002": {
     "limit": 71
   },
   "ANN003": {
-    "limit": 832
+    "limit": 827
   },
   "ANN201": {
-    "limit": 2023
+    "limit": 2012
   },
   "ANN202": {
-    "limit": 860
+    "limit": 847
   },
   "ANN204": {
-    "limit": 713
+    "limit": 706
   },
   "ANN205": {
-    "limit": 114
+    "limit": 112
   },
   "ANN206": {
     "limit": 133
   },
   "ANN401": {
-    "limit": 1495
+    "limit": 1153
   },
   "ASYNC230": {
     "limit": 11
@@ -33,13 +33,13 @@
     "limit": 2
   },
   "B006": {
-    "limit": 178
+    "limit": 176
   },
   "B008": {
-    "limit": 505
+    "limit": 503
   },
   "B009": {
-    "limit": 79
+    "limit": 58
   },
   "B010": {
     "limit": 190
@@ -57,7 +57,7 @@
     "limit": 3
   },
   "BLE001": {
-    "limit": 2924
+    "limit": 2918
   },
   "C401": {
     "limit": 8
@@ -78,7 +78,7 @@
     "limit": 1
   },
   "C901": {
-    "limit": 313
+    "limit": 312
   },
   "D419": {
     "limit": 6
@@ -96,7 +96,7 @@
     "limit": 10
   },
   "DTZ007": {
-    "limit": 19
+    "limit": 17
   },
   "DTZ011": {
     "limit": 3
@@ -108,7 +108,7 @@
     "limit": 3
   },
   "F401": {
-    "limit": 17
+    "limit": 14
   },
   "LOG015": {
     "limit": 5
@@ -147,13 +147,10 @@
     "limit": 3
   },
   "PLR1714": {
-    "limit": 257
+    "limit": 256
   },
   "PLW0127": {
     "limit": 57
-  },
-  "PLW0133": {
-    "limit": 1
   },
   "PLW0602": {
     "limit": 215
@@ -171,10 +168,10 @@
     "limit": 3
   },
   "RET504": {
-    "limit": 177
+    "limit": 175
   },
   "RUF012": {
-    "limit": 241
+    "limit": 240
   },
   "RUF015": {
     "limit": 8
@@ -201,7 +198,7 @@
     "limit": 58
   },
   "SIM102": {
-    "limit": 322
+    "limit": 317
   },
   "SIM103": {
     "limit": 119
@@ -213,7 +210,7 @@
     "limit": 2
   },
   "SIM117": {
-    "limit": 7
+    "limit": 6
   },
   "SIM201": {
     "limit": 1
@@ -234,7 +231,7 @@
     "limit": 5
   },
   "TID251": {
-    "limit": 1226
+    "limit": 1201
   },
   "TRY002": {
     "limit": 524
@@ -249,7 +246,7 @@
     "limit": 113
   },
   "TRY300": {
-    "limit": 860
+    "limit": 859
   },
   "UP028": {
     "limit": 2

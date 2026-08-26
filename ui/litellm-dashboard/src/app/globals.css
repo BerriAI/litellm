@@ -1,10 +1,7 @@
-@layer theme, base, antd, components, utilities;
+@layer theme, base, components, utilities;
 
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "./tremor-v3-compat.css" layer(utilities);
-
-@source '../../node_modules/@tremor/react';
 
 @plugin '@headlessui/tailwindcss';
 @plugin '@tailwindcss/forms';
@@ -30,6 +27,78 @@
   }
 }
 
+/* The only z-index values in the dashboard. Portalled popups (src/components/ui) own the top of the
+   scale; everything else must sit below them. Enforced by the local/no-ad-hoc-z-index ESLint rule. */
+@utility z-raised {
+  z-index: 1;
+}
+@utility z-chrome {
+  z-index: 10;
+}
+@utility z-sticky {
+  z-index: 20;
+}
+@utility z-sticky-pinned {
+  z-index: 25;
+}
+@utility z-floating {
+  z-index: 30;
+}
+@utility z-overlay {
+  z-index: 40;
+}
+@utility z-popup {
+  z-index: 50;
+}
+
+/* Verbatim end-edge subset of the shadcn scroll-fade utility (shadcn@4.17.0 dist/tailwind.css),
+   vendored so the CLI package is not a build dependency. Re-copy from upstream to update. */
+@property --scroll-fade-e {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-mask {
+  syntax: "*";
+  inherits: false;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-e {
+    from {
+      --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@utility scroll-fade-e {
+  --_scroll-fade-size-e: var(--scroll-fade-e-size, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+  --scroll-fade-mask: linear-gradient(to right, #000 0, #000 calc(100% - var(--scroll-fade-e, 0px)), transparent 100%);
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-mask: linear-gradient(to left, #000 0, #000 calc(100% - var(--scroll-fade-e, 0px)), transparent 100%);
+  }
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
 :root {
   --radius: 0.5rem;
   --background: oklch(1 0 0);
@@ -47,6 +116,13 @@
   --accent: oklch(0.967 0.003 264.542);
   --accent-foreground: oklch(0.21 0.034 264.665);
   --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.527 0.154 150.069);
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.555 0.163 48.998);
+  --warning-foreground: oklch(1 0 0);
+  --info: oklch(0.546 0.245 262.881);
+  --info-foreground: oklch(1 0 0);
   --border: oklch(0.928 0.006 264.531);
   --input: oklch(0.928 0.006 264.531);
   --ring: oklch(0.707 0.022 261.325);
@@ -67,37 +143,45 @@
 }
 
 .dark {
-  --background: oklch(0.13 0.028 261.692);
-  --foreground: oklch(0.985 0.002 247.839);
-  --card: oklch(0.21 0.034 264.665);
-  --card-foreground: oklch(0.985 0.002 247.839);
-  --popover: oklch(0.21 0.034 264.665);
-  --popover-foreground: oklch(0.985 0.002 247.839);
-  --primary: oklch(0.928 0.006 264.531);
-  --primary-foreground: oklch(0.21 0.034 264.665);
-  --secondary: oklch(0.278 0.033 256.848);
-  --secondary-foreground: oklch(0.985 0.002 247.839);
-  --muted: oklch(0.278 0.033 256.848);
-  --muted-foreground: oklch(0.707 0.022 261.325);
-  --accent: oklch(0.278 0.033 256.848);
-  --accent-foreground: oklch(0.985 0.002 247.839);
+  --background: oklch(0.248 0 0);
+  --foreground: oklch(0.964 0 0);
+  --card: oklch(0.248 0 0);
+  --card-foreground: oklch(0.964 0 0);
+  --popover: oklch(0.286 0 0);
+  --popover-foreground: oklch(0.964 0 0);
+  --primary: oklch(0.928 0 0);
+  --primary-foreground: oklch(0.209 0 0);
+  --secondary: oklch(0.356 0 0);
+  --secondary-foreground: oklch(0.964 0 0);
+  --muted: oklch(0.209 0 0);
+  --muted-foreground: oklch(0.754 0 0);
+  --accent: oklch(0.309 0 0);
+  --accent-foreground: oklch(0.964 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
+  --destructive-foreground: oklch(0.209 0 0);
+  --success: oklch(0.792 0.209 151.711);
+  --success-foreground: oklch(0.209 0 0);
+  --warning: oklch(0.828 0.189 84.429);
+  --warning-foreground: oklch(0.209 0 0);
+  --info: oklch(0.707 0.165 254.624);
+  --info-foreground: oklch(0.209 0 0);
+  --border: oklch(0.309 0 0);
+  --input: oklch(0.56 0 0);
+  --ring: oklch(0.569 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.034 264.665);
-  --sidebar-foreground: oklch(0.985 0.002 247.839);
+  --sidebar: oklch(0.187 0 0);
+  --sidebar-foreground: oklch(0.964 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0.002 247.839);
-  --sidebar-accent: oklch(0.278 0.033 256.848);
-  --sidebar-accent-foreground: oklch(0.985 0.002 247.839);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --sidebar-primary-foreground: oklch(0.964 0 0);
+  --sidebar-accent: oklch(0.309 0 0);
+  --sidebar-accent-foreground: oklch(0.964 0 0);
+  --sidebar-border: oklch(0.187 0 0);
+  --sidebar-ring: oklch(0.569 0 0);
+  --neutral-border: var(--border);
 }
 
 @theme inline {
@@ -120,6 +204,13 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -138,66 +229,6 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-@theme {
-  --color-tremor-brand-muted: #8688ef;
-  --color-tremor-brand-subtle: #8e91eb;
-  --color-tremor-brand: #6366f1;
-  --color-tremor-brand-emphasis: #4338ca;
-  --color-tremor-brand-inverted: #ffffff;
-  --color-tremor-background-muted: #f9fafb;
-  --color-tremor-background-subtle: #f3f4f6;
-  --color-tremor-background: #ffffff;
-  --color-tremor-background-emphasis: #374151;
-  --color-tremor-border: #e5e7eb;
-  --color-tremor-ring: #e5e7eb;
-  --color-tremor-content-subtle: #9ca3af;
-  --color-tremor-content: #6b7280;
-  --color-tremor-content-emphasis: #374151;
-  --color-tremor-content-strong: #111827;
-  --color-tremor-content-inverted: #ffffff;
-
-  --color-dark-tremor-brand-faint: #0b1229;
-  --color-dark-tremor-brand-muted: #1e1b4b;
-  --color-dark-tremor-brand-subtle: #3730a3;
-  --color-dark-tremor-brand: #6366f1;
-  --color-dark-tremor-brand-emphasis: #818cf8;
-  --color-dark-tremor-brand-inverted: #1e1b4b;
-  --color-dark-tremor-background-muted: #131a2b;
-  --color-dark-tremor-background-subtle: #1f2937;
-  --color-dark-tremor-background: #111827;
-  --color-dark-tremor-background-emphasis: #d1d5db;
-  --color-dark-tremor-border: #374151;
-  --color-dark-tremor-ring: #1f2937;
-  --color-dark-tremor-content-subtle: #4b5563;
-  --color-dark-tremor-content: #6b7280;
-  --color-dark-tremor-content-emphasis: #e5e7eb;
-  --color-dark-tremor-content-strong: #f9fafb;
-  --color-dark-tremor-content-inverted: #030712;
-
-  --shadow-tremor-input: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-tremor-card: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-  --shadow-tremor-dropdown: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-  --shadow-dark-tremor-input: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-dark-tremor-card: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
-  --shadow-dark-tremor-dropdown: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-
-  --radius-tremor-small: 0.375rem;
-  --radius-tremor-default: 0.5rem;
-  --radius-tremor-full: 9999px;
-
-  --text-tremor-label: 0.75rem;
-  --text-tremor-label--line-height: 0.3rem;
-  --text-tremor-default: 0.775rem;
-  --text-tremor-default--line-height: 1.15rem;
-  --text-tremor-title: 1.025rem;
-  --text-tremor-title--line-height: 1.65rem;
-  --text-tremor-metric: 1.675rem;
-  --text-tremor-metric--line-height: 2.15rem;
-}
-
-@source inline("{,hover:,ui-selected:}{bg,text,border}-{slate,gray,zinc,neutral,stone,red,orange,amber,yellow,lime,green,emerald,teal,cyan,sky,blue,indigo,violet,purple,fuchsia,pink,rose}-{50,{100..900..100},950}");
-@source inline("{ring,stroke,fill}-{slate,gray,zinc,neutral,stone,red,orange,amber,yellow,lime,green,emerald,teal,cyan,sky,blue,indigo,violet,purple,fuchsia,pink,rose}-{50,{100..900..100},950}");
-
 @layer base {
   *,
   ::after,
@@ -211,6 +242,37 @@
     outline-color: color-mix(in oklab, var(--color-ring) 50%, transparent);
   }
 
+  /* @tailwindcss/forms paints a 1px blue-600 ring via box-shadow on :focus, which `outline-none`
+     cannot cancel. Components that declare their own focus ring override this from the utilities
+     layer; the ones that do not inherit a blue rectangle. `:not([disabled])` is here only to
+     outweigh the plugin's own (0,1,1) selector, which Tailwind emits after this block. Delete
+     along with the plugin once no route renders a Tremor form control. */
+  :is(input, textarea, select):focus:not([disabled]) {
+    --tw-ring-color: initial;
+    --tw-ring-shadow: 0 0 #0000;
+    border-color: var(--color-border);
+  }
+
+  /* Same plugin, resting state: it also gives every bare input a border, a white fill, 0.5rem/0.75rem
+     padding and 1rem text. shadcn primitives style themselves and only break where a base class omits
+     those, which today is `combobox-chip-input` alone (audited against every input-rendering file in
+     components/ui). These values restore Tailwind's own preflight, and `[data-slot]` outweighs the
+     plugin's zero-specificity `input:where(:not([type]))`. Delete along with the plugin. */
+  [data-slot="combobox-chip-input"] {
+    border-width: 0;
+    background-color: transparent;
+    padding: 0;
+    font: inherit;
+    letter-spacing: inherit;
+  }
+
+  /* Same plugin's white fill, on the hand-rolled controls outside components/ui that the audit
+     above did not cover. Tracks --background so light mode keeps the white it already painted.
+     Delete along with the plugin. */
+  :is(input, textarea, select):not([type="checkbox"], [type="radio"], [data-slot="combobox-chip-input"]) {
+    background-color: var(--color-background);
+  }
+
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
@@ -218,7 +280,7 @@
 
   input::placeholder,
   textarea::placeholder {
-    color: var(--color-gray-400);
+    color: var(--color-muted-foreground);
   }
 
   body {

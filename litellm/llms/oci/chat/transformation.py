@@ -10,7 +10,7 @@ implement the LiteLLM BaseConfig interface.  Heavy-lifting lives in:
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -713,8 +713,25 @@ class OCIChatConfig(BaseConfig):
 class OCIStreamWrapper(CustomStreamWrapper):
     """Custom stream wrapper that dispatches OCI SSE chunks to the correct handler."""
 
-    def __init__(self, **kwargs: Any):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        completion_stream: object,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        stream_options: object = None,
+        make_call: Callable[..., object] | None = None,
+        _response_headers: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(
+            completion_stream=completion_stream,
+            model=model,
+            logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            stream_options=stream_options,
+            make_call=make_call,
+            _response_headers=_response_headers,
+        )
         # Tracks whether any prior Cohere chunk in this stream has emitted
         # tool calls. The Cohere handler uses this to decide whether the
         # terminal consolidation chunk's tool calls are duplicates (suppress)

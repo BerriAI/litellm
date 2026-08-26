@@ -3,6 +3,7 @@ from typing import Any, Final
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
@@ -39,9 +40,9 @@ class AzureTextCompletion(BaseAzureLLM):
         azure_ad_token_provider: Callable | None,
         print_verbose: Callable,
         timeout,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params,
-        litellm_params,
+        litellm_params: dict[str, object],
         logger_fn,
         acompletion: bool = False,
         headers: dict | None = None,
@@ -246,7 +247,7 @@ class AzureTextCompletion(BaseAzureLLM):
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str | None,
         api_version: str,
@@ -299,7 +300,7 @@ class AzureTextCompletion(BaseAzureLLM):
 
     async def async_streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str | None,
         api_version: str,
