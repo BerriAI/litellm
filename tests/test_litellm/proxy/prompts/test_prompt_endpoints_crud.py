@@ -246,3 +246,149 @@ async def test_patch_prompt_row_deleted_mid_update_returns_404():
         exc_info.value.detail
         == "Prompt with ID test_prompt not found in environment development"
     )
+
+
+def test_is_ambiguous_keyed_prompt_data_shapes():
+    from litellm.proxy.prompts.prompt_endpoints import is_ambiguous_keyed_prompt_data
+
+    keyed_with_id = PromptLiteLLMParams(
+        prompt_id="agent-prompt",
+        prompt_integration="dotprompt",
+        prompt_data={"json_prompt": {"content": "AHOY", "metadata": {}}},
+    )
+    flat_with_id = PromptLiteLLMParams(
+        prompt_id="agent-prompt",
+        prompt_integration="dotprompt",
+        prompt_data={"content": "AHOY", "metadata": {}},
+    )
+    keyed_without_id = PromptLiteLLMParams(
+        prompt_integration="dotprompt",
+        prompt_data={"json_prompt": {"content": "AHOY", "metadata": {}}},
+    )
+    no_prompt_data = PromptLiteLLMParams(
+        prompt_id="agent-prompt", prompt_integration="dotprompt"
+    )
+    empty_prompt_data = PromptLiteLLMParams(
+        prompt_id="agent-prompt", prompt_integration="dotprompt", prompt_data={}
+    )
+
+    assert is_ambiguous_keyed_prompt_data(keyed_with_id) is True
+    assert is_ambiguous_keyed_prompt_data(flat_with_id) is False
+    assert is_ambiguous_keyed_prompt_data(keyed_without_id) is False
+    assert is_ambiguous_keyed_prompt_data(no_prompt_data) is False
+    assert is_ambiguous_keyed_prompt_data(empty_prompt_data) is False
+
+
+@pytest.mark.asyncio
+async def test_create_prompt_rejects_keyed_prompt_data_with_prompt_id():
+    from fastapi import HTTPException
+
+    from litellm.proxy.prompts.prompt_endpoints import (
+        AMBIGUOUS_PROMPT_DATA_ERROR,
+        Prompt,
+        create_prompt,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    request = Prompt(
+        prompt_id="agent-prompt",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="agent-prompt",
+            prompt_integration="dotprompt",
+            prompt_data={"json_prompt": {"content": "AHOY", "metadata": {}}},
+        ),
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        with pytest.raises(HTTPException) as exc_info:
+            await create_prompt(request=request, user_api_key_dict=mock_user_auth)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == AMBIGUOUS_PROMPT_DATA_ERROR
+
+
+@pytest.mark.asyncio
+async def test_update_prompt_rejects_keyed_prompt_data_with_prompt_id():
+    from fastapi import HTTPException
+
+    from litellm.proxy.prompts.prompt_endpoints import (
+        AMBIGUOUS_PROMPT_DATA_ERROR,
+        Prompt,
+        update_prompt,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    request = Prompt(
+        prompt_id="agent-prompt",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="agent-prompt",
+            prompt_integration="dotprompt",
+            prompt_data={"json_prompt": {"content": "AHOY", "metadata": {}}},
+        ),
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        with pytest.raises(HTTPException) as exc_info:
+            await update_prompt(
+                prompt_id="agent-prompt",
+                request=request,
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == AMBIGUOUS_PROMPT_DATA_ERROR
+
+
+def test_create_versioned_prompt_spec_populates_version():
+    from litellm.proxy.prompts.prompt_endpoints import create_versioned_prompt_spec
+
+    db_prompt = MagicMock()
+    db_prompt.model_dump.return_value = {
+        "prompt_id": "agent-prompt",
+        "version": 3,
+        "environment": "development",
+        "created_by": "user-1",
+        "litellm_params": {
+            "prompt_id": "agent-prompt",
+            "prompt_integration": "dotprompt",
+        },
+        "prompt_info": {"prompt_type": "db"},
+        "created_at": None,
+        "updated_at": None,
+    }
+
+    prompt_spec = create_versioned_prompt_spec(db_prompt=db_prompt)
+
+    assert prompt_spec.prompt_id == "agent-prompt.v3"
+    assert prompt_spec.version == 3
+
+
+def test_initialize_prompt_keeps_version_and_created_by():
+    import litellm
+    from litellm.proxy.prompts.prompt_registry import InMemoryPromptRegistry
+
+    registry = InMemoryPromptRegistry()
+    prompt_spec = PromptSpec(
+        prompt_id="agent-prompt.v3",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="agent-prompt",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "AHOY", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+        version=3,
+        environment="development",
+        created_by="user-1",
+    )
+
+    with patch.object(litellm.logging_callback_manager, "add_litellm_callback"):  # test-quality-ok: keeps initialize_prompt from registering a global callback that would leak across tests
+        initialized_prompt = registry.initialize_prompt(prompt=prompt_spec)
+
+    assert initialized_prompt is not None
+    assert initialized_prompt.version == 3
+    assert initialized_prompt.created_by == "user-1"
+    assert initialized_prompt.environment == "development"
