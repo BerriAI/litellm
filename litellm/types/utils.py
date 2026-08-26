@@ -3065,7 +3065,13 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_cost: ReadOnly[float | None]
     """USD cost of this guardrail invocation, priced from ``guardrail_usage`` by the
     provider hook. Summed into the request's ``response_cost`` so it counts against
-    spend and budgets like token cost."""
+    spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
+
+    guardrail_cost_in_spend: ReadOnly[bool | None]
+    """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
+    the spend/budget aggregates built from it. Absent, None, or True keeps the default
+    (cost counts against spend, the Bedrock behavior); False reports the cost on
+    logs, OTEL spans, and the UI while every spend and budget total ignores it."""
 
 
 class EvalVerdict(TypedDict, total=False):
@@ -3112,6 +3118,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
+    guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3154,7 +3161,7 @@ class CostBreakdown(TypedDict, total=False):
     reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
     total_cost: ReadOnly[float]  # Total cost (input + output + tool usage + guardrail)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    guardrail_cost: ReadOnly[float]  # Cost of guardrail invocations billed by the guardrail provider
+    guardrail_cost: ReadOnly[float]  # Guardrail cost counted in spend; report-only costs (guardrail_cost_in_spend=False) never appear here
     additional_costs: dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
