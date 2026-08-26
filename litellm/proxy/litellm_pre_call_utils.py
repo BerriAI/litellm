@@ -311,6 +311,22 @@ _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.mod
 _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
+# OAuth client-credentials fields (the enabling flag plus token endpoint and
+# client id/secret/scope) are deployment configuration: a client request that
+# turned on oauth_client_credentials or overrode oauth_token_url could redirect a
+# configured deployment's client_secret to an attacker, so they are stripped from
+# request bodies and only honored from the deployment's litellm_params. The SDK
+# path never passes through here and is unaffected.
+_CLIENT_OAUTH_CONTROL_FIELDS: Final = frozenset(
+    {
+        "oauth_client_credentials",
+        "oauth_token_url",
+        "oauth_client_id",
+        "oauth_client_secret",
+        "oauth_scope",
+    }
+)
+
 # Request fields whose value, when URL-valued, becomes the outbound destination
 # for a provider call. Letting a proxy caller pin the destination is an SSRF
 # primitive (HuggingFace/Oobabooga `model`, Gemini files `file_id`); guard
@@ -530,6 +546,39 @@ def _strip_client_pricing_overrides(data: dict[str, Any]) -> None:
             "Stripped client-supplied pricing fields from request body: %s. "
             "Set `allow_client_pricing_override: true` on the key or team "
             "metadata to keep these values.",
+            ", ".join(stripped),
+        )
+
+
+def _strip_client_oauth_overrides(
+    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    """Drop OAuth client-credentials fields from a client request body.
+
+    These are deployment configuration; a client-supplied ``oauth_token_url``
+    combined with a configured ``oauth_client_secret`` would let a caller
+    exfiltrate the secret to an arbitrary URL, so they are never honored from
+    request bodies (top-level or in a metadata variant).
+    """
+    metadata_dicts: Final = tuple(
+        (metadata_key, metadata)
+        for metadata_key in ("metadata", "litellm_metadata")
+        if isinstance(metadata := data.get(metadata_key), dict)
+    )
+    containers: Final = (("body", data), *metadata_dicts)
+    stripped: Final = tuple(
+        f"{label}.{field}"
+        for label, container in containers
+        for field in _CLIENT_OAUTH_CONTROL_FIELDS
+        if field in container
+    )
+    for _, container in containers:
+        for field in _CLIENT_OAUTH_CONTROL_FIELDS:
+            container.pop(field, None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped client-supplied OAuth client-credentials fields from request "
+            "body: %s. These are deployment configuration only.",
             ", ".join(stripped),
         )
 
@@ -1882,6 +1931,8 @@ async def add_litellm_data_to_request(
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
     _strip_client_callback_credentials(data)
+
+    _strip_client_oauth_overrides(data)
 
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
         _strip_client_message_redaction_opt_out(data)

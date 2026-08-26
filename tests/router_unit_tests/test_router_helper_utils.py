@@ -2062,7 +2062,7 @@ def test_handle_clientside_credential_metadata_loading(
     }
 
     # Call the function
-    result_deployment = router._handle_clientside_credential(
+    result_deployment, _ = router._handle_clientside_credential(
         deployment=deployment, kwargs=kwargs, function_name=function_name
     )
 
@@ -2139,7 +2139,7 @@ def test_handle_clientside_credential_metadata_variable_name(
     }
 
     # Call the function
-    result_deployment = router._handle_clientside_credential(
+    result_deployment, _ = router._handle_clientside_credential(
         deployment=deployment, kwargs=kwargs, function_name=function_name
     )
 
@@ -2176,7 +2176,7 @@ def test_handle_clientside_credential_no_metadata(model_list):
     # This should fail because there's no model_group in metadata
     # The function expects to find model_group in the metadata
     try:
-        result_deployment = router._handle_clientside_credential(
+        result_deployment, _ = router._handle_clientside_credential(
             deployment=deployment, kwargs=kwargs, function_name="acompletion"
         )
         # If we get here, the function should have used deployment.model_name as fallback
@@ -2194,7 +2194,7 @@ def test_handle_clientside_credential_no_metadata(model_list):
     }
 
     try:
-        result_deployment = router._handle_clientside_credential(
+        result_deployment, _ = router._handle_clientside_credential(
             deployment=deployment,
             kwargs=kwargs_with_empty_metadata,
             function_name="acompletion",
@@ -2227,7 +2227,7 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     }
 
     # Call the function with _ageneric_api_call_with_fallbacks function name (which handles responses)
-    result_deployment = router._handle_clientside_credential(
+    result_deployment, _ = router._handle_clientside_credential(
         deployment=deployment,
         kwargs=kwargs,
         function_name="_ageneric_api_call_with_fallbacks",

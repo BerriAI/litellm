@@ -2530,6 +2530,14 @@ def _complete_custom_openai(
         or get_secret("OPENAI_API_KEY")
     )
 
+    from litellm.llms.openai_like.oauth_authenticator import (
+        resolve_client_credentials_token,
+    )
+
+    oauth_api_key = resolve_client_credentials_token(litellm_params)
+    if oauth_api_key is not None:
+        api_key = oauth_api_key
+
     headers = headers or litellm.headers
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
@@ -2798,6 +2806,16 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     timeout: Final = ctx.timeout
 
     api_key = api_key or litellm.anthropic_key or litellm.api_key or os.environ.get("ANTHROPIC_API_KEY")
+
+    from litellm.llms.openai_like.oauth_authenticator import (
+        resolve_client_credentials_token,
+    )
+
+    oauth_api_key = resolve_client_credentials_token(litellm_params)
+    if oauth_api_key is not None:
+        api_key = oauth_api_key
+        litellm_params["use_bearer_for_custom_base"] = True
+
     custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
     # call /messages
     # default route for all anthropic models

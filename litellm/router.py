@@ -2104,7 +2104,7 @@ class Router:
                 thread.start()
 
             kwargs.setdefault("messages", messages)
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            clientside_litellm_params: Final = self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
             model_name = litellm_params["model"]
             potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs)
@@ -2125,12 +2125,13 @@ class Router:
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
             input_kwargs: Final = {
-                **litellm_params,
+                **(clientside_litellm_params if clientside_litellm_params is not None else litellm_params),
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
                 **kwargs,
             }
+            input_kwargs.pop("silent_model", None)
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -3134,7 +3135,7 @@ class Router:
                 )
 
             kwargs.setdefault("messages", messages)
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            clientside_litellm_params: Final = self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
 
             model_name = litellm_params["model"]
@@ -3146,7 +3147,7 @@ class Router:
             self.total_calls[model_name] += 1
 
             input_kwargs: Final = {
-                **litellm_params,
+                **(clientside_litellm_params if clientside_litellm_params is not None else litellm_params),
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
@@ -3336,9 +3337,13 @@ class Router:
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict, function_name: str | None = None
-    ) -> Deployment:
+    ) -> tuple[Deployment, dict]:  # mutable-ok: the litellm_params dict is merged into per-request kwargs downstream
         """
         Handle clientside credential
+
+        Returns the upserted deployment plus the effective litellm_params with
+        admin credential and endpoint fields cleared on an api_base override,
+        so the in-flight request uses the cleared params too.
         """
         model_info: Final = deployment.get("model_info", {}).copy()
         litellm_params: Final = deployment["litellm_params"].copy()
@@ -3358,7 +3363,7 @@ class Router:
             model_info=model_info,
         )
         self.upsert_deployment(deployment=deployment_pydantic_obj)  # add new deployment to router
-        return deployment_pydantic_obj
+        return deployment_pydantic_obj, dynamic_litellm_params
 
     @staticmethod
     def _merge_tools_from_deployment(deployment: dict, kwargs: dict) -> None:
@@ -3385,12 +3390,16 @@ class Router:
         deployment: dict,
         kwargs: dict,
         function_name: str | None = None,
-    ) -> None:
+    ) -> dict | None:  # mutable-ok: callers merge the returned litellm_params into per-request kwargs
         """
         3 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
+
+        Returns the cleared litellm_params when the caller supplied clientside
+        credentials (admin credential fields must not ride along to a
+        client-redirected upstream), else None so callers use the deployment's own.
         """
         for key in self._forwarded_alias_marker_keys_the_deployment_sets(
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
@@ -3402,8 +3411,9 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
+        clientside_litellm_params = None  # rebind-ok: set only when the caller supplied clientside credentials
         if is_clientside_credential(request_kwargs=kwargs):
-            deployment_pydantic_obj: Final = self._handle_clientside_credential(
+            deployment_pydantic_obj, clientside_litellm_params = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs, function_name=function_name
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
@@ -3468,6 +3478,7 @@ class Router:
             kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        return clientside_litellm_params
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
@@ -4819,9 +4830,15 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
+            clientside_litellm_params: Final = self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name=function_name
+            )
 
-            data: Final = deployment["litellm_params"].copy()
+            data: Final = (
+                clientside_litellm_params
+                if clientside_litellm_params is not None
+                else deployment["litellm_params"].copy()
+            )
             model_name: Final = data["model"]
             self.total_calls[model_name] += 1
 
