@@ -4,7 +4,6 @@ import {
 } from "@/components/add_model/build_complexity_router_config";
 import {
   ComplexityRouterConfigValue,
-  ComplexityTiers,
   ClassifierType,
   ClassifierLLMConfig,
   DEFAULT_SESSION_AFFINITY,
@@ -43,15 +42,7 @@ export const getRequiredModels = (
   config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model" | "default_model">,
 ): Set<string> => {
   const { tiers, classifier_llm_config: classifier, embedding_model: embedding, default_model: pinned } = config;
-  const models = [
-    ...tiers.SIMPLE,
-    ...tiers.MEDIUM,
-    ...tiers.COMPLEX,
-    ...tiers.REASONING,
-    classifier?.model,
-    embedding,
-    pinned,
-  ];
+  const models = [...Object.values(tiers).flat(), classifier?.model, embedding, pinned];
   // Boolean(), not != null: an empty-string placeholder (e.g. classifier_llm_config seeded before a
   // model is chosen) is never a real model reference either.
   return new Set(models.filter((model): model is string => Boolean(model)));
@@ -191,7 +182,7 @@ export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability:
 // effect would block submit for a model that was never going to be submitted.
 export const getReferencedModelsError = (
   params: {
-    tiers: ComplexityTiers;
+    tiers: ComplexityRouterConfigPayload["tiers"];
     classifierType: ClassifierType;
     classifierLlmConfig: ClassifierLLMConfig | undefined;
     semanticMatchingEnabled: boolean;
