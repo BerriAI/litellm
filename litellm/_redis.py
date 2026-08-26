@@ -357,8 +357,6 @@ def get_redis_url_from_environment():
 
 
 def _url_without_userinfo(url: str) -> str:
-    """redis-py rejects a url that carries its own username or password next to a credential
-    provider, so the provider's credentials replace whatever userinfo the url was configured with."""
     parts: Final = urlsplit(url)
     netloc: Final = parts.netloc.rsplit("@", 1)[-1]
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))

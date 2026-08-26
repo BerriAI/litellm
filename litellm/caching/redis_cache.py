@@ -402,9 +402,6 @@ class RedisCache(BaseCache):
         """
         Generate a cache key for the async Redis client based on connection parameters.
         This ensures different Redis configurations use different cached clients.
-
-        Kwargs the caller hands over as live objects (a credential provider, a connect func) are not
-        JSON-serializable and carry no stable value identity, so they key on instance identity.
         """
         # Sort keys to ensure consistent hash regardless of parameter order
         sorted_kwargs: Final = sorted(self.redis_kwargs.items())
