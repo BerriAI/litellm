@@ -132,7 +132,7 @@ class SingulrGuardrail(CustomGuardrail):
     @classmethod
     def _resolve_metadata_value(cls, request_data: Mapping[str, Any], key: str) -> str | None:
         for container in cls._metadata_containers(request_data=request_data):
-            value: Final = container.get(key)
+            value = container.get(key)
             if value:
                 return value
         return None
@@ -140,7 +140,7 @@ class SingulrGuardrail(CustomGuardrail):
     @classmethod
     def _resolve_user_role_from_request_data(cls, request_data: Mapping[str, Any]) -> str | None:
         for container in cls._metadata_containers(request_data=request_data):
-            auth: Final = container.get("user_api_key_auth")
+            auth = container.get("user_api_key_auth")
             if isinstance(auth, UserAPIKeyAuth) and auth.user_role:
                 return auth.user_role.value
         return None
