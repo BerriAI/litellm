@@ -111,7 +111,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return True
 
     def _strip_native_audio_speech_config(self) -> bool:
-        """Google AI Studio native-audio Live was never verified to accept ``speechConfig`` on setup; Vertex AI accepts it."""
+        """Google AI Studio native-audio Live was never verified to accept ``speechConfig`` on setup.
+
+        Vertex AI accepts it and reads the requested voice.
+        """
         return True
 
     @staticmethod
