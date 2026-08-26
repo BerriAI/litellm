@@ -31,6 +31,10 @@ SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
 )
 
 
+def is_server_fulfilled_tool_leak_error(chunk: object) -> bool:
+    return chunk == SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
+
+
 async def _anext_or_none(iterator: AsyncIterator) -> bytes | None:
     try:
         return await iterator.__anext__()
