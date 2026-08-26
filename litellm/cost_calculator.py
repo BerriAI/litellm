@@ -794,32 +794,42 @@ def _select_model_name_for_cost_calc(
         and custom_llm_provider is not None
         and not _model_contains_known_llm_provider(return_model)
     ):  # add provider prefix if not already present, to match model_cost
-        if region_name is not None:
-            prefixed = f"{custom_llm_provider}/{region_name}/{return_model}"
-        else:
-            prefixed = f"{custom_llm_provider}/{return_model}"
-
-        # If `return_model` already contains a "/" whose leading segment is
-        # not a registered provider (i.e. it's an aliased public name like
-        # "vertex/claude-opus-5"), the naive prefix produces a double-prefixed
-        # key ("vertex_ai/vertex/claude-opus-5") that isn't in
-        # `litellm.model_cost`, silently pricing the request at $0. In that
-        # case, prefer the tail-only form ("vertex_ai/claude-opus-5") when it
-        # resolves against the model cost. See issue #38069.
-        if "/" in return_model and prefixed not in litellm.model_cost:
-            tail: Final = return_model.split("/", 1)[1]
-            if region_name is not None:
-                tail_prefixed: Final = f"{custom_llm_provider}/{region_name}/{tail}"
-            else:
-                tail_prefixed = f"{custom_llm_provider}/{tail}"
-            if tail_prefixed in litellm.model_cost:
-                return_model = tail_prefixed
-            else:
-                return_model = prefixed
-        else:
-            return_model = prefixed
+        return_model = _apply_provider_prefix_for_cost_lookup(
+            return_model=return_model,
+            custom_llm_provider=custom_llm_provider,
+            region_name=region_name,
+        )
 
     return return_model
+
+
+def _apply_provider_prefix_for_cost_lookup(
+    return_model: str,
+    custom_llm_provider: str,
+    region_name: str | None,
+) -> str:
+    """Prepend the real provider prefix to a model name for `model_cost` lookup.
+
+    If `return_model` already contains a "/" whose leading segment isn't a
+    registered provider (i.e. it's an aliased public name like
+    ``vertex/claude-opus-5``), the naive prefix produces a double-prefixed key
+    (``vertex_ai/vertex/claude-opus-5``) that isn't in ``litellm.model_cost``,
+    silently pricing the request at $0. In that case, prefer the tail-only form
+    (``vertex_ai/claude-opus-5``) when it resolves against the model cost.
+    See issue #38069.
+    """
+    prefixed: Final = (
+        f"{custom_llm_provider}/{region_name}/{return_model}"
+        if region_name is not None
+        else f"{custom_llm_provider}/{return_model}"
+    )
+    if "/" not in return_model or prefixed in litellm.model_cost:
+        return prefixed
+    tail: Final = return_model.split("/", 1)[1]
+    tail_prefixed: Final = (
+        f"{custom_llm_provider}/{region_name}/{tail}" if region_name is not None else f"{custom_llm_provider}/{tail}"
+    )
+    return tail_prefixed if tail_prefixed in litellm.model_cost else prefixed
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)

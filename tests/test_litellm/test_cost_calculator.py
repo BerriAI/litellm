@@ -3799,6 +3799,34 @@ def test_select_model_name_avoids_double_prefix_for_aliased_public_name(
     assert selected in litellm.model_cost
 
 
+def test_select_model_name_uses_region_when_stripping_alias_prefix(
+    _local_model_cost_map,
+):
+    """The alias-tail fallback must keep any ``region_name`` uplift key that the
+    naive prefix would have used. Regression test for the region branch of
+    ``_apply_provider_prefix_for_cost_lookup``."""
+    from litellm.cost_calculator import _apply_provider_prefix_for_cost_lookup
+
+    litellm.register_model(
+        {
+            "vertex_ai/us-east5/claude-3-5-sonnet": {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 1.5e-5,
+                "litellm_provider": "vertex_ai",
+            }
+        }
+    )
+
+    resolved = _apply_provider_prefix_for_cost_lookup(
+        return_model="vertex/claude-3-5-sonnet",
+        custom_llm_provider="vertex_ai",
+        region_name="us-east5",
+    )
+
+    assert resolved == "vertex_ai/us-east5/claude-3-5-sonnet"
+    assert resolved in litellm.model_cost
+
+
 def test_select_model_name_keeps_prefix_when_alias_has_no_resolvable_tail(
     _local_model_cost_map,
 ):
