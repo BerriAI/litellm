@@ -67,7 +67,7 @@ class Authenticator:
         for attempt in range(3):
             verbose_logger.debug("Access token acquisition attempt %s/3", attempt + 1)
             try:
-                new_token: Final = self._login()
+                new_token = self._login()  # rebind-ok: loop variable
                 try:
                     self._ensure_token_dir()
                     with open(self.access_token_file, "w") as f:
@@ -206,11 +206,11 @@ class Authenticator:
         max_retries: Final = 3
         for attempt in range(max_retries):
             try:
-                sync_client: Final = _get_httpx_client()
-                response: Final = sync_client.get(api_key_url, headers=headers)
+                sync_client = _get_httpx_client()  # rebind-ok: loop variable
+                response = sync_client.get(api_key_url, headers=headers)  # rebind-ok: loop variable
                 response.raise_for_status()
 
-                response_json: Final = response.json()
+                response_json = response.json()  # rebind-ok: loop variable
 
                 if isinstance(response_json, dict) and "token" in response_json:
                     return response_json
