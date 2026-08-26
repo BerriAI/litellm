@@ -287,6 +287,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
@@ -1613,6 +1614,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: int | None = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    google_maps_grounding_requests: int | None = None
+    """Number of Grounding with Google Maps requests made by the tool call. Used for Gemini to calculate Maps cost."""
+
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 
@@ -1671,6 +1675,8 @@ class PromptTokensDetailsWrapper(
             del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.google_maps_grounding_requests is None:
+            del self.google_maps_grounding_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
         if self.cache_write_tokens is None:
@@ -3405,6 +3411,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
