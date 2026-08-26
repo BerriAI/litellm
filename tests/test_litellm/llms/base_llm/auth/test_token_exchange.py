@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qsl
 
@@ -33,7 +34,9 @@ from litellm.llms.base_llm.auth.token_exchange import (
     redact_oauth_error_body,
 )
 from litellm.llms.base_llm.auth.types import (
+    AssertionSource,
     AssertionSourceError,
+    BodyEncoding,
     ExchangeError,
     ExchangeResult,
     InsecureTokenUrl,
@@ -143,29 +146,45 @@ class NeverRunsExecutor(concurrent.futures.Executor):
 
 
 def token_response(token: str = "sk-ant-oat01-minted", expires_in: int | None = 3600) -> httpx.Response:
-    body = {"access_token": token, "token_type": "Bearer"}
-    if expires_in is not None:
-        body["expires_in"] = expires_in
+    body: Final[dict[str, str | int]] = {
+        "access_token": token,
+        "token_type": "Bearer",
+        **({} if expires_in is None else {"expires_in": expires_in}),
+    }
     return httpx.Response(200, json=body)
 
 
-def make_spec(**overrides) -> TokenExchangeSpec:
-    base = {
-        "token_url": "https://token.example/v1/oauth/token",
-        "assertion_ref": DEFAULT_REF,
-        "assertion_field": "assertion",
-        "static_body": {
+def make_spec(
+    *,
+    token_url: str = "https://token.example/v1/oauth/token",
+    assertion_ref: str = DEFAULT_REF,
+    assertion_field: str = "assertion",
+    static_body: Mapping[str, str] = MappingProxyType(
+        {
             "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
             "federation_rule_id": "fdrl_1",
             "organization_id": "org-1",
-        },
-        "body_encoding": "json",
-        "request_headers": {"anthropic-beta": "oauth-2025-04-20,oidc-federation-2026-04-01"},
-        "cache_key_identity": ("fdrl_1", "org-1", "", ""),
-        "timeout_seconds": 2.0,
-    }
-    base.update(overrides)
-    return TokenExchangeSpec(**base)
+        }
+    ),
+    body_encoding: BodyEncoding = "json",
+    request_headers: Mapping[str, str] = MappingProxyType(
+        {"anthropic-beta": "oauth-2025-04-20,oidc-federation-2026-04-01"}
+    ),
+    cache_key_identity: tuple[str, ...] = ("fdrl_1", "org-1", "", ""),
+    timeout_seconds: float = 2.0,
+    assertion_source: AssertionSource | None = None,
+) -> TokenExchangeSpec:
+    return TokenExchangeSpec(
+        token_url=token_url,
+        assertion_ref=assertion_ref,
+        assertion_field=assertion_field,
+        static_body=static_body,
+        body_encoding=body_encoding,
+        request_headers=request_headers,
+        cache_key_identity=cache_key_identity,
+        timeout_seconds=timeout_seconds,
+        assertion_source=assertion_source,
+    )
 
 
 class RecordingMetricsSink:
@@ -862,7 +881,6 @@ class TestAssertionGuards:
 
         assert isinstance(result, AssertionSourceError)
         assert result.detail == overlong_message[:_REDACTION_CAP]
-        assert len(result.detail) == _REDACTION_CAP
 
 
 class TestAssertionSourceOverridesEngineReader:

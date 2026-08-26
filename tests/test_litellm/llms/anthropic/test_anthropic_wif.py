@@ -102,9 +102,11 @@ class ManualExecutor(concurrent.futures.Executor):
 
 
 def token_response(token: str = "sk-ant-oat01-minted", expires_in: int | None = 3600) -> httpx.Response:
-    body = {"access_token": token, "token_type": "Bearer"}
-    if expires_in is not None:
-        body["expires_in"] = expires_in
+    body: Final[dict[str, str | int]] = {
+        "access_token": token,
+        "token_type": "Bearer",
+        **({} if expires_in is None else {"expires_in": expires_in}),
+    }
     return httpx.Response(200, json=body)
 
 

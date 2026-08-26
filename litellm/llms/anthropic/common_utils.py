@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -205,10 +206,12 @@ def _sanitized_anthropic_error(response: httpx.Response, detail: str | None = No
 def _fetch_anthropic_models_page(
     api_base: str, headers: Mapping[str, str], after_id: str | None
 ) -> _AnthropicModelsPage:
+    # after_id rides the URL because the client mutates the params mapping it is handed,
+    # which a read-only one cannot support
+    query: Final = f"?after_id={quote(after_id)}" if after_id else ""
     response: Final = litellm.module_level_client.get(
-        url=f"{api_base}/v1/models",
+        url=f"{api_base}/v1/models{query}",
         headers=headers,
-        params=MappingProxyType({"after_id": after_id}) if after_id else MappingProxyType({}),
         follow_redirects=False,
     )
     try:

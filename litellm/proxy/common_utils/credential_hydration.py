@@ -23,6 +23,21 @@ from litellm.types.router import (
 from litellm.types.utils import CredentialItem
 
 
+def _decrypted(db_credential: CredentialItem) -> CredentialItem:
+    """The stored credential with every value decrypted, leaving already-plaintext values alone."""
+    decrypted_values: Final = MappingProxyType(
+        {
+            key: decrypt_value_helper(value=value, key=key) or value
+            for key, value in db_credential.credential_values.items()
+        }
+    )
+    return CredentialItem(
+        credential_name=db_credential.credential_name,
+        credential_values=decrypted_values,  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydantic copies this mapping into one on validation; LIT002 rules out building that dict here
+        credential_info=db_credential.credential_info,
+    )
+
+
 async def hydrate_named_credential_authoritative(
     credential_name: str,
     prisma_client: PrismaClient | None,
@@ -39,17 +54,7 @@ async def hydrate_named_credential_authoritative(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return await hydrate_named_credential(credential_name, prisma_client)
-    decrypted_values: Final = MappingProxyType(
-        {
-            key: decrypt_value_helper(value=value, key=key) or value
-            for key, value in db_credential.credential_values.items()
-        }
-    )
-    return CredentialItem(
-        credential_name=db_credential.credential_name,
-        credential_values=decrypted_values,
-        credential_info=db_credential.credential_info,
-    )
+    return _decrypted(db_credential)
 
 
 async def hydrate_named_credential(
@@ -64,17 +69,7 @@ async def hydrate_named_credential(
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
     if db_credential is None:
         return None
-    decrypted_values: Final = MappingProxyType(
-        {
-            key: decrypt_value_helper(value=value, key=key) or value
-            for key, value in db_credential.credential_values.items()
-        }
-    )
-    return CredentialItem(
-        credential_name=db_credential.credential_name,
-        credential_values=decrypted_values,
-        credential_info=db_credential.credential_info,
-    )
+    return _decrypted(db_credential)
 
 
 async def named_credential_wif_fields(

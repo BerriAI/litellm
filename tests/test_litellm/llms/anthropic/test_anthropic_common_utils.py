@@ -15,8 +15,10 @@ import os
 import sys
 import threading
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -3181,8 +3183,42 @@ class TestModelDiscovery:
 
         assert models == ["anthropic/claude-a", "anthropic/claude-b", "anthropic/claude-c"]
         assert len(client.calls) == 2
-        assert client.calls[0].params == {}
-        assert client.calls[1].params == {"after_id": "claude-b"}
+        assert client.calls[0].url == "https://api.anthropic.com/v1/models"
+        assert client.calls[1].url == "https://api.anthropic.com/v1/models?after_id=claude-b"
+
+    def test_paginated_fetch_survives_the_real_http_client(self, monkeypatch, clean_anthropic_env):
+        """Regression: the second page is fetched through the real HTTPHandler, which merges the
+        URL's query string into the params mapping by mutating it. Handing that client a
+        read-only mapping raised AttributeError, so discovery blew up for any org holding more
+        models than one page, while the stubbed client here never exercised the mutation."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
+        requested: Final = []  # mutable-ok: a test spy recording the URLs the client was asked for
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requested.append(str(request.url))
+            first: Final = "after_id" not in request.url.params
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"id": "claude-a"}] if first else [{"id": "claude-b"}],
+                    "has_more": first,
+                    "last_id": "claude-a" if first else "claude-b",
+                },
+            )
+
+        handler: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+        monkeypatch.setattr("litellm.module_level_client", handler)
+
+        models = AnthropicModelInfo().get_models(api_base="https://api.anthropic.com")
+
+        assert models == ["anthropic/claude-a", "anthropic/claude-b"]
+        assert requested == [
+            "https://api.anthropic.com/v1/models",
+            "https://api.anthropic.com/v1/models?after_id=claude-a",
+        ]
 
     def test_get_models_refuses_to_follow_redirects(self, monkeypatch, clean_anthropic_env):
         """Only the configured api_base is validated, so a redirected /v1/models must not be
