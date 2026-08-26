@@ -165,13 +165,14 @@ async def test_count_tokens_env_fallback_prefers_anthropic_api_base(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://from-base-url:9000")
 
     with patch(_HANDLER, new=AsyncMock(return_value={"input_tokens": 5})) as m:
-        await AnthropicTokenCounter().count_tokens(
+        result = await AnthropicTokenCounter().count_tokens(
             model_to_use="claude-3-5-sonnet",
             messages=[{"role": "user", "content": "hi"}],
             contents=None,
         )
 
     assert m.call_args.kwargs["api_base"] == "http://from-api-base:8000"
+    assert result.total_tokens == 5
 
 
 @pytest.mark.asyncio
@@ -184,13 +185,14 @@ async def test_count_tokens_falls_back_to_anthropic_base_url(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://from-base-url:9000")
 
     with patch(_HANDLER, new=AsyncMock(return_value={"input_tokens": 5})) as m:
-        await AnthropicTokenCounter().count_tokens(
+        result = await AnthropicTokenCounter().count_tokens(
             model_to_use="claude-3-5-sonnet",
             messages=[{"role": "user", "content": "hi"}],
             contents=None,
         )
 
     assert m.call_args.kwargs["api_base"] == "http://from-base-url:9000"
+    assert result.total_tokens == 5
 
 
 @pytest.mark.asyncio
@@ -201,7 +203,7 @@ async def test_count_tokens_litellm_params_api_base_wins(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://from-base-url:9000")
 
     with patch(_HANDLER, new=AsyncMock(return_value={"input_tokens": 5})) as m:
-        await AnthropicTokenCounter().count_tokens(
+        result = await AnthropicTokenCounter().count_tokens(
             model_to_use="claude-3-5-sonnet",
             messages=[{"role": "user", "content": "hi"}],
             contents=None,
@@ -209,3 +211,4 @@ async def test_count_tokens_litellm_params_api_base_wins(monkeypatch):
         )
 
     assert m.call_args.kwargs["api_base"] == "http://explicit:7000"
+    assert result.total_tokens == 5
