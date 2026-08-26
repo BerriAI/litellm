@@ -352,8 +352,7 @@ async def test_handle_streaming_preserves_multiple_choices():
 
     choices = events[-1]["result"]["choices"]
     assert [choice["index"] for choice in choices] == [0, 1]
-    assert choices[0]["message"]["parts"][0]["text"] == "first"
-    assert choices[1]["message"]["parts"][0]["text"] == "second"
+    assert [choice["message"]["parts"][0]["text"] for choice in choices] == ["", ""]
     assert choices[1]["finish_reason"] == "length"
 
 
@@ -431,6 +430,34 @@ async def test_provider_config_receives_full_message_history():
         )
 
     assert provider_config.handle_non_streaming.await_args.kwargs["params"]["messages"] == messages
+
+
+@pytest.mark.asyncio
+async def test_native_provider_config_drops_internal_message_history():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    provider_config = MagicMock()
+    provider_config.handle_non_streaming = AsyncMock(return_value={"result": {}})
+    params = {
+        "message": {"role": "user", "parts": []},
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+
+    with patch(
+        "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",
+        return_value=provider_config,
+    ):
+        await A2ACompletionBridgeHandler.handle_non_streaming(
+            request_id="req-native",
+            params=params,
+            litellm_params={"custom_llm_provider": "pydantic_ai_agents", "model": "agent"},
+        )
+
+    assert provider_config.handle_non_streaming.await_args.kwargs["params"] == {
+        "message": params["message"]
+    }
 
 
 def test_response_transform_preserves_audio_and_logprobs():

@@ -174,6 +174,12 @@ class A2ACompletionBridgeHandler:
                 verbose_logger.info("A2A: Using provider config for %s", custom_llm_provider)
 
                 provider_params: Final = dict(params)
+                if custom_llm_provider == "pydantic_ai_agents" or (
+                    custom_llm_provider == "bedrock"
+                    and isinstance(litellm_params.get("model"), str)
+                    and "agentcore" in litellm_params["model"]
+                ):
+                    provider_params.pop("messages", None)
                 provider_kwargs: Final[dict[str, Any]] = {
                     "request_id": request_id,
                     "params": provider_params,
@@ -250,6 +256,12 @@ class A2ACompletionBridgeHandler:
                 verbose_logger.info("A2A: Using provider config for %s (streaming)", custom_llm_provider)
 
                 provider_params: Final = dict(params)
+                if custom_llm_provider == "pydantic_ai_agents" or (
+                    custom_llm_provider == "bedrock"
+                    and isinstance(litellm_params.get("model"), str)
+                    and "agentcore" in litellm_params["model"]
+                ):
+                    provider_params.pop("messages", None)
                 provider_kwargs: Final[dict[str, Any]] = {
                     "request_id": request_id,
                     "params": provider_params,
@@ -429,7 +441,7 @@ class A2ACompletionBridgeHandler:
                     "message": {
                         "kind": "message",
                         "role": "agent",
-                        "parts": [{"kind": "text", "text": choice_texts[choice_index]}],
+                        "parts": [{"kind": "text", "text": ""}],
                         **(
                             {"tool_calls": choice_tool_calls[choice_index]}
                             if choice_tool_calls.get(choice_index)

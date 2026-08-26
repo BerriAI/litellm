@@ -147,7 +147,16 @@ async def _route_registered_provider(
         **_OBJECT_DICT_ADAPTER.validate_python(litellm_params),
         **{key: data[key] for key in _FORWARDED_REQUEST_PARAMS if key in data and data[key] is not None},
     }
-    bridge_params: Final = _OBJECT_DICT_ADAPTER.validate_python(params)
+    registered_provider: Final = litellm_params.get("custom_llm_provider")
+    registered_model: Final = litellm_params.get("model")
+    native_provider: Final = registered_provider == "pydantic_ai_agents" or (
+        registered_provider == "bedrock"
+        and isinstance(registered_model, str)
+        and "agentcore" in registered_model
+    )
+    bridge_params: Final = _OBJECT_DICT_ADAPTER.validate_python(
+        {"message": params["message"]} if native_provider else params
+    )
     configured_headers: Final = litellm_params.get("extra_headers") or litellm_params.get("headers")
     configured_headers_dict: Final = (
         _HEADERS_ADAPTER.validate_python(configured_headers) if isinstance(configured_headers, dict) else None
@@ -550,10 +559,7 @@ async def route_a2a_agent_request(
     )
     configured_api_base: Final = registered_params_value.get("api_base") if registered_params_value else None
     api_base: Final = configured_api_base if isinstance(configured_api_base, str) and configured_api_base else agent_url
-    registered_model: Final = registered_params_value.get("model") if registered_params_value else None
-    cardless_provider: Final = registered_provider == "watsonx_orchestrate" or (
-        registered_provider == "bedrock" and isinstance(registered_model, str) and "agentcore" in registered_model
-    )
+    cardless_provider: Final = registered_provider is not None and registered_provider != "a2a"
     has_configured_api_base: Final = isinstance(configured_api_base, str) and bool(configured_api_base)
     if (not isinstance(agent_url, str) or not agent_url) and not has_configured_api_base and not cardless_provider:
         verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
