@@ -104,7 +104,10 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
         Tuple of (updated headers, api_key)
     """
     # Check Authorization header (passthrough / forwarded requests)
-    auth_header: Final = headers.get("authorization", "")
+    auth_header: Final = next(
+        (value for key, value in headers.items() if key.lower() == "authorization"),
+        "",
+    )
     if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
         api_key = auth_header.replace("Bearer ", "")
         headers.pop("x-api-key", None)
