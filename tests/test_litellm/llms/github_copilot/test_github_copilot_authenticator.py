@@ -337,3 +337,43 @@ class TestGitHubCopilotAuthenticator:
         ):
             authenticator._refresh_api_key()
             assert mock_client.get.call_args[0][0] == custom_url
+
+    def test_get_api_key_fallback_refresh_missing_token(self, authenticator):
+        """Test fallback flow when refreshed API key is missing token."""
+        with (
+            patch("builtins.open", side_effect=OSError),
+            patch.object(authenticator, "_refresh_api_key", return_value={}),
+        ):
+            with pytest.raises(GetAPIKeyError):
+                authenticator.get_api_key()
+
+    def test_get_api_key_fallback_refresh_error(self, authenticator):
+        """Test fallback flow when _refresh_api_key raises RefreshAPIKeyError."""
+        with (
+            patch("builtins.open", side_effect=OSError),
+            patch.object(
+                authenticator, "_refresh_api_key", side_effect=RefreshAPIKeyError(message="Error", status_code=401)
+            ),
+        ):
+            with pytest.raises(GetAPIKeyError):
+                authenticator.get_api_key()
+
+    def test_get_api_key_fallback_save_os_error(self, authenticator):
+        """Test fallback flow continues when saving API key raises OSError."""
+        mock_new_data = {
+            "token": "in-memory-token",
+            "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
+        }
+        with (
+            patch("builtins.open", side_effect=[OSError, OSError]),
+            patch.object(authenticator, "_refresh_api_key", return_value=mock_new_data),
+            patch.object(authenticator, "_ensure_token_dir", side_effect=OSError),
+        ):
+            api_key = authenticator.get_api_key()
+            assert api_key == "in-memory-token"
+
+    def test_get_api_base_non_dict_or_missing(self, authenticator):
+        """Test get_api_base returns None for non-dict or missing endpoints."""
+        with patch("builtins.open", mock_open(read_data=json.dumps({"endpoints": "invalid"}))):
+            assert authenticator.get_api_base() is None
+
