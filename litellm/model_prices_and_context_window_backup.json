@@ -52689,18 +52689,21 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-opus-4-8": {
-        "max_tokens": 1000000,
-        "max_input_tokens": 1000000,
         "input_cost_per_token": 5e-06,
-        "output_cost_per_token": 2.5e-05,
         "litellm_provider": "deepinfra",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
         "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://deepinfra.com/pricing",
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_response_schema": true,
         "supports_reasoning": true,
-        "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "deepinfra/anthropic/claude-sonnet-4-6": {
         "max_tokens": 1000000,
@@ -52890,18 +52893,21 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-opus-5": {
-        "max_tokens": 1000000,
-        "max_input_tokens": 1000000,
         "input_cost_per_token": 5e-06,
-        "output_cost_per_token": 2.5e-05,
         "litellm_provider": "deepinfra",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
         "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://deepinfra.com/pricing",
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_response_schema": true,
         "supports_reasoning": true,
-        "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "deepinfra/thinkingmachines/Inkling": {
         "max_tokens": 524288,
@@ -53199,18 +53205,21 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-sonnet-5": {
-        "max_tokens": 1000000,
-        "max_input_tokens": 1000000,
         "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 1e-05,
         "litellm_provider": "deepinfra",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
         "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://deepinfra.com/pricing",
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_response_schema": true,
         "supports_reasoning": true,
-        "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "deepinfra/Qwen/Qwen3.5-397B-A17B": {
         "max_tokens": 262144,
@@ -53288,18 +53297,22 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-fable-5": {
-        "max_tokens": 1000000,
-        "max_input_tokens": 1000000,
         "input_cost_per_token": 1e-05,
-        "output_cost_per_token": 5e-05,
         "litellm_provider": "deepinfra",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
         "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "prompt_cache_min_tokens": 512,
+        "source": "https://deepinfra.com/pricing",
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_response_schema": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
         "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "thinking_always_on": true
     },
     "deepinfra/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": {
         "max_tokens": 262144,
@@ -53408,18 +53421,21 @@
         "source": "https://deepinfra.com/pricing"
     },
     "deepinfra/anthropic/claude-opus-4-7": {
-        "max_tokens": 1000000,
-        "max_input_tokens": 1000000,
         "input_cost_per_token": 5e-06,
-        "output_cost_per_token": 2.5e-05,
         "litellm_provider": "deepinfra",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
         "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "prompt_cache_min_tokens": 2048,
+        "source": "https://deepinfra.com/pricing",
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_response_schema": true,
         "supports_reasoning": true,
-        "supports_vision": true,
-        "source": "https://deepinfra.com/pricing"
+        "supports_response_schema": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "deepinfra/Qwen/Qwen3.6-27B": {
         "max_tokens": 262144,
