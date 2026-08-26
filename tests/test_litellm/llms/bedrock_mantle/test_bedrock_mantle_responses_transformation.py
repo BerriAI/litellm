@@ -9,6 +9,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 
 import copy
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -622,6 +623,181 @@ class TestBedrockMantleCodexAdditionalTools:
             )
         assert mock_debug.call_count == 1
         assert "additional_tools" in str(mock_debug.call_args)
+
+
+class TestBedrockMantleCodexInputItemNormalization:
+    """Mantle 400s ("Invalid 'input': value did not match any expected variant")
+    on the Codex history item types agent_message, context_compaction, and
+    local_shell_call (verified against bedrock-mantle.us-east-1.api.aws with
+    openai.gpt-5.6-sol), so the config must rewrite them into supported
+    equivalents. agent_message is what every Codex multi-agent v2 session sends,
+    and its encrypted_content slot carries the verbatim plaintext payload when
+    the upstream model never issued encrypted args, so that slot must be
+    preserved, not dropped. Mantle also rejects assistant messages with
+    input_text content, so the rewrite must use output_text."""
+
+    _USER_MESSAGE = {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Continue."}],
+    }
+
+    def _transform(self, input):
+        cfg = BedrockMantleResponsesAPIConfig()
+        return cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-sol",
+            input=input,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    def test_plaintext_agent_message_becomes_assistant_output_text_message(self):
+        body = self._transform(
+            input=[
+                self._USER_MESSAGE,
+                {
+                    "type": "agent_message",
+                    "id": "amsg_1",
+                    "author": "/root/arithmetic",
+                    "recipient": "/root",
+                    "content": [{"type": "input_text", "text": "Message Type: FINAL_ANSWER\nPayload:\n2+2 is 4."}],
+                },
+            ]
+        )
+        assert body["input"] == [
+            self._USER_MESSAGE,
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": ({"type": "output_text", "text": "Message Type: FINAL_ANSWER\nPayload:\n2+2 is 4."},),
+            },
+        ]
+
+    def test_agent_message_encrypted_content_payload_is_preserved(self):
+        body = self._transform(
+            input=[
+                {
+                    "type": "agent_message",
+                    "author": "/root",
+                    "recipient": "/root/arithmetic",
+                    "content": [
+                        {"type": "input_text", "text": "Message Type: NEW_TASK\nPayload:\n"},
+                        {"type": "encrypted_content", "encrypted_content": "Answer the question 'what is 2+2'."},
+                    ],
+                },
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"][0] == {
+            "type": "message",
+            "role": "assistant",
+            "content": (
+                {
+                    "type": "output_text",
+                    "text": "Message Type: NEW_TASK\nPayload:\nAnswer the question 'what is 2+2'.",
+                },
+            ),
+        }
+
+    def test_agent_message_without_any_text_is_dropped(self):
+        body = self._transform(
+            input=[
+                {"type": "agent_message", "author": "/root", "recipient": "/root/a", "content": []},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+
+    def test_context_compaction_becomes_compaction_with_same_ciphertext(self):
+        body = self._transform(
+            input=[
+                {"type": "context_compaction", "id": "cc_1", "encrypted_content": "smry_abc123"},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [
+            {"type": "compaction", "encrypted_content": "smry_abc123"},
+            self._USER_MESSAGE,
+        ]
+
+    def test_context_compaction_without_ciphertext_is_dropped(self):
+        body = self._transform(
+            input=[
+                {"type": "context_compaction", "id": "cc_1"},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+
+    def test_local_shell_call_becomes_function_call_keeping_call_id_pairing(self):
+        body = self._transform(
+            input=[
+                {
+                    "type": "local_shell_call",
+                    "id": "lsh_1",
+                    "call_id": "call_1",
+                    "status": "completed",
+                    "action": {"type": "exec", "command": ["echo", "hi"]},
+                },
+                {"type": "function_call_output", "call_id": "call_1", "output": "hi\n"},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "local_shell",
+                "arguments": '{"type": "exec", "command": ["echo", "hi"]}',
+            },
+            {"type": "function_call_output", "call_id": "call_1", "output": "hi\n"},
+            self._USER_MESSAGE,
+        ]
+
+    def test_local_shell_call_without_call_id_is_dropped(self):
+        body = self._transform(
+            input=[
+                {"type": "local_shell_call", "status": "completed", "action": {"type": "exec", "command": ["ls"]}},
+                self._USER_MESSAGE,
+            ]
+        )
+        assert body["input"] == [self._USER_MESSAGE]
+
+    def test_mantle_supported_item_types_pass_through_untouched(self):
+        supported_items = [
+            self._USER_MESSAGE,
+            {"type": "compaction", "encrypted_content": "smry_abc123"},
+            {"type": "function_call", "name": "shell", "arguments": "{}", "call_id": "call_2"},
+            {"type": "function_call_output", "call_id": "call_2", "output": "ok"},
+            {"type": "tool_search_call", "call_id": "call_3", "execution": "server", "arguments": {"query": "x"}},
+            {"type": "tool_search_output", "call_id": "call_3", "status": "completed", "execution": "server", "tools": []},
+            {"type": "compaction_trigger"},
+        ]
+        body = self._transform(input=copy.deepcopy(supported_items))
+        assert body["input"] == supported_items
+
+    def test_string_input_passes_through(self):
+        body = self._transform(input="Say hi.")
+        assert body["input"] == "Say hi."
+
+    def test_rewrite_is_logged_as_warning_naming_the_types(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            body = self._transform(
+                input=[
+                    {"type": "agent_message", "author": "a", "recipient": "b", "content": [{"type": "input_text", "text": "hi"}]},
+                    self._USER_MESSAGE,
+                ]
+            )
+        assert body["input"][0]["role"] == "assistant"
+        rewrite_warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "rewrote Codex input item type" in record.getMessage()
+        ]
+        assert rewrite_warnings == [
+            "Bedrock Mantle Responses API: rewrote Codex input item type(s) ['agent_message'] that Mantle rejects."
+        ]
 
 
 class TestBedrockMantleResponsesRegistry:

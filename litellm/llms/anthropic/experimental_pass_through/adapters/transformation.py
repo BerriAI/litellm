@@ -434,7 +434,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 content_items = list(content.get("content", []))
 
                                 # Single-item text keeps the backward-compatible string format; a single
-                                # image becomes a structured image_url part
+                                # image or document becomes a structured image_url part
                                 if len(content_items) == 1:
                                     c = content_items[0]
                                     if isinstance(c, str):
@@ -454,7 +454,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
-                                        elif c.get("type") == "image":
+                                        elif c.get("type") in ("image", "document"):
                                             image_part = self._tool_result_image_part(c.get("source"))
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
@@ -482,7 +482,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                                         text=c.get("text", ""),
                                                     )
                                                 )
-                                            elif c.get("type") == "image":
+                                            elif c.get("type") in ("image", "document"):
                                                 image_part = self._tool_result_image_part(c.get("source"))
                                                 if image_part:
                                                     combined_content_parts.append(image_part)
