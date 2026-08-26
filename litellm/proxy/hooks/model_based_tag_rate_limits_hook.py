@@ -934,12 +934,16 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             return built
 
     async def _check_and_increment_one(
-        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int
+        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
     ) -> tuple[bool, float]:
         """Single-key atomic check-and-increment. Always one key per Lua
-        call -- see TAG_RL_CHECK_AND_INCR_SCRIPT's module docstring for why."""
+        call -- see TAG_RL_CHECK_AND_INCR_SCRIPT's module docstring for why,
+        and for why `refresh_ttl` must be True for a concurrency key and
+        False for a requests key."""
         if self._check_and_incr_script is not None:
-            raw: Final = await self._check_and_incr_script(keys=(key,), args=(limit, increment, ttl))
+            raw: Final = await self._check_and_incr_script(
+                keys=(key,), args=(limit, increment, ttl, 1 if refresh_ttl else 0)
+            )
             return bool(raw[0]), float(raw[1])
 
         async with self._lock:
@@ -962,7 +966,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
 
     async def _atomic_check_and_increment(
         self,
-        checks: Sequence[tuple[InternalUsageCache, str, float, float, int]],
+        checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]],
     ) -> tuple[int | None, tuple[float, ...]]:
         """
         All-or-nothing across every (cache, key, limit, increment, ttl) in
@@ -1019,10 +1023,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # accumulated so far in favor of refunding and returning early, so
         # this can't be expressed as a one-shot comprehension.
         admitted_values: Final = []  # mutable-ok: sequential async accumulator, discardable on early rejection; see comment above
-        for index, (cache, key, limit, increment, ttl) in enumerate(checks):
+        for index, (cache, key, limit, increment, ttl, refresh_ttl) in enumerate(checks):
             admitted = False
             try:
-                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl)
+                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
             finally:
                 # Runs on a normal rejection (admitted stays False) and on
                 # any exception/cancellation from the awaited call above
@@ -1040,10 +1044,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         return None, tuple(admitted_values)
 
     async def _refund_admitted(
-        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int]], up_to_index: int
+        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]], up_to_index: int
     ) -> None:
         for refund_index in range(up_to_index):
-            refund_cache, refund_key, _limit, refund_increment, _ttl = checks[refund_index]
+            refund_cache, refund_key, _limit, refund_increment, _ttl, _refresh_ttl = checks[refund_index]
             try:
                 await self._decrement_floor_zero(refund_cache, refund_key, -refund_increment)
             except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
@@ -1150,6 +1154,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                         # with nothing to replace it.
                         0.0 if configured_limit.unit == "requests" and key in stale_request_keys else 1.0,
                         self._ttl_for(configured_limit),
+                        configured_limit.unit == "concurrency",
                     )
                     for partition, (configured_limit, _tag_value, key) in zip(atomic_partitions, atomic_checks)
                 )

@@ -3340,6 +3340,49 @@ async def test_redis_backed_token_admission_sees_increments_the_in_memory_cache_
     await redis_cache.async_delete_cache(key=token_key)
 
 
+@pytest.mark.asyncio
+async def test_redis_backed_concurrency_ttl_refreshes_on_every_admission(time_controller):
+    """
+    Bugbot finding: TAG_RL_CHECK_AND_INCR_SCRIPT only ran EXPIRE when a key
+    had no TTL at all, so a concurrency counter's expiry was fixed from its
+    first admission and never pushed out by later ones. A concurrency bucket
+    isn't epoch-windowed like requests/tokens/dollars -- its TTL exists only
+    as a crash-safety net for a reservation whose explicit release never
+    runs -- so a still-active bucket receiving continuous admissions must
+    keep extending that TTL, or it expires mid-flight under sustained
+    traffic, silently admitting past the cap.
+    """
+    limiter, redis_cache = _redis_limiter(time_controller)
+    try:
+        await redis_cache.ping()
+    except Exception as e:
+        pytest.skip(f"Redis connection failed: {e!s}")
+
+    key = f"{{tag_rl:test:ttl-refresh:{uuid.uuid4().hex}}}:inflight"
+    cache = limiter.internal_usage_cache
+    try:
+        # A short, fixed ttl (bypassing _ttl_for's 3600s safety floor, which
+        # would make a real-time before/after comparison too slow to assert
+        # on deterministically) with refresh_ttl=True, matching how a
+        # concurrency check is actually admitted.
+        admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+        assert admitted
+        ttl_after_first_admission = await redis_cache.redis_async_client.ttl(key)
+        assert ttl_after_first_admission > 0
+
+        await asyncio.sleep(2)
+
+        # A second admission on the same still-live key, most of the way
+        # through the first admission's ttl, must push the ttl back out to
+        # the full window again, not leave it counting down toward zero.
+        admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+        assert admitted
+        ttl_after_second_admission = await redis_cache.redis_async_client.ttl(key)
+        assert ttl_after_second_admission >= 2
+    finally:
+        await redis_cache.async_delete_cache(key=key)
+
+
 # ---------------------------------------------------------------------------
 # team_public_model_name alias -- index lookup must not miss
 # ---------------------------------------------------------------------------
@@ -3843,9 +3886,9 @@ async def test_refund_failure_on_one_key_does_not_block_others_or_raise(time_con
 
     failing_index, values = await flaky._atomic_check_and_increment(
         [
-            (flaky.internal_usage_cache, failing_key, 10.0, 1.0, 60),
-            (flaky.internal_usage_cache, other_key, 10.0, 1.0, 60),
-            (flaky.internal_usage_cache, rejecting_key, 0.0, 1.0, 60),
+            (flaky.internal_usage_cache, failing_key, 10.0, 1.0, 60, False),
+            (flaky.internal_usage_cache, other_key, 10.0, 1.0, 60, False),
+            (flaky.internal_usage_cache, rejecting_key, 0.0, 1.0, 60, False),
         ]
     )
 
@@ -3870,18 +3913,18 @@ async def test_exception_mid_batch_refunds_every_earlier_admission_before_propag
     raising_key = "{tag_rl:test:exception-refund:b}:requests"
 
     class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
-        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int):
+        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool):
             if key == raising_key:
                 raise RuntimeError("simulated transient redis failure")
-            return await super()._check_and_increment_one(cache, key, limit, increment, ttl)
+            return await super()._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
 
     flaky = _FlakyLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
 
     with pytest.raises(RuntimeError):
         await flaky._atomic_check_and_increment(
             [
-                (flaky.internal_usage_cache, admitted_key, 10.0, 1.0, 60),
-                (flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60),
+                (flaky.internal_usage_cache, admitted_key, 10.0, 1.0, 60, False),
+                (flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60, False),
             ]
         )
 
@@ -3908,22 +3951,22 @@ async def test_a_raising_keys_own_ambiguous_outcome_is_never_refunded(time_contr
     raising_key = "{tag_rl:test:ambiguous-no-refund:b}:requests"
 
     class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
-        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int):
+        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool):
             if key == raising_key:
                 # Simulate Redis committing the increment before the
                 # response is lost: the write actually happens...
-                await super()._check_and_increment_one(cache, key, limit, increment, ttl)
+                await super()._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
                 # ...but the caller never finds out.
                 raise RuntimeError("simulated lost response after a committed redis write")
-            return await super()._check_and_increment_one(cache, key, limit, increment, ttl)
+            return await super()._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
 
     flaky = _FlakyLimiter(internal_usage_cache=DualCache(), time_provider=time_controller.now)
 
     with pytest.raises(RuntimeError):
         await flaky._atomic_check_and_increment(
             [
-                (flaky.internal_usage_cache, admitted_key, 10.0, 1.0, 60),
-                (flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60),
+                (flaky.internal_usage_cache, admitted_key, 10.0, 1.0, 60, False),
+                (flaky.internal_usage_cache, raising_key, 10.0, 1.0, 60, False),
             ]
         )
 

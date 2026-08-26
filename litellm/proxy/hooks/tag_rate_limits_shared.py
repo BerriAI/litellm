@@ -93,19 +93,36 @@ CONCURRENCY_MIN_SAFETY_TTL_SECONDS: Final = 3600
 # `atomic_check_and_increment_by_n` in parallel_request_limiter_v3.py, applied
 # per-key instead of per-descriptor since each key already is one hash-tag
 # group by construction.
+#
+# refresh_ttl (ARGV[4]) distinguishes the two callers of this script:
+# "requests" is an epoch-bucketed fixed window, whose TTL must be set once
+# (at first write) and never extended, or the bucket outlives the epoch it's
+# meant to reset at. "concurrency" is not windowed at all -- its TTL exists
+# purely as a crash-safety net for a reservation whose explicit release never
+# runs -- so a still-active bucket must keep pushing that TTL out on every
+# admission, or a long-lived burst of continuous traffic expires the whole
+# counter mid-flight (silently admitting past the cap, and letting a release
+# for a since-reset counter decrement an unrelated, newer cohort).
 TAG_RL_CHECK_AND_INCR_SCRIPT: Final = """
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
 local increment = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
+local refresh_ttl = tonumber(ARGV[4])
 local current = tonumber(redis.call('GET', key) or 0)
 if current + increment > limit then
     return { 0, current }
 end
 local new_value = redis.call('INCRBY', key, increment)
-local current_ttl = redis.call('TTL', key)
-if current_ttl == -1 and ttl > 0 then
-    redis.call('EXPIRE', key, ttl)
+if ttl > 0 then
+    if refresh_ttl == 1 then
+        redis.call('EXPIRE', key, ttl)
+    else
+        local current_ttl = redis.call('TTL', key)
+        if current_ttl == -1 then
+            redis.call('EXPIRE', key, ttl)
+        end
+    end
 end
 return { 1, new_value }
 """
