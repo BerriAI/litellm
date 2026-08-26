@@ -818,3 +818,50 @@ async def test_process_prompt_template_async_get_prompt_error_raises(proxy_loggi
             prompt_version=None,
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_process_prompt_template_aresponses_swaps_model_and_merges_input(proxy_logging, monkeypatch):
+    from litellm.proxy.prompts import prompt_registry
+
+    custom_logger = MagicMock()
+    prompt_spec = MagicMock()
+    prompt_spec.litellm_params = MagicMock(prompt_id="resolved-id")
+    monkeypatch.setattr(
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY,
+        "get_prompt_callback_by_id",
+        lambda *a, **kw: custom_logger,
+    )
+    monkeypatch.setattr(
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(
+        return_value=(
+            "gpt-4o-mini",
+            [
+                {"role": "user", "content": "You are a pirate."},
+                {"role": "user", "content": "Who are you?"},
+            ],
+            {},
+        )
+    )
+    data: Dict[str, Any] = {"input": "Who are you?", "model": "anthropic-haiku-4-5", "prompt_id": "x"}
+    await proxy_logging._process_prompt_template(
+        data=data,
+        litellm_logging_obj=logging_obj,
+        prompt_id="x",
+        prompt_version=None,
+        call_type="aresponses",
+    )
+    assert data["model"] == "gpt-4o-mini"
+    assert data["input"] == [
+        {"role": "user", "content": "You are a pirate."},
+        {"role": "user", "content": "Who are you?"},
+    ]
+    assert "messages" not in data
+    assert "prompt_id" not in data
+    hook_kwargs = logging_obj.async_get_chat_completion_prompt.await_args.kwargs
+    assert hook_kwargs["messages"] == [{"role": "user", "content": "Who are you?"}]
+    assert hook_kwargs["prompt_spec"] is prompt_spec

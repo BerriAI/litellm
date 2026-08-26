@@ -1402,6 +1402,7 @@ class ProxyLogging:
             get_latest_version_prompt_id,
         )
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.utils import get_non_default_completion_params
 
         if prompt_version is None:
@@ -1420,13 +1421,20 @@ class ProxyLogging:
             data.pop("prompt_id", None)
 
         if custom_logger and prompt_spec is not None:
+            is_responses_call: Final = call_type == "aresponses"
+            original_responses_input: Final = data.get("input", "") if is_responses_call else None
+            client_messages: Final = (
+                ResponsesAPIRequestUtils.responses_input_to_chat_messages(original_responses_input)
+                if is_responses_call
+                else data.get("messages", [])
+            )
             (
                 model,
                 messages,
                 optional_params,
             ) = await litellm_logging_obj.async_get_chat_completion_prompt(
                 model=data.get("model", ""),
-                messages=data.get("messages", []),
+                messages=client_messages,
                 non_default_params=get_non_default_completion_params(kwargs=data) or {},
                 prompt_id=litellm_prompt_id,
                 prompt_spec=prompt_spec,
@@ -1438,7 +1446,14 @@ class ProxyLogging:
 
             data.update(optional_params)
             data["model"] = model
-            data["messages"] = messages
+            if is_responses_call:
+                data["input"] = ResponsesAPIRequestUtils.merge_prompt_management_input(
+                    original_input=original_responses_input,
+                    client_input=client_messages,
+                    merged_input=messages,
+                )
+            else:
+                data["messages"] = messages
             # prevent re-processing the prompt template
             data.pop("prompt_id", None)
             data.pop("prompt_variables", None)
@@ -1653,7 +1668,7 @@ class ProxyLogging:
             not guardrails_only
             and litellm_logging_obj is not None
             and prompt_id is not None
-            and (call_type == "completion" or call_type == "acompletion")
+            and (call_type == "completion" or call_type == "acompletion" or call_type == "aresponses")
         ):
             await self._process_prompt_template(
                 data=data,
