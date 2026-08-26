@@ -60,7 +60,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         """
         api_base = (
             api_base or get_secret_str("DOCKER_MODEL_RUNNER_API_BASE") or "http://localhost:22088/engines/llama.cpp"
-        )  # type: ignore
+        )
         # Docker Model Runner may not require authentication for local instances
         dynamic_api_key: Final = api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
         return api_base, dynamic_api_key

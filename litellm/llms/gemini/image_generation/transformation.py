@@ -42,7 +42,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         supported_params: Final = ["n", "size"]
         if is_gemini_image_model(model):
             supported_params.extend(["imageConfig", "tools", "web_search_options"])
-        return supported_params  # type: ignore[return-value]
+        return supported_params
 
     def map_openai_params(
         self,

@@ -1,7 +1,77 @@
 import React, { forwardRef, useImperativeHandle, useMemo } from "react";
-import { Form, Input, InputNumber, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { CircleHelp } from "lucide-react";
+import { useForm, type Resolver } from "react-hook-form";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
+
+type ToolFormValues = Record<string, unknown>;
+
+const STRING_SCHEMA_MESSAGES: Readonly<Record<string, string>> = { input: "Please enter input for this tool" };
+
+const BOOLEAN_ITEMS = [
+  { value: true, label: "True" },
+  { value: false, label: "False" },
+];
+
+const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
+
+const jsonErrorFor = (prop: InputSchemaProperty, value: unknown): string | null => {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    const isValidObject =
+      prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+    const isValidArray = prop.type === "array" && Array.isArray(parsed);
+    if (isValidObject || isValidArray) return null;
+    return prop.type === "object" ? "Please enter a JSON object" : "Please enter a JSON array";
+  } catch {
+    return "Invalid JSON";
+  }
+};
+
+type FieldError = { type: string; message: string };
+
+const collectErrors = (
+  actualSchema: InputSchema,
+  requiredMessages: Readonly<Record<string, string>>,
+  values: ToolFormValues,
+): Record<string, FieldError> => {
+  const entries = Object.entries(actualSchema.properties ?? {}).flatMap<[string, FieldError]>(([key, prop]) => {
+    const value = values[key];
+    const blank = isBlank(value);
+    if (actualSchema.required?.includes(key) && blank) {
+      return [[key, { type: "required", message: requiredMessages[key] ?? `Please enter ${key}` }]];
+    }
+    if (prop.type !== "object" && prop.type !== "array") return [];
+    if (blank) return [];
+    const message = jsonErrorFor(prop, value);
+    return message === null ? [] : [[key, { type: "validate", message }]];
+  });
+  return Object.fromEntries(entries);
+};
+
+const buildResolver =
+  (actualSchema: InputSchema, requiredMessages: Readonly<Record<string, string>> = {}): Resolver<ToolFormValues> =>
+  (values) => {
+    const errors = collectErrors(actualSchema, requiredMessages, values);
+    return Object.keys(errors).length > 0 ? { values: {}, errors } : { values, errors: {} };
+  };
+
+const labelFor = (key: string, prop: InputSchemaProperty, required: boolean): React.ReactNode => (
+  <span className="flex items-center">
+    {key} {required && <span className="text-destructive">*</span>}
+    {prop.description && (
+      <Tooltip>
+        <TooltipTrigger render={<CircleHelp className="ml-2 size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+        <TooltipContent>{prop.description}</TooltipContent>
+      </Tooltip>
+    )}
+  </span>
+);
 
 const isPlainObject = (value: unknown): value is Record<string, any> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -140,8 +210,6 @@ interface MCPToolArgumentsFormProps {
 
 const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgumentsFormProps>(
   ({ tool, className }, ref) => {
-    const [form] = Form.useForm();
-
     const schema: InputSchema = useMemo(() => {
       if (typeof tool.inputSchema === "string") {
         return {
@@ -169,151 +237,178 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
       return schema;
     }, [schema]);
 
+    const defaultValues = useMemo<ToolFormValues>(
+      () =>
+        Object.fromEntries(
+          Object.entries(actualSchema.properties ?? {}).map(([key, prop]) => [key, getInitialValueForField(prop)]),
+        ),
+      [actualSchema],
+    );
+
+    const isStringSchema = typeof tool.inputSchema === "string";
+    const requiredMessages = isStringSchema ? STRING_SCHEMA_MESSAGES : {};
+    const form = useForm<ToolFormValues>({
+      defaultValues,
+      resolver: buildResolver(actualSchema, requiredMessages),
+    });
+    const { reset } = form;
+
     useImperativeHandle(ref, () => ({
       getSubmitValues: async () => {
-        const values = await form.validateFields();
+        const values = form.getValues();
+        const errors = collectErrors(actualSchema, requiredMessages, values);
+        if (Object.keys(errors).length > 0) {
+          await form.trigger();
+          return Promise.reject({
+            errorFields: Object.entries(errors).map(([name, error]) => ({
+              name: [name],
+              errors: [error.message],
+            })),
+          });
+        }
         return convertFormValues(values, actualSchema, schema);
       },
     }));
 
     React.useEffect(() => {
-      form.resetFields();
-      if (!actualSchema.properties) return;
+      reset(defaultValues);
+    }, [reset, defaultValues, tool]);
 
-      const initialValues: Record<string, any> = {};
-      Object.entries(actualSchema.properties).forEach(([key, prop]) => {
-        initialValues[key] = getInitialValueForField(prop);
-      });
-      form.setFieldsValue(initialValues);
-    }, [form, actualSchema, tool]);
-
-    if (typeof tool.inputSchema === "string") {
+    if (isStringSchema) {
       return (
-        <Form form={form} layout="vertical" className={className}>
-          <Form.Item
-            label={
-              <span className="text-sm font-medium text-gray-700">
-                Input <span className="text-red-500">*</span>
-              </span>
-            }
-            name="input"
-            rules={[{ required: true, message: "Please enter input for this tool" }]}
-          >
-            <Input placeholder="Enter input for this tool" />
-          </Form.Item>
-        </Form>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void form.trigger();
+          }}
+          className={className}
+        >
+          <FieldGroup>
+            <FormField
+              control={form.control}
+              name="input"
+              label={
+                <span>
+                  Input <span className="text-destructive">*</span>
+                </span>
+              }
+            >
+              {(field) => <Input {...field} value={field.value as string} placeholder="Enter input for this tool" />}
+            </FormField>
+          </FieldGroup>
+        </form>
       );
     }
 
     if (!actualSchema.properties) {
       return (
-        <Form form={form} layout="vertical" className={className}>
-          <div className="py-4 text-center text-sm text-gray-500">No parameters required for this tool.</div>
-        </Form>
+        <form onSubmit={(event) => event.preventDefault()} className={className}>
+          <div className="py-4 text-center text-sm text-muted-foreground">No parameters required for this tool.</div>
+        </form>
       );
     }
 
     return (
-      <Form form={form} layout="vertical" className={className}>
-        {Object.entries(actualSchema.properties).map(([key, prop]) => {
-          const initialValue = getInitialValueForField(prop);
-          const fieldKey = `${tool.name}-${key}`;
-          return (
-            <Form.Item
-              key={fieldKey}
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  {key} {actualSchema.required?.includes(key) && <span className="text-red-500">*</span>}
-                  {prop.description && (
-                    <Tooltip title={prop.description}>
-                      <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
-                    </Tooltip>
-                  )}
-                </span>
-              }
-              name={key}
-              initialValue={initialValue}
-              rules={[
-                {
-                  required: actualSchema.required?.includes(key),
-                  message: `Please enter ${key}`,
-                },
-                ...(prop.type === "object" || prop.type === "array"
-                  ? [
-                      {
-                        validator: (_rule: any, value: any) => {
-                          if (
-                            (value === undefined || value === null || value === "") &&
-                            !actualSchema.required?.includes(key)
-                          ) {
-                            return Promise.resolve();
+      <TooltipProvider>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void form.trigger();
+          }}
+          className={className}
+        >
+          <FieldGroup>
+            {Object.entries(actualSchema.properties).map(([key, prop]) => {
+              const required = actualSchema.required?.includes(key) ?? false;
+              return (
+                <FormField
+                  key={`${tool.name}-${key}`}
+                  control={form.control}
+                  name={key}
+                  label={labelFor(key, prop, required)}
+                >
+                  {(field) => {
+                    if (prop.type === "string" && prop.enum) {
+                      return (
+                        <Select value={field.value ?? ""} onValueChange={field.onChange}>
+                          <SelectTrigger
+                            id={field.id}
+                            onBlur={field.onBlur}
+                            aria-invalid={field["aria-invalid"]}
+                            className="w-full"
+                          >
+                            <SelectValue placeholder={`Select ${key}`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {!required && <SelectItem value="">Select {key}</SelectItem>}
+                            {prop.enum.map((v) => (
+                              <SelectItem key={v} value={v}>
+                                {v}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      );
+                    }
+                    if (prop.type === "boolean") {
+                      return (
+                        <Select items={BOOLEAN_ITEMS} value={field.value ?? ""} onValueChange={field.onChange}>
+                          <SelectTrigger
+                            id={field.id}
+                            onBlur={field.onBlur}
+                            aria-invalid={field["aria-invalid"]}
+                            className="w-full"
+                          >
+                            <SelectValue placeholder={`Select ${key}`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {!required && <SelectItem value="">Select {key}</SelectItem>}
+                            <SelectItem value={true}>True</SelectItem>
+                            <SelectItem value={false}>False</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      );
+                    }
+                    if (prop.type === "number" || prop.type === "integer") {
+                      return (
+                        <Input
+                          {...field}
+                          type="number"
+                          step={prop.type === "integer" ? 1 : undefined}
+                          value={field.value as number | string}
+                          placeholder={prop.description || `Enter ${key}`}
+                        />
+                      );
+                    }
+                    if (prop.type === "object" || prop.type === "array") {
+                      return (
+                        <Textarea
+                          {...field}
+                          rows={prop.type === "object" ? 4 : 3}
+                          value={field.value as string}
+                          spellCheck={false}
+                          className="font-mono"
+                          placeholder={
+                            prop.description ||
+                            (prop.type === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
                           }
-                          try {
-                            const parsed = typeof value === "string" ? JSON.parse(value) : value;
-                            const isValidObject =
-                              prop.type === "object" &&
-                              parsed !== null &&
-                              typeof parsed === "object" &&
-                              !Array.isArray(parsed);
-                            const isValidArray = prop.type === "array" && Array.isArray(parsed);
-                            if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
-                              return Promise.resolve();
-                            }
-                            return Promise.reject(
-                              new Error(
-                                prop.type === "object" ? "Please enter a JSON object" : "Please enter a JSON array",
-                              ),
-                            );
-                          } catch {
-                            return Promise.reject(new Error("Invalid JSON"));
-                          }
-                        },
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              {prop.type === "string" && prop.enum ? (
-                <Select
-                  placeholder={`Select ${key}`}
-                  allowClear={!actualSchema.required?.includes(key)}
-                  options={prop.enum.map((v) => ({ value: v, label: v }))}
-                />
-              ) : prop.type === "string" && !prop.enum ? (
-                <Input placeholder={prop.description || `Enter ${key}`} allowClear />
-              ) : prop.type === "number" || prop.type === "integer" ? (
-                <InputNumber
-                  step={prop.type === "integer" ? 1 : undefined}
-                  placeholder={prop.description || `Enter ${key}`}
-                  className="w-full"
-                  style={{ width: "100%" }}
-                />
-              ) : prop.type === "boolean" ? (
-                <Select
-                  placeholder={`Select ${key}`}
-                  allowClear={!actualSchema.required?.includes(key)}
-                  options={[
-                    { value: true, label: "True" },
-                    { value: false, label: "False" },
-                  ]}
-                />
-              ) : prop.type === "object" || prop.type === "array" ? (
-                <Input.TextArea
-                  rows={prop.type === "object" ? 4 : 3}
-                  placeholder={
-                    prop.description ||
-                    (prop.type === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
-                  }
-                  spellCheck={false}
-                  className="font-mono"
-                />
-              ) : (
-                <Input placeholder={prop.description || `Enter ${key}`} allowClear />
-              )}
-            </Form.Item>
-          );
-        })}
-      </Form>
+                        />
+                      );
+                    }
+                    return (
+                      <Input
+                        {...field}
+                        value={field.value as string}
+                        placeholder={prop.description || `Enter ${key}`}
+                      />
+                    );
+                  }}
+                </FormField>
+              );
+            })}
+          </FieldGroup>
+        </form>
+      </TooltipProvider>
     );
   },
 );

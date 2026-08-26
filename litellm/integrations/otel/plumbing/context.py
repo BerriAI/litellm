@@ -194,7 +194,7 @@ def resolve_parent_context(threaded: Span | None = None) -> Context:
     """
     ctx = get_current()
     if is_recordable_span(threaded) and not is_recordable_span(get_current_span(ctx)):
-        ctx = context_from_span(threaded, context=ctx)  # type: ignore[arg-type]
+        ctx = context_from_span(threaded, context=ctx)
     return ctx
 
 

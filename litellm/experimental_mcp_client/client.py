@@ -6,16 +6,17 @@ import asyncio
 import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
+from datetime import timedelta
 from typing import Any, Final, TypeVar
 
 import httpx
-from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
+from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 
 streamable_http_client: Any | None = None
 try:
-    import mcp.client.streamable_http as streamable_http_module  # type: ignore
+    import mcp.client.streamable_http as streamable_http_module
 
     streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
 except ImportError:
@@ -50,6 +51,42 @@ def to_basic_auth(auth_value: str) -> str:
     return base64.b64encode(auth_value.encode("utf-8")).decode()
 
 
+def strip_auth_scheme(auth_value: str, scheme: str) -> str:
+    """Return ``auth_value`` with a leading ``<scheme> `` removed, or unchanged when absent.
+
+    Callers supply both a bare credential and a complete header value, so prefixing
+    unconditionally yields ``Bearer Bearer <jwt>``. Scheme names are case-insensitive per
+    RFC 7235. A credential is required after the scheme, so both a token that merely begins
+    with the scheme text and a scheme with nothing behind it are returned untouched.
+    Surrounding whitespace is left to ``_strip_header_whitespace`` at header-build time.
+    """
+    scheme_name, _, remainder = auth_value.lstrip().partition(" ")
+    credential: Final = remainder.lstrip()
+    if credential and scheme_name.lower() == scheme.lower():
+        return credential
+    return auth_value
+
+
+def to_basic_credentials(auth_value: str) -> str:
+    """Return the base64 credentials for a ``Basic`` header, encoding only when needed.
+
+    ``Basic <credentials>`` carries credentials that are already encoded, so encoding the whole
+    value again would bury the scheme inside the payload. This has to run before
+    :func:`to_basic_auth` rather than at header-build time, where no prefix is left to find.
+    A schemed value whose remainder does not decode is the bare ``username:password`` shape with
+    the scheme written in front of it, and is encoded rather than forwarded as an invalid header;
+    a pair always contains ``:``, which is outside the base64 alphabet, so the two never collide.
+    """
+    credentials: Final = strip_auth_scheme(auth_value, "Basic")
+    if credentials == auth_value:
+        return to_basic_auth(auth_value)
+    try:
+        base64.b64decode(credentials, validate=True)
+    except ValueError:
+        return to_basic_auth(credentials)
+    return credentials
+
+
 def _strip_header_whitespace(headers: dict[str, str]) -> dict[str, str]:
     return {
         (key.strip() if isinstance(key, str) else key): (value.strip() if isinstance(value, str) else value)
@@ -67,6 +104,29 @@ def _first_non_cancelled_cause(exc: BaseException) -> BaseException | None:
         elif not isinstance(current, asyncio.CancelledError):
             return current
     return None
+
+
+_SDK_READ_TIMEOUT_CODE: Final = int(httpx.codes.REQUEST_TIMEOUT)
+"""The code the MCP SDK puts on its own elapsed read timeout, an HTTP status in a field that
+otherwise carries JSON-RPC error codes."""
+
+
+def _as_read_timeout(exc: BaseException) -> TimeoutError | None:
+    """The session read timeout elapsing, re-expressed as a ``TimeoutError``, or ``None``.
+
+    The SDK reports its own elapsed read timeout as ``McpError`` carrying an HTTP status code in a
+    field that otherwise holds JSON-RPC error codes, and it relays an upstream's JSON-RPC error
+    through that same class and field. The numeric code alone therefore cannot separate the two, and
+    an upstream answering with application code 408 would be reported as a gateway timeout it never
+    caused. The SDK raises its own from inside an ``except TimeoutError``, so the elapsed timeout is
+    on the context chain, while a relayed error is built from a received message and has no such
+    chain; that is the discriminator.
+    """
+    if not isinstance(exc, McpError) or exc.error.code != _SDK_READ_TIMEOUT_CODE:
+        return None
+    if not isinstance(exc.__context__, TimeoutError):
+        return None
+    return TimeoutError(exc.error.message)
 
 
 TSessionResult = TypeVar("TSessionResult")
@@ -347,7 +407,14 @@ class MCPClient:
                 session_kwargs["elicitation_callback"] = self._elicitation_callback
             if self._logging_callback is not None:
                 session_kwargs["logging_callback"] = self._logging_callback
-            session_ctx: Final = ClientSession(read_stream, write_stream, **session_kwargs)
+            # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
+            # ever fails the request.
+            session_ctx: Final = ClientSession(
+                read_stream,
+                write_stream,
+                read_timeout_seconds=timedelta(seconds=self.timeout),
+                **session_kwargs,
+            )
             session: Final = await session_ctx.__aenter__()
             try:
                 init_result: Final = await session.initialize()
@@ -390,7 +457,16 @@ class MCPClient:
             self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
-        except Exception:
+        except Exception as e:
+            read_timeout: Final = _as_read_timeout(e)
+            if read_timeout is not None:
+                verbose_logger.warning(
+                    "MCP client timed out after %ss waiting for %s to answer; the server accepted the "
+                    "request and ended its response stream without a JSON-RPC reply",
+                    self.timeout,
+                    self.server_url or "stdio",
+                )
+                raise read_timeout from e
             _log: Final = verbose_logger.debug if quiet_on_error else verbose_logger.warning
             _log("MCP client run_with_session failed for %s", self.server_url or "stdio")
             raise
@@ -401,16 +477,15 @@ class MCPClient:
                 except BaseException as e:
                     verbose_logger.debug("Error during http_client cleanup: %s", e)
 
-    def update_auth_value(self, mcp_auth_value: str | dict[str, str]):
+    def update_auth_value(self, mcp_auth_value: str | dict[str, str]) -> None:
         """
         Set the authentication header for the MCP client.
         """
         if isinstance(mcp_auth_value, dict):
             self._mcp_auth_value = mcp_auth_value
+        elif self.auth_type == MCPAuth.basic:
+            self._mcp_auth_value = to_basic_credentials(mcp_auth_value)
         else:
-            if self.auth_type == MCPAuth.basic:
-                # Assuming mcp_auth_value is in format "username:password", convert it when updating
-                mcp_auth_value = to_basic_auth(mcp_auth_value)
             self._mcp_auth_value = mcp_auth_value
 
     def _get_auth_headers(self) -> dict:
@@ -419,19 +494,20 @@ class MCPClient:
         if self._mcp_auth_value:
             if isinstance(self._mcp_auth_value, str):
                 if self.auth_type == MCPAuth.bearer_token:
-                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
                 elif self.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {self._mcp_auth_value}"
                 elif self.auth_type == MCPAuth.api_key:
                     headers["X-API-Key"] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.authorization:
+                    # This auth type means the caller owns the whole header value.
                     headers["Authorization"] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.oauth2:
-                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
                 elif self.auth_type == MCPAuth.token:
-                    headers["Authorization"] = f"token {self._mcp_auth_value}"
+                    headers["Authorization"] = f"token {strip_auth_scheme(self._mcp_auth_value, 'token')}"
                 elif self.auth_type == MCPAuth.oauth2_token_exchange:
-                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
+                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request

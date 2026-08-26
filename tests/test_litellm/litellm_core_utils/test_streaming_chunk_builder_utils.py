@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
@@ -994,6 +989,114 @@ def test_cost_field_in_usage_chunks():
     assert usage.completion_tokens == 5
 
 
+def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
+    """Regression for https://github.com/BerriAI/litellm/issues/32051
+
+    The Responses-API bridge yields ModelResponseStream chunks with choices
+    followed by a trailing event object that has no ``choices`` key. Building
+    those chunks used to raise ``KeyError('choices')`` (surfaced as a 500
+    APIError); it must now skip the choices-less chunk and assemble content.
+    """
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+
+    content_chunks = [
+        ModelResponseStream(
+            model="gpt-4o",
+            choices=[StreamingChoices(index=0, delta=Delta(content=part))],
+        )
+        for part in ("Hello", " world")
+    ]
+    trailing_chunk = BaseLiteLLMOpenAIResponseObject()
+    assert "choices" not in trailing_chunk
+
+    response = stream_chunk_builder(chunks=content_chunks + [trailing_chunk])
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+
+
+def test_anthropic_speed_and_geo_survive_stream_assembly():
+    """Anthropic prices fast mode and non-global regions with a multiplier read off
+    ``usage.speed`` / ``usage.inference_geo``. Dropping them while reassembling a stream
+    bills streamed fast-mode calls at the standard rate."""
+    from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+    def _usage(**extra):
+        usage = Usage(completion_tokens=100, prompt_tokens=1000, total_tokens=1100)
+        for key, value in extra.items():
+            setattr(usage, key, value)
+        return usage
+
+    def _chunk(usage):
+        return ModelResponseStream(
+            id="chatcmpl-1",
+            created=1745513206,
+            model="claude-opus-4-8",
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="Hi"))],
+            usage=usage,
+        )
+
+    fast_chunk = _chunk(_usage(speed="fast", inference_geo="global"))
+    fast_usage = ChunkProcessor(chunks=[fast_chunk]).calculate_usage(
+        chunks=[fast_chunk], model="claude-opus-4-8", completion_output="Hi"
+    )
+    standard_chunk = _chunk(_usage(inference_geo="global"))
+    standard_usage = ChunkProcessor(chunks=[standard_chunk]).calculate_usage(
+        chunks=[standard_chunk], model="claude-opus-4-8", completion_output="Hi"
+    )
+
+    assert fast_usage.speed == "fast"
+    assert fast_usage.inference_geo == "global"
+    assert getattr(standard_usage, "speed", None) is None
+
+    fast_cost = sum(cost_per_token(model="claude-opus-4-8", usage=fast_usage))
+    standard_cost = sum(cost_per_token(model="claude-opus-4-8", usage=standard_usage))
+    assert fast_cost == pytest.approx(standard_cost * 2.0)
+
+
+def test_prompt_tokens_details_survive_later_usage_chunk_without_details():
+    """Regression for #34801: a trailing usage chunk that omits
+    `prompt_tokens_details` must not wipe the OpenAI cache-read/cache-write split,
+    otherwise those tokens get re-priced at the uncached input rate."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk_with_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513206,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=Usage(
+            prompt_tokens=6017,
+            completion_tokens=4,
+            total_tokens=6021,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=6004, cache_write_tokens=10
+            ),
+        ),
+    )
+    chunk_without_details = ModelResponseStream(
+        id="chatcmpl-1",
+        created=1745513207,
+        model="openai/gpt-5.6-sol",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(prompt_tokens=6017, completion_tokens=4, total_tokens=6021),
+    )
+
+    chunks = [chunk_with_details, chunk_without_details]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="openai/gpt-5.6-sol", completion_output="Hi"
+    )
+
+    assert usage.prompt_tokens == 6017
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 6004
+    assert usage.prompt_tokens_details.cache_write_tokens == 10
+
+
 def test_get_combined_tool_content_custom_tool_call():
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
     from litellm.types.utils import ChatCompletionMessageCustomToolCall
@@ -1180,3 +1283,83 @@ def test_get_combined_tool_content_joins_many_custom_tool_input_fragments_in_ord
     assert isinstance(combined[1], ChatCompletionMessageCustomToolCall)
     assert combined[1].custom.name == "run_script"
     assert combined[1].custom.input == "".join(object_fragments)
+
+
+def _reasoning_stream_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-reasoning",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="10", role="assistant"))],
+    )
+
+
+def test_count_reasoning_tokens_returns_none_for_signature_only_thinking():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="10", role="assistant", reasoning_content=""),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) is None
+
+
+def test_count_reasoning_tokens_counts_visible_reasoning():
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    processor = ChunkProcessor(chunks=[_reasoning_stream_chunk()])
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="10",
+                    role="assistant",
+                    reasoning_content="let me count the primes under thirty",
+                ),
+            )
+        ]
+    )
+
+    assert processor.count_reasoning_tokens(response) > 0
+
+
+@pytest.mark.parametrize(
+    "estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens",
+    [(40, 40, 60), (250, 100, 0)],
+)
+def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
+    estimated_reasoning_tokens, expected_reasoning_tokens, expected_text_tokens
+):
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-unknown-split",
+        model="claude-opus-4-8",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, role=None))],
+        usage=Usage(
+            prompt_tokens=50,
+            completion_tokens=100,
+            total_tokens=150,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=None, text_tokens=None),
+        ),
+    )
+    processor = ChunkProcessor(chunks=[chunk])
+
+    usage = processor.calculate_usage(
+        chunks=[chunk],
+        model="claude-opus-4-8",
+        completion_output="10",
+        reasoning_tokens=estimated_reasoning_tokens,
+    )
+
+    assert usage.completion_tokens == 100
+    assert usage.completion_tokens_details.reasoning_tokens == expected_reasoning_tokens
+    assert usage.completion_tokens_details.text_tokens == expected_text_tokens

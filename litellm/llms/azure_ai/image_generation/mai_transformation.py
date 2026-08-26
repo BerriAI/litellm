@@ -226,5 +226,5 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         width: Final = optional_params.get("width", self.DEFAULT_WIDTH)
         height: Final = optional_params.get("height", self.DEFAULT_HEIGHT)
-        image_response.size = f"{width}x{height}"  # type: ignore[assignment]
+        image_response.size = f"{width}x{height}"
         return image_response

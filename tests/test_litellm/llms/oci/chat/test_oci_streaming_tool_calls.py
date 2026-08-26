@@ -9,10 +9,7 @@ Issue: OCI API returns tool calls with incomplete structures during streaming
 Error: ValidationError: 1 validation error for OCIStreamChunk message.toolCalls.0.arguments Field required
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.oci.chat.generic import handle_generic_stream_chunk
 from litellm.types.utils import ModelResponseStream

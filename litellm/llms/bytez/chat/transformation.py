@@ -165,7 +165,7 @@ class BytezChatConfig(BaseConfig):
         if optional_params.get("stream"):
             del optional_params["stream"]
 
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+        messages = adapt_messages_to_bytez_standard(messages=messages)
 
         data: Final = {
             "messages": messages,
@@ -206,14 +206,14 @@ class BytezChatConfig(BaseConfig):
         # Add the output
         output: Final = json.get("output")
 
-        message: Final = model_response.choices[0].message  # type: ignore
+        message: Final = model_response.choices[0].message
 
         message.content = output["content"][0]["text"]
 
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+        messages = adapt_messages_to_bytez_standard(messages=messages)
 
         # NOTE We are approximating tokens, to get the true values we will need to update our BE
-        prompt_tokens: Final = get_tokens_from_messages(messages)  # type: ignore
+        prompt_tokens: Final = get_tokens_from_messages(messages)
 
         output_messages: Final = adapt_messages_to_bytez_standard(messages=[output])
 
@@ -227,7 +227,7 @@ class BytezChatConfig(BaseConfig):
             total_tokens=total_tokens,
         )
 
-        model_response.usage = usage  # type: ignore
+        model_response.usage = usage
 
         model_response._hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
@@ -348,7 +348,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
 
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,
-                model_response=model_response,  # type: ignore
+                model_response=model_response,
                 response_obj=response_obj,
             )
 

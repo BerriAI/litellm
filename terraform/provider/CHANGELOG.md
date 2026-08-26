@@ -2,18 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+Up to `0.4.0` the provider had its own version line, cut from the headings in
+this file. It now ships at the **LiteLLM version**, on every LiteLLM release
+channel, built from the same commit as the proxy (see `RELEASING.md`). The
+headings below no longer drive a release; they record what changed and which
+LiteLLM line first carried it. A change that breaks existing configurations
+or state must be called out loudly here, because the version number can no
+longer signal it.
 
 ## [Unreleased]
+
+### Added
+
+- **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
+
+### Fixed
+
+- **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
+
+### Changed
+
+- **Versioning**: the provider is now published at the LiteLLM version, from the same commit as the proxy, on every LiteLLM release (dev, rc, stable). The `0.x` line ends at `0.4.0`; a `~> 0.4` constraint will not receive further releases, so re-pin to the LiteLLM version your proxy runs (for example `~> 1.99.0`). Existing `0.x` versions remain in the registry and keep verifying
+
+## [0.4.0] - 2026-08-06
 
 ### Fixed
 
 - **organization**: Send `PATCH` instead of `POST` to `/organization/update` and `/organization/member_update`, matching the methods the LiteLLM proxy serves; organization and organization member updates previously failed with a 405
+- **team_member**: Include `role` in the update payload so a role change on an existing `litellm_team_member` is applied instead of being silently dropped
 
 ### Changed
 
 - The provider source of truth moved to `terraform/provider/` in [BerriAI/litellm](https://github.com/BerriAI/litellm); this repository is now a release mirror. CI in the monorepo statically audits every endpoint the provider calls against the proxy's OpenAPI schema on every change
+- **mcp_server**, **vector_store**: `env` and `litellm_params` are now marked sensitive, so they are redacted from plan/apply output, and they are no longer read back from the API into state — the configured value is authoritative. If the proxy returns values that differ from the configuration, that drift is no longer surfaced on refresh
+- Dependency updates: `grpc` and `golang.org/x` modules
+
+## [0.3.0] - 2026-07-13
+
+Released from the mirror repository before the source move was complete; this entry backfills it in the monorepo changelog.
+
+### Added
+
+- **model**: Add optional `pricing_base_model` attribute that sets `model_info.base_model` (the cost-map lookup key) independently of routing. Deployments whose routing name differs from the pricing key (for example Azure Data Zone, routed as `azure/gpt-4.1` but priced via `us/gpt-4.1-2025-04-14`) can now be billed correctly without breaking routing. When unset, behavior is unchanged and `base_model` continues to drive both routing and pricing (#47)
 
 ## [0.2.2] - 2026-05-13
 

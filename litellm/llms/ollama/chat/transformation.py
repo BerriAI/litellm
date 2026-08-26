@@ -253,7 +253,7 @@ class OllamaChatConfig(BaseConfig):
             if tool_calls is not None and isinstance(tool_calls, list):
                 new_tools = []
                 for tool in tool_calls:
-                    typed_tool = ChatCompletionAssistantToolCall(**tool)  # type: ignore
+                    typed_tool = ChatCompletionAssistantToolCall(**tool)
                     if typed_tool["type"] == "function":
                         arguments = {}
                         if "arguments" in typed_tool["function"]:
@@ -375,18 +375,18 @@ class OllamaChatConfig(BaseConfig):
                 ],
                 reasoning_content=response_json_message.get("reasoning_content"),
             )
-            model_response.choices[0].message = message  # type: ignore
+            model_response.choices[0].message = message
             model_response.choices[0].finish_reason = "tool_calls"
         else:
             _message: Final = litellm.Message(**response_json_message)
-            model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].message = _message
             # Set finish_reason to "tool_calls" when tool_calls are present
             # Fixes: https://github.com/BerriAI/litellm/issues/18922
             if _message.tool_calls:
                 model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
-        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
+        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
         completion_tokens: Final = response_json.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),

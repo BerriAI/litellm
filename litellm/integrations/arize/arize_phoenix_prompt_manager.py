@@ -174,9 +174,7 @@ class ArizePhoenixTemplateManager:
             # Combine rendered content
             final_content = " ".join(rendered_content_parts)
 
-            rendered_messages.append(
-                {"role": role, "content": final_content}  # type: ignore
-            )
+            rendered_messages.append({"role": role, "content": final_content})
 
         return rendered_messages
 
@@ -361,10 +359,10 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         """
         Determine if prompt management should run based on the prompt_id.
 
-        For Arize Phoenix, we always return True and handle the prompt loading
-        in the _compile_prompt_helper method.
+        Arize Phoenix needs a prompt_id to compile, so it declines requests without one;
+        prompt loading itself happens in the _compile_prompt_helper method.
         """
-        return True
+        return prompt_id is not None
 
     def _compile_prompt_helper(
         self,

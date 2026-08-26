@@ -84,7 +84,7 @@ def bm25_score_messages(
     # document tokens that start with that term (min 4 chars match).  This lets
     # "cook" match "cooking" and "auth" match "authentication" without a full
     # stemmer dependency.
-    def _expand_tf(query_term: str, tf_counts: Counter) -> int:  # type: ignore[type-arg]
+    def _expand_tf(query_term: str, tf_counts: Counter) -> int:
         """Sum TF across all doc tokens that are prefixed by query_term."""
         exact: Final = tf_counts.get(query_term, 0)
         if exact:

@@ -2,13 +2,16 @@
 Handles Authentication Errors
 """
 
-from typing import TYPE_CHECKING, Any, Final, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
+from litellm.litellm_core_utils.core_helpers import is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -28,9 +31,22 @@ DB_UNAVAILABLE_FALLBACK_USER_ID: Final = "__db_unavailable_fallback__"
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
+
+
+def _with_requester_ip_address(request_data: dict[str, object], requester_ip: str | None) -> dict[str, object]:
+    """Auth gate rejections are raised before `add_litellm_data_to_request` records the
+    caller IP, so their failure logs would otherwise carry no IP nor key/user identity."""
+    if not requester_ip:
+        return request_data
+    key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
+    metadata: Final = request_data.get(key)
+    base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
+    if base.get("requester_ip_address"):
+        return request_data
+    return {**request_data, key: {**base, "requester_ip_address": requester_ip}}  # mutable-ok: logging needs dicts
 
 
 class UserAPIKeyAuthExceptionHandler:
@@ -38,7 +54,7 @@ class UserAPIKeyAuthExceptionHandler:
     async def _handle_authentication_error(
         e: Exception,
         request: Request,
-        request_data: dict,
+        request_data: dict[str, object],
         route: str,
         parent_otel_span: Span | None,
         api_key: str,
@@ -92,9 +108,14 @@ class UserAPIKeyAuthExceptionHandler:
             # raise the exception to the caller
             requester_ip: Final = _get_request_ip_address(
                 request=request,
-                use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+                use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
-            verbose_proxy_logger.exception(
+            log_fn: Final = (
+                verbose_proxy_logger.error
+                if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
+                else verbose_proxy_logger.exception
+            )
+            log_fn(
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
                 e,
                 requester_ip,
@@ -129,11 +150,14 @@ class UserAPIKeyAuthExceptionHandler:
                     resolve_llm_provider_for_rate_limit,
                 )
 
-                _, e.llm_provider = resolve_llm_provider_for_rate_limit(request_data.get("model"))
+                budget_model: Final = request_data.get("model")
+                _, e.llm_provider = resolve_llm_provider_for_rate_limit(
+                    budget_model if isinstance(budget_model, str) else None
+                )
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=request_data,
+                request_data=_with_requester_ip_address(request_data, requester_ip),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,

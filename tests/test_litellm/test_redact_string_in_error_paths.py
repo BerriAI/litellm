@@ -9,14 +9,11 @@ Covers actual execution of redaction in:
 """
 
 import logging
-import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string
 
@@ -193,13 +190,22 @@ class TestProxyStreamingDataGeneratorRedaction:
 
 
 class TestRouterFallbackFailureTracebackRedaction:
-    """Test the fallback-failure error log in router.py's
-    async_function_with_fallbacks_common_utils. A prior version passed exc_info=True
-    alongside an already-redacted message, which bypasses redact_string() entirely
-    since the stdlib logging module renders exc_info separately from the message."""
+    """Test the fallback-failure logs in router.py's
+    async_function_with_fallbacks_common_utils. Both call sites must redact the
+    traceback at the call site with redact_string() rather than hand a live
+    exception to exc_info=True. SecretRedactionFilter rewrites record.exc_text,
+    but record.exc_info stays an exception object no filter can rewrite, so any
+    handler that renders exc_info itself (Datadog and OTel log bridges do) would
+    receive the unredacted secret."""
 
     @pytest.mark.asyncio
     async def test_fallback_failure_does_not_leak_secret_via_exc_info(self, caplog):
+        """The helper is driven from inside an `except` block because that is the only
+        way production reaches it, and the entry-point debug log takes its traceback
+        from the active exception. With no exception in flight sys.exc_info() is empty,
+        so an exc_info=True regression there would degrade to (None, None, None) and
+        this test would pass against it.
+        """
         import litellm
 
         router = litellm.Router(
@@ -221,24 +227,39 @@ class TestRouterFallbackFailureTracebackRedaction:
             "litellm.router.run_async_fallback",
             new=AsyncMock(side_effect=RuntimeError(f"boom api_key={secret}")),
         ):
-            with caplog.at_level(logging.ERROR, logger="LiteLLM Router"):
-                with pytest.raises(Exception):
-                    await router.async_function_with_fallbacks_common_utils(
-                        e=Exception("original failure"),
-                        disable_fallbacks=False,
-                        fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
-                        context_window_fallbacks=None,
-                        content_policy_fallbacks=None,
-                        model_group="gpt-3.5-turbo",
-                        args=(),
-                        kwargs={"model": "gpt-3.5-turbo"},
-                    )
+            try:
+                raise ValueError(f"primary deployment failed api_key={secret}")
+            except ValueError as original_exception:
+                with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+                    with pytest.raises(ValueError, match='primary deployment failed api_key=sk-testsecretvalu'):
+                        await router.async_function_with_fallbacks_common_utils(
+                            e=original_exception,
+                            disable_fallbacks=False,
+                            fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
+                            context_window_fallbacks=None,
+                            content_policy_fallbacks=None,
+                            model_group="gpt-3.5-turbo",
+                            args=(),
+                            kwargs={"model": "gpt-3.5-turbo"},
+                        )
+
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        assert debug_records, "expected the entry-point debug log, which carries the active traceback"
 
         error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert error_records, "expected an error log for the fallback failure"
-        for record in error_records:
+        assert any(
+            "Cooldown Deployments" in r.getMessage() for r in error_records
+        ), "expected the fallback-failure log, not an unrelated error"
+
+        for record in caplog.records:
             assert secret not in record.getMessage()
             assert secret not in (record.exc_text or "")
+            rendered_exc_info = "".join(traceback.format_exception(*record.exc_info)) if record.exc_info else ""
+            assert secret not in rendered_exc_info, (
+                f"{record.levelname} record passed a live exception to exc_info; "
+                "no logging filter can redact record.exc_info"
+            )
 
 
 def _make_mock_ingest_options():

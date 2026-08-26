@@ -65,7 +65,7 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
             additional_args={"complete_input_dict": request_data},
             original_response=stringified_response,
         )
-        image_response: Final[ImageResponse] = convert_to_model_response_object(  # type: ignore
+        image_response: Final[ImageResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
             response_type="image_generation",

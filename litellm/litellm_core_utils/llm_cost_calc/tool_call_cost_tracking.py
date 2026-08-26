@@ -2,6 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 import litellm
@@ -21,6 +22,19 @@ from litellm.types.utils import (
     StandardBuiltInToolsParams,
     Usage,
 )
+
+
+def _output_item_type(output_item: object) -> str | None:
+    item_type: Final = output_item.get("type") if isinstance(output_item, dict) else getattr(output_item, "type", None)
+    return item_type if isinstance(item_type, str) else None
+
+
+def _usage_reports_server_side_web_search_calls(usage: Usage) -> bool:
+    details: Final = getattr(usage, "server_side_tool_usage_details", None)
+    if not isinstance(details, Mapping):
+        return False
+    calls: Final = details.get("web_search_calls")
+    return isinstance(calls, int) and calls > 0
 
 
 class StandardBuiltInToolCostTracking:
@@ -117,10 +131,28 @@ class StandardBuiltInToolCostTracking:
             if result is not None:
                 return result
 
-        return StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        per_call_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
             web_search_options=standard_built_in_tools_params.get("web_search_options", None),
             model_info=model_info,
         )
+        return per_call_cost * StandardBuiltInToolCostTracking._count_web_search_calls(response_object)
+
+    @staticmethod
+    def _count_web_search_calls(response_object: object) -> int:
+        """
+        Number of web searches to bill for on the per-call pricing path.
+
+        Providers that report a request count in usage (gemini, anthropic, xai, vertex) are handled by
+        get_cost_for_web_search_request and never reach here. This path prices per call, so it must count
+        the web_search_call items. Chat-completions responses only expose url_citation annotations with no
+        count, so they floor to a single billable search.
+        """
+        if isinstance(response_object, ResponsesAPIResponse):
+            count = sum(
+                1 for output_item in response_object.output if _output_item_type(output_item) == "web_search_call"
+            )
+            return max(count, 1)
+        return 1
 
     @staticmethod
     def _handle_file_search_cost(
@@ -188,13 +220,13 @@ class StandardBuiltInToolCostTracking:
 
             if storage_gb_val is not None:
                 try:
-                    storage_gb = float(storage_gb_val)  # type: ignore
+                    storage_gb = float(storage_gb_val)
                 except (TypeError, ValueError):
                     storage_gb = None
 
             if days_val is not None:
                 try:
-                    days = float(days_val)  # type: ignore
+                    days = float(days_val)
                 except (TypeError, ValueError):
                     days = None
 
@@ -286,7 +318,7 @@ class StandardBuiltInToolCostTracking:
         """Safely convert a value to int."""
         if value is not None:
             try:
-                return int(value)  # type: ignore
+                return int(value)
             except (TypeError, ValueError):
                 return None
         return None
@@ -351,6 +383,10 @@ class StandardBuiltInToolCostTracking:
                 # and _handle_web_search_cost() is never called.
                 if hasattr(usage, "server_tool_use") and _get_web_search_requests(usage.server_tool_use) is not None:
                     return True
+                # xAI reports usage.server_side_tool_usage_details.web_search_calls; a searched
+                # answer with no url_citation annotations has no other chat-path signal
+                if _usage_reports_server_side_web_search_calls(usage):
+                    return True
             return False
         elif isinstance(response_object, ResponsesAPIResponse):
             # response api explicitly includes web_search_call in the output
@@ -369,6 +405,8 @@ class StandardBuiltInToolCostTracking:
                     and usage.prompt_tokens_details.web_search_requests is not None
                 )
             ):
+                return True
+            if _usage_reports_server_side_web_search_calls(usage):
                 return True
 
         return False
@@ -430,12 +468,7 @@ class StandardBuiltInToolCostTracking:
         Returns:
             True if the ResponsesAPIResponse includes one of the specified output types, False otherwise.
         """
-        output: Final = response_object.output
-        for output_item in output:
-            _output_type: str | None = getattr(output_item, "type", None)
-            if _output_type == output_type:
-                return True
-        return False
+        return any(_output_item_type(output_item) == output_type for output_item in response_object.output)
 
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
