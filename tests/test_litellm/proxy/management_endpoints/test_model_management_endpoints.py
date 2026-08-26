@@ -4261,15 +4261,21 @@ class TestAutoRouterClassifierDefaultPrompt:
 
 class TestEnforceRpmTpmOnModelAdd:
     def test_passes_when_disabled_even_without_limits(self):
-        _raise_if_rate_limits_required_but_missing(
-            litellm_params=LiteLLM_Params(model="azure/gpt-5.2"),
-            enforced=False,
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                litellm_params=LiteLLM_Params(model="azure/gpt-5.2"),
+                enforced=False,
+            )
+            is None
         )
 
     def test_passes_when_enabled_and_both_set(self):
-        _raise_if_rate_limits_required_but_missing(
-            litellm_params=LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=1000),
-            enforced=True,
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                litellm_params=LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=1000),
+                enforced=True,
+            )
+            is None
         )
 
     @pytest.mark.parametrize(
