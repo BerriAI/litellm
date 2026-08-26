@@ -2588,13 +2588,29 @@ async def _delete_cache_key_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ):
+    """
+    Evict one key object, best-effort, matching `delete_cache_team_object` and
+    `delete_cache_key_objects`.
+
+    Every caller runs this after its own write has already committed, and the in-memory entry is
+    dropped before the Redis round trip. Letting a cache-backend error raise here therefore reports
+    failure for work that succeeded without making the cache any less stale; the leftover Redis
+    entry expires at its TTL either way.
+    """
     key: Final = hashed_token
 
-    user_api_key_cache.delete_cache(key=key)
+    try:
+        user_api_key_cache.delete_cache(key=key)
 
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        ## UPDATE REDIS CACHE ##
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # best-effort: a cache error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to invalidate cached key entry %s; a stale key object may be served until its TTL expires: %s",
+            key,
+            e,
+        )
 
 
 async def delete_cache_key_objects(
