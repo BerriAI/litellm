@@ -12,7 +12,12 @@ from pydantic import PositiveInt, TypeAdapter, ValidationError
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    EMPTY_MAPPING,
+    MINIMUM_CUSTOM_KEY_LENGTH,
+    STANDARD_CUSTOMER_ID_HEADERS,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -217,8 +222,10 @@ _SAFE_CLIENT_CALLBACK_PARAMS: Final[frozenset[str]] = frozenset(
 _EXTRA_BANNED_OBSERVABILITY_PARAMS: Final[frozenset[str]] = frozenset(
     {
         "posthog_api_url",
-        "phoenix_project_name",
-        "phoenix_project_name_override",
+        # ``phoenix_project_name`` / ``phoenix_project_name_override`` are NOT
+        # banned: on the proxy the Phoenix integrations only read them from
+        # ``user_api_key_auth_metadata`` (key/team config), so the bare request
+        # fields are inert and rejecting them just breaks SDK-style callers.
         # Server-reserved: written exclusively by add_user_api_key_auth_to_request_metadata
         # from the authenticated key's database record.  A caller-supplied value
         # would survive the server merge and let an authenticated user redirect
@@ -304,6 +311,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # the request away from the admin's pinned configuration.
     "nvcf_function_id",
     "use_ssl",
+    # Per-deployment opt-in that hands the whole call to the Rust core. It is a
+    # deployment decision, not a request one: the Rust path uses its own client
+    # rather than the one the deployment configured, and reports no post_call,
+    # so a caller-supplied value picks a transport and a callback surface the
+    # admin did not choose.
+    "rust",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
@@ -595,7 +608,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         # Check wildcard patterns
         for route_pattern in routes_defined:
-            if RouteChecks._route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
+            if RouteChecks.route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
                 return True
 
         return False
@@ -1169,10 +1182,50 @@ def enforce_output_token_estimates_are_admin_only(
     )
 
 
+class BatchEnqueuedTokenLimitRequest(Protocol):
+    """The shape of any management request that can carry a batch enqueued-token limit."""
+
+    @property
+    def metadata(self) -> Mapping[str, object] | None: ...
+
+    @property
+    def model_fields_set(self) -> Collection[str]: ...
+
+
+def enforce_batch_enqueued_token_limit_is_admin_only(
+    data: BatchEnqueuedTokenLimitRequest,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    """Only a proxy admin may change a key or team's batch enqueued-token limit.
+
+    When set, ``batch_enqueued_token_limit`` replaces the standard RPM/TPM checks
+    for batch submissions, so a holder-writable copy would let a caller lift their
+    own batch quota. Gated on the resulting value rather than on presence, so a
+    form resending the stored value stays a no-op.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored: Final[Mapping[str, object]] = existing_metadata or EMPTY_MAPPING
+    requested: Final[Mapping[str, object]] = (
+        (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
+    )
+    if requested.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY) == stored.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={  # mutable-ok: HTTPException.detail has no immutable form
+            "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
+            "It replaces the standard rate limit checks for batch submissions."
+        },
+    )
+
+
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_accessor_key: Literal["team_metadata", "organization_metadata", "project_metadata"],
-    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit", "model_itpm_limit", "model_otpm_limit"],
 ) -> dict[str, int] | None:
     if getattr(user_api_key_dict, metadata_accessor_key):
         return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
@@ -1748,7 +1801,7 @@ def _format_model_candidates(
     return candidates
 
 
-def _request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
+def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
     """Whether FastAPI resolved this request to a user-defined pass-through handler.
 
     Reads the marker set by ``create_pass_through_route`` off the dispatched endpoint
@@ -1789,7 +1842,7 @@ def get_model_from_request(
     and does not carry the marker. Built-in provider passthrough routes
     (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
-    if _request_dispatched_to_pass_through_endpoint(request):
+    if request_dispatched_to_pass_through_endpoint(request):
         return None
 
     candidates: Final = _extract_model_candidates_from_request(

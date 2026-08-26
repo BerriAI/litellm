@@ -1,3 +1,4 @@
+import copy
 import enum
 import re
 from typing import Any, Final, cast
@@ -11,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
+    filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -26,6 +28,14 @@ from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
 class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
+
+
+NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
+    "thinking_blocks",
+    "reasoning_content",
+    "provider_specific_fields",
+    "cache_control",
+)
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -167,10 +177,24 @@ class AzureAIStudioConfig(OpenAIConfig):
     ) -> list:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
-            1. Transforms list content to a string.
-            2. If message contains an image or audio, send as is (user-intended)
+            1. Strips message fields that are not part of the OpenAI chat-completions
+               schema (thinking_blocks, reasoning_content, provider_specific_fields,
+               cache_control).
+               Azure AI Foundry backends set additionalProperties=false and reject
+               these with "Extra inputs are not permitted", which breaks multi-turn
+               Anthropic-format clients that echo thinking blocks back as history.
+            2. Transforms list content to a string.
+            3. If message contains an image or audio, send as is (user-intended)
+
+        Operates on a deep copy so the caller's messages keep their thinking blocks
+        and provider metadata, which a fallback to another provider still needs.
         """
-        for message in messages:
+        stripped_messages: Final = copy.deepcopy(messages)
+        for message in stripped_messages:
+            message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
+            for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
+                filter_value_from_dict(message_dict, field)
+
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue
@@ -178,7 +202,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             texts = convert_content_list_to_str(message=message)
             if texts:
                 message["content"] = texts
-        return messages
+        return stripped_messages
 
     def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
         try:

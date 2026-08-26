@@ -9,8 +9,6 @@ is aggregated.
 
 import asyncio
 import io
-import os
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -18,7 +16,6 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.nvidia_riva.audio_transcription import handler as handler_mod
 from litellm.llms.nvidia_riva.audio_transcription.handler import (

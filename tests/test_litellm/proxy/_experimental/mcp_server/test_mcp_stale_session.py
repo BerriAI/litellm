@@ -1411,6 +1411,8 @@ async def _run_passthrough_connect(
 ):
     """Drive handle_streamable_http_mcp through the preemptive-401 gate and report whether it
     challenged (raised) or forwarded to the session manager. Returns (challenged, www_authenticate)."""
+    from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server.server import (
         handle_streamable_http_mcp,
         session_manager_stateless,
