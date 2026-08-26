@@ -48,7 +48,8 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit || '50' }}
         with:
           script: |
-            const FLAG_MARKER = '<!-- litellm:potential-duplicate -->';
+            const FLAG_MARKER = '<!-- litellm:potential-duplicate';
+            const CANDIDATES = /<!-- litellm:potential-duplicate candidates=([\d,]*) -->/;
             const FLAG_LABEL = 'potential-duplicate';
             const OPTOUT_LABELS = ['do not close', 'keep open', 'not a duplicate'];
 
@@ -58,13 +59,15 @@ jobs:
             const cutoff = Date.now() - graceDays * 86400000;
             const { owner, repo } = context.repo;
 
-            // The oldest issue the flag points at, excluding the issue itself. The
-            // detector orders candidates by score, not age, so the first one listed
-            // can be newer than the original report.
+            // Read candidates from the marker's digits-only field, never from the prose.
+            // Titles are user-controlled and get interpolated into this same comment, so
+            // scanning the body would let an issue titled "... see #1" redirect a closure
+            // onto an unrelated report. Take the lowest: the detector orders by score, not
+            // age, so the first candidate listed can be newer than the original report.
             const canonicalTarget = (body, self) => {
-              const refs = new Set();
-              for (const [, n] of body.matchAll(/#(\d+)/g)) refs.add(Number(n));
-              for (const [, n] of body.matchAll(/github\.com\/[^/\s]+\/[^/\s]+\/issues\/(\d+)/g)) refs.add(Number(n));
+              const field = body.match(CANDIDATES);
+              if (!field) return null;
+              const refs = new Set(field[1].split(',').filter(Boolean).map(Number));
               refs.delete(self);
               return refs.size ? Math.min(...refs) : null;
             };
