@@ -87,7 +87,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_auth_cache_key,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
@@ -196,13 +199,22 @@ class _UserModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
+class _TokenTeamModels(Protocol):
+    @property
+    def team_models(self) -> list[str]: ...
+
+
+def _token_team_models(valid_token: _TokenTeamModels) -> list[str]:
+    return valid_token.team_models
+
+
 async def _read_user_model_max_budget(
     user_id: str | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: object,
+    parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging,
-) -> dict | None:
+) -> Mapping[str, object] | None:
     """The user row's `model_max_budget`, or None when the row cannot be read.
 
     A user whose row is missing must not be refused: this is a budget lookup,
@@ -216,13 +228,13 @@ async def _read_user_model_max_budget(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
-            parent_otel_span=parent_otel_span,  # pyright: ignore[reportArgumentType]  # Span is a runtime union, not usable in an annotation here
+            parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
     except Exception as e:  # noqa: BLE001  # mirrors the main path's tolerance
         verbose_logger.debug("Unable to read user for the per-model budget check: %s", e)
         return None
-    return getattr(user_obj, "model_max_budget", None)
+    return user_obj.model_max_budget if user_obj is not None else None
 
 
 async def _check_user_model_budget(
@@ -1970,8 +1982,10 @@ async def _user_api_key_auth_builder(
 
             # Check 3. Check if user is in their team budget
             if not skip_budget_checks and valid_token.team_member_spend is not None:
-                if prisma_client is not None:
-                    _cache_key: Final = f"{valid_token.team_id}_{valid_token.user_id}"
+                _user_id: Final = valid_token.user_id
+                _team_id: Final = valid_token.team_id
+                if prisma_client is not None and _user_id is not None and _team_id is not None:
+                    _cache_key: Final = team_membership_auth_cache_key(team_id=_team_id, user_id=_user_id)
 
                     team_member_info = await user_api_key_cache.async_get_cache(
                         key=_cache_key,
@@ -1979,25 +1993,21 @@ async def _user_api_key_auth_builder(
                     )
                     if team_member_info is None:
                         # read from DB
-                        _user_id: Final = valid_token.user_id
-                        _team_id: Final = valid_token.team_id
-
-                        if _user_id is not None and _team_id is not None:
-                            _db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
-                                where={
-                                    "user_id": _user_id,
-                                    "team_id": _team_id,
-                                },
-                                include={"litellm_budget_table": True},
+                        _db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
+                            where={
+                                "user_id": _user_id,
+                                "team_id": _team_id,
+                            },
+                            include={"litellm_budget_table": True},
+                        )
+                        if _db_member is not None:
+                            team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
+                            await user_api_key_cache.async_set_cache(
+                                key=_cache_key,
+                                value=team_member_info,
+                                model_type=LiteLLM_TeamMembership,
+                                ttl=5,
                             )
-                            if _db_member is not None:
-                                team_member_info = LiteLLM_TeamMembership(**_db_member.dict())
-                                await user_api_key_cache.async_set_cache(
-                                    key=_cache_key,
-                                    value=team_member_info,
-                                    model_type=LiteLLM_TeamMembership,
-                                    ttl=5,
-                                )
 
                     if team_member_info is not None and team_member_info.litellm_budget_table is not None:
                         team_member_budget: Final = team_member_info.litellm_budget_table.max_budget
@@ -2013,11 +2023,16 @@ async def _user_api_key_auth_builder(
                                     max_budget=team_member_budget,
                                 )
                             if team_member_spend > team_member_budget:
+                                _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
                                     max_budget=team_member_budget,
+                                    message=(
+                                        f"Budget has been exceeded! TeamMember={_entity_id} "
+                                        f"Current cost: {team_member_spend}, Max budget: {team_member_budget}"
+                                    ),
                                     entity_type=Litellm_EntityType.TEAM_MEMBER.value,
-                                    entity_id=f"{valid_token.user_id}:{valid_token.team_id}",
+                                    entity_id=_entity_id,
                                 )
 
             # Check 3. If token is expired
@@ -2143,6 +2158,7 @@ async def _user_api_key_auth_builder(
                             proxy_logging_obj=proxy_logging_obj,
                         )
                 except HTTPException:
+                    token_team_models: Final = _token_team_models(valid_token)
                     _team_obj = LiteLLM_TeamTableCachedObj(
                         team_id=valid_token.team_id,
                         max_budget=valid_token.team_max_budget,
@@ -2151,7 +2167,7 @@ async def _user_api_key_auth_builder(
                         tpm_limit=valid_token.team_tpm_limit,
                         rpm_limit=valid_token.team_rpm_limit,
                         blocked=valid_token.team_blocked,
-                        models=valid_token.team_models,
+                        models=token_team_models,
                         metadata=valid_token.team_metadata,
                         object_permission_id=valid_token.team_object_permission_id,
                         object_permission=await _resolve_object_permission_for_unresolvable_team(
@@ -2295,6 +2311,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     UserAPIKeyAuth. Only called when valid_token.team_id is known to be
     non-None (the caller gates on it)."""
     assert valid_token.team_id is not None
+    token_team_models: Final = _token_team_models(valid_token)
     return LiteLLM_TeamTableCachedObj(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
@@ -2303,7 +2320,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         tpm_limit=valid_token.team_tpm_limit,
         rpm_limit=valid_token.team_rpm_limit,
         blocked=valid_token.team_blocked,
-        models=valid_token.team_models,
+        models=token_team_models,
         metadata=valid_token.team_metadata,
         object_permission_id=valid_token.team_object_permission_id,
     )
@@ -3250,8 +3267,7 @@ async def _run_post_custom_auth_checks(
     # loaded the user row yet. The attach is unconditional because the post-call
     # spend hook reads this field off the token: gating it on the same condition
     # as enforcement would leave the user's counter uncharged whenever this
-    # request was not itself enforceable, which is the untracked-spend bug this
-    # PR exists to fix.
+    # request was not itself enforceable, so its spend would go untracked.
     user_budget: Final = await _read_user_model_max_budget(
         user_id=valid_token.user_id,
         prisma_client=prisma_client,

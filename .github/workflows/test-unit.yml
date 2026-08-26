@@ -164,6 +164,7 @@ jobs:
               tests/test_litellm/proxy/public_endpoints
               tests/test_litellm/proxy/prompts
               tests/test_litellm/proxy/rag_endpoints
+              tests/test_litellm/proxy/rerank_endpoints
               tests/test_litellm/proxy/realtime_endpoints
               tests/test_litellm/proxy/ui_crud_endpoints
               tests/test_litellm/proxy/config_resolvers
@@ -211,7 +212,7 @@ jobs:
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: proxy-extras
             artifact-name: proxy-extras
@@ -219,7 +220,7 @@ jobs:
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: enterprise-package
             artifact-name: enterprise-package
@@ -227,7 +228,7 @@ jobs:
             workers: 4
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: responses-caching-types
             artifact-name: responses-caching-types

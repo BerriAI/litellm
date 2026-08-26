@@ -413,3 +413,42 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+    def test_event_loop_change_carries_pending_tasks_over(self):
+        """Regression (LIT-6028): a loop change must not silently drop queued coroutines.
+
+        Before the fix ``_ensure_queue`` nulled ``self._queue`` on a loop change, discarding
+        every pending ``LoggingTask`` (each an un-awaited spend-logging coroutine). The tasks
+        must instead be moved onto the queue bound to the new loop and still execute there.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        executed: list[int] = []
+
+        async def spend_log(index: int) -> None:
+            executed.append(index)
+
+        async def enqueue_on_first_loop() -> None:
+            worker._ensure_queue()
+            for i in range(5):
+                worker.enqueue(spend_log(i))
+            assert worker._queue is not None
+            assert worker._queue.qsize() == 5
+
+        asyncio.run(enqueue_on_first_loop())
+
+        stale_queue = worker._queue
+        assert stale_queue is not None
+
+        async def rebind_on_second_loop() -> None:
+            worker._ensure_queue()
+            assert worker._queue is not None
+            # A fresh queue bound to the new loop, holding every carried-over task (not dropped).
+            assert worker._queue is not stale_queue
+            assert worker._queue.qsize() == 5
+            while not worker._queue.empty():
+                task = worker._queue.get_nowait()
+                await task["context"].run(asyncio.create_task, task["coroutine"])
+
+        asyncio.run(rebind_on_second_loop())
+
+        assert sorted(executed) == [0, 1, 2, 3, 4]

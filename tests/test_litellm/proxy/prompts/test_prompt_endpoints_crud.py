@@ -191,3 +191,58 @@ async def test_get_prompt_info_by_base_id():
             response.prompt_spec.prompt_id == "test_prompt"
         )  # Should return base ID in spec response
         assert response.prompt_spec.version == 3  # Should identify it as version 3
+
+
+@pytest.mark.asyncio
+async def test_patch_prompt_row_deleted_mid_update_returns_404():
+    """
+    A concurrent delete between the version lookup and the write makes Prisma's
+    `update` return None. That must reuse the endpoint's existing not-found 404
+    contract rather than blowing up into an opaque 500.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.prompts.prompt_endpoints import PatchPromptRequest, patch_prompt
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    target_row = MagicMock()
+    target_row.id = "row-1"
+    target_row.version = 1
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+        return_value=[target_row]
+    )
+    mock_prisma_client.db.litellm_prompttable.update = AsyncMock(return_value=None)
+
+    existing_prompt = PromptSpec(
+        prompt_id="test_prompt.v1",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="test_prompt", prompt_integration="dotprompt"
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: stubs the collaborator so the test pins the endpoint's own error contract
+            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+        ) as mock_registry,
+    ):
+        mock_registry.get_prompt_by_id.return_value = existing_prompt
+
+        with pytest.raises(HTTPException) as exc_info:
+            await patch_prompt(
+                prompt_id="test_prompt",
+                request=PatchPromptRequest(prompt_info=PromptInfo(prompt_type="db")),
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert (
+        exc_info.value.detail
+        == "Prompt with ID test_prompt not found in environment development"
+    )
