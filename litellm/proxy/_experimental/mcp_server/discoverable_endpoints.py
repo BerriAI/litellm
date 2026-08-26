@@ -3,7 +3,7 @@ import html as _html
 import json
 import secrets
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -663,15 +663,18 @@ def _endpoint_not_configured_detail(
     )
 
 
-async def _server_with_oauth_endpoints(mcp_server: MCPServer) -> MCPServer:
-    """Join deferred OAuth discovery only when this server still has no authorize URL.
+async def _server_with_oauth_endpoints(
+    mcp_server: MCPServer,
+    needed_endpoint: Callable[[MCPServer], str | None],
+) -> MCPServer:
+    """Join deferred OAuth discovery only when the endpoint this caller needs is still missing.
 
     Admin-entered endpoints live on ``configured_*`` after an anchored issuer empties the
-    resolved fields. Those already let authorize/token run, so discovery is not awaited
-    and cannot 503 over a leftover pin. A server with nothing configured still joins the
-    deferred task; no slot is a no-op and the caller 400s.
+    resolved fields. A caller whose needed endpoint already resolves never awaits discovery
+    and cannot 503 over a leftover pin. A server still missing it joins the deferred task;
+    no slot is a no-op and the caller 400s.
     """
-    if mcp_server.effective_authorization_url is not None:
+    if needed_endpoint(mcp_server) is not None:
         return mcp_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
         global_mcp_server_manager,
@@ -829,7 +832,7 @@ async def authorize_with_server(
     ephemeral_dcr_client: "EphemeralDcrClient | None" = None,
 ):
     _raise_if_not_oauth2(mcp_server)
-    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server)
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, lambda s: s.effective_authorization_url)
     if resolved_server.effective_authorization_url is None:
         raise HTTPException(
             status_code=400,
@@ -841,7 +844,7 @@ async def authorize_with_server(
             ),
         )
 
-    if mcp_server.is_dcr_bridge:
+    if resolved_server.is_dcr_bridge:
         # Enforce S256 PKCE on both bridge arms. The relay arm forwards the validated,
         # now-non-optional pair to the upstream authorize; the short-circuit arm keeps
         # calling this for its enforcement side effect, then falls through to the gateway
@@ -850,9 +853,9 @@ async def authorize_with_server(
         # A gateway-minted ephemeral client is registered against {base}/callback, so its
         # flow must run the short-circuit arm; the relay arm is only for clients that
         # registered themselves through the front door and hold their own redirect binding.
-        if _dcr_bridge_relays_client_registration(mcp_server) and ephemeral_dcr_client is None:
+        if _dcr_bridge_relays_client_registration(resolved_server) and ephemeral_dcr_client is None:
             return _redirect_to_upstream_authorize(
-                mcp_server=mcp_server,
+                mcp_server=resolved_server,
                 client_id=client_id,
                 redirect_uri=redirect_uri,
                 state=state,
@@ -878,7 +881,7 @@ async def authorize_with_server(
     # litellm key, so the browser session is the only identity source; without one there is nothing to
     # bind, so send the user through login first. Every other oauth2 server keeps the identity-less state.
     litellm_user_id: str | None = None
-    if mcp_server.is_dcr_bridge and mcp_server.is_oauth_delegate:
+    if resolved_server.is_dcr_bridge and resolved_server.is_oauth_delegate:
         from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # inline import avoids a module-load circular import
             _user_id_from_session_cookie,
         )
@@ -888,7 +891,7 @@ async def authorize_with_server(
             return _redirect_to_litellm_login(request)
         denial: Final = await _bridge_authorize_access_denial(
             litellm_user_id=litellm_user_id,
-            mcp_server=mcp_server,
+            mcp_server=resolved_server,
             redirect_uri=redirect_uri,
             state=state,
         )
@@ -902,7 +905,7 @@ async def authorize_with_server(
         code_challenge_method=code_challenge_method,
         client_redirect_uri=redirect_uri,
         litellm_user_id=litellm_user_id,
-        mcp_server_id=mcp_server.server_id if (litellm_user_id or ephemeral_dcr_client) else None,
+        mcp_server_id=resolved_server.server_id if (litellm_user_id or ephemeral_dcr_client) else None,
         dcr_client_id=ephemeral_dcr_client.client_id if ephemeral_dcr_client else None,
         dcr_client_secret=ephemeral_dcr_client.client_secret if ephemeral_dcr_client else None,
         dcr_token_endpoint_auth_method=ephemeral_dcr_client.token_endpoint_auth_method
@@ -912,22 +915,22 @@ async def authorize_with_server(
     relay_state: Final = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
 
     params: Final = {
-        "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
+        "client_id": resolved_server.client_id if resolved_server.client_id else client_id,
         "redirect_uri": f"{request_base_url}/callback",
         "state": relay_state,
         "response_type": response_type or "code",
     }
     if scope:
         params["scope"] = scope
-    elif mcp_server.scopes:
-        params["scope"] = " ".join(mcp_server.scopes)
+    elif resolved_server.scopes:
+        params["scope"] = " ".join(resolved_server.scopes)
 
     if code_challenge:
         params["code_challenge"] = code_challenge
     if code_challenge_method:
         params["code_challenge_method"] = code_challenge_method
 
-    upstream_resource: Final = resolve_upstream_resource(mcp_server)
+    upstream_resource: Final = resolve_upstream_resource(resolved_server)
     if upstream_resource:
         params["resource"] = upstream_resource
 
@@ -964,7 +967,7 @@ async def exchange_token_with_server(
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
-    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server)
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, lambda s: s.effective_token_url)
     token_url: Final = resolved_server.effective_token_url
     if token_url is None:
         raise HTTPException(
@@ -985,16 +988,16 @@ async def exchange_token_with_server(
     # recovered from a sealed code) must authenticate the way its own registration was granted,
     # not the way the server row is configured; callers that carry no method keep the row's method
     # as before.
-    resolved_client_id: Final = mcp_server.client_id if mcp_server.client_id else client_id
-    resolved_client_secret: Final = mcp_server.client_secret if mcp_server.client_id else client_secret
+    resolved_client_id: Final = resolved_server.client_id if resolved_server.client_id else client_id
+    resolved_client_secret: Final = resolved_server.client_secret if resolved_server.client_id else client_secret
     resolved_auth_method: Final = (
-        mcp_server.token_endpoint_auth_method
-        if mcp_server.client_id
-        else (client_token_endpoint_auth_method or mcp_server.token_endpoint_auth_method)
+        resolved_server.token_endpoint_auth_method
+        if resolved_server.client_id
+        else (client_token_endpoint_auth_method or resolved_server.token_endpoint_auth_method)
     )
     try:
         token_request: Final = build_upstream_oauth2_token_request(
-            mcp_server,
+            resolved_server,
             auth_method=resolved_auth_method,
             client_id=resolved_client_id,
             client_secret=resolved_client_secret,
@@ -1007,14 +1010,14 @@ async def exchange_token_with_server(
     bridge_upstream_refresh: SecretStr | None = None
     bridge_upstream_scope: str | None = None
     refresh_request_scope: str | None = None
-    is_bridge: Final = mcp_server.is_oauth_delegate and mcp_server.is_dcr_bridge
+    is_bridge: Final = resolved_server.is_oauth_delegate and resolved_server.is_dcr_bridge
 
     if grant_type == "refresh_token":
         # Phase 1 for a bridge refresh: open the client's refresh envelope, re-validate the sealed
         # identity, and unwrap the real upstream refresh token BEFORE building token_data, so the exchange
         # sends the upstream token and never the envelope. A failure returns without touching the upstream.
         if is_bridge:
-            prepared_refresh: Final = await _prepare_bridge_refresh(mcp_server, refresh_token)
+            prepared_refresh: Final = await _prepare_bridge_refresh(resolved_server, refresh_token)
             if not isinstance(prepared_refresh, _BridgeRefreshReady):
                 return _bridge_mint_error_response(prepared_refresh)
             bridge_mint_ready = prepared_refresh.ready
@@ -1051,13 +1054,13 @@ async def exchange_token_with_server(
         # A raw upstream code (scripted path) opens to None and the code is used as-is.
         bridge_identity = open_bridge_authorization_code(code)
         if bridge_identity is not None:
-            if bridge_identity.mcp_server_id != mcp_server.server_id:
+            if bridge_identity.mcp_server_id != resolved_server.server_id:
                 raise HTTPException(
                     status_code=400,
                     detail="Authorization code was issued for a different MCP server",
                 )
             code = bridge_identity.upstream_code
-        bridge_token_relay: Final = _dcr_bridge_relays_client_registration(mcp_server)
+        bridge_token_relay: Final = _dcr_bridge_relays_client_registration(resolved_server)
         if bridge_token_relay and not redirect_uri:
             raise HTTPException(
                 status_code=400,
@@ -1079,7 +1082,7 @@ async def exchange_token_with_server(
         # Phase 1 for a bridge authorization_code mint: resolve identity (the SSO user recovered above, or
         # the presented litellm key) and the envelope keys BEFORE the exchange consumes the single-use code.
         if is_bridge:
-            prepared: Final = await _prepare_bridge_mint(request, mcp_server, bridge_identity)
+            prepared: Final = await _prepare_bridge_mint(request, resolved_server, bridge_identity)
             if not isinstance(prepared, _BridgeMintReady):
                 return _bridge_mint_error_response(prepared)
             bridge_mint_ready = prepared
@@ -1096,8 +1099,8 @@ async def exchange_token_with_server(
     except httpx.HTTPStatusError as exc:
         fault: Final = classify_upstream_token_rejection(
             exc.response,
-            credential_source=_token_credential_source(mcp_server),
-            log_context=mcp_server.server_id,
+            credential_source=_token_credential_source(resolved_server),
+            log_context=resolved_server.server_id,
         )
         upstream_rejected_bridge_refresh: Final = (
             is_bridge
@@ -1110,7 +1113,7 @@ async def exchange_token_with_server(
                 "bridge refresh: the upstream rejected the sealed refresh token for server=%s with "
                 "invalid_grant (revoked or expired at the IdP); returning invalid_grant so the client "
                 "re-runs authorization_code rather than an opaque upstream error",
-                mcp_server.server_id,
+                resolved_server.server_id,
             )
             return _bridge_mint_error_response("invalid_refresh")
         return render_token_fault(fault)
@@ -1123,22 +1126,22 @@ async def exchange_token_with_server(
 
     # Validate token response against server-configured rules before any storage.
     # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
-    if mcp_server.token_validation and isinstance(mcp_server.token_validation, dict):
+    if resolved_server.token_validation and isinstance(resolved_server.token_validation, dict):
         _validate_token_response(
             token_response=token_response,
-            validation_rules=mcp_server.token_validation,
-            server_id=mcp_server.server_id,
+            validation_rules=resolved_server.token_validation,
+            server_id=resolved_server.server_id,
         )
 
     # Store server-side when the server is configured for per-user OAuth and
     # the calling client has provided a valid LiteLLM identity.
     # Errors are non-fatal: the token is still returned to the client.
-    if mcp_server.needs_user_oauth_token:
+    if resolved_server.needs_user_oauth_token:
         user_id: Final = await _extract_user_id_from_request(request)
         if user_id:
             try:
                 await _store_per_user_token_server_side(
-                    server=mcp_server,
+                    server=resolved_server,
                     user_id=user_id,
                     token_response=token_response,
                 )
@@ -1146,7 +1149,7 @@ async def exchange_token_with_server(
                 verbose_logger.warning(
                     "exchange_token_with_server: server-side storage failed for user=%s server=%s: %s",
                     user_id,
-                    mcp_server.server_id,
+                    resolved_server.server_id,
                     exc,
                 )
         else:
@@ -1156,7 +1159,7 @@ async def exchange_token_with_server(
                 "requires the stored token, so the client will be challenged with 401 on reconnect. "
                 "Ensure the request carries a valid LiteLLM key (x-litellm-api-key or Authorization), "
                 "or store it via POST /mcp/server/{id}/oauth-user-credential.",
-                mcp_server.server_id,
+                resolved_server.server_id,
             )
 
     # A DCR-bridge oauth_delegate server hands the client a gateway-bound envelope (identity plus the
@@ -1167,7 +1170,9 @@ async def exchange_token_with_server(
             token_response = {**token_response, "scope": refresh_request_scope}
         # Phase 3: seal the upstream grant into the client-held envelope; failures map through the same
         # OAuth-shaped response as the phase-1 preconditions.
-        minted: Final = _finish_bridge_mint(bridge_mint_ready, mcp_server, token_response, datetime.now(timezone.utc))
+        minted: Final = _finish_bridge_mint(
+            bridge_mint_ready, resolved_server, token_response, datetime.now(timezone.utc)
+        )
         return minted if isinstance(minted, JSONResponse) else _bridge_mint_error_response(minted)
 
     raw_access_token: Final = token_response.get("access_token") if isinstance(token_response, dict) else None
@@ -1682,7 +1687,7 @@ async def register_client_with_server(
     ):
         return dummy_return
 
-    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server)
+    resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, lambda s: s.effective_authorization_url)
     if resolved_server.effective_authorization_url is None:
         raise HTTPException(
             status_code=400,
@@ -1715,13 +1720,15 @@ async def register_client_with_server(
     response: Final = await _post_dcr_registration(
         registration_url=registration_url,
         register_data=register_data,
-        server_id=mcp_server.server_id,
+        server_id=resolved_server.server_id,
     )
 
     token_response = response.json()
 
     if persist_credentials and not bridge_relay:
-        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response, current_redirect_uri)
+        persistence_result = await _persist_dcr_client_registration(
+            resolved_server, token_response, current_redirect_uri
+        )
         if persistence_result == "reused":
             return dummy_return
 
