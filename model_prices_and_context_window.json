@@ -12727,8 +12727,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
@@ -12765,8 +12764,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
@@ -12805,8 +12803,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_output_config": true,
         "supports_speed": true,
@@ -12844,8 +12841,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_output_config": true,
         "supports_speed": true,
