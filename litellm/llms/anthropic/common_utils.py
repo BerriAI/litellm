@@ -92,8 +92,11 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
     if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
         api_key = auth_header.removeprefix("Bearer ")
-        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+        for name in tuple(
+            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+        ):
             headers.pop(name)
+        headers["authorization"] = auth_header
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
