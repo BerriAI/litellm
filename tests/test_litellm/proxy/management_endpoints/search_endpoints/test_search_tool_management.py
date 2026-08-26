@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
@@ -762,6 +763,20 @@ async def test_list_search_tools_unrestricted_internal_user_sees_all():
     assert names == {"db-tool-1", "db-tool-2", "db-tool-3"}
 
 
+def _session_user_on(*team_ids: str) -> AsyncMock:
+    return AsyncMock(return_value=LiteLLM_UserTable(user_id="internal_user", teams=list(team_ids)))
+
+
+def _team_allowing(team_id: str, search_tools: list[str]) -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(
+        team_id=team_id,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"op-{team_id}",
+            search_tools=search_tools,
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_list_search_tools_scoped_to_team_object_permission():
     """A team-level search_tools allowlist also scopes the listing for a non-admin caller."""
@@ -770,19 +785,12 @@ async def test_list_search_tools_scoped_to_team_object_permission():
         user_id="internal_user",
         team_id="team-1",
     )
-    team_object = LiteLLM_TeamTable(
-        team_id="team-1",
-        object_permission=LiteLLM_ObjectPermissionTable(
-            object_permission_id="op-team",
-            search_tools=["db-tool-2"],
-        ),
-    )
 
     with (
         _mock_search_tool_backend(_scoping_db_tools()),
         patch(
             "litellm.proxy.auth.auth_checks.get_team_object",
-            AsyncMock(return_value=team_object),
+            AsyncMock(return_value=_team_allowing("team-1", ["db-tool-2"])),
         ),
         _override_auth(team_member),
     ):
@@ -834,12 +842,47 @@ def _team_ids_looked_up(lookup: AsyncMock) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_list_search_tools_dashboard_session_key_does_not_look_up_the_ui_team():
+async def test_list_search_tools_dashboard_session_scoped_to_the_users_real_team_allowlist():
     """
     Regression: the Admin UI session key is stamped with the reserved team id
-    ``litellm-dashboard``, which has no row in LiteLLM_TeamTable. Resolving it as a real team
-    raised 404, which the endpoint reported as a 500, so the Search Tools page was broken for
-    every non-admin browsing the dashboard.
+    ``litellm-dashboard``, which has no row in LiteLLM_TeamTable. Treating that as "no team"
+    dropped team-level scoping, so the Search Tools page listed every tool on the proxy,
+    including ids and api_base for tools the caller cannot invoke.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    dashboard_session_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+    )
+
+    with (
+        _mock_search_tool_backend(_scoping_db_tools()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            AsyncMock(return_value=_team_allowing("team-1", ["db-tool-2"])),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            _session_user_on("team-1"),
+        ),
+        _override_auth(dashboard_session_user),
+    ):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 200
+    tools = response.json()["search_tools"]
+    assert [t["search_tool_name"] for t in tools] == ["db-tool-2"]
+    leaked = {t["litellm_params"].get("api_base") for t in tools}
+    assert "https://api.perplexity.ai" not in leaked
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_dashboard_session_never_resolves_the_ui_team():
+    """
+    Regression: resolving ``litellm-dashboard`` as a real team raised 404, which the endpoint
+    reported as a 500, so the Search Tools page was broken for every non-admin.
     """
     from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 
@@ -861,6 +904,10 @@ async def test_list_search_tools_dashboard_session_key_does_not_look_up_the_ui_t
             "litellm.proxy.auth.auth_checks.get_team_object",
             ui_team_is_not_a_real_team,
         ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            _session_user_on(),
+        ),
         _override_auth(dashboard_session_user),
     ):
         response = TestClient(app).get("/search_tools/list")
@@ -874,8 +921,8 @@ async def test_list_search_tools_dashboard_session_key_does_not_look_up_the_ui_t
 @pytest.mark.asyncio
 async def test_filter_visible_search_tools_dashboard_session_still_honors_key_allowlist():
     """
-    Skipping the synthetic team must not widen visibility: a dashboard session whose key
-    carries a search_tools allowlist stays scoped to it.
+    Resolving the session through its user's teams must not widen visibility: a dashboard
+    session whose key carries a search_tools allowlist stays scoped to it.
     """
     from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
     from litellm.proxy.search_endpoints.search_tool_management import (
@@ -891,16 +938,47 @@ async def test_filter_visible_search_tools_dashboard_session_still_honors_key_al
             search_tools=["db-tool-3"],
         ),
     )
-    lookup = AsyncMock()
+    lookup = AsyncMock(return_value=_team_allowing("team-1", []))
 
     visible = await _filter_visible_search_tools(
         _search_tool_responses("db-tool-1", "db-tool-2", "db-tool-3"),
         restricted_dashboard_session,
         lookup,
+        AsyncMock(return_value=["team-1"]),
     )
 
     assert [t["search_tool_name"] for t in visible] == ["db-tool-3"]
-    lookup.assert_not_awaited()
+    assert _team_ids_looked_up(lookup) == ["team-1"]
+
+
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_dashboard_session_sees_the_union_of_its_teams():
+    """A user on several teams sees every tool any one of those teams allowlists."""
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        _filter_visible_search_tools,
+    )
+
+    dashboard_session_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+    )
+    lookup = AsyncMock(
+        side_effect=[
+            _team_allowing("team-1", ["db-tool-1"]),
+            _team_allowing("team-2", ["db-tool-3"]),
+        ]
+    )
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2", "db-tool-3"),
+        dashboard_session_user,
+        lookup,
+        AsyncMock(return_value=["team-1", "team-2"]),
+    )
+
+    assert [t["search_tool_name"] for t in visible] == ["db-tool-1", "db-tool-3"]
 
 
 @pytest.mark.asyncio
@@ -915,15 +993,7 @@ async def test_filter_visible_search_tools_still_applies_a_real_team_allowlist()
         user_id="internal_user",
         team_id="team-1",
     )
-    lookup = AsyncMock(
-        return_value=LiteLLM_TeamTable(
-            team_id="team-1",
-            object_permission=LiteLLM_ObjectPermissionTable(
-                object_permission_id="op-team",
-                search_tools=["db-tool-2"],
-            ),
-        )
-    )
+    lookup = AsyncMock(return_value=_team_allowing("team-1", ["db-tool-2"]))
 
     visible = await _filter_visible_search_tools(
         _search_tool_responses("db-tool-1", "db-tool-2", "db-tool-3"),
@@ -992,3 +1062,36 @@ async def test_list_search_tools_reports_a_missing_real_team_as_404():
 
     assert response.status_code == 404
     assert "search_tools" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_dashboard_session_shows_nothing_when_no_team_loads():
+    """
+    Regression: a dashboard session whose every team failed to load resolved to an empty team set,
+    which reads as "belongs to no team" and skipped team scoping, so the listing showed every tool
+    on the proxy to a user entitled to none of them.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    dashboard_session_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+    )
+    every_team_is_gone = AsyncMock(
+        side_effect=HTTPException(
+            status_code=404,
+            detail={"error": "Team doesn't exist in db. Team=team-1."},
+        )
+    )
+
+    with (
+        _mock_search_tool_backend(_scoping_db_tools()),
+        patch("litellm.proxy.auth.auth_checks.get_team_object", every_team_is_gone),
+        patch("litellm.proxy.auth.auth_checks.get_user_object", _session_user_on("team-1")),
+        _override_auth(dashboard_session_user),
+    ):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 404
+    assert every_team_is_gone.await_count == 1
