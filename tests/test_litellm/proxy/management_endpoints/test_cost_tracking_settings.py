@@ -815,7 +815,9 @@ async def _estimate(mock_router: MagicMock | None, model: str = AN_ALIAS, **over
         output_tokens=OUTPUT_TOKENS,
         **overrides,
     )
-    with patch("litellm.proxy.proxy_server.llm_router", mock_router):
+    with patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        "litellm.proxy.proxy_server.llm_router", mock_router
+    ):
         return await estimate_cost(request=request, user_api_key_dict=MagicMock())
 
 
@@ -837,22 +839,19 @@ class TestEstimateCostPartiallyPricedDeployments:
         assert response.cost_per_request == pytest.approx(0.001)
 
     @pytest.mark.asyncio
-    async def test_a_model_priced_only_by_the_cost_map_reports_that_price_and_provider(self):
-        saved_model_cost = dict(litellm.model_cost)
-        litellm.register_model(
+    async def test_a_model_priced_only_by_the_cost_map_reports_that_price_and_provider(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
             {
-                A_MAPPED_MODEL: {
-                    "input_cost_per_token": 0.000005,
-                    "output_cost_per_token": 0.000006,
-                    "litellm_provider": "openai",
-                    "mode": "chat",
-                }
-            }
+                "input_cost_per_token": 0.000005,
+                "output_cost_per_token": 0.000006,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
         )
-        try:
-            response = await _estimate(None, model=A_MAPPED_MODEL)
-        finally:
-            litellm.model_cost = saved_model_cost
+
+        response = await _estimate(None, model=A_MAPPED_MODEL)
 
         assert response.input_cost_per_token == pytest.approx(0.000005)
         assert response.output_cost_per_token == pytest.approx(0.000006)
