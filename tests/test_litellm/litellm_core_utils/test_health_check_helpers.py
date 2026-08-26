@@ -17,18 +17,19 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 
+def _png_chunks(png: bytes, offset: int = 8) -> tuple[tuple[bytes, bytes], ...]:
+    if offset >= len(png):
+        return ()
+    (length,) = struct.unpack(">I", png[offset : offset + 4])
+    chunk = (png[offset + 4 : offset + 8], png[offset + 8 : offset + 8 + length])
+    return (chunk, *_png_chunks(png, offset + 12 + length))
+
+
 def _distinct_rgb_colors(png: bytes) -> set[bytes]:
     width = int.from_bytes(png[16:20], "big")
-    idat_parts = []
-    offset = 8
-    while offset < len(png):
-        (length,) = struct.unpack(">I", png[offset : offset + 4])
-        if png[offset + 4 : offset + 8] == b"IDAT":
-            idat_parts.append(png[offset + 8 : offset + 8 + length])
-        offset += 12 + length
-    raw = zlib.decompress(b"".join(idat_parts))
+    raw = zlib.decompress(b"".join(data for tag, data in _png_chunks(png) if tag == b"IDAT"))
     row_size = 1 + width * 3
-    rows = [raw[i : i + row_size] for i in range(0, len(raw), row_size)]
+    rows = tuple(raw[i : i + row_size] for i in range(0, len(raw), row_size))
     assert all(row[0] == 0 for row in rows)
     return {bytes(row[i : i + 3]) for row in rows for i in range(1, row_size, 3)}
 
