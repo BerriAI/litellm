@@ -3486,7 +3486,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         monkeypatch,
         headers: list[tuple[bytes, bytes]],
         authenticated: UserAPIKeyAuth | None = None,
+        master_key: str | None = "sk-master-1234",
     ) -> tuple[HTTPException | None, dict | None]:
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
         caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
         from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
@@ -3780,20 +3782,27 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
 
     GOOGLE_OAUTH_TOKEN = "ya29.byo-google-oauth-token"
 
+    LITELLM_JWT = (
+        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiJqd3Qtc3ViamVjdCIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUuY29tIn0."
+        "c2lnbmF0dXJl"
+    )
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "authenticated",
+        ("master_key", "authenticated"),
         [
             pytest.param(
+                "sk-master-1234",
                 UserAPIKeyAuth(api_key="best-api-key-ever", user_role=LitellmUserRoles.PROXY_ADMIN),
                 id="custom-auth-returning-its-own-identifier",
             ),
-            pytest.param(UserAPIKeyAuth(api_key=None, user_id="jwt-subject"), id="jwt-auth"),
-            pytest.param(UserAPIKeyAuth(api_key=GOOGLE_OAUTH_TOKEN), id="no-master-key-echoes-raw-header"),
+            pytest.param("sk-master-1234", UserAPIKeyAuth(api_key=None, user_id="jwt-subject"), id="jwt-auth"),
+            pytest.param(None, UserAPIKeyAuth(api_key=GOOGLE_OAUTH_TOKEN), id="no-master-key-echoes-raw-header"),
         ],
     )
     async def test_google_token_in_authorization_is_forwarded_when_auth_did_not_consume_it(
-        self, monkeypatch, authenticated: UserAPIKeyAuth
+        self, monkeypatch, master_key: str | None, authenticated: UserAPIKeyAuth
     ):
         raised, forwarded = await self._run(
             monkeypatch,
@@ -3802,14 +3811,33 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                 (b"content-type", b"application/json"),
             ],
             authenticated=authenticated,
+            master_key=master_key,
         )
         assert raised is None, f"the caller's own Google token must not be mistaken for a LiteLLM key: {raised}"
         assert forwarded is not None
         assert forwarded.get("authorization") == f"Bearer {self.GOOGLE_OAUTH_TOKEN}"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("credential", "authenticated"),
+        [
+            pytest.param("modified_key", UserAPIKeyAuth(api_key="modified_key"), id="custom-auth-echoing-opaque-credential"),
+            pytest.param(LITELLM_JWT, UserAPIKeyAuth(api_key=LITELLM_JWT, user_id="jwt-subject"), id="jwt-auth-consuming-header"),
+        ],
+    )
+    async def test_non_sk_litellm_credential_that_authenticated_is_rejected_not_forwarded(
+        self, monkeypatch, credential: str, authenticated: UserAPIKeyAuth
+    ):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", f"Bearer {credential}".encode()), (b"content-type", b"application/json")],
+            authenticated=authenticated,
+        )
+        assert forwarded is None, "the credential that authenticated the caller must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
     async def test_master_key_in_authorization_alone_is_rejected(self, monkeypatch):
-        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master-1234")
         raised, forwarded = await self._run(
             monkeypatch,
             [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
@@ -3820,7 +3848,6 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
 
     @pytest.mark.asyncio
     async def test_master_key_is_stripped_and_byo_x_goog_api_key_forwards(self, monkeypatch):
-        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master-1234")
         raised, forwarded = await self._run(
             monkeypatch,
             [
