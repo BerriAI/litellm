@@ -21091,18 +21091,15 @@
     },
     "gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
-        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 7e-07,
-        "input_cost_per_token": 1.25e-06,
-        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
         "max_tokens": 65535,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "output_cost_per_token_above_200k_tokens": 1.5e-05,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
+        "output_cost_per_token": 2e-05,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text"
         ],
@@ -22212,11 +22209,11 @@
         "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-preview-tts": {
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "mode": "audio_speech",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
         ],
@@ -23156,19 +23153,16 @@
     },
     "gemini/gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
-        "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
         "input_cost_per_audio_token": 7e-07,
-        "input_cost_per_token": 1.25e-06,
-        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "input_cost_per_token": 1e-06,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
         "max_tokens": 65535,
         "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "output_cost_per_token": 2e-05,
         "rpm": 10000,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_modalities": [
             "text"
         ],
@@ -48804,15 +48798,16 @@
         }
     },
     "gemini-2.5-flash-native-audio-latest": {
-        "input_cost_per_audio_token": 1e-06,
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -48829,15 +48824,16 @@
         "gemini_native_audio": true
     },
     "gemini-2.5-flash-native-audio-preview-09-2025": {
-        "input_cost_per_audio_token": 1e-06,
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -48854,15 +48850,16 @@
         "gemini_native_audio": true
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
-        "input_cost_per_audio_token": 1e-06,
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -48912,15 +48909,16 @@
         "gemini_audio_only_live": true
     },
     "gemini/gemini-2.5-flash-native-audio-latest": {
-        "input_cost_per_audio_token": 1e-06,
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -48939,15 +48937,16 @@
         "gemini_native_audio": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-09-2025": {
-        "input_cost_per_audio_token": 1e-06,
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -48966,15 +48965,16 @@
         "gemini_native_audio": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
-        "input_cost_per_audio_token": 1e-06,
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -49043,11 +49043,11 @@
         "rpm": 10
     },
     "gemini-2.5-flash-preview-tts": {
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
         "mode": "audio_speech",
-        "output_cost_per_token": 2.5e-06,
-        "source": "https://ai.google.dev/pricing",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/speech"
         ]
