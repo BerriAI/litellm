@@ -391,6 +391,40 @@ class TestVertexAIRerankTransform:
         assert "document" not in result_request_data.results[0]
         assert "document" not in result_request_data.results[1]
 
+        # Test with litellm_params={"return_documents": True}
+        result_litellm_params = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            litellm_params={"return_documents": True},
+        )
+        assert result_litellm_params.results[0]["document"]["text"] == "Content of document 1"
+
+        # Test with request_data={"return_documents": True}
+        result_req_data_true = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={"return_documents": True},
+        )
+        assert result_req_data_true.results[0]["document"]["text"] == "Content of document 1"
+
+        # Test with records missing content
+        no_content_response_data = {"records": [{"id": "0", "score": 0.9}]}
+        mock_no_content = MagicMock(spec=httpx.Response)
+        mock_no_content.json.return_value = no_content_response_data
+        mock_no_content.text = json.dumps(no_content_response_data)
+        result_no_content = self.config.transform_rerank_response(
+            model=self.model,
+            raw_response=mock_no_content,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            optional_params={"return_documents": True},
+        )
+        assert "document" not in result_no_content.results[0]
+
     def test_transform_rerank_response_with_ignore_record_details(self):
         """Test response transformation when ignoreRecordDetailsInResponse=true."""
         # Mock response with only IDs (when ignoreRecordDetailsInResponse=true)
