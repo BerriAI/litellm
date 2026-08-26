@@ -127,6 +127,24 @@ class _KeyringCallTimedOut:
 _KeyringCallResult: TypeAlias = _KeyringCallAnswered[_T] | _KeyringCallFailed | _KeyringCallTimedOut
 
 
+@dataclass(frozen=True, slots=True)
+class _ProbeStored:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _ProbeRefused:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _ProbeSilent:
+    pass
+
+
+_WriteProbe: TypeAlias = _ProbeStored | _ProbeRefused | _ProbeSilent
+
+
 def _keyring_disabled() -> bool:
     return os.getenv(DISABLE_KEYRING_ENV_VAR, "").strip().lower() in _DISABLED_VALUES
 
@@ -162,7 +180,7 @@ def _bounded_keyring_call(call: Callable[[], _T], timeout_seconds: float) -> _Ke
         return _KeyringCallTimedOut()
 
 
-def _answers_a_write(api: KeyringApi, timeout_seconds: float) -> bool:
+def _probe_a_write(api: KeyringApi, timeout_seconds: float) -> _WriteProbe:
     """Whether the keychain answers a write at all, asked with a value worth nothing.
 
     macOS derives the login keychain from `$HOME`, and `set_password` against a HOME with no usable
@@ -176,7 +194,13 @@ def _answers_a_write(api: KeyringApi, timeout_seconds: float) -> bool:
         lambda: api.set_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT, _PREFLIGHT_VALUE),
         timeout_seconds,
     )
-    return not isinstance(result, _KeyringCallTimedOut)
+    match result:
+        case _KeyringCallAnswered():
+            return _ProbeStored()
+        case _KeyringCallFailed():
+            return _ProbeRefused()
+        case _KeyringCallTimedOut():
+            return _ProbeSilent()
 
 
 def _forget_the_preflight(api: KeyringApi, timeout_seconds: float) -> bool:
@@ -241,9 +265,13 @@ class KeyringVault:
         api: Final = self.keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
-        if not _answers_a_write(api, self.preflight_timeout_seconds):
-            self.stopped_answering.set()
-            return KeyringUnreachable()
+        probe: Final = _probe_a_write(api, self.preflight_timeout_seconds)
+        match probe:
+            case _ProbeStored() | _ProbeRefused():
+                pass
+            case _ProbeSilent():
+                self.stopped_answering.set()
+                return KeyringUnreachable()
         if not _forget_the_preflight(api, self.preflight_timeout_seconds):
             self.stopped_answering.set()
             return KeyringUnreachable()
@@ -253,7 +281,11 @@ class KeyringVault:
         )
         match result:
             case _KeyringCallFailed():
-                return SecretTooLarge() if _payload_exceeds_windows_limit(blob) else KeyringUnreachable()
+                match probe:
+                    case _ProbeStored():
+                        return SecretTooLarge() if _payload_exceeds_windows_limit(blob) else KeyringUnreachable()
+                    case _ProbeRefused():
+                        return KeyringUnreachable()
             case _KeyringCallTimedOut():
                 self.stopped_answering.set()
                 return KeyringUnreachable()

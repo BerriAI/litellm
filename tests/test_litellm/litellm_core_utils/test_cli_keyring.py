@@ -67,6 +67,17 @@ class _OversizedWriteKeyring:
         self.calls.append(("delete", username))
 
 
+class _RefusingWriteKeyring:
+    def set_password(self, service_name: str, username: str, password: str) -> None:
+        raise ValueError("keychain refused write")
+
+    def get_password(self, service_name: str, username: str) -> str | None:
+        return None
+
+    def delete_password(self, service_name: str, username: str) -> None:
+        return None
+
+
 def _vault(api: KeyringApi, timeout_seconds: float = 0.02) -> KeyringVault:
     return KeyringVault(
         preflight_timeout_seconds=timeout_seconds,
@@ -132,3 +143,9 @@ def test_small_write_failure_remains_unreachable():
     keyring = _OversizedWriteKeyring()
 
     assert _vault(keyring).write("small") == KeyringUnreachable()
+
+
+def test_oversized_write_from_refusing_probe_remains_unreachable():
+    keyring = _RefusingWriteKeyring()
+
+    assert _vault(keyring).write("a" * 1281) == KeyringUnreachable()
