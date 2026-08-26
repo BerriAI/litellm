@@ -2957,3 +2957,161 @@ async def test_acompletion_resolves_provider_from_api_base():
     )
 
     assert response.choices[0].message.content == "resolved"
+
+
+OPENAI_HOST = "api.openai.com"
+A_STREAMED_MODEL = "gpt-4o"
+
+
+def _sse(chunks: list[dict]) -> str:
+    return "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+
+
+def _content_chunk(text: str, finish_reason: str | None = None) -> dict:
+    return {
+        "id": "chatcmpl-stream",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": A_STREAMED_MODEL,
+        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": finish_reason}],
+    }
+
+
+def _usage_chunk(prompt_tokens: int, completion_tokens: int) -> dict:
+    return {
+        "id": "chatcmpl-stream",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": A_STREAMED_MODEL,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+
+
+def _a_stream(deltas: tuple[str, ...], prompt_tokens: int, completion_tokens: int) -> str:
+    body = [_content_chunk(delta) for delta in deltas[:-1]]
+    body.append(_content_chunk(deltas[-1], finish_reason="stop"))
+    body.append(_usage_chunk(prompt_tokens, completion_tokens))
+    return _sse(body)
+
+
+@contextlib.contextmanager
+def _openai_streaming(body: str):
+    with respx.mock:
+        respx.route(host=OPENAI_HOST).mock(
+            return_value=httpx.Response(
+                200, text=body, headers={"content-type": "text/event-stream"}
+            )
+        )
+        yield
+
+
+def _collect(deltas: tuple[str, ...], prompt_tokens: int, completion_tokens: int):
+    with _openai_streaming(_a_stream(deltas, prompt_tokens, completion_tokens)):
+        stream = litellm.completion(
+            model=A_STREAMED_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        return list(stream)
+
+
+def _expected_cost(prompt_tokens: int, completion_tokens: int) -> float:
+    rates = litellm.model_cost[A_STREAMED_MODEL]
+    return (
+        prompt_tokens * rates["input_cost_per_token"]
+        + completion_tokens * rates["output_cost_per_token"]
+    )
+
+
+def test_a_streamed_reply_rebuilds_into_the_text_the_provider_sent():
+    chunks = _collect(("Hel", "lo th", "ere"), prompt_tokens=11, completion_tokens=7)
+
+    rebuilt = litellm.stream_chunk_builder(chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert rebuilt.choices[0].message.content == "Hello there"
+    assert rebuilt.choices[0].finish_reason == "stop"
+
+
+def test_a_streamed_reply_keeps_the_token_counts_the_provider_reported():
+    chunks = _collect(("Hel", "lo th", "ere"), prompt_tokens=11, completion_tokens=7)
+
+    rebuilt = litellm.stream_chunk_builder(chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert rebuilt.usage.prompt_tokens == 11
+    assert rebuilt.usage.completion_tokens == 7
+    assert rebuilt.usage.total_tokens == 18
+
+
+def test_a_streamed_reply_is_billed_on_the_counts_the_provider_reported():
+    chunks = _collect(("Hel", "lo th", "ere"), prompt_tokens=11, completion_tokens=7)
+    rebuilt = litellm.stream_chunk_builder(chunks, messages=[{"role": "user", "content": "hi"}])
+
+    cost = litellm.completion_cost(completion_response=rebuilt, model=A_STREAMED_MODEL)
+
+    assert cost == _expected_cost(11, 7)
+
+
+def test_the_bill_follows_the_provider_counts_not_the_length_of_the_text():
+    same_text = ("Hel", "lo th", "ere")
+
+    cheap = litellm.stream_chunk_builder(
+        _collect(same_text, prompt_tokens=11, completion_tokens=7),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    expensive = litellm.stream_chunk_builder(
+        _collect(same_text, prompt_tokens=1100, completion_tokens=700),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert litellm.completion_cost(completion_response=cheap, model=A_STREAMED_MODEL) == _expected_cost(11, 7)
+    assert litellm.completion_cost(
+        completion_response=expensive, model=A_STREAMED_MODEL
+    ) == _expected_cost(1100, 700)
+
+
+def test_prompt_and_completion_tokens_are_billed_at_their_own_rates():
+    rates = litellm.model_cost[A_STREAMED_MODEL]
+    assert rates["input_cost_per_token"] != rates["output_cost_per_token"]
+
+    prompt_heavy = litellm.stream_chunk_builder(
+        _collect(("Hel", "lo"), prompt_tokens=100, completion_tokens=10),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    completion_heavy = litellm.stream_chunk_builder(
+        _collect(("Hel", "lo"), prompt_tokens=10, completion_tokens=100),
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert litellm.completion_cost(
+        completion_response=prompt_heavy, model=A_STREAMED_MODEL
+    ) == _expected_cost(100, 10)
+    assert litellm.completion_cost(
+        completion_response=completion_heavy, model=A_STREAMED_MODEL
+    ) == _expected_cost(10, 100)
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_reply_keeps_the_provider_counts_on_the_async_path(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with _openai_streaming(_a_stream(("Hel", "lo"), prompt_tokens=11, completion_tokens=7)):
+        stream = await litellm.acompletion(
+            model=A_STREAMED_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        chunks = [chunk async for chunk in stream]
+
+    rebuilt = litellm.stream_chunk_builder(chunks, messages=[{"role": "user", "content": "hi"}])
+    assert rebuilt.choices[0].message.content == "Hello"
+    assert rebuilt.usage.prompt_tokens == 11
+    assert rebuilt.usage.completion_tokens == 7
