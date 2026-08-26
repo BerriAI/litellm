@@ -1,5 +1,6 @@
 import asyncio
 import time
+from types import TracebackType
 from unittest.mock import MagicMock, patch
 
 
@@ -194,19 +195,22 @@ def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch
 
 
 class _CapturingConnect:
-    def __init__(self):
-        self.url = None
-        self.additional_headers = None
+    def __init__(self) -> None:
+        self.url: str | None = None
 
-    def __call__(self, url, **kwargs):
+    def __call__(self, url: str, **kwargs: object) -> "_CapturingConnect":
         self.url = url
-        self.additional_headers = kwargs.get("additional_headers")
         return self
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> MagicMock:
         return MagicMock()
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         return None
 
 
