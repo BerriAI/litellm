@@ -275,6 +275,26 @@ def test_build_completion_params_keeps_bridge_routing_fields():
     assert params["stream"] is True
 
 
+def test_build_completion_params_drops_proxy_only_databricks_oauth():
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    params = A2ACompletionBridgeHandler._build_completion_params(
+        params={"message": {"role": "user", "parts": []}},
+        litellm_params={
+            "custom_llm_provider": "databricks",
+            "model": "agent",
+            "databricks_oauth": {"client_id": "id"},
+        },
+        api_base="https://configured.example",
+        agent_extra_headers=None,
+        stream=False,
+    )
+
+    assert "databricks_oauth" not in params
+
+
 @pytest.mark.asyncio
 async def test_handle_streaming_accumulates_logprobs_and_provider_metadata():
     from litellm.a2a_protocol.litellm_completion_bridge.handler import (

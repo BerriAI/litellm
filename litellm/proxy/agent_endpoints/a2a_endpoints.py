@@ -858,6 +858,16 @@ async def invoke_agent_a2a(
                     response=response,
                 )
                 post_call_succeeded = True
+            except HTTPException as e:
+                try:
+                    await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        original_exception=e,
+                        request_data=data,
+                    )
+                except Exception:
+                    pass
+                raise
             finally:
                 _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
                 if _enqueue_fn is not None:

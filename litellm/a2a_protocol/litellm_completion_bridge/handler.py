@@ -37,6 +37,7 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
         "agent_id",
         "agent_card_params",
         A2A_USER_API_KEY_HASH_PARAM,
+        "databricks_oauth",
     }
 )
 
