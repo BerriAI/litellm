@@ -20,8 +20,7 @@ SIGNOZ_INGESTION_ENDPOINT_ENV: Final = "SIGNOZ_INGESTION_ENDPOINT"
 class _SigNozSettings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
-    # One endpoint for both SigNoz Cloud and self-hosted, with no default host, so
-    # nothing exports until the operator names a destination
+    # No default host: nothing exports until the operator names a destination
     endpoint: str | None = Field(default=None, validation_alias=SIGNOZ_INGESTION_ENDPOINT_ENV)
     ingestion_key: str | None = Field(default=None, validation_alias="SIGNOZ_INGESTION_KEY")
 
@@ -52,12 +51,11 @@ def signoz_preset(
 
 
 def signoz_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
-    """Per-request SigNoz endpoint from team/key dynamic params.
-
-    ``None`` keeps the operator's endpoint, so a team that saved only a key still
-    exports to the configured destination.
-    """
-    return params.get("signoz_ingestion_endpoint")
+    """Per-request SigNoz endpoint from team/key dynamic params; ``None`` keeps the operator's."""
+    endpoint: Final = params.get("signoz_ingestion_endpoint")
+    if not endpoint or not endpoint.startswith(("http://", "https://")):
+        return None
+    return endpoint
 
 
 def signoz_dynamic_headers(
