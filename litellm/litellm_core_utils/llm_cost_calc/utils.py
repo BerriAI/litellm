@@ -310,6 +310,14 @@ def _get_token_base_cost(
         _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
     )
     cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
+    # Some model entries only carry the legacy `input_cost_per_token_cache_hit` field
+    # instead of the canonical `cache_read_input_token_cost` (e.g. DeepSeek entries
+    # added before the field was standardized). Without this fallback, cache-hit
+    # tokens silently cost $0 for those models. See BerriAI/litellm#28854.
+    if model_info.get("cache_read_input_token_cost") is None:
+        legacy_cache_hit_cost: Final = model_info.get("input_cost_per_token_cache_hit")
+        if legacy_cache_hit_cost is not None:
+            cache_read_cost = cast(float, _get_cost_per_unit(model_info, "input_cost_per_token_cache_hit"))
 
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
