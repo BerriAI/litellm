@@ -29,6 +29,7 @@ from litellm.constants import (
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token,
@@ -1815,12 +1816,27 @@ def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
     return override + pass_through
 
 
+def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -> bool:
+    """Whether a header value is the JWT whose claims ``user_api_key_auth`` stored as ``jwt_claims``."""
+    presented_claims: Final = JWTHandler.get_unverified_claims(value)
+    if presented_claims is None:
+        return False
+    return all(
+        presented_claims.get(name) == claim
+        for name, claim in jwt_claims.items()
+        if name not in JWTHandler.LITELLM_INTERNAL_CLAIMS
+    )
+
+
 def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-    """Whether a header value is the master key or the key ``user_api_key_auth`` stored as ``api_key``."""
+    """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``."""
     from litellm.proxy.proxy_server import master_key
 
     normalized: Final = _normalize_credential_value(value)
     if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
+        return True
+    jwt_claims: Final = user_api_key_dict.jwt_claims
+    if jwt_claims and _is_authenticated_caller_jwt(normalized, jwt_claims):
         return True
     authenticated_key: Final = user_api_key_dict.api_key
     if authenticated_key is None:
