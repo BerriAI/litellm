@@ -845,6 +845,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
                 },
+                "cache_creation_input_token_cost_above_272k_tokens_priority": {
+                    "type": "number"
+                },
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
