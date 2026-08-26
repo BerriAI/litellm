@@ -24,13 +24,14 @@ describe("resetCredentialFormOnProviderChange", () => {
   it("clears all fields when switching providers", () => {
     // Simulate the OpenAI->Google AI Studio leak: api_base picked up
     // OpenAI's default value and the user typed a custom URL.
-    const { stub, fields, calls } = makeFormStub({
+    const leakedOpenAiForm = {
       credential_name: "my-prod-key",
       custom_llm_provider: "OpenAI",
       api_base: "https://api.openai.com/v1",
       api_key: "sk-stale-openai-key",
       organization: "org-leak",
-    });
+    };
+    const { stub, fields, calls } = makeFormStub(leakedOpenAiForm);
     const setSelectedProvider = vi.fn();
 
     resetCredentialFormOnProviderChange(stub, Providers.Google_AI_Studio, setSelectedProvider);

@@ -5,6 +5,7 @@ Memory first (``litellm.credential_list``, already decrypted -- matching
 in-memory list has not yet picked up a credential another pod just wrote or updated.
 """
 
+import asyncio
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
@@ -118,11 +119,16 @@ async def effective_anthropic_wif_fields(
     """
     from_stored: Final = () if stored is None else anthropic_wif_fields_present(stored)
     from_incoming: Final = () if incoming is None else anthropic_wif_fields_named(incoming.model_fields_set)
-    per_credential: Final = [
-        await named_credential_wif_fields(credential_name, prisma_client)
-        for credential_name in _effective_credential_names(stored, incoming)
-    ]
-    from_credential: Final = tuple(chain.from_iterable(per_credential))
+    from_credential: Final = tuple(
+        chain.from_iterable(
+            await asyncio.gather(
+                *(
+                    named_credential_wif_fields(credential_name, prisma_client)
+                    for credential_name in _effective_credential_names(stored, incoming)
+                )
+            )
+        )
+    )
     return tuple(dict.fromkeys(from_stored + from_incoming + from_credential))
 
 

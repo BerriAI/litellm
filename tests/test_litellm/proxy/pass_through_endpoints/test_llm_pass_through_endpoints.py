@@ -3253,14 +3253,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     """
 
     VKEY = "sk-litellm-victim-key"
-    ENDPOINT = (
-        "v1/projects/my-proj/locations/us-central1/publishers/google/models/"
-        "gemini-2.5-flash:generateContent"
-    )
+    ENDPOINT = "v1/projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
 
-    async def _run(
-        self, monkeypatch, headers: list[tuple[bytes, bytes]]
-    ) -> tuple[HTTPException | None, dict | None]:
+    async def _run(self, monkeypatch, headers: list[tuple[bytes, bytes]]) -> tuple[HTTPException | None, dict | None]:
         from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
@@ -3378,7 +3373,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                 (b"content-type", b"application/json"),
             ],
         )
-        assert forwarded is None, f"a virtual key echoed as '{scheme} <key>' in Authorization must be stripped, not forwarded"
+        assert forwarded is None, (
+            f"a virtual key echoed as '{scheme} <key>' in Authorization must be stripped, not forwarded"
+        )
         assert raised is not None and raised.status_code == 401
 
     @pytest.mark.asyncio
@@ -3424,8 +3421,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     @pytest.mark.parametrize(
         "credential_header",
         sorted(
-            SpecialHeaders.litellm_credential_header_names()
-            - {"authorization", "x-goog-api-key", "x-litellm-api-key"}
+            SpecialHeaders.litellm_credential_header_names() - {"authorization", "x-goog-api-key", "x-litellm-api-key"}
         ),
     )
     async def test_every_non_google_credential_header_is_dropped_by_name(self, monkeypatch, credential_header):
@@ -3500,7 +3496,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert raised is not None and raised.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_authenticated_authorization_is_stripped_over_a_lower_precedence_pass_through_header(self, monkeypatch):
+    async def test_authenticated_authorization_is_stripped_over_a_lower_precedence_pass_through_header(
+        self, monkeypatch
+    ):
         with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for pass_through_endpoints; no injection seam exists on this route
             "litellm.proxy.proxy_server.general_settings",
             {"pass_through_endpoints": [{"headers": {"litellm_user_api_key": "x-company-key"}}]},
@@ -3517,7 +3515,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert raised is None
         assert forwarded is not None
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
-        assert "authorization" not in forwarded, "Authorization authenticated (higher precedence) so its key must be stripped"
+        assert "authorization" not in forwarded, (
+            "Authorization authenticated (higher precedence) so its key must be stripped"
+        )
         assert "x-company-key" not in forwarded
         assert self.VKEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
@@ -3548,7 +3548,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                 (b"content-type", b"application/json"),
             ],
         )
-        assert forwarded is None, "a virtual key in the mapped-route litellm_user_api_key header must be dropped, not forwarded"
+        assert forwarded is None, (
+            "a virtual key in the mapped-route litellm_user_api_key header must be dropped, not forwarded"
+        )
         assert raised is not None and raised.status_code == 401
 
 
@@ -4360,11 +4362,13 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
         client_wrapper.client = httpx_client
 
         with (
-            patch(
+            patch(  # test-quality-ok: stubbing the http client IS the boundary; the test asserts on the bytes handed to it
                 "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
                 return_value=client_wrapper,
             ),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging_obj,
+            patch(  # test-quality-ok: the relay calls these hooks, and they need a db this test has no use for
+                "litellm.proxy.proxy_server.proxy_logging_obj"
+            ) as mock_logging_obj,
         ):
             mock_logging_obj.pre_call_hook = AsyncMock(return_value={"model": "claude-sonnet-4-5", "messages": []})
             mock_logging_obj.post_call_success_hook = AsyncMock()

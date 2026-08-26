@@ -970,7 +970,7 @@ class TestManagementReadsTheStoredCredential:
         prisma = MagicMock()
         prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=row)
 
-        with patch.object(litellm, "credential_list", [stale]):
+        with patch.object(litellm, "credential_list", [stale]):  # test-quality-ok: the stale copy under test
             served = await hydrate_named_credential("anthropic-wif", prisma)
             managed = await hydrate_named_credential_authoritative("anthropic-wif", prisma)
 
@@ -991,7 +991,7 @@ class TestManagementReadsTheStoredCredential:
         prisma = MagicMock()
         prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
 
-        with patch.object(litellm, "credential_list", [only_in_memory]):
+        with patch.object(litellm, "credential_list", [only_in_memory]):  # test-quality-ok: the config.yaml fallback under test
             resolved = await hydrate_named_credential_authoritative("config-yaml-credential", prisma)
 
         assert resolved is not None
