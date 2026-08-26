@@ -1,5 +1,10 @@
 name: Check Duplicate Issues
 
+# Flags newly opened issues that look like existing ones. Flagging only: the actual
+# close happens 3 days later in "Close Stale Duplicate Issues", and only if nobody
+# replied to the comment posted here. The HTML marker below is the handshake between
+# the two workflows, so keep it in the template.
+
 on:
   issues:
     types: [opened, edited]
@@ -19,35 +24,12 @@ jobs:
           threshold: 0.6
           reaction: eyes
           comment: |
-            **⚠️ Potential duplicate detected**
+            <!-- litellm:potential-duplicate -->
+            **Potential duplicate detected**
 
-            This issue appears similar to existing issue(s):
+            This looks similar to:
             {{#issues}}
-            - [#{{number}}]({{html_url}}) - {{title}} ({{accuracy}}% similar)
+            - #{{number}} - {{title}} ({{accuracy}}% similar)
             {{/issues}}
 
-            Please review the linked issue(s) to see if they address your concern. If this is not a duplicate, please provide additional context to help us understand the difference.
-
-      - name: Checkout close script
-        if: github.event.action == 'opened'
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          sparse-checkout: .github/scripts
-          persist-credentials: false
-
-      - name: Set up Python
-        if: github.event.action == 'opened'
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-
-      - name: Auto-close if high-confidence duplicate
-        if: github.event.action == 'opened'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 .github/scripts/close_duplicate_issues.py \
-            --issue-number ${{ github.event.issue.number }} \
-            --repo ${{ github.repository }} \
-            --threshold 0.85 \
-            --close
+            This issue will close automatically in 3 days unless someone responds. If it is a duplicate, please 👍 the existing issue and follow along there. If it is not, comment here or 👎 this comment and it stays open.

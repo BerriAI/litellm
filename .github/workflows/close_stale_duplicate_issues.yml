@@ -1,0 +1,148 @@
+name: Close Stale Duplicate Issues
+
+# Closes issues that "Check Duplicate Issues" flagged and that nobody acknowledged
+# within the grace period. Replying to the flag, thumbs-downing it, or applying an
+# opt-out label all keep an issue open.
+#
+# Dry-run preview (touches nothing):
+#   gh workflow run "Close Stale Duplicate Issues" -f dry_run=true
+
+on:
+  schedule:
+    # Daily at 09:30 UTC, after the midnight stale sweep and off the hour.
+    - cron: "30 9 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would close without touching any issue."
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      grace_period_days:
+        description: "Days to wait after the duplicate flag before closing."
+        required: false
+        default: "3"
+      limit:
+        description: "Maximum number of issues to close in a single run."
+        required: false
+        default: "50"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  close-stale-duplicates:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Close unacknowledged duplicates
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          GRACE_PERIOD_DAYS: ${{ github.event.inputs.grace_period_days || '3' }}
+          LIMIT: ${{ github.event.inputs.limit || '50' }}
+        with:
+          script: |
+            const FLAG_MARKER = '<!-- litellm:potential-duplicate -->';
+            const FLAG_LABEL = 'potential-duplicate';
+            const OPTOUT_LABELS = ['do not close', 'keep open', 'not a duplicate'];
+
+            const dryRun = process.env.DRY_RUN === 'true';
+            const graceDays = Number(process.env.GRACE_PERIOD_DAYS);
+            const limit = Number(process.env.LIMIT);
+            const cutoff = Date.now() - graceDays * 86400000;
+            const { owner, repo } = context.repo;
+
+            // The oldest issue the flag points at, excluding the issue itself. The
+            // detector orders candidates by score, not age, so the first one listed
+            // can be newer than the original report.
+            const canonicalTarget = (body, self) => {
+              const refs = new Set();
+              for (const [, n] of body.matchAll(/#(\d+)/g)) refs.add(Number(n));
+              for (const [, n] of body.matchAll(/github\.com\/[^/\s]+\/[^/\s]+\/issues\/(\d+)/g)) refs.add(Number(n));
+              refs.delete(self);
+              return refs.size ? Math.min(...refs) : null;
+            };
+
+            // Only issues the detector labelled: scanning the whole open backlog would
+            // cost one comments request each and exhaust the token's hourly budget.
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', labels: FLAG_LABEL, per_page: 100,
+            });
+            core.info(`Scanning ${issues.length} open issues labelled '${FLAG_LABEL}' in ${owner}/${repo}.`);
+
+            const closures = [];
+            for (const issue of issues) {
+              const skip = (reason) => core.info(`  #${issue.number}: skip, ${reason}`);
+              const labels = issue.labels.map((l) => (l.name || l).toLowerCase());
+              const blocking = OPTOUT_LABELS.find((l) => labels.includes(l));
+              if (blocking) { skip(`carries opt-out label '${blocking}'`); continue; }
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: issue.number, per_page: 100,
+              });
+
+              // Author filter matters: "Quote reply" carries the marker into a human
+              // comment, and treating that as a fresh flag would restart the clock.
+              const flags = comments.filter((c) => c.user?.type === 'Bot' && c.body?.includes(FLAG_MARKER));
+              if (!flags.length) { skip('never flagged as a potential duplicate'); continue; }
+
+              const flag = flags.reduce((a, b) => (new Date(a.created_at) > new Date(b.created_at) ? a : b));
+              const flaggedAt = new Date(flag.created_at).getTime();
+              if (flaggedAt > cutoff) { skip(`flagged less than ${graceDays}d ago`); continue; }
+
+              if (comments.some((c) => new Date(c.created_at).getTime() > flaggedAt)) {
+                skip('someone replied after the flag went up'); continue;
+              }
+
+              const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+                owner, repo, comment_id: flag.id, per_page: 100,
+              });
+              if (reactions.some((r) => r.content === '-1' && r.user?.login === issue.user?.login)) {
+                skip('author thumbs-downed the flag'); continue;
+              }
+
+              const target = canonicalTarget(flag.body, issue.number);
+              if (target === null) { skip('flag comment names no other issue number'); continue; }
+              if (target > issue.number) { skip(`only candidate #${target} is newer than this issue`); continue; }
+
+              core.info(`  #${issue.number}: unacknowledged duplicate of #${target}`);
+              closures.push({ number: issue.number, title: issue.title, target });
+            }
+
+            const actionable = closures.slice(0, limit);
+            if (closures.length > limit) {
+              core.info(`Reached limit ${limit}; ${closures.length - limit} further match(es) left for the next run.`);
+            }
+
+            for (const { number, target } of actionable) {
+              if (dryRun) { core.info(`  WOULD close #${number} as duplicate of #${target}`); continue; }
+              core.info(`  closing #${number} as duplicate of #${target}`);
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: number,
+                body: `Closing as a duplicate of #${target}.\n\nThe duplicate notice on this issue went `
+                  + `unanswered for ${graceDays} days, so it is being closed automatically. If that call is `
+                  + `wrong, reopen the issue and say how it differs from #${target}, and we will pick it back `
+                  + `up.\n\n<!-- litellm:closed-as-duplicate -->`,
+              });
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: ['duplicate'] });
+              await github.rest.issues.update({
+                owner, repo, issue_number: number, state: 'closed', state_reason: 'duplicate',
+              });
+            }
+
+            const heading = dryRun ? 'Would close as duplicates (dry run)' : 'Closed as duplicates';
+            const rows = actionable.length
+              ? ['| Issue | Duplicate of |', '| --- | --- |',
+                 ...actionable.map((c) => `| [#${c.number}](https://github.com/${owner}/${repo}/issues/${c.number}) ${c.title} | #${c.target} |`)]
+              : ['No issue reached the end of its grace period unacknowledged.'];
+            await core.summary
+              .addRaw([`## ${heading}`, '', ...rows, '', `Scanned ${issues.length} flagged issues.`].join('\n'))
+              .write();
+
+            core.info(`\n${dryRun ? 'Would close' : 'Closed'}: ${actionable.length}`);
