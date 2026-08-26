@@ -49575,6 +49575,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-sol": {
@@ -49600,6 +49601,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-terra": {
@@ -49625,6 +49627,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-terra": {
@@ -49650,6 +49653,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-luna": {
@@ -49675,6 +49679,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-luna": {
@@ -49700,6 +49705,7 @@
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "bedrock_mantle/openai.gpt-5.5": {
@@ -49707,7 +49713,7 @@
         "cache_read_input_token_cost": 5.5e-07,
         "output_cost_per_token": 3.3e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
@@ -49734,7 +49740,7 @@
         "cache_read_input_token_cost": 2.75e-07,
         "output_cost_per_token": 1.65e-05,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",

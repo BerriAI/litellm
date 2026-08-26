@@ -62,7 +62,7 @@ def token_auth_flag_enabled(value: str | bool | None, *, env_var: str) -> bool:
         return False
     raise ValueError(
         f"{env_var}={value!r} is not a recognized boolean. Set it to one of "
-        f"{', '.join(sorted(TRUTHY_TOKEN_AUTH_VALUES))} to turn token auth on, or to one of "
+        f"{', '.join(sorted(TRUTHY_TOKEN_AUTH_VALUES))} to turn it on, or to one of "
         f"{', '.join(sorted(v for v in FALSY_TOKEN_AUTH_VALUES if v))} to turn it off."
     )
 

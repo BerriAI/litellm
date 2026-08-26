@@ -36,6 +36,7 @@ AnthropicInputSchema = TypedDict(
 class AnthropicOutputSchema(TypedDict, total=False):
     type: Required[Literal["json_schema"]]
     schema: Required[dict]
+    strict: ReadOnly[bool]
 
 
 class AnthropicOutputConfig(TypedDict, total=False):
