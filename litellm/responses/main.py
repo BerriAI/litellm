@@ -961,6 +961,21 @@ def responses(
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
 
+        #########################################################
+        # PROMPT MANAGEMENT
+        # If aresponses() already ran the async hook, it pops prompt_id and
+        # passes the result via _async_prompt_merged_params — apply those
+        # directly and skip the sync hook to avoid double-merging.
+        #########################################################
+        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
+            input=input,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_logging_obj=litellm_logging_obj,
+            kwargs=kwargs,
+            local_vars=local_vars,
+        )
+
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
@@ -979,21 +994,6 @@ def responses(
             model=model,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            local_vars=local_vars,
-        )
-
-        #########################################################
-        # PROMPT MANAGEMENT
-        # If aresponses() already ran the async hook, it pops prompt_id and
-        # passes the result via _async_prompt_merged_params — apply those
-        # directly and skip the sync hook to avoid double-merging.
-        #########################################################
-        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
-            input=input,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            litellm_logging_obj=litellm_logging_obj,
-            kwargs=kwargs,
             local_vars=local_vars,
         )
 

@@ -12,7 +12,9 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 
 import litellm
+from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
 from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptTemplate
+from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
 
 def test_prompt_manager_initialization():
@@ -579,10 +581,7 @@ async def test_dotprompt_with_prompt_version():
     assert "Test v2" in v2_rendered
 
 
-def _swap_prompt_manager_and_spec(ignore_prompt_manager_model: bool):
-    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
-    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
-
+def _swap_prompt_manager_and_spec(ignore_prompt_manager_model: bool) -> tuple[DotpromptManager, PromptSpec]:
     manager = DotpromptManager(
         prompt_data={"content": "You are a pirate assistant.", "metadata": {"model": "gpt-4o-mini"}},
         prompt_id="swap-prompt",

@@ -52,12 +52,19 @@ def _make_logging_obj(
     return logging_obj
 
 
+def _provider_by_model(model: str, **_: object) -> tuple[str, str, None, None]:
+    provider, _, bare_model = model.partition("/")
+    if not bare_model:
+        return (model, "anthropic" if "claude" in model else "openai", None, None)
+    return (bare_model, provider, None, None)
+
+
 def _patch_responses_dispatch():
     """Patch everything after the prompt management block so tests stay unit-level."""
     return [
         patch(
             "litellm.responses.main.litellm.get_llm_provider",
-            return_value=("gpt-4o", "openai", None, None),
+            side_effect=_provider_by_model,
         ),
         patch(
             "litellm.responses.mcp.litellm_proxy_mcp_handler."
@@ -278,7 +285,7 @@ class TestResponsesAPIPromptManagement:
 
         # The model passed to the downstream handler should be the overridden one
         handler_call_kwargs = mock_handler.call_args.kwargs
-        assert handler_call_kwargs.get("model") == "openai/gpt-4o-mini"
+        assert handler_call_kwargs.get("model") == "gpt-4o-mini"
 
     def test_non_message_input_items_filtered(self):
         """[F] Non-message items in ResponseInputParam (e.g. function_call_output) are
@@ -388,10 +395,7 @@ class TestResponsesAPIPromptManagement:
         with (
             patch(
                 "litellm.responses.main.litellm.get_llm_provider",
-                side_effect=[
-                    ("gpt-4o", "openai", None, None),
-                    ("claude-3-5-sonnet", "anthropic", None, None),
-                ],
+                side_effect=_provider_by_model,
             ),
             patches[1],
             patches[2],
@@ -588,6 +592,23 @@ def test_resolve_prompt_swapped_provider_allows_same_provider_swap_with_credenti
         )
         == "openai"
     )
+
+
+def test_sync_prompt_swap_resolves_credentials_for_swapped_provider(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+
+    monkeypatch.setenv("XAI_API_KEY", "sk-xai-test")
+    logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
+    with patch(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
+        "litellm.responses.main.base_llm_http_handler.response_api_handler", return_value=MagicMock()
+    ) as mock_handler:
+        litellm.responses(input="hi", model="xai/grok-4", prompt_id="p1", litellm_logging_obj=logging_obj)
+
+    handler_kwargs = mock_handler.call_args.kwargs
+    assert handler_kwargs["model"] == "gpt-4o-mini"
+    assert handler_kwargs["custom_llm_provider"] == "openai"
+    assert handler_kwargs["litellm_params"].api_base is None
+    assert handler_kwargs["litellm_params"].api_key != "sk-xai-test"
 
 
 def test_sync_prompt_swap_cross_provider_with_credentials_raises():
