@@ -1,7 +1,10 @@
+import asyncio
+import base64
 import contextlib
 import copy
 import json
 import os
+from typing import Any, Final
 
 import httpx
 import pytest
@@ -14,6 +17,9 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import main as litellm_main
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.types.utils import Usage
 
 
 async def _async_fake_bedrock_image_details(image_url):
@@ -2957,3 +2963,84 @@ async def test_acompletion_resolves_provider_from_api_base():
     )
 
     assert response.choices[0].message.content == "resolved"
+
+
+class _SuccessEventRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[dict[str, Any]] = []  # mutable-ok: test recorder of success-callback kwargs
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.events.append(kwargs)
+
+
+async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: str) -> dict[str, Any]:
+    for _ in range(100):
+        if (event := next((e for e in recorder.events if e.get("call_type") == call_type), None)) is not None:
+            return event
+        await asyncio.sleep(0.05)
+    pytest.fail(f"no {call_type} success event; got {[e.get('call_type') for e in recorder.events]}")
+
+
+def _gemini_tts_generate_content_response() -> dict[str, Any]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": "audio/L16;codec=pcm;rate=24000",
+                                "data": base64.b64encode(b"pcm-audio-bytes").decode(),
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 60,
+            "totalTokenCount": 65,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 5}],
+            "candidatesTokensDetails": [{"modality": "AUDIO", "tokenCount": 60}],
+        },
+        "modelVersion": "gemini-2.5-flash-preview-tts",
+    }
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="spend tracking check",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        metadata={"user_api_key": "hashed-virtual-key", "user_api_key_user_id": "user-1"},
+    )
+
+    assert mock_route.called
+    speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
+    spend_metadata: Final = get_litellm_metadata_from_kwargs(speech_event)
+    assert spend_metadata["user_api_key"] == "hashed-virtual-key"
+    assert spend_metadata["user_api_key_user_id"] == "user-1"
+    expected_prompt_cost, expected_completion_cost = litellm.cost_per_token(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        usage_object=Usage(prompt_tokens=5, completion_tokens=60, total_tokens=65),
+    )
+    expected_cost: Final = expected_prompt_cost + expected_completion_cost
+    assert expected_cost > 0
+    assert speech_event["response_cost"] == pytest.approx(expected_cost)
+    assert speech_event["standard_logging_object"]["response_cost"] == pytest.approx(expected_cost)

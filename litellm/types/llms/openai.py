@@ -109,6 +109,9 @@ EmbeddingInput = str | list[str]
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict = {}
 
+    def set_response_cost(self, response_cost: float | None) -> None:
+        self._hidden_params = {"response_cost": response_cost}
+
 
 class NotGiven:
     """
