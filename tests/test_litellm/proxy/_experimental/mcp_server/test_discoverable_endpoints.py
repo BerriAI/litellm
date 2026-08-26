@@ -187,6 +187,66 @@ async def test_register_resolves_cold_oauth_metadata():
     assert fake_http_client.post.await_args.args[0] == "https://idp.example.com/register"
 
 
+@pytest.mark.asyncio
+async def test_register_route_bridge_missing_registration_url_joins_discovery():
+    """A clientless DCR bridge whose authorize and token urls are admin-entered still relays
+    registration upstream: the flow must join deferred discovery for the missing registration
+    endpoint instead of short-circuiting to dummy credentials because authorization resolves."""
+    import json
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="bridge-partial-metadata",
+        name="bridge_partial_metadata",
+        server_name="bridge_partial_metadata",
+        alias="bridge_partial_metadata",
+        url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth_delegate,
+        dcr_bridge=True,
+        client_id=None,
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+    global_mcp_server_manager._set_oauth_discovery_deferred(server.server_id, True)
+    request = _mock_callback_request("https://litellm.example.com/")
+    fake_http_response = MagicMock()
+    fake_http_response.json.return_value = {"client_id": "generated-client", "client_secret": "generated-secret"}
+    fake_http_response.raise_for_status = MagicMock()
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(return_value=fake_http_response)
+
+    with (
+        patch.object(  # test-quality-ok: innermost discovery seam on a module-global manager; the route-to-flow join under test stays real
+            global_mcp_server_manager,
+            "_discover_oauth_metadata_for_server",
+            new=AsyncMock(return_value=_resolved_oauth_metadata()),
+        ) as discovery,
+        patch.object(  # test-quality-ok: the MagicMock Request carries no body; this seam feeds the RFC 7591 redirect_uris
+            discoverable_endpoints,
+            "_read_request_body",
+            new=AsyncMock(return_value={"redirect_uris": ["https://client.example.com/cb"]}),
+        ),
+        patch.object(  # test-quality-ok: keeps the DCR POST off the network so its target URL can be asserted
+            discoverable_endpoints,
+            "get_async_httpx_client",
+            new=lambda llm_provider: fake_http_client,
+        ),
+    ):
+        response = await discoverable_endpoints.register_client(request=request, mcp_server_name=server.server_name)
+
+    discovery.assert_awaited_once_with(server)
+    assert fake_http_client.post.await_args.args[0] == "https://idp.example.com/register"
+    assert fake_http_client.post.await_args.kwargs["json"]["redirect_uris"] == ["https://client.example.com/cb"]
+    assert response.status_code == 200
+    assert json.loads(response.body.decode("utf-8"))["client_id"] == "generated-client"
+
+
 @pytest.fixture
 def trust_xff():
     """Force ``IPAddressUtils.is_request_from_trusted_proxy`` to True.
