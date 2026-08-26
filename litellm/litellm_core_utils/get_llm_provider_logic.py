@@ -830,7 +830,7 @@ def _get_openai_compatible_provider_info(
         (
             api_base,
             dynamic_api_key,
-        ) = litellm.TokenKioskConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = litellm.TokenKioskConfig().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "wandb":
         api_base = api_base or get_secret("WANDB_API_BASE") or "https://api.inference.wandb.ai/v1"
         dynamic_api_key = api_key or get_secret_str("WANDB_API_KEY")

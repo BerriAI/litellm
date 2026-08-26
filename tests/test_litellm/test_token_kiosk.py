@@ -41,7 +41,7 @@ def test_token_kiosk_llm_provider_enum():
 
 def test_token_kiosk_get_openai_compatible_provider_info():
     config = TokenKioskConfig()
-    api_base, api_key = config._get_openai_compatible_provider_info(
+    api_base, api_key = config.get_openai_compatible_provider_info(
         api_base=None, api_key="test-key"
     )
     assert api_base == "https://agent-router.gaib.ai/v1"

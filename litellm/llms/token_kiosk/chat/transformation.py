@@ -9,12 +9,17 @@ from litellm.secret_managers.main import get_secret_str
 
 
 class TokenKioskConfig(OpenAIGPTConfig):
-    def _get_openai_compatible_provider_info(
+    def get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         final_api_base: Final = api_base or get_secret_str("TOKEN_KIOSK_API_BASE") or "https://agent-router.gaib.ai/v1"
         dynamic_api_key: Final = api_key or get_secret_str("TOKEN_KIOSK_API_KEY")
         return final_api_base, dynamic_api_key
+
+    def _get_openai_compatible_provider_info(
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
+        return self.get_openai_compatible_provider_info(api_base, api_key)
 
     def get_complete_url(
         self,
