@@ -68,7 +68,7 @@ def test_url_context_grounding_chunks_without_queries_count_nothing():
     assert result == GroundingRequests(web_search_requests=None, google_maps_grounding_requests=None)
 
 
-def test_counters_sum_across_candidates():
+def test_counters_count_distinct_queries_across_candidates():
     result = calculate_grounding_requests(
         [
             {"webSearchQueries": ["a"]},
@@ -76,7 +76,19 @@ def test_counters_sum_across_candidates():
             {"webSearchQueries": ["b", "c"], "groundingChunks": [{"maps": {"uri": "https://maps.google.com/?cid=2"}}]},
         ]
     )
-    assert result == GroundingRequests(web_search_requests=1, google_maps_grounding_requests=3)
+    assert result == GroundingRequests(web_search_requests=1, google_maps_grounding_requests=2)
+
+
+def test_duplicate_queries_across_candidates_collapse_per_bucket():
+    result = calculate_grounding_requests(
+        [
+            {"webSearchQueries": ["shared", "web only"], "groundingChunks": [{"web": {"uri": "https://e.com"}}]},
+            {"webSearchQueries": ["shared"], "groundingChunks": [{"web": {"uri": "https://e.com"}}]},
+            {"webSearchQueries": ["maps q", "maps q"], "groundingChunks": [{"maps": {"uri": "https://m.com"}}]},
+            {"webSearchQueries": ["maps q"], "groundingChunks": [{"maps": {"uri": "https://m.com"}}]},
+        ]
+    )
+    assert result == GroundingRequests(web_search_requests=2, google_maps_grounding_requests=1)
 
 
 def test_empty_metadata_counts_nothing():
