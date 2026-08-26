@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -103,6 +98,48 @@ def test_calculate_usage():
     assert usage.prompt_tokens_details.cache_creation_tokens == 12304
     assert usage._cache_creation_input_tokens == 12304
     assert usage._cache_read_input_tokens == 0
+
+
+def test_calculate_usage_prefers_served_speed_from_response_usage():
+    """
+    Anthropic reports the speed a request was actually served at in the response
+    usage (a fast request on a model without fast mode comes back
+    ``"speed": "standard"``), so the served value must beat the requested one or
+    spend gets multiplied for fast service that never happened.
+    """
+    config = AnthropicConfig()
+
+    served_standard = config.calculate_usage(
+        usage_object={"input_tokens": 12, "output_tokens": 1, "speed": "standard"},
+        reasoning_content=None,
+        speed="fast",
+    )
+    assert served_standard.speed == "standard"
+
+    no_response_speed = config.calculate_usage(
+        usage_object={"input_tokens": 12, "output_tokens": 1},
+        reasoning_content=None,
+        speed="fast",
+    )
+    assert no_response_speed.speed == "fast"
+
+
+def test_streaming_iterator_persists_served_speed_across_usage_chunks():
+    """
+    Only ``message_start`` usage carries the served speed; the final
+    ``message_delta`` usage does not. The iterator must remember the served
+    value so the last usage chunk, which wins in the stream chunk builder, does
+    not fall back to the requested speed.
+    """
+    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+
+    iterator = ModelResponseIterator(None, sync_stream=True, speed="fast")
+
+    start_usage = iterator._handle_usage({"input_tokens": 12, "output_tokens": 1, "speed": "standard"})
+    delta_usage = iterator._handle_usage({"output_tokens": 5})
+
+    assert start_usage.speed == "standard"
+    assert delta_usage.speed == "standard"
 
 
 def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
@@ -1055,6 +1092,7 @@ def test_anthropic_messages_validate_adds_beta_header():
         messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
         optional_params={"context_management": _sample_context_management_payload()},
         litellm_params={},
+        api_key="fake-anthropic-key",
     )
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
 
@@ -1986,10 +2024,11 @@ def test_effort_validation():
         )
         assert result["output_config"]["effort"] == effort
 
+    optional_params = {"output_config": {"effort": "invalid"}}
+
     with pytest.raises(
         litellm.exceptions.BadRequestError, match="Invalid effort value"
     ):
-        optional_params = {"output_config": {"effort": "invalid"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,
@@ -2043,11 +2082,12 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
+    optional_params = {"output_config": {"effort": "max"}}
+
     with pytest.raises(
         litellm.exceptions.BadRequestError,
         match="effort='max' is not supported by this model",
     ):
-        optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
             messages=messages,
@@ -2810,18 +2850,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
 
     assert result["thinking"] == {"type": "adaptive"}
 
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -6141,3 +6169,41 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
             "output_tokens_details": {"reasoning_tokens": 0},
         }
     )
+
+
+@pytest.mark.parametrize(
+    "model, expected_dropped",
+    [
+        # always-on-thinking models reject thinking.type=disabled with a 400
+        ("claude-fable-5", True),
+        ("claude-mythos-5", True),
+        # unmapped future family member -> claude-always-on-thinking fallback rule
+        ("claude-fable-5-1", True),
+        # adaptive-capable models that ACCEPT disabled must keep it verbatim
+        ("claude-opus-5", False),
+        ("claude-sonnet-5", False),
+        ("claude-opus-4-8", False),
+        # legacy models keep it verbatim
+        ("claude-sonnet-4-5-20250929", False),
+    ],
+)
+def test_disabled_thinking_omitted_only_for_always_on_models(
+    local_model_cost_map, model, expected_dropped
+):
+    """``thinking={"type": "disabled"}`` is omitted for always-on-thinking models
+    (Fable/Mythos, which 400 on it: the API remedy is to omit the param) and is
+    forwarded verbatim for every model that accepts it."""
+    config = AnthropicConfig()
+
+    request = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 64, "thinking": {"type": "disabled"}},
+        litellm_params={},
+        headers={},
+    )
+
+    if expected_dropped:
+        assert "thinking" not in request
+    else:
+        assert request["thinking"] == {"type": "disabled"}

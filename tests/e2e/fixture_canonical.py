@@ -129,7 +129,6 @@ def canonicalize(request: RecordedRequest) -> CanonicalRequest:
         else {
             "name": None if request.file_name is None else canonical_string(request.file_name),
             "sha256": request.file_sha256,
-            "bytes": request.file_bytes,
         }
     )
     content: Final[dict[str, JsonValue]] = {

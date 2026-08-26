@@ -64,22 +64,9 @@ class RedisClusterCache(RedisCache):
             dict: {"status": "success" | "failed", "message": str, "error": Optional[str]}
         """
         try:
-            import redis.asyncio as redis_async
-            from redis.cluster import ClusterNode
+            from .._redis import get_redis_async_client
 
-            # Create ClusterNode objects from startup_nodes
-            cluster_kwargs: Final = self.redis_kwargs.copy()
-            startup_nodes: Final = cluster_kwargs.pop("startup_nodes", [])
-
-            new_startup_nodes: Final[list[ClusterNode]] = []
-            for item in startup_nodes:
-                new_startup_nodes.append(ClusterNode(**item))
-
-            # Create a fresh Redis Cluster client with current settings
-            redis_client: Final = redis_async.RedisCluster(
-                startup_nodes=new_startup_nodes,
-                **cluster_kwargs,
-            )
+            redis_client: Final = get_redis_async_client(**self.redis_kwargs)
 
             # Test the connection
             ping_result: Final = await redis_client.ping()

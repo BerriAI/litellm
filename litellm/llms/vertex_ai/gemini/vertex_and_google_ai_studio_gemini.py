@@ -23,6 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _encode_tool_call_id_with_signature,
 )
@@ -1978,16 +1979,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _calculate_web_search_requests(grounding_metadata: list[dict]) -> int | None:
-        web_search_requests: int | None = None
-
-        if grounding_metadata and isinstance(grounding_metadata, list) and len(grounding_metadata) > 0:
-            for grounding_metadata_item in grounding_metadata:
-                web_search_queries = grounding_metadata_item.get("webSearchQueries")
-                if web_search_queries and web_search_requests:
-                    web_search_requests += len([q for q in web_search_queries if q])
-                elif web_search_queries:
-                    web_search_requests = len([q for q in web_search_queries if q])
-        return web_search_requests
+        if not (grounding_metadata and isinstance(grounding_metadata, list)):
+            return None
+        unique_queries: Final = {
+            query
+            for grounding_metadata_item in grounding_metadata
+            for query in (grounding_metadata_item.get("webSearchQueries") or [])
+            if query
+        }
+        return len(unique_queries) or None
 
     @staticmethod
     def _create_streaming_choice(
@@ -3087,13 +3087,21 @@ class ModelResponseIterator:
         self.streaming_response = streaming_response
         self.response = response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
-        self.accumulated_json = ""
+        self._json_buffer = JSONFragmentAccumulator()
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.response_headers = response_headers or {}
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
+
+    @property
+    def accumulated_json(self) -> str:
+        return self._json_buffer.snapshot()
+
+    @accumulated_json.setter
+    def accumulated_json(self, value: str) -> None:
+        self._json_buffer.set(value)
 
     @staticmethod
     def _check_streaming_error(chunk: dict) -> None:
@@ -3298,8 +3306,8 @@ class ModelResponseIterator:
         return self.chunk_parser(chunk=json_chunk)
 
     def handle_accumulated_json_chunk(self, chunk: str, is_final: bool = False) -> Optional["ModelResponseStream"]:
-        message: Final = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
-        self.accumulated_json = (self.accumulated_json + message.replace("\n\n", "")).strip()
+        message: Final = (litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or "").replace("\n\n", "")
+        self._json_buffer.append(message)
 
         # Mid-stream, defer parsing until the buffer's last byte can close a value:
         # attempting a parse after every fragment of one large object is O(n^2) and
@@ -3307,27 +3315,23 @@ class ModelResponseIterator:
         # data is coming, so drain whatever complete values remain regardless of the
         # trailing byte, otherwise a complete leading value sitting behind a truncated
         # trailing one would be silently dropped.
-        if not is_final and (not self.accumulated_json or self.accumulated_json[-1] not in "}]"):
+        if not is_final and not self._json_buffer.could_close_json():
             return None
 
         # Peel one complete JSON value from the front of the buffer and keep the
         # unconsumed tail. Running json.loads over the whole buffer would fail
         # forever once it held more than one concatenated value ("Extra data") while
         # never resetting the buffer, so the buffer grew without bound and pinned the
-        # core. raw_decode reports where the value ended, so concatenated values drain
-        # one call at a time. A leading non-dict value (never emitted by Gemini in
-        # practice) is consumed and skipped so it cannot block the dict values behind it.
-        decoder: Final = json.JSONDecoder()
-        while self.accumulated_json:
-            try:
-                raw_value = decoder.raw_decode(self.accumulated_json)
-            except json.JSONDecodeError:
+        # core. pop_next_value reports where the value ended, so concatenated values
+        # drain one call at a time. A leading non-dict value (never emitted by Gemini
+        # in practice) is consumed and skipped so it cannot block the dict values
+        # behind it.
+        while True:
+            found, decoded = self._json_buffer.pop_next_value()
+            if not found:
                 return None
-            decoded, end_index = cast("tuple[object, int]", raw_value)  # cast-ok: raw_decode -> tuple[Any,int]
-            self.accumulated_json = self.accumulated_json[end_index:].strip()
             if isinstance(decoded, dict):
                 return self.chunk_parser(chunk=decoded)
-        return None
 
     def _common_chunk_parsing_logic(self, chunk: str) -> Optional["ModelResponseStream"]:
         try:
@@ -3351,7 +3355,7 @@ class ModelResponseIterator:
         try:
             chunk: Final = self.response_iterator.__next__()
         except StopIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+            if self.chunk_type == "accumulated_json" and self._json_buffer:
                 result: Final = self.handle_accumulated_json_chunk(chunk="", is_final=True)
                 if result is not None:
                     return result
@@ -3375,7 +3379,7 @@ class ModelResponseIterator:
         try:
             chunk: Final = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+            if self.chunk_type == "accumulated_json" and self._json_buffer:
                 result: Final = self.handle_accumulated_json_chunk(chunk="", is_final=True)
                 if result is not None:
                     return result

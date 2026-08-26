@@ -1,13 +1,9 @@
-import os
 import sys
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def test_qdrant_semantic_cache_initialization(monkeypatch):
@@ -966,3 +962,67 @@ async def test_qdrant_async_embedding_explicit_limit_beats_deployment_limit(monk
 
     sent_input = router.aembedding.call_args.kwargs["input"]
     assert _token_count("sem-embed", sent_input) == 3
+
+
+@pytest.mark.asyncio
+async def test_qdrant_async_embedding_call_is_bounded(monkeypatch):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.embedding_max_input_tokens = None
+    cache.embedding_timeout = 1.5
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    await cache._get_async_embedding("What is the capital of France?")
+
+    assert router.aembedding.call_args.kwargs["timeout"] == 1.5
+    assert router.aembedding.call_args.kwargs["num_retries"] == 0
+
+
+@pytest.mark.asyncio
+async def test_qdrant_async_embedding_gives_up_on_unresponsive_endpoint(monkeypatch):
+    import asyncio
+    import time
+
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.embedding_max_input_tokens = None
+    cache.embedding_timeout = 0.05
+
+    async def never_responds(**kwargs):
+        await asyncio.sleep(3)
+        return {"data": [{"embedding": [0.1, 0.2]}]}
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.aembedding = never_responds
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    started = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await cache._get_async_embedding("What is the capital of France?")
+    assert time.monotonic() - started < 1.0
+
+
+def test_qdrant_semantic_cache_defaults_embedding_timeout():
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+    from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    assert cache.embedding_timeout == SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+    assert SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS < 60

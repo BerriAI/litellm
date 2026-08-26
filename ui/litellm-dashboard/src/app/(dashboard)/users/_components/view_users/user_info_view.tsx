@@ -18,7 +18,7 @@ import {
   Member,
 } from "@/components/networking";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   Combobox,
   ComboboxContent,
@@ -38,6 +38,7 @@ import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-
 import { toast } from "@/lib/toast";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import MCPServerPermissions from "@/components/permissions/MCPServerPermissions";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -84,6 +85,7 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
+  const { premiumUser } = useAuthorized();
   const [userData, setUserData] = useState<UserInfoV2Response | null>(null);
   const [teamDetails, setTeamDetails] = useState<TeamDisplayInfo[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -333,6 +335,7 @@ export default function UserInfoView({
         max_budget: formValues.max_budget ?? userData.max_budget,
         budget_duration: formValues.budget_duration ?? userData.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
+        model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
         object_permission: mcpEntitlement
           ? { ...userData.object_permission, ...mcpEntitlement }
           : userData.object_permission,
@@ -391,6 +394,10 @@ export default function UserInfoView({
       max_budget: userData.max_budget,
       budget_duration: userData.budget_duration,
       metadata: userData.metadata,
+      // Without these the per-model budget editor mounts empty and a save
+      // replaces the user's existing budgets with whatever was typed.
+      model_max_budget: userData.model_max_budget,
+      model_max_budget_usage: userData.model_max_budget_usage,
     },
   };
 
@@ -409,7 +416,7 @@ export default function UserInfoView({
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["user-id"]
                   ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -579,6 +586,7 @@ export default function UserInfoView({
                 userModels={userModels}
                 possibleUIRoles={possibleUIRoles}
                 objectPermission={userData.object_permission}
+                premiumUser={premiumUser === true}
               />
             ) : (
               <div className="space-y-4">
@@ -590,7 +598,7 @@ export default function UserInfoView({
                       variant="ghost"
                       size="icon-xs"
                       onClick={() => copyToClipboard(userData.user_id, "user-id")}
-                      className={`left-2 z-10 transition-all duration-200 ${
+                      className={`left-2 z-raised transition-all duration-200 ${
                         copiedStates["user-id"]
                           ? "text-success bg-success/10 border-success/20"
                           : "text-muted-foreground hover:text-foreground hover:bg-accent"

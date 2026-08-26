@@ -113,18 +113,30 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
     expect(result.classifier_context_per_turn_chars).toBe(300);
   });
 
-  it("persists an edited classifier context window size and per-turn char limit", () => {
+  it("persists an edited classifier context window size", () => {
     const formValue = {
       tiers: STORED_LLM.tiers,
       classifier_type: "llm" as const,
       classifier_llm_config: STORED_LLM.classifier_llm_config,
       classifier_context_window_size: 10,
-      classifier_context_per_turn_chars: 500,
     };
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBe(10);
-    expect(result.classifier_context_per_turn_chars).toBe(500);
+  });
+
+  it("carries a stored per-turn cap through untouched now that no control sets it", () => {
+    // The modal stopped rendering a per-turn control, so the key left MANAGED_COMPLEXITY_ROUTER_KEYS.
+    // Had it stayed managed, every open-and-save would have silently dropped an operator's cap.
+    const formValue = {
+      tiers: STORED_LLM.tiers,
+      classifier_type: "llm" as const,
+      classifier_llm_config: STORED_LLM.classifier_llm_config,
+      classifier_context_window_size: 10,
+    };
+    const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(result.classifier_context_per_turn_chars).toBe(300);
   });
 
   it("omits classifier context fields when classifier_type is heuristic even if values linger in state", () => {
@@ -132,12 +144,12 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
       tiers: STORED_LLM.tiers,
       classifier_type: "heuristic" as const,
       classifier_context_window_size: 5,
-      classifier_context_per_turn_chars: 300,
+      classifier_context_budget_chars: 4000,
     };
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBeUndefined();
-    expect(result.classifier_context_per_turn_chars).toBeUndefined();
+    expect(result.classifier_context_budget_chars).toBeUndefined();
   });
 
   it("does not resurrect a stale stored classifier_context_window_size once the form's own value is unset", () => {
@@ -151,7 +163,6 @@ describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
 
     expect(result.classifier_context_window_size).toBeUndefined();
-    expect(result.classifier_context_per_turn_chars).toBeUndefined();
   });
 });
 
@@ -371,5 +382,61 @@ describe("buildUpdatedComplexityRouterConfig plan-mode minimum tier", () => {
       { ...FORM_VALUE, plan_mode_min_tier: "MEDIUM" },
     );
     expect(result.plan_mode_min_tier).toBe("MEDIUM");
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig tier model params", () => {
+  const storedWithParams = {
+    ...STORED,
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["opus"], COMPLEX: ["opus"], REASONING: [] },
+    tier_model_configs: {
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }],
+      COMPLEX: [{ model_name: "opus", litellm_params: { reasoning_effort: "high" } }],
+    },
+  };
+  const formValueWithParams = {
+    ...FORM_VALUE,
+    tiers: storedWithParams.tiers,
+    tier_model_params: {
+      MEDIUM: { opus: { reasoning_effort: "medium" } },
+      COMPLEX: { opus: { reasoning_effort: "high" } },
+    },
+  };
+
+  it("round-trips hydrated params on an untouched save", () => {
+    const result = buildUpdatedComplexityRouterConfig(storedWithParams, formValueWithParams, undefined, hydratedState);
+    expect(result.tier_model_configs).toEqual(storedWithParams.tier_model_configs);
+  });
+
+  // tier_model_configs is managed now that this modal renders a control for it. Before that, the
+  // stale stored key was carried through, so clearing the last effort could never persist.
+  it("drops the stored key entirely when the operator unsets every effort", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      storedWithParams,
+      { ...formValueWithParams, tier_model_params: undefined },
+      undefined,
+      hydratedState,
+    );
+    expect(result).not.toHaveProperty("tier_model_configs");
+  });
+
+  it("drops params for a model removed from its tier", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      storedWithParams,
+      {
+        ...formValueWithParams,
+        tiers: { ...storedWithParams.tiers, COMPLEX: ["gpt-4o-mini"] },
+      },
+      undefined,
+      hydratedState,
+    );
+    expect(result.tier_model_configs).toEqual({
+      MEDIUM: [{ model_name: "opus", litellm_params: { reasoning_effort: "medium" } }],
+    });
+  });
+
+  it("emits no tier_model_configs for a config that never had params", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, hydratedState);
+    expect(result).not.toHaveProperty("tier_model_configs");
   });
 });

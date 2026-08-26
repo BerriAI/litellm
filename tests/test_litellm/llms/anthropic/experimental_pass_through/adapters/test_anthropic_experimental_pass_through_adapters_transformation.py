@@ -1,12 +1,10 @@
-import os
-import sys
+import base64
 from typing import Any, cast
 
 import pytest
 
 import litellm
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -14,6 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+    _bedrock_converse_messages_pt,
 )
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
@@ -362,6 +361,48 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
+    """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
+
+    Without it Moonshot and DeepSeek fill in a single-space placeholder and the model gets
+    a blank where its own prior reasoning belongs.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Which city is best for a picnic?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "Denver is dry in August.", "signature": "sig1"},
+                {"type": "thinking", "thinking": "San Francisco is foggy.", "signature": "sig2"},
+                {"type": "redacted_thinking", "data": "REDACTED"},
+                {"type": "text", "text": "Denver."},
+            ],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["reasoning_content"] == "Denver is dry in August.\nSan Francisco is foggy."
+    assert result[1]["content"] == "Denver."
+
+
+def test_translate_anthropic_messages_to_openai_sets_no_reasoning_content_without_thinking():
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "text", "text": "Denver."}],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert "reasoning_content" not in result[0]
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 
@@ -638,7 +679,7 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
 
 
 def _translate_with_metadata(
-    model: str, metadata: dict[str, Any], custom_llm_provider: str | None
+    model: str, metadata: dict[str, str], custom_llm_provider: str | None
 ) -> dict[str, Any]:
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={
@@ -3831,6 +3872,75 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+TOOL_RESULT_PDF_B64 = base64.b64encode(b"%PDF-1.4 minimal regression fixture").decode()
+
+
+def _base64_pdf_block():
+    return {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": TOOL_RESULT_PDF_B64},
+    }
+
+
+def test_tool_result_single_document_kept_as_pdf_data_url():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_base64_pdf_block()]}),
+        ]
+    )
+
+    tool_messages = [m for m in translated if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}"},
+        }
+    ]
+
+
+def test_tool_result_text_and_document_reach_bedrock_converse_tool_result():
+    """Claude Code >= 2.1.245 sends Read-tool PDF output as a document block inside
+    tool_result; dropping it left bedrock converse models blind to the PDF content."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            AnthropicMessagesUserMessageParam(role="user", content="Read pong.pdf"),
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {
+                    "toolu_01": [
+                        {"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"},
+                        _base64_pdf_block(),
+                    ]
+                }
+            ),
+        ]
+    )
+
+    converse_messages = _bedrock_converse_messages_pt(
+        messages=translated,
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    tool_results = [
+        block["toolResult"]
+        for message in converse_messages
+        for block in message["content"]
+        if "toolResult" in block
+    ]
+    assert len(tool_results) == 1
+    documents = [part["document"] for part in tool_results[0]["content"] if "document" in part]
+    assert len(documents) == 1
+    assert documents[0]["format"] == "pdf"
+    assert documents[0]["source"]["bytes"] == TOOL_RESULT_PDF_B64
+    texts = [part["text"] for part in tool_results[0]["content"] if "text" in part]
+    assert texts == ["PDF file read: pong.pdf (579 bytes)"]
 
 
 def test_translate_anthropic_to_openai_carries_prompt_cache_breakpoint_on_system_and_user_blocks():

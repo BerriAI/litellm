@@ -406,6 +406,37 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
     setTemplateQueueProgress(null);
   };
 
+  if (showFlowBuilder) {
+    return (
+      <FlowBuilderPage
+        onBack={() => {
+          setShowFlowBuilder(false);
+          setEditingPolicy(null);
+        }}
+        onSuccess={() => {
+          fetchPolicies();
+          setEditingPolicy(null);
+        }}
+        accessToken={accessToken}
+        editingPolicy={editingPolicy}
+        availableGuardrails={guardrailsList}
+        createPolicy={createPolicyCall}
+        updatePolicy={updatePolicyCall}
+        onVersionCreated={(newPolicy) => {
+          setEditingPolicy(newPolicy);
+          fetchPolicies();
+        }}
+        onSelectVersion={(policy) => {
+          setEditingPolicy(policy);
+        }}
+        onVersionStatusUpdated={(updatedPolicy) => {
+          setEditingPolicy(updatedPolicy);
+          fetchPolicies();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="m-8 mx-auto w-full flex-auto overflow-y-auto p-2">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -628,35 +659,6 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         accessToken={accessToken}
         allTemplates={loadedTemplates}
       />
-
-      {showFlowBuilder && (
-        <FlowBuilderPage
-          onBack={() => {
-            setShowFlowBuilder(false);
-            setEditingPolicy(null);
-          }}
-          onSuccess={() => {
-            fetchPolicies();
-            setEditingPolicy(null);
-          }}
-          accessToken={accessToken}
-          editingPolicy={editingPolicy}
-          availableGuardrails={guardrailsList}
-          createPolicy={createPolicyCall}
-          updatePolicy={updatePolicyCall}
-          onVersionCreated={(newPolicy) => {
-            setEditingPolicy(newPolicy);
-            fetchPolicies();
-          }}
-          onSelectVersion={(policy) => {
-            setEditingPolicy(policy);
-          }}
-          onVersionStatusUpdated={(updatedPolicy) => {
-            setEditingPolicy(updatedPolicy);
-            fetchPolicies();
-          }}
-        />
-      )}
     </div>
   );
 };

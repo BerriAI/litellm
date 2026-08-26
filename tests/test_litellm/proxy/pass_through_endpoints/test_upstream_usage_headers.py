@@ -1,10 +1,7 @@
-import os
-import sys
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.upstream_usage_headers import (
