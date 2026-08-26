@@ -42,5 +42,5 @@ class TestSafeFilename:
             safe_filename("..")
 
     def test_empty_rejected(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='Empty or unsafe filename'):
             safe_filename("")

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { DashboardHeader } from "./DashboardHeader";
 
 const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
@@ -44,7 +44,7 @@ describe("DashboardHeader breadcrumb", () => {
     act(() => {
       fireEvent.click(selector);
     });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
+    expect(await screen.findByText("Chat")).toBeInTheDocument();
   });
 
   it("keeps the AI Gateway selector at the root even when there is nothing to switch to (discovery)", () => {

@@ -13,13 +13,10 @@ There are no real I/O seams here; ``uuid.uuid4`` is the only nondeterministic
 dependency and is patched where the displayName is asserted.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
     VertexAIBatchTransformation,

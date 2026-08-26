@@ -1,5 +1,6 @@
 import {
   buildComplexityRouterConfig,
+  getPlanModeTierError,
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getMissingTiersError,
@@ -22,7 +23,7 @@ const baseParams: BuildComplexityRouterConfigParams = {
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
   classifierContextWindowSize: undefined,
-  classifierContextPerTurnChars: undefined,
+  classifierContextBudgetChars: undefined,
   classifierContextIncludeAssistantTurns: undefined,
   classifierFallback: undefined,
   sessionAffinity: false,
@@ -92,39 +93,39 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toBeUndefined();
   });
 
-  it("includes classifier_context_window_size and classifier_context_per_turn_chars only when classifier_type is llm", () => {
+  it("includes classifier_context_window_size and classifier_context_budget_chars only when classifier_type is llm", () => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "llm",
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
       classifierContextWindowSize: 5,
-      classifierContextPerTurnChars: 300,
+      classifierContextBudgetChars: 4000,
     };
     const config = buildComplexityRouterConfig(params);
     expect(config.classifier_context_window_size).toBe(5);
-    expect(config.classifier_context_per_turn_chars).toBe(300);
+    expect(config.classifier_context_budget_chars).toBe(4000);
   });
 
-  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is heuristic even if values linger in state", () => {
+  it("omits classifier_context_window_size and classifier_context_budget_chars when classifier_type is heuristic even if values linger in state", () => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "heuristic",
       classifierContextWindowSize: 5,
-      classifierContextPerTurnChars: 300,
+      classifierContextBudgetChars: 4000,
     };
     const config = buildComplexityRouterConfig(params);
     expect(config.classifier_context_window_size).toBeUndefined();
-    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+    expect(config.classifier_context_budget_chars).toBeUndefined();
   });
 
-  it("omits classifier_context_window_size and classifier_context_per_turn_chars when classifier_type is llm but neither was set, leaving the backend default", () => {
+  it("omits classifier_context_window_size and classifier_context_budget_chars when classifier_type is llm but neither was set, leaving the backend default", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
       classifierType: "llm",
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_context_window_size).toBeUndefined();
-    expect(config.classifier_context_per_turn_chars).toBeUndefined();
+    expect(config.classifier_context_budget_chars).toBeUndefined();
   });
 
   it("allows classifier_context_window_size of 0, distinct from unset, to send no prior-turn context", () => {
@@ -573,5 +574,102 @@ describe("hydrateTierLabels", () => {
   it("returns undefined for a value that is not an object", () => {
     expect(hydrateTierLabels("Cheap")).toBeUndefined();
     expect(hydrateTierLabels(["Cheap"])).toBeUndefined();
+  });
+});
+
+describe("buildComplexityRouterConfig scorer knobs", () => {
+  const BOUNDARIES = { simple_medium: 0.22, medium_complex: 0.44, complex_reasoning: 0.66 };
+  const tuned: BuildComplexityRouterConfigParams = { ...baseParams, tierBoundaries: BOUNDARIES };
+  const llmWithDefaultFallback: BuildComplexityRouterConfigParams = {
+    ...tuned,
+    classifierType: "llm",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierFallback: "default_model",
+  };
+
+  it("omits untouched knobs so the router tracks the backend defaults", () => {
+    const config = buildComplexityRouterConfig(baseParams);
+
+    expect(config).not.toHaveProperty("tier_boundaries");
+    expect(config).not.toHaveProperty("dimension_weights");
+  });
+
+  it("emits what was set", () => {
+    expect(buildComplexityRouterConfig(tuned).tier_boundaries).toEqual(BOUNDARIES);
+  });
+
+  it("drops them when the classifier falls back to the default model and nothing is scored", () => {
+    expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
+  });
+
+  it("omits the reasoning override floor while untouched, so it keeps tracking simple_medium", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("reasoning_override_min_score");
+  });
+
+  it("emits the reasoning override floor that was set", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, reasoningOverrideMinScore: 0.4 });
+    expect(config.reasoning_override_min_score).toBe(0.4);
+  });
+
+  // 0 is an unconditional override, not an absent knob, so a falsy check here would silently discard it.
+  it("emits an explicit 0 reasoning override floor", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, reasoningOverrideMinScore: 0 });
+    expect(config.reasoning_override_min_score).toBe(0);
+  });
+
+  it("drops the reasoning override floor when nothing is scored", () => {
+    expect(buildComplexityRouterConfig({ ...llmWithDefaultFallback, reasoningOverrideMinScore: 0 })).not.toHaveProperty(
+      "reasoning_override_min_score",
+    );
+  });
+});
+
+describe("plan-mode minimum tier", () => {
+  it("omits plan_mode_min_tier when unset, so the backend default (off) is preserved", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: undefined });
+    expect(config).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("writes the selected tier", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: "COMPLEX" });
+    expect(config.plan_mode_min_tier).toBe("COMPLEX");
+  });
+
+  it("never writes an empty string, which the backend rejects instead of treating as off", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, planModeMinTier: "  " });
+    expect(config).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("getPlanModeTierError", () => {
+  const tiersWithEmptyComplex = { SIMPLE: ["m1"], MEDIUM: ["m1"], COMPLEX: [], REASONING: [] };
+
+  it("passes when the override is off", () => {
+    expect(getPlanModeTierError(undefined, tiersWithEmptyComplex)).toBeNull();
+  });
+
+  it("passes when the named tier has models", () => {
+    expect(getPlanModeTierError("MEDIUM", tiersWithEmptyComplex)).toBeNull();
+  });
+
+  it("blocks a tier whose models were removed, which the backend would reject with a 400", () => {
+    expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
+  });
+});
+
+describe("buildComplexityRouterConfig tier model params", () => {
+  it("keeps tier_model_configs out of the payload when nothing is set", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("tier_model_configs");
+  });
+
+  it("emits tier_model_configs beside string tiers when efforts are set", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tierModelParams: { COMPLEX: { "claude-sonnet-4": { reasoning_effort: "high" } } },
+    });
+    expect(config.tiers).toEqual(tiers);
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "claude-sonnet-4", litellm_params: { reasoning_effort: "high" } }],
+    });
   });
 });

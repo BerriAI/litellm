@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 
 ILLEGAL_DISPLAY_PARAMS: Final = [
     "messages",
@@ -185,30 +186,17 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
-def _is_semantic_auto_router_deployment(litellm_params: dict) -> bool:
-    """
-    True for semantic auto_router deployments (auto_router/<name>) that are not
-    sub-strategies (complexity_router, adaptive_router, quality_router).
-
-    These are meta-routers that select among real LLM deployments at request time;
-    they have no LLM endpoint to health-check.
-    """
+def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
+    """True for strategy-router deployments."""
     model: Final[object] = litellm_params.get("model", "")
-    if not isinstance(model, str):
-        return False
-    if not model.startswith("auto_router/"):
-        return False
-    for sub_strategy in ("complexity_router", "adaptive_router", "quality_router"):
-        if model.startswith(f"auto_router/{sub_strategy}"):
-            return False
-    return True
+    return isinstance(model, str) and classify_strategy_router_model(model) is not None
 
 
 async def _run_model_health_check(model: dict):
     litellm_params = model["litellm_params"]
     model_info: Final = model.get("model_info", {})
 
-    if _is_semantic_auto_router_deployment(litellm_params):
+    if _is_strategy_router_deployment(litellm_params):
         return {}
 
     mode: Final = _resolve_health_check_mode(
@@ -448,6 +436,9 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     """
     Update the litellm params for health check.
 
+    - merges `model_info.health_check_params` into the probe request, so a deployment whose provider
+      requires a payload field litellm does not synthesize (e.g. `mediaSource` for Bedrock TwelveLabs
+      Pegasus) can supply it. The dedicated knobs below are applied afterwards and win on conflict.
     - gets a short `messages` param for health check
     - adds a bounded `max_tokens` when the deployment is a chat-style mode
       (`chat`, `completion`, `responses`) or the operator explicitly opts in
@@ -462,6 +453,16 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
         model_info,
         litellm_params,  # any-ok: untyped router config dict
     )
+    _health_check_params: Final = model_info.get("health_check_params", None)
+    if isinstance(_health_check_params, dict):
+        litellm_params.update(_health_check_params)
+    elif _health_check_params is not None:
+        logger.warning(
+            "health_check_params for model %s is a %s, expected a dict. Ignoring it.",
+            litellm_params.get("model"),
+            type(_health_check_params).__name__,
+        )
+
     litellm_params["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
         model_info,

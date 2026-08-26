@@ -12,6 +12,7 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
@@ -36,6 +37,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
   pageSize = 20,
   placeholder = "Search teams by alias...",
 }) => {
+  const anchor = useComboboxAnchor();
   const [search, setSearch] = useState("");
   const debouncedSetSearch = useDebouncedCallback(setSearch, { wait: DEBOUNCE_WAIT_MS });
 
@@ -75,7 +77,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
       onInputValueChange={debouncedSetSearch}
       disabled={disabled}
     >
-      <ComboboxChips className="w-full" aria-busy={isLoading}>
+      <ComboboxChips render={<div ref={anchor} />} className="w-full" aria-busy={isLoading}>
         <ComboboxValue>
           {(selected: string[]) =>
             selected.map((teamId) => (
@@ -85,15 +87,10 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
             ))
           }
         </ComboboxValue>
-        <ComboboxChipsInput
-          className="border-0 bg-transparent"
-          placeholder={placeholder}
-          aria-label={placeholder}
-          disabled={disabled}
-        />
+        <ComboboxChipsInput placeholder={placeholder} aria-label={placeholder} disabled={disabled} />
         {value.length > 0 && <ComboboxClear aria-label="Clear all teams" disabled={disabled} />}
       </ComboboxChips>
-      <ComboboxContent>
+      <ComboboxContent anchor={anchor}>
         <ComboboxEmpty>
           {isLoading ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : "No teams found"}
         </ComboboxEmpty>

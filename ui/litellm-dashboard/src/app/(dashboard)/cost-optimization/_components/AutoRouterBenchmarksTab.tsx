@@ -4,6 +4,7 @@ import React, { useState } from "react";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,7 +16,6 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 import {
   ALL_ROUTERS,
-  WINDOW_LABELS,
   bucketRows,
   bucketTurnsTotal,
   durationLabel,
@@ -27,13 +27,13 @@ import {
   type AutoRouterBenchmarksResponse,
   type AutoRouterCacheStats,
   type BenchmarkView,
-  type BenchmarkWindow,
   type BucketRow,
 } from "./autoRouterBenchmarks";
-import { usd } from "./costOptimizationUtils";
+import { formatRangeLabel, usd } from "./costOptimizationUtils";
 import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
+import { DailyActivityRange } from "./useDailyActivityRange";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>
@@ -62,9 +62,9 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
             <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
             <Badge
               variant="secondary"
-              className={cheaper ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-destructive"}
+              className={cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}
             >
-              {cheaper ? "-" : "+"}
+              {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
               {Math.abs(stats.saved_pct).toFixed(0)}%
             </Badge>
           </div>
@@ -95,7 +95,7 @@ const StackedTurnBar: React.FC<{ buckets: BucketRow[] }> = ({ buckets }) => {
   return (
     <div className="flex flex-col gap-1">
       <div
-        className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded-sm"
+        className={`flex h-2.5 w-full gap-0.5 overflow-hidden rounded-sm ${segments.length === 0 ? "bg-muted" : ""}`}
         role="img"
         aria-label="Share of turns by bucket"
       >
@@ -230,7 +230,6 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
     return <Message>Auto-router usage is visible to proxy admin roles only</Message>;
   }
   if (error || !data) return <Message>Auto-router usage is unavailable right now</Message>;
-  if (data.groups.length === 0) return <Message>No auto-router sessions in this window yet</Message>;
 
   const view = viewFor(data, selectedKey);
   const stats = view.stats;
@@ -249,7 +248,8 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       <p className="text-xs text-muted-foreground">
         Compares your actual routed spend with the estimated cost of using only the most expensive model configured in
         the auto-router. It accounts for both the cache savings from staying on one model and the added cache costs from
-        switching models.
+        switching models. The range counts whole sessions that overlap it, so totals can differ slightly from the
+        Overall tab, which buckets savings by UTC day.
       </p>
 
       <div className="space-y-4">
@@ -267,32 +267,28 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
 interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
+  activity: DailyActivityRange;
 }
 
-const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
-  const [range, setRange] = useState<BenchmarkWindow>("30d");
-  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, range);
+const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
+  const { dateValue, onDateChange } = activity;
+  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
   const { data: autoRouters } = useAutoRouters();
 
   const groups = data?.groups ?? [];
   const selectedLabel = data ? viewFor(data, selectedKey).label : "All auto-routers";
+  const rangeLabel = formatRangeLabel(dateValue.from, dateValue.to);
 
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-foreground">Auto-router usage</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{WINDOW_LABELS[range]}</p>
+          {rangeLabel && <p className="mt-1 text-sm text-muted-foreground">{rangeLabel} (UTC)</p>}
         </div>
         <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
-          <Tabs value={range} onValueChange={(value) => setRange(value === "7d" || value === "24h" ? value : "30d")}>
-            <TabsList>
-              <TabsTrigger value="30d">30d</TabsTrigger>
-              <TabsTrigger value="7d">7d</TabsTrigger>
-              <TabsTrigger value="24h">24h</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
           <div className="w-full sm:w-64">
             <Select value={selectedKey} onValueChange={(value: string | null) => setSelectedKey(value ?? ALL_ROUTERS)}>
               <SelectTrigger className="w-full">
@@ -322,7 +318,7 @@ const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
   );
 };
 
-const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
   const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
 
   const handleTabChange = (value: unknown) => {
@@ -345,7 +341,7 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
       </TabsList>
 
       <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
-        <UsageView accessToken={accessToken} />
+        <UsageView accessToken={accessToken} activity={activity} />
       </TabsContent>
       <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
         <ShadowEvalSection />

@@ -109,7 +109,7 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user_admin_login_with_master_key_as_password():
+async def test_authenticate_user_admin_login_with_master_key_as_password(monkeypatch):
     """Test admin login when UI_PASSWORD is not set, should use master_key"""
     master_key = "sk-1234"
     ui_username = "admin"
@@ -131,39 +131,35 @@ async def test_authenticate_user_admin_login_with_master_key_as_password():
 
     with patch.dict(os.environ, env_vars, clear=False):
         # Explicitly remove UI_PASSWORD if it exists
-        original_ui_password = os.environ.pop("UI_PASSWORD", None)
-        try:
+        monkeypatch.delenv("UI_PASSWORD", raising=False)
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_generate_key:
+            mock_generate_key.return_value = {
+                "token": "test-token-123",
+                "user_id": LITELLM_PROXY_ADMIN_NAME,
+            }
+
             with patch(
-                "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+                "litellm.proxy.auth.login_utils.user_update",
                 new_callable=AsyncMock,
-            ) as mock_generate_key:
-                mock_generate_key.return_value = {
-                    "token": "test-token-123",
-                    "user_id": LITELLM_PROXY_ADMIN_NAME,
-                }
-
+                return_value=None,
+            ) as mock_user_update:
                 with patch(
-                    "litellm.proxy.auth.login_utils.user_update",
-                    new_callable=AsyncMock,
-                    return_value=None,
-                ) as mock_user_update:
-                    with patch(
-                        "litellm.proxy.auth.login_utils.get_secret_bool",
-                        return_value=False,
-                    ):
-                        result = await authenticate_user(
-                            username=ui_username,
-                            password=master_key,
-                            master_key=master_key,
-                            prisma_client=mock_prisma_client,
-                        )
+                    "litellm.proxy.auth.login_utils.get_secret_bool",
+                    return_value=False,
+                ):
+                    result = await authenticate_user(
+                        username=ui_username,
+                        password=master_key,
+                        master_key=master_key,
+                        prisma_client=mock_prisma_client,
+                    )
 
-                        assert isinstance(result, LoginResult)
-                        assert result.user_id == LITELLM_PROXY_ADMIN_NAME
-                        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
-        finally:
-            if original_ui_password:
-                os.environ["UI_PASSWORD"] = original_ui_password
+                    assert isinstance(result, LoginResult)
+                    assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+                    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
 @pytest.mark.asyncio
@@ -319,7 +315,7 @@ async def test_authenticate_user_email_case_insensitive_login():
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user_database_required_for_admin():
+async def test_authenticate_user_database_required_for_admin(monkeypatch):
     """Test that database is required for admin login"""
     master_key = "sk-1234"
     ui_username = "admin"
@@ -353,7 +349,7 @@ async def test_authenticate_user_database_required_for_admin():
                 assert "No Database connected" in exc_info.value.message
             finally:
                 if original_db_url:
-                    os.environ["DATABASE_URL"] = original_db_url
+                    monkeypatch.setenv("DATABASE_URL", original_db_url)
 
 
 @pytest.mark.asyncio

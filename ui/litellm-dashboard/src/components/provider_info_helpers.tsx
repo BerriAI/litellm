@@ -50,6 +50,7 @@ import replicateLogo from "../../public/assets/logos/replicate.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
+import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
@@ -85,6 +86,7 @@ export enum Providers {
   CLARIFAI = "Clarifai",
   CLOUDFLARE = "Cloudflare",
   CODESTRAL = "Codestral",
+  Cognition = "Cognition",
   Cohere = "Cohere",
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
@@ -110,7 +112,7 @@ export enum Providers {
   GradientAI = "GradientAI",
   Groq = "Groq",
   HEROKU = "Heroku",
-  Hosted_Vllm = "vllm",
+  Hosted_Vllm = "Hosted vLLM",
   HUGGINGFACE = "Huggingface",
   HYPERBOLIC = "Hyperbolic",
   Infinity = "Infinity",
@@ -152,6 +154,7 @@ export enum Providers {
   SAGEMAKER_LEGACY = "Sagemaker",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
+  SCX_AI = "SCX.ai",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
@@ -162,7 +165,7 @@ export enum Providers {
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   VERTEX_AI_BETA = "Vertex Ai Beta",
-  VLLM = "Vllm",
+  VLLM = "Local vLLM",
   VolcEngine = "VolcEngine",
   Voyage = "Voyage AI",
   WANDB = "Wandb",
@@ -194,6 +197,7 @@ export const provider_map: Record<string, string> = {
   CLARIFAI: "clarifai",
   CLOUDFLARE: "cloudflare",
   CODESTRAL: "codestral",
+  Cognition: "cognition",
   Cohere: "cohere",
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
@@ -262,6 +266,7 @@ export const provider_map: Record<string, string> = {
   SageMaker: "sagemaker_chat",
   Sambanova: "sambanova",
   SAP: "sap",
+  SCX_AI: "scx-ai",
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
@@ -354,6 +359,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
+  [Providers.SCX_AI]: scxAiLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
@@ -409,6 +415,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Azure]: "my-deployment",
   [Providers.Azure_AI_Studio]: "azure_ai/command-r-plus",
   [Providers.Bedrock]: "claude-3-opus",
+  [Providers.Cognition]: "cognition/swe-1.7",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
@@ -418,6 +425,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+  [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",

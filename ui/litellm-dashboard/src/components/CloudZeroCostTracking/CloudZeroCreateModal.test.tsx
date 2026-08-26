@@ -17,17 +17,6 @@ vi.mock("@/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate", () => ({
   }),
 }));
 
-vi.mock("antd", async () => {
-  const actual = await vi.importActual("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-      error: vi.fn(),
-    },
-  };
-});
-
 describe("CloudZeroCreateModal", () => {
   let queryClient: QueryClient;
 

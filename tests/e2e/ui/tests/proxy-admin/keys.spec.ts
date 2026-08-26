@@ -36,19 +36,18 @@ test.describe("Proxy Admin - Keys", () => {
     // Wait for the key creation modal
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
-    // Fill key name (has data-testid="base-input" in the built UI)
     const keyName = `e2e-admin-key-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
-    // Select team — the team dropdown has placeholder "Search or select a team"
-    const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
+    // Select team
+    const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await page.locator(".ant-select-dropdown:visible").getByText(E2E_TEAM_CRUD_ALIAS).first().click();
+    await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
 
-    // Select models
-    await page.locator(".ant-select-selection-overflow").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Team Models").click();
+    // Select models — the popup is portaled to the body, so scope options to the page.
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "All Team Models", exact: true }).click();
     await page.keyboard.press("Escape");
 
     // Submit
@@ -87,7 +86,7 @@ test.describe("Proxy Admin - Keys", () => {
     // Scope to the modal — the Regenerate button has an icon whose aria-label
     // ("sync") is concatenated into the button's accessible name, and the
     // "Regenerate Key" button is still in the DOM behind the modal.
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Regenerate Virtual Key" });
     await modal.getByRole("button", { name: /Regenerate/ }).click();
 
     // Success view shows a Copy button in the footer (text varies between modal versions)
@@ -157,7 +156,7 @@ test.describe("Proxy Admin - Keys", () => {
     await page.getByRole("button", { name: "More key actions" }).click();
     await page.getByRole("menuitem", { name: "Delete Key" }).click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Delete Key" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.locator("input").fill(E2E_DELETE_KEY_ALIAS);
 
@@ -192,15 +191,15 @@ test.describe("Proxy Admin - Keys", () => {
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
     const keyName = `e2e-admin-allproxy-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
     // No team selection — leave team dropdown empty so the key is owned by the admin user
 
     // Select models — open the multi-select and pick the all-models meta-option.
     // With no team selected the modal offers "All Proxy Models"; the team-scoped
     // "All Team Models" option only appears once a team is picked.
-    await page.locator(".ant-select-selection-overflow").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Proxy Models").click();
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "All Proxy Models", exact: true }).click();
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
@@ -220,19 +219,12 @@ test.describe("Proxy Admin - Keys", () => {
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
     const keyName = `e2e-admin-specific-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
-    // Open the model multi-select and pick a single specific model. Use
-    // getByRole("option", ...) to avoid the strict-mode collision between
-    // the option container and its inner text node.
+    // Open the model multi-select and pick a single specific model.
     const modelName = "fake-openai-gpt-4";
-    await page.locator(".ant-select-selection-overflow").click();
-    const option = page.locator(".ant-select-dropdown:visible").getByRole("option", { name: modelName, exact: true });
-    await option.waitFor({ state: "attached" });
-    // Dispatch the click via the DOM — antd's dropdown can render the option
-    // off-viewport during the open animation, which trips Playwright's
-    // visibility/stability checks. The click handler fires regardless.
-    await option.evaluate((el: HTMLElement) => el.click());
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: modelName, exact: true }).click();
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Create Key", exact: true }).click();
@@ -243,7 +235,7 @@ test.describe("Proxy Admin - Keys", () => {
     // verify it can call /chat/completions for the model it was scoped to.
     // The mock LLM server (fixtures/mock_llm_server/server.py) replies with
     // a fixed "This is a mock response." body.
-    const apiKey = (await page.locator(".ant-modal:visible pre").innerText()).trim();
+    const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").innerText()).trim();
     expect(apiKey).toMatch(/^sk-/);
 
     const response = await page.request.post("/chat/completions", {
