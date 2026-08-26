@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from functools import lru_cache
+from types import MappingProxyType
 from typing import Any, Final, Literal, NamedTuple, cast
 
 import httpx
@@ -788,6 +789,28 @@ class BaseAzureLLM(BaseOpenAILLM):
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+
+    @staticmethod
+    def get_azure_v1_image_url(api_base: str, api_version: str | None, route: str) -> str | None:
+        """
+        Azure's v1 surface serves images at ``/openai/v1/images/{generations,edits}`` and routes by
+        ``model`` in the request body, so any deployment path in ``api_base`` has to be dropped.
+
+        Returns None when ``api_version`` is a dated one, which still uses the deployment route.
+        """
+        if not BaseAzureLLM._is_azure_v1_api_version(api_version):
+            return None
+
+        base_url: Final = httpx.URL(api_base)
+        openai_path_start: Final = base_url.path.find("/openai")
+        resource_base: Final = (
+            api_base if openai_path_start == -1 else str(base_url.copy_with(path=base_url.path[:openai_path_start]))
+        )
+        return BaseAzureLLM._get_base_azure_url(
+            api_base=resource_base,
+            litellm_params=MappingProxyType({"api_version": api_version}),
+            route=route,
+        )
 
     @staticmethod
     def _is_azure_v1_api_version(api_version: str | None) -> bool:
