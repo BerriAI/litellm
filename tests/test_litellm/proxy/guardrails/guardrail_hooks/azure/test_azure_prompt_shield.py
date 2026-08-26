@@ -7,6 +7,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import (
     AzureContentSafetyPromptShieldGuardrail,
 )
+from litellm.types.guardrails import LitellmParams
 
 
 @pytest.mark.asyncio
@@ -587,4 +588,50 @@ def test_update_in_memory_litellm_params_rejects_invalid_pricing_untouched():
         guardrail.update_in_memory_litellm_params({"cost_tier": "paid", "price_per_1000_text_records": None})
 
     assert guardrail.cost_tier == "paid"
+    assert guardrail.price_per_1000_text_records == 0.38
+
+
+def test_update_in_memory_litellm_params_reads_extras_from_pydantic_object():
+    """Pricing extras live in __pydantic_extra__, which the base vars() loop never
+    sees; an object-shaped update must not silently clear a paid config into
+    usage-only mode."""
+    guardrail = _priced_shield_guardrail(cost_tier="paid", price_per_1000_text_records=0.38)
+    params = LitellmParams(
+        guardrail="azure/prompt_shield", mode="pre_call", cost_tier="paid", price_per_1000_text_records=0.5
+    )
+
+    guardrail.update_in_memory_litellm_params(params)
+
+    assert guardrail.cost_tier == "paid"
+    assert guardrail.price_per_1000_text_records == 0.5
+
+
+def test_update_in_memory_litellm_params_resolves_env_credential_references(monkeypatch):
+    """A raw os.environ/ credential in the update payload must land resolved,
+    never as the literal reference: the request path sends self.api_key verbatim
+    as the Ocp-Apim-Subscription-Key header."""
+    monkeypatch.setenv("_TEST_SHIELD_UPDATED_KEY", "resolved-key")
+    guardrail = _priced_shield_guardrail(cost_tier="paid", price_per_1000_text_records=0.38)
+
+    guardrail.update_in_memory_litellm_params(
+        {"api_key": "os.environ/_TEST_SHIELD_UPDATED_KEY", "cost_tier": "paid", "price_per_1000_text_records": 0.76}
+    )
+
+    assert guardrail.api_key == "resolved-key"
+    assert guardrail.price_per_1000_text_records == 0.76
+
+
+def test_update_in_memory_litellm_params_dead_env_credential_rejected_untouched(monkeypatch):
+    """An update carrying a credential reference that resolves to nothing is
+    rejected before any state is mutated, keeping the working credential and
+    pricing in place."""
+    monkeypatch.delenv("_TEST_SHIELD_DEAD_KEY", raising=False)
+    guardrail = _priced_shield_guardrail(cost_tier="paid", price_per_1000_text_records=0.38)
+
+    with pytest.raises(ValueError, match="unset or blank"):
+        guardrail.update_in_memory_litellm_params(
+            {"api_key": "os.environ/_TEST_SHIELD_DEAD_KEY", "cost_tier": "paid", "price_per_1000_text_records": 0.76}
+        )
+
+    assert guardrail.api_key == "azure_prompt_shield_api_key"
     assert guardrail.price_per_1000_text_records == 0.38

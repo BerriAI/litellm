@@ -40,11 +40,9 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
-# Per-invocation billing counters, stashed between the chunk loop and the
-# guardrail-information record. A ContextVar rather than request metadata: the
-# decorator swaps a falsy ``request_data`` for a fresh dict (stranding a metadata
-# stash), concurrent guardrails run in separate tasks with their own context copy
-# (no cross-attribution), and request metadata is client-suppliable (forgeable).
+# Per-invocation billing counters. A ContextVar rather than request metadata: the
+# decorator can swap out ``request_data``, metadata is client-forgeable, and
+# concurrent guardrails run in separate tasks with their own context copy.
 _billing_usage_stash: Final[ContextVar[dict[str, int] | None]] = ContextVar(  # mutable-ok: task-local stash
     "azure_prompt_shield_billing_usage", default=None
 )
@@ -61,6 +59,15 @@ def _resolved_secret_value(value: object) -> object:
             raise ValueError(f"Azure Prompt Shield: {value!r} resolves to an unset or blank environment variable")
         return resolved
     return value
+
+
+def _updated_param(litellm_params: "LitellmParams | dict", key: str) -> object:
+    """Read one param from a Mapping or a pydantic object, including pydantic
+    extras (cost_tier / price_per_1000_text_records live there), which the base
+    class ``vars()`` loop never sees."""
+    if isinstance(litellm_params, Mapping):
+        return litellm_params.get(key)
+    return getattr(litellm_params, key, None)
 
 
 def _resolved_cost_tier(raw: object) -> str | None:
@@ -264,34 +271,34 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         return None
 
     def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | dict") -> None:  # mutable-ok: DB dict
-        """Apply updated params in place, re-resolving the billing configuration.
+        """Apply updated params in place, re-resolving billing and credentials.
 
-        ``cost_tier`` / ``price_per_1000_text_records`` are pydantic extras on
-        ``LitellmParams``, which the base ``vars()`` loop never sees (and the
-        immediate PUT sync hands this method the raw DB dict, which ``vars()``
-        rejects), so the serving pod would otherwise keep the old pricing until
-        restart. The new pricing is validated BEFORE any state is mutated, so an
-        invalid update leaves the running guardrail untouched.
+        Pricing is read via ``_updated_param`` (the values are pydantic extras, and
+        the immediate PUT sync hands this method the raw DB dict). Pricing and any
+        ``os.environ/`` credential references are validated and resolved BEFORE any
+        state is mutated, so an invalid update leaves the running guardrail
+        untouched and a raw reference never overwrites a resolved credential.
         """
-        params: Final[Mapping[str, object]] = (
-            litellm_params if isinstance(litellm_params, Mapping) else vars(litellm_params)
-        )
-        cost_tier: Final = _resolved_cost_tier(params.get("cost_tier"))
-        price: Final = _resolved_price(params.get("price_per_1000_text_records"), cost_tier)
+        cost_tier: Final = _resolved_cost_tier(_updated_param(litellm_params, "cost_tier"))
+        price: Final = _resolved_price(_updated_param(litellm_params, "price_per_1000_text_records"), cost_tier)
+        resolved_credentials: dict[str, object] = {}  # mutable-ok: staged before mutation
+        for cred_key in ("api_key", "api_base"):
+            cred_value = _updated_param(litellm_params, cred_key)
+            if isinstance(cred_value, str) and cred_value.startswith("os.environ/"):
+                resolved_credentials[cred_key] = _resolved_secret_value(cred_value)
         if isinstance(litellm_params, Mapping):
             for key, value in litellm_params.items():
-                setattr(self, key, value)
+                setattr(self, key, resolved_credentials.get(key, value))
         else:
             super().update_in_memory_litellm_params(litellm_params)
+            for cred_key, cred_value in resolved_credentials.items():
+                setattr(self, cred_key, cred_value)
         self.cost_tier = cost_tier
         self.price_per_1000_text_records = price
 
     def _record_billing_usage(self, usage: Mapping[str, int]) -> None:
-        """Stash this invocation's chunk-usage counters for the
-        ``_process_response`` / ``_process_error`` the decorator runs next in the
-        same asyncio task (both the allow and the blocked/error path). Overwrites:
-        record and pop are 1:1 per decorated invocation, so anything already
-        stashed is a leftover that must not bleed into this entry."""
+        """Stash this invocation's usage counters for the ``_process_*`` call the
+        decorator runs next in the same asyncio task; overwrites any leftover."""
         _billing_usage_stash.set(dict(usage) if usage else None)  # mutable-ok: fresh snapshot, popped by _process_*
 
     def _pop_billing_tracing_detail(self) -> GuardrailTracingDetail | None:

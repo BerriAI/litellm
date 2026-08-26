@@ -3161,7 +3161,7 @@ class CostBreakdown(TypedDict, total=False):
     reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
     total_cost: ReadOnly[float]  # Total cost (input + output + tool usage + guardrail)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    guardrail_cost: ReadOnly[float]  # Guardrail cost counted in spend; report-only costs (guardrail_cost_in_spend=False) never appear here
+    guardrail_cost: ReadOnly[float]  # Cost counted in spend; report-only (guardrail_cost_in_spend=False) is excluded
     additional_costs: dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
