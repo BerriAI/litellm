@@ -14,7 +14,10 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.litellm_core_utils.token_counter import _get_tiktoken_count_function
+from litellm.litellm_core_utils.token_counter import (
+    _get_count_function,
+    _get_tiktoken_count_function,
+)
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
@@ -535,18 +538,21 @@ def test_empty_tools():
     print(result)
 
 
-@pytest.mark.skip(
-    reason="Skipping this test temporarily because it relies on a function being called that I am removing."
-)
-def test_gpt_4o_token_counter():
-    with patch.object(
-        litellm.utils, "openai_token_counter", new=MagicMock()
-    ) as mock_client:
-        token_counter(
-            model="gpt-4o-2024-05-13", messages=[{"role": "user", "content": "Hey!"}]
-        )
+def test_openai_tokenizer_uses_tiktoken_model_mapping():
+    with (
+        patch(
+            "litellm.litellm_core_utils.token_counter.tiktoken.encoding_for_model"
+        ) as mock_encoding_for_model,
+        patch(
+            "litellm.litellm_core_utils.token_counter.tiktoken.get_encoding"
+        ) as mock_get_encoding,
+    ):
+        _get_count_function(model="gpt-4o-2024-05-13")
 
-        mock_client.assert_called()
+        mock_encoding_for_model.assert_called_once_with(
+            "gpt-4o-2024-05-13"
+        )
+        mock_get_encoding.assert_not_called()
 
 
 @pytest.mark.parametrize(
