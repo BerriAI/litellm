@@ -417,6 +417,29 @@ class MCPRequestHandler:
             # for a delegated server, so validate it: identity / spend / rate
             # limits resolve and any stored upstream token can be forwarded.
             validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
+            if (
+                (
+                    bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                        path=request_route,
+                        mcp_servers=mcp_servers,
+                        client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                    )
+                )
+                is not None
+                and oauth2_headers
+                and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+            ):
+                (
+                    validated_user_api_key_auth,  # rebind-ok: envelope replaces the matching explicit-key admission
+                    mcp_server_auth_headers,  # rebind-ok: envelope supplies the upstream authorization header
+                ) = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                    server=bridge_delegate_target,
+                    authorization_value=oauth2_headers["Authorization"],
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    request=request,
+                    route=request_route,
+                    validated_user_api_key_auth=validated_user_api_key_auth,
+                )
         elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -755,15 +778,16 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         request: Request,
         route: str,
+        validated_user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:
         """Open the bridge envelope and admit the caller under the live key it references.
 
         The envelope's signature proves the user authenticated when it was minted, but
-        authorization is resolved fresh here rather than trusted from the envelope: the
-        sealed ``key_hash`` reloads the current ``UserAPIKeyAuth`` record, and the admitted
-        identity then runs through the standard pipeline's centralized policy gate, so the
-        key's present restrictions and revocation state gate the request instead of a
-        snapshot frozen at mint time. The inner upstream token is injected under the
+        authorization is resolved fresh here rather than trusted from the envelope. When
+        the request already supplied a validated LiteLLM key, the envelope identity must
+        match that principal; otherwise the sealed identity reloads the current
+        ``UserAPIKeyAuth`` record and runs through the standard pipeline's centralized
+        policy gate. The inner upstream token is injected under the
         server's per-server auth-header key so egress forwards it via the
         ``PassthroughConfig`` override; the envelope ``Authorization`` the leak-defense
         strips never reaches the upstream. A new headers dict is returned rather than
@@ -783,7 +807,8 @@ class MCPRequestHandler:
         if not master_key:
             raise HTTPException(status_code=500, detail="Server misconfigured: master_key is not set")
 
-        await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
+        if validated_user_api_key_auth is None:
+            await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
 
         keys: Final = envelope_keys_from_master_key(master_key)
         result: Final = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
@@ -792,8 +817,23 @@ class MCPRequestHandler:
                 header_key: Final = server.alias or server.server_name
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
-                admitted: Final = await MCPRequestHandler._reload_admitted_principal(result.identity)
-                await MCPRequestHandler._enforce_admitted_live_policy(admitted=admitted, request=request, route=route)
+                if (
+                    validated_user_api_key_auth is not None
+                    and not MCPRequestHandler._bridge_identity_matches_admitted_principal(
+                        identity=result.identity,
+                        admitted=validated_user_api_key_auth,
+                    )
+                ):
+                    raise HTTPException(status_code=401, detail="Invalid or expired credential")
+                admitted: Final = (
+                    validated_user_api_key_auth
+                    if validated_user_api_key_auth is not None
+                    else await MCPRequestHandler._reload_admitted_principal(result.identity)
+                )
+                if validated_user_api_key_auth is None:
+                    await MCPRequestHandler._enforce_admitted_live_policy(
+                        admitted=admitted, request=request, route=route
+                    )
                 injected: Final = {header_key: {"Authorization": result.upstream_authorization.get_secret_value()}}
                 new_headers: Final = {**(mcp_server_auth_headers or {}), **injected}
                 return admitted, new_headers
@@ -801,6 +841,16 @@ class MCPRequestHandler:
                 raise HTTPException(status_code=401, detail="Invalid or expired credential")
             case _:
                 assert_never(result)
+
+    @staticmethod
+    def _bridge_identity_matches_admitted_principal(identity: EnvelopeIdentity, admitted: UserAPIKeyAuth) -> bool:
+        match identity.subject_type:
+            case "key_hash":
+                return admitted.api_key == identity.subject
+            case "user_id":
+                return admitted.user_id == identity.subject
+            case _:
+                assert_never(identity.subject_type)
 
     @staticmethod
     async def _admit_gateway_session(
