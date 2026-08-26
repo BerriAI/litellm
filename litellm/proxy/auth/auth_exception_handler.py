@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
+from litellm.litellm_core_utils.core_helpers import is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -109,7 +110,12 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
-            verbose_proxy_logger.exception(
+            log_fn: Final = (
+                verbose_proxy_logger.error
+                if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
+                else verbose_proxy_logger.exception
+            )
+            log_fn(
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
                 e,
                 requester_ip,

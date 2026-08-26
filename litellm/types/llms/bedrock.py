@@ -1,8 +1,9 @@
 import json
+from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import Required, TypedDict, override
+from typing_extensions import ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -94,6 +95,10 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     signature: str
     redactedContent: str
     text: str
+
+
+class BedrockConverseGptReasoningEffortBlock(TypedDict):
+    effort: ReadOnly[str]
 
 
 class GuardrailConverseTextBlock(TypedDict, total=False):
@@ -396,7 +401,7 @@ class OutputConfigBlock(TypedDict, total=False):
 
 class CommonRequestObject(TypedDict, total=False):  # common request object across sync + async flows
     additionalModelRequestFields: dict
-    additionalModelResponseFieldPaths: list[str]
+    additionalModelResponseFieldPaths: Sequence[str]
     inferenceConfig: InferenceConfig
     system: list[SystemContentBlock]
     toolConfig: ToolConfigBlock

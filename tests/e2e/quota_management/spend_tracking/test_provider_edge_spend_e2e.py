@@ -18,7 +18,7 @@ from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from spend_e2e_client import SpendClient, unique_marker, unwrap
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 
 @pytest.mark.covers("quota_management.spend_tracking.chat_completions.logs_cost")
