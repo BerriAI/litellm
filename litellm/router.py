@@ -384,8 +384,29 @@ def _anthropic_stream_should_drop_pre_content_ping(chunk: object, has_generated_
     return is_anthropic_ping_chunk(chunk)
 
 
+def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
+    """A `ping` that no lifecycle frame precedes reaches the client live: a fallback's own message_start can still
+    follow it without overlapping lifecycles, and AgenticAnthropicStreamingIterator's hold-back keepalive is exactly
+    such a ping."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+
+    if has_generated_content or buffered_chunk_count:
+        return False
+    return is_anthropic_ping_chunk(chunk)
+
+
 def _is_retriable_anthropic_status(status_code: int) -> bool:
     return status_code == 429 or status_code >= 500
+
+
+def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
+    """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
+    failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        is_server_fulfilled_tool_leak_error,
+    )
+
+    return is_server_fulfilled_tool_leak_error(chunk)
 
 
 def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error: "MidStreamFallbackError") -> bool:
@@ -427,9 +448,17 @@ class FallbackAwareAnthropicMessagesStream:
 
     def __init__(self, async_generator: AsyncGenerator[bytes, None], source_iterator: object) -> None:
         self._async_generator = async_generator
+        self._source_iterator = source_iterator
         self._hidden_params = dict(  # mutable-ok: mutated in place by merge_fallback_hidden_params
             getattr(source_iterator, "_hidden_params", None) or {}
         )
+
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self._source_iterator, "has_buffered_provider_output", False) is True
+
+    def adopt_fallback_source(self, fallback_response: object) -> None:
+        self._source_iterator = fallback_response
 
     def __aiter__(self) -> "FallbackAwareAnthropicMessagesStream":
         return self
@@ -4974,7 +5003,9 @@ class Router:
             # arrives - at that point the primary attempt has committed and a
             # clean retry is no longer possible anyway - or once the primary
             # stream ends without ever producing content. A `ping` keepalive
-            # is dropped outright rather than buffered, since it can recur
+            # that nothing precedes is forwarded live (it is how a hold-back
+            # turn keeps its connection alive); one behind buffered frames is
+            # dropped outright rather than buffered, since it can recur
             # indefinitely on a slow-starting connection and carries nothing
             # worth preserving; hitting MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
             # forces the same early commit as real content arriving, so a
@@ -4984,6 +5015,11 @@ class Router:
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
             try:
                 async for chunk in source_iterator:
+                    if _anthropic_stream_forwards_ping_live(
+                        chunk, has_generated_content, len(buffered_lifecycle_chunks)
+                    ):
+                        yield chunk
+                        continue
                     if _anthropic_stream_should_drop_pre_content_ping(chunk, has_generated_content):
                         continue
                     if _anthropic_stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
@@ -4993,6 +5029,7 @@ class Router:
                         not has_generated_content
                         and error_event is not None
                         and _is_retriable_anthropic_status(error_event[2])
+                        and not _anthropic_stream_error_is_gateway_verdict(chunk)
                     )
                     if not has_generated_content and not retriable_pending_error and error_event is None:
                         buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
@@ -5087,6 +5124,7 @@ class Router:
             )
             fallback_hidden_params, fallback_headers = Router._prepare_fallback_hidden_params(fallback_response)
             wrapper.merge_fallback_hidden_params(fallback_hidden_params, fallback_headers)
+            wrapper.adopt_fallback_source(fallback_response)
             if hasattr(fallback_response, "__aiter__"):
                 async for fallback_item in fallback_response:
                     yield fallback_item
