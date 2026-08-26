@@ -129,6 +129,9 @@ def _snapshot_exception_for_hook(exception: Exception) -> Exception:
         snapshot.__traceback__ = exception.__traceback__
         snapshot.__cause__ = exception.__cause__
         snapshot.__context__ = exception.__context__
+        # Setting __cause__ implicitly forces __suppress_context__ to True (CPython
+        # behavior for `raise ... from ...`), so this must be set after, not before.
+        snapshot.__suppress_context__ = exception.__suppress_context__
         return snapshot
     except Exception:  # noqa: BLE001  # any snapshot failure must fall back to the live object, not break the failure path
         return exception

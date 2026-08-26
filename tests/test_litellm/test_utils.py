@@ -37,6 +37,7 @@ from litellm.utils import (
     _check_provider_match,
     _get_potential_model_names,
     _is_streaming_request,
+    _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     client,
     get_api_key,
@@ -5510,3 +5511,27 @@ async def test_wrapper_async_failure_hook_exception_snapshot_preserves_traceback
 
     assert len(received) == 1
     assert received[0].__traceback__ is not None
+
+
+def test_snapshot_exception_for_hook_preserves_suppress_context_flag() -> None:
+    """Regression: setting __cause__ has a documented CPython side effect of implicitly
+    forcing __suppress_context__ to True, even when the real exception's own
+    __suppress_context__ is False (the common case: no `raise ... from`, just an
+    exception raised while handling another one, which chains __context__ but does not
+    suppress it). Snapshotting __cause__ before __suppress_context__ would silently flip
+    a real exception's __suppress_context__=False to True on the snapshot, hiding a
+    chained context a callback formatting it should still see."""
+    def _raise_chained_without_from() -> None:
+        try:
+            raise ValueError("inner cause")
+        except ValueError:
+            raise RuntimeError("outer error")  # no `from` clause: implicit chaining, not suppressed
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _raise_chained_without_from()
+
+    e = exc_info.value
+    assert e.__suppress_context__ is False  # sanity check on the real exception itself
+    snapshot = _snapshot_exception_for_hook(e)
+    assert snapshot.__suppress_context__ is False
+    assert snapshot.__context__ is e.__context__
