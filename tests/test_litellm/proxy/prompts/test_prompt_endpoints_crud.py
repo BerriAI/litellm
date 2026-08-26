@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
@@ -6,6 +8,27 @@ from litellm.types.prompts.init_prompts import (
     PromptLiteLLMParams,
     PromptInfo,
 )
+
+
+def _db_row(content: str) -> MagicMock:
+    row = MagicMock()
+    row.id = "row-1"
+    row.version = 1
+    row.model_dump.return_value = {
+        "prompt_id": "test_prompt",
+        "version": 1,
+        "environment": "development",
+        "created_by": None,
+        "litellm_params": {
+            "prompt_id": "test_prompt",
+            "prompt_integration": "dotprompt",
+            "prompt_data": {"content": content, "metadata": {}},
+        },
+        "prompt_info": {"prompt_type": "db"},
+        "created_at": None,
+        "updated_at": None,
+    }
+    return row
 
 
 @pytest.mark.asyncio
@@ -208,9 +231,7 @@ async def test_patch_prompt_row_deleted_mid_update_returns_404():
         api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
-    target_row = MagicMock()
-    target_row.id = "row-1"
-    target_row.version = 1
+    target_row = _db_row("Begin every reply with AHOY")
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(
@@ -246,3 +267,45 @@ async def test_patch_prompt_row_deleted_mid_update_returns_404():
         exc_info.value.detail
         == "Prompt with ID test_prompt not found in environment development"
     )
+
+
+@pytest.mark.asyncio
+async def test_patch_prompt_merges_unsent_fields_from_db_row_not_stale_memory():
+    from litellm.proxy.prompts.prompt_endpoints import PatchPromptRequest, patch_prompt
+
+    mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    db_row = _db_row("Begin every reply with HOWDY")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row])
+    mock_prisma_client.db.litellm_prompttable.update = AsyncMock(return_value=db_row)
+    stale_in_memory = PromptSpec(
+        prompt_id="test_prompt.v1",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="test_prompt",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "Begin every reply with AHOY", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: stubs the collaborator so the test pins what the endpoint writes and reloads
+            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+        ) as mock_registry,
+    ):
+        mock_registry.get_prompt_by_id.return_value = stale_in_memory
+        mock_registry.reload_prompt.side_effect = lambda prompt: prompt
+
+        response = await patch_prompt(
+            prompt_id="test_prompt",
+            request=PatchPromptRequest(prompt_info=PromptInfo(prompt_type="db")),
+            user_api_key_dict=mock_user_auth,
+        )
+
+    written_params = json.loads(mock_prisma_client.db.litellm_prompttable.update.call_args.kwargs["data"]["litellm_params"])
+    assert written_params["prompt_data"]["content"] == "Begin every reply with HOWDY"
+    reloaded_spec = mock_registry.reload_prompt.call_args.kwargs["prompt"]
+    assert reloaded_spec.prompt_id == "test_prompt.v1"
+    assert reloaded_spec.litellm_params.prompt_data["content"] == "Begin every reply with HOWDY"
+    assert response.litellm_params.prompt_data["content"] == "Begin every reply with HOWDY"

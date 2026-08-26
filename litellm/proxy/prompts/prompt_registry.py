@@ -155,6 +155,23 @@ class InMemoryPromptRegistry:
 
         return parsed_prompt
 
+    def reload_prompt(self, prompt: PromptSpec) -> PromptSpec | None:
+        import litellm
+
+        stale_callback: Final = self.prompt_id_to_custom_prompt.pop(prompt.prompt_id, None)
+        self.IN_MEMORY_PROMPTS.pop(prompt.prompt_id, None)
+        if stale_callback is not None:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(stale_callback)
+        return self.initialize_prompt(prompt=prompt)
+
+    def sync_prompt_from_db(self, prompt: PromptSpec) -> PromptSpec | None:
+        existing: Final = self.IN_MEMORY_PROMPTS.get(prompt.prompt_id)
+        if existing is None:
+            return self.initialize_prompt(prompt=prompt)
+        if existing.litellm_params == prompt.litellm_params and existing.prompt_info == prompt.prompt_info:
+            return existing
+        return self.reload_prompt(prompt=prompt)
+
     def get_prompt_by_id(self, prompt_id: str) -> PromptSpec | None:
         """
         Get a prompt by its ID from memory

@@ -7237,7 +7237,7 @@ class ProxyConfig:
             for prompt in prompts_in_db:
                 # Convert DB object to dict and create versioned prompt_id
                 prompt_spec = self._get_prompt_spec_for_db_prompt(db_prompt=prompt)
-                IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt_spec)
+                IN_MEMORY_PROMPT_REGISTRY.sync_prompt_from_db(prompt=prompt_spec)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 
