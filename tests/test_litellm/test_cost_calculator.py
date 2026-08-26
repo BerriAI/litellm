@@ -1,4 +1,7 @@
 
+import json
+from pathlib import Path
+
 import pytest
 
 
@@ -14,7 +17,13 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelInfo, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    ModelInfo,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import TranscriptionResponse
 
 
@@ -3781,3 +3790,51 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     )
 
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_1hr_rate"),
+    [("claude-3-haiku-20240307", 5e-07), ("claude-3-opus-20240229", 3e-05)],
+)
+def test_claude_3_one_hour_cache_writes_bill_at_double_input(
+    _local_model_cost_map, model: str, expected_1hr_rate: float
+):
+    """Regression: both models carried the Sonnet 1h cache-write rate (6e-06) instead of
+    2x their own input price, overbilling haiku 12x and underbilling opus 5x."""
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=1000,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1000
+            ),
+        ),
+    )
+
+    prompt_cost, _ = cost_per_token(model=model, usage_object=usage, custom_llm_provider="anthropic")
+
+    assert prompt_cost == pytest.approx(1000 * expected_1hr_rate, rel=1e-9)
+
+
+def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
+    """Guard against pasting one model's 1h cache-write price onto another: every provider
+    LiteLLM tracks (Anthropic, Bedrock, Vertex, Azure) publishes the 1h write at 2x input."""
+
+    cost_map = json.loads(
+        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
+    )
+    one_hour_prefix = "cache_creation_input_token_cost_above_1hr"
+    deviations = {
+        (name, key): (entry["input_cost_per_token" + key[len(one_hour_prefix) :]], entry[key])
+        for name, entry in cost_map.items()
+        if isinstance(entry, dict)
+        for key in entry
+        if key.startswith(one_hour_prefix)
+        and entry[key] != pytest.approx(2 * entry["input_cost_per_token" + key[len(one_hour_prefix) :]], rel=1e-9)
+    }
+
+    assert deviations == {}
