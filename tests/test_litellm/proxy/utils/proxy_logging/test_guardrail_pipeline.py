@@ -818,3 +818,163 @@ async def test_process_prompt_template_async_get_prompt_error_raises(proxy_loggi
             prompt_version=None,
             call_type="completion",
         )
+
+
+# ---------------------------------------------------------------------------
+# generic unreachable_fallback enforcement (fail_open / fail_closed)
+# ---------------------------------------------------------------------------
+
+
+def _make_failing_guardrail(exc: Exception, unreachable_fallback: str):
+    cb = _make_guardrail()
+    cb.should_run_guardrail = MagicMock(return_value=True)
+    cb.unreachable_fallback = unreachable_fallback
+    cb.async_pre_call_hook = AsyncMock(side_effect=exc)
+    return cb
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConnectionError("guardrail endpoint unreachable"),
+        asyncio.TimeoutError(),
+        RuntimeError("bug inside the guardrail"),
+        HTTPException(status_code=500, detail={"error": "guardrail provider exploded"}),
+    ],
+)
+async def test_pre_call_guardrail_failure_is_swallowed_when_fail_open(
+    proxy_logging, make_user_api_key_auth, exc
+):
+    cb = _make_failing_guardrail(exc, "fail_open")
+    proxy_logging._should_use_guardrail_load_balancing = MagicMock(return_value=False)
+
+    out = await proxy_logging._process_guardrail_callback(
+        callback=cb,
+        data={"model": "m"},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+        event_type=GuardrailEventHooks.pre_call,
+    )
+
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_pre_call_guardrail_failure_propagates_when_fail_closed(
+    proxy_logging, make_user_api_key_auth
+):
+    cb = _make_failing_guardrail(ConnectionError("guardrail endpoint unreachable"), "fail_closed")
+    proxy_logging._should_use_guardrail_load_balancing = MagicMock(return_value=False)
+
+    with pytest.raises(ConnectionError):
+        await proxy_logging._process_guardrail_callback(
+            callback=cb,
+            data={"model": "m"},
+            user_api_key_dict=make_user_api_key_auth(),
+            call_type="completion",
+            event_type=GuardrailEventHooks.pre_call,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        HTTPException(status_code=400, detail={"error": "violated content policy"}),
+        HTTPException(status_code=403, detail={"error": "blocked"}),
+        litellm.exceptions.GuardrailRaisedException(guardrail_name="g", message="blocked"),
+        SensitiveDataRouteException(
+            session_id="s", route_to_model="on-prem", guardrail_name="g", sticky_session_routing=True
+        ),
+        ModifyResponseException(message="passthrough violation", model="m", request_data={}),
+    ],
+)
+async def test_pre_call_intentional_block_still_raises_with_fail_open(
+    proxy_logging, make_user_api_key_auth, exc
+):
+    cb = _make_failing_guardrail(exc, "fail_open")
+    proxy_logging._should_use_guardrail_load_balancing = MagicMock(return_value=False)
+
+    with pytest.raises(type(exc)):
+        await proxy_logging._process_guardrail_callback(
+            callback=cb,
+            data={"model": "m"},
+            user_api_key_dict=make_user_api_key_auth(),
+            call_type="completion",
+            event_type=GuardrailEventHooks.pre_call,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_type", ["during_call", "post_call"])
+async def test_run_guardrail_with_metrics_fail_open_swallows_non_block(monkeypatch, hook_type):
+    async def task():
+        raise ConnectionError("guardrail endpoint unreachable")
+
+    cb = _make_guardrail()
+    cb.unreachable_fallback = "fail_open"
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    assert await ProxyLogging._run_guardrail_with_metrics(cb, task(), hook_type) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_type", ["during_call", "post_call"])
+async def test_run_guardrail_with_metrics_fail_closed_propagates(monkeypatch, hook_type):
+    async def task():
+        raise ConnectionError("guardrail endpoint unreachable")
+
+    cb = _make_guardrail()
+    cb.unreachable_fallback = "fail_closed"
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    with pytest.raises(ConnectionError):
+        await ProxyLogging._run_guardrail_with_metrics(cb, task(), hook_type)
+
+
+@pytest.mark.asyncio
+async def test_run_guardrail_with_metrics_fail_open_keeps_block(monkeypatch):
+    async def task():
+        raise HTTPException(status_code=400, detail={"error": "blocked"})
+
+    cb = _make_guardrail()
+    cb.unreachable_fallback = "fail_open"
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    with pytest.raises(HTTPException):
+        await ProxyLogging._run_guardrail_with_metrics(cb, task(), "post_call")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_continues_to_next_guardrail_after_fail_open(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    class _FailOpenGuardrail(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise ConnectionError("guardrail endpoint unreachable")
+
+    class _BlockingGuardrail(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise HTTPException(status_code=400, detail={"error": "blocked by second guardrail"})
+
+    unreachable = _FailOpenGuardrail(
+        guardrail_name="unreachable",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+        unreachable_fallback="fail_open",
+    )
+    blocking = _BlockingGuardrail(
+        guardrail_name="blocking", event_hook=GuardrailEventHooks.pre_call, default_on=True
+    )
+    monkeypatch.setattr(litellm, "callbacks", [unreachable, blocking])
+    proxy_logging._should_use_guardrail_load_balancing = MagicMock(return_value=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+
+    assert exc_info.value.detail["error"] == "blocked by second guardrail"

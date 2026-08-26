@@ -413,6 +413,29 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
 
+def _apply_unreachable_fallback(
+    guardrail_name: str,
+    primary_callback: CustomGuardrail,
+    unreachable_fallback: str | None,
+) -> None:
+    """
+    Stamp the configured fail_open / fail_closed policy on every callback that belongs to
+    this guardrail, so the orchestration layer can enforce it without each guardrail
+    implementing it.
+
+    An initializer may register more callbacks than it returns (presidio registers a
+    separate output-parsing callback, for example), so the whole callback list is swept by
+    guardrail name instead of only stamping the returned instance.
+    """
+    resolved: Final[Literal["fail_closed", "fail_open"]] = (
+        "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
+    )
+    primary_callback.unreachable_fallback = resolved
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomGuardrail) and callback.guardrail_name == guardrail_name:
+            callback.unreachable_fallback = resolved
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -521,6 +544,11 @@ class InMemoryGuardrailHandler:
                 setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
             scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(
                 custom_guardrail_callback
+            )
+            _apply_unreachable_fallback(
+                guardrail_name=guardrail["guardrail_name"],
+                primary_callback=custom_guardrail_callback,
+                unreachable_fallback=getattr(litellm_params, "unreachable_fallback", None),
             )
             if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
                 raise ValueError(

@@ -871,9 +871,10 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
         default="fail_closed",
         description=(
-            "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. "
-            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+            "Behavior when a guardrail fails for a reason other than a deliberate block, such as a "
+            "network error, a timeout, or a bug in the guardrail. Enforced by the proxy guardrail "
+            "orchestration for every guardrail, including custom ones. 'fail_closed' propagates the "
+            "error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
 

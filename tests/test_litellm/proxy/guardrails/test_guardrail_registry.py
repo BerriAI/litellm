@@ -563,6 +563,89 @@ def test_reinitialized_judge_guardrail_uses_lazy_router_provider():
             cb_list[:] = snapshot
 
 
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(None, "fail_closed"), ("fail_open", "fail_open"), ("fail_closed", "fail_closed")],
+)
+def test_initialize_guardrail_wires_unreachable_fallback_generically(configured, expected):
+    """
+    Any guardrail, including ones whose constructor knows nothing about
+    unreachable_fallback, must end up with the configured value so the
+    orchestration layer can enforce fail_open / fail_closed for it.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry["unreachable_fallback_test"] = _initializer
+    try:
+        params = {"guardrail": "unreachable_fallback_test", "mode": "pre_call"}
+        if configured is not None:
+            params["unreachable_fallback"] = configured
+
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(
+            guardrail={"guardrail_name": "cf-unreachable-fallback", "litellm_params": params},
+        )
+
+        stored = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+        assert stored.unreachable_fallback == expected
+    finally:
+        registry_module.guardrail_initializer_registry.pop("unreachable_fallback_test", None)
+
+
+def test_custom_guardrail_defaults_to_fail_closed():
+    assert CustomGuardrail(guardrail_name="g").unreachable_fallback == "fail_closed"
+
+
+def test_initialize_guardrail_stamps_all_callbacks_of_the_guardrail(monkeypatch):
+    """
+    Initializers may register more callbacks than they return (presidio registers a
+    separate output-parsing callback), and every one of them must carry the configured
+    fallback or the extra callbacks silently stay fail_closed.
+    """
+    import litellm
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def _initializer(litellm_params, guardrail):
+        primary = CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+        secondary = CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=True,
+        )
+        litellm.callbacks.extend([primary, secondary])
+        return primary
+
+    registry_module.guardrail_initializer_registry["multi_callback_test"] = _initializer
+    try:
+        InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail={
+                "guardrail_name": "cf-multi-callback",
+                "litellm_params": {
+                    "guardrail": "multi_callback_test",
+                    "mode": "pre_call",
+                    "unreachable_fallback": "fail_open",
+                },
+            },
+        )
+
+        assert [cb.unreachable_fallback for cb in litellm.callbacks] == ["fail_open", "fail_open"]
+    finally:
+        registry_module.guardrail_initializer_registry.pop("multi_callback_test", None)
+
+
 class TestScanOnlyToolResultsInitRefusal:
     """A guardrail whose role filtering never scans tool results must be rejected at
     initialization when configured with scan_only_tool_results, instead of booting a

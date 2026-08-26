@@ -159,6 +159,7 @@ class CustomGuardrail(CustomLogger):
         sticky_session_routing: bool = True,
         run_in_parallel: bool = False,
         only_scan_new_messages: bool = False,
+        unreachable_fallback: str | None = None,
         **kwargs,
     ):
         """
@@ -180,6 +181,10 @@ class CustomGuardrail(CustomLogger):
             run_in_parallel: When True, this pre_call or post_call guardrail runs concurrently with
                 other opted-in guardrails of the same hook. Only safe for block-only guardrails that
                 do not mutate the request or response.
+            unreachable_fallback: 'fail_closed' (default) propagates guardrail failures that are not
+                deliberate blocks, 'fail_open' lets the request continue. Enforced by the proxy
+                guardrail orchestration for every guardrail, so individual guardrails do not need to
+                implement it themselves.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -196,6 +201,10 @@ class CustomGuardrail(CustomLogger):
         self.sticky_session_routing: bool = sticky_session_routing
         self.run_in_parallel: bool = run_in_parallel
         self.only_scan_new_messages: bool = only_scan_new_messages
+        if not hasattr(self, "unreachable_fallback"):
+            self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
+                "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
+            )
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks

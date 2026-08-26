@@ -401,6 +401,35 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
         detail.setdefault("guardrail_mode", event_hook)
 
 
+def _guardrail_fails_open(exc: BaseException, callback: "CustomGuardrail") -> bool:
+    """
+    True when `exc` is a guardrail failure the orchestration layer should swallow
+    because the guardrail is configured with `unreachable_fallback: fail_open`.
+
+    Deliberate interventions (blocks, reroutes, passthrough responses) are always
+    honored, so only technical failures such as a timeout, a connection error or a
+    bug inside the guardrail let the request through. This is enforced here rather
+    than inside each guardrail so every guardrail, including custom ones, supports
+    fail_open / fail_closed without implementing it.
+    """
+    if not isinstance(exc, Exception):
+        return False
+    if CustomGuardrail._is_guardrail_intervention(exc):
+        return False
+    return getattr(callback, "unreachable_fallback", "fail_closed") == "fail_open"
+
+
+def _log_guardrail_fail_open(exc: BaseException, callback: "CustomGuardrail", hook_type: str) -> None:
+    verbose_proxy_logger.critical(
+        "Guardrail %s failed during %s and is configured with unreachable_fallback='fail_open', "
+        "allowing the request to proceed: %s: %s",
+        getattr(callback, "guardrail_name", None) or type(callback).__name__,
+        hook_type,
+        type(exc).__name__,
+        exc,
+    )
+
+
 def _exception_changes_request_flow(exc: BaseException) -> bool:
     """
     True for guardrail exceptions the proxy turns into an alternate request flow
@@ -1365,6 +1394,9 @@ class ProxyLogging:
             status = "error"
             error_type = type(e).__name__
             _enrich_http_exception_with_guardrail_context(e, callback)
+            if _guardrail_fails_open(e, callback):
+                _log_guardrail_fail_open(e, callback, "pre_call")
+                return None
             # Re-raise the exception to maintain existing behavior
             raise
         finally:
@@ -1919,6 +1951,9 @@ class ProxyLogging:
             status = "error"
             error_type = type(e).__name__
             _enrich_http_exception_with_guardrail_context(e, callback)
+            if _guardrail_fails_open(e, callback):
+                _log_guardrail_fail_open(e, callback, hook_type)
+                return None
             raise
         finally:
             ProxyLogging._emit_guardrail_metrics(
