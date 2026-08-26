@@ -24,7 +24,7 @@ jobs:
           threshold: 0.6
           reaction: eyes
           comment: |
-            <!-- litellm:potential-duplicate -->
+            <!-- litellm:potential-duplicate candidates={{#issues}}{{number}},{{/issues}} -->
             **Potential duplicate detected**
 
             This looks similar to:
