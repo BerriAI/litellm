@@ -5540,6 +5540,30 @@ async def test_bridge_envelope_too_large_upstream_token_is_502():
 
 
 @pytest.mark.asyncio
+async def test_bridge_envelope_unrepresentable_upstream_lifetime_is_502():
+    from litellm.types.mcp import MCPAuth
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate)
+    upstream = {
+        "access_token": "UPSTREAM-SECRET-TOKEN",
+        "token_type": "Bearer",
+        "expires_in": 10**30,
+    }
+
+    response = await _exchange_for_bridge_server(
+        server,
+        upstream,
+        key_hash="hashed-litellm-key-77",
+    )
+
+    assert response.status_code == 502
+    assert json.loads(response.body) == {
+        "error": "server_error",
+        "error_description": "the upstream token response reports an unrepresentable lifetime",
+    }
+
+
+@pytest.mark.asyncio
 async def test_bridge_access_envelope_never_carries_upstream_refresh_token():
     """The upstream refresh token is never sealed into the ACCESS envelope, the bearer forwarded upstream
     on every tool call: the opened access grant carries no refresh token even when the upstream returned

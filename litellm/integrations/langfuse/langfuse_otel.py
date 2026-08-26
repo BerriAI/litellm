@@ -10,6 +10,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
@@ -197,7 +198,11 @@ class LangfuseOtelLogger(OpenTelemetry):
                         )
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
-                        arguments_obj = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                        arguments_obj = (
+                            safe_json_loads(arguments_str, default={})
+                            if isinstance(arguments_str, str)
+                            else arguments_str
+                        )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
                             "name": getattr(item, "name", ""),

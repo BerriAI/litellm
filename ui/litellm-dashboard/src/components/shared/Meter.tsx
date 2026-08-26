@@ -1,13 +1,13 @@
 "use client";
 
 import { Meter as MeterPrimitive } from "@base-ui/react/meter";
-import { type VariantProps } from "cva";
 import * as React from "react";
 
-import { cn, cva } from "@/lib/cva.config";
+import { cva, type VariantProps } from "class-variance-authority";
 
-const meterIndicatorVariants = cva({
-  base: "h-full rounded-full transition-[width] duration-300",
+import { cn } from "@/lib/cva.config";
+
+const meterIndicatorVariants = cva("h-full rounded-full transition-[width] duration-300", {
   variants: {
     tone: {
       default: "bg-primary",
