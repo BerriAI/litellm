@@ -440,7 +440,7 @@ def test_validate_mode_rejects_invalid_values_and_names_accepted_ones(
 ):
     monkeypatch.setattr(litellm, "prometheus_deployment_and_latency_caller_identity", invalid_mode)
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="prometheus_deployment_and_latency_caller_identity") as exc_info:
         validate_prometheus_deployment_and_latency_caller_identity()
 
     message = str(exc_info.value)
@@ -491,7 +491,7 @@ def test_user_email_mode_conflict_error_names_every_conflicting_metric_and_only_
         },
     ]
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match="prometheus_deployment_and_latency_caller_identity") as exc_info:
         validate_caller_identity_settings(_identity_settings("user_email", metrics_config))
 
     message = str(exc_info.value)
