@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from typing import Final, cast
 
 import httpx
@@ -106,7 +107,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         if BaseAzureLLM._is_azure_v1_api_version(api_version):
             return BaseAzureLLM._get_base_azure_url(
                 api_base=api_base,
-                litellm_params={"api_version": api_version},
+                litellm_params=MappingProxyType({"api_version": api_version}),
                 route="/openai/images/edits",
             )
 
