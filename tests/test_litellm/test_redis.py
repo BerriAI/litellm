@@ -487,6 +487,20 @@ def test_azure_wins_over_aws_iam(clean_redis_environment):
     assert redis_kwargs["redis_connect_func"] is mock_azure.return_value
 
 
+def test_async_cluster_installs_aws_iam_provider(clean_redis_environment):
+    startup_nodes = [{"host": "cluster-node", "port": 6379}]
+
+    client = get_redis_async_client(
+        startup_nodes=startup_nodes,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert isinstance(client.connection_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
+
+
 def test_provider_keeps_the_rest_of_the_url_intact(clean_redis_environment):
     provider = _StubCredentialProvider()
 
