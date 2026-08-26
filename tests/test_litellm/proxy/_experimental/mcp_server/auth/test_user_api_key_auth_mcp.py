@@ -5320,6 +5320,37 @@ class TestMCPDcrBridgeDelegateAdmission:
         assert auth_result == UserAPIKeyAuth()
         assert mcp_server_auth_headers == {}
 
+    @pytest.mark.parametrize(
+        "headers",
+        (
+            [(b"x-mcp-auth", b"Bearer upstream-token")],
+            [(b"x-mcp-bridge_delegate_server-authorization", b"Bearer upstream-token")],
+        ),
+        ids=("deprecated-mcp-auth", "per-server-auth"),
+    )
+    async def test_client_mcp_credentials_do_not_receive_keyless_bridge_admission(self, headers):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": headers,
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=401, detail="Invalid key"),
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 401
+        mock_auth.assert_awaited_once()
+
     async def test_valid_envelope_reloads_live_key_and_admits_its_authorization_context(self):
         """A valid envelope admits under the LIVE key record the sealed key_hash references, not a
         blank identity: the reload is keyed by that exact hash, and the admitted auth carries the
@@ -6058,6 +6089,7 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch(
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
                 new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=401, detail="Invalid key"),
             ) as mock_auth,
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
@@ -6067,13 +6099,69 @@ class TestMCPDcrBridgeDelegateAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
         assert exc_info.value.status_code == 401
-        mock_auth.assert_not_called()
+        mock_auth.assert_awaited_once()
         assert exc_info.value.headers == {
             "www-authenticate": (
                 'Bearer error="invalid_token", '
                 'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/bridge_delegate_server"'
             )
         }
+
+    async def test_valid_litellm_authorization_key_uses_standard_admission(self):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", b"Bearer sk-valid-litellm-key")],
+        }
+        admitted = UserAPIKeyAuth(api_key="hashed-key", user_id="litellm-key-user")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=admitted,
+            ) as mock_auth,
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            (
+                auth_result,
+                _mcp_auth,
+                _servers,
+                mcp_server_auth_headers,
+                _oauth,
+                _raw,
+            ) = await MCPRequestHandler.process_mcp_request(scope)
+
+        assert auth_result is admitted
+        assert mcp_server_auth_headers == {}
+        assert mock_auth.await_args.kwargs["api_key"] == "Bearer sk-valid-litellm-key"
+
+    async def test_non_401_litellm_key_failure_is_not_converted_to_oauth_challenge(self):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", b"Bearer sk-blocked-litellm-key")],
+        }
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=403, detail="Key blocked"),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
+            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 403
+        assert not exc_info.value.headers
 
     async def test_explicit_litellm_key_wins_over_envelope_arm(self):
         """An explicit x-litellm-api-key is always a LiteLLM credential and its arm precedes the
