@@ -21,7 +21,6 @@ from litellm.integrations.opentelemetry import (
     METRIC_METADATA_KEYS,
     TOKEN_TYPE_ATTRIBUTE,
     _build_metric_attribute_filter,
-    _is_unbilled_non_inference,
     _resolve_metric_attribute_filter,
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
@@ -33,6 +32,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 
@@ -199,7 +199,7 @@ class GenAIMetricRecorder:
     ) -> None:
         common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
         duration_s: Final = (end_time - start_time).total_seconds()
-        usage_is_replayed: Final = _is_unbilled_non_inference(
+        usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
             kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
         )
 

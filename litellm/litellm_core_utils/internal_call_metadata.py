@@ -79,6 +79,26 @@ def is_unbilled_non_inference_call(
     return metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 
+def is_unbilled_non_inference_call_from_params(
+    call_type: str | None,
+    litellm_params: Mapping[str, object] | None,
+    response: object,
+) -> bool:
+    """:func:`is_unbilled_non_inference_call` for callers holding raw ``litellm_params``.
+
+    The call-type membership test runs first so that inference traffic, which is every
+    request in a normal workload, never pays for the metadata merge behind it.
+    """
+    if call_type not in NON_INFERENCE_CALL_TYPES:
+        return False
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    metadata: Final = (
+        StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params) if litellm_params is not None else None
+    )
+    return is_unbilled_non_inference_call(call_type, metadata, response)
+
+
 def sanitize_user_api_key_auth(auth: object) -> object:
     """Copy of the auth object with its budget reservation removed; the cost callback
     falls back to reading the reservation from inside the auth object."""

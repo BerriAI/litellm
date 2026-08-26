@@ -27,6 +27,7 @@ from litellm.constants import (
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+    NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     ROUTER_MODEL_NAME_RESPONSE_FIELD,
     STREAM_SSE_DATA_PREFIX,
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -1293,15 +1295,35 @@ def _uncached_input_cost(
     return input_cost - (cache_read_cost or 0.0) - (cache_creation_cost or 0.0)
 
 
+_ZERO_COST_BREAKDOWN: Final = CostBreakdownHeaderValues(
+    original_cost=0.0,
+    discount_amount=0.0,
+    margin_total_amount=0.0,
+    margin_percent=0.0,
+    input_cost=0.0,
+    output_cost=0.0,
+    tool_usage_cost=0.0,
+)
+"""The component split a call priced at zero advertises, so a client reading the cost headers off a
+read or management route still finds the whole family rather than a partially populated one."""
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
 ) -> CostBreakdownHeaderValues:
-    """Extract discount, margin, and per-component cost information from logging object's cost breakdown."""
+    """Extract discount, margin, and per-component cost information from logging object's cost breakdown.
+
+    A non-inference call that priced at zero never records a breakdown, so its components are
+    reported as zero here. Any such call that did price normally (retrieving a background response,
+    and the cost poller's read of one) has a stored breakdown and takes the branch below instead.
+    """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
         return CostBreakdownHeaderValues()
 
     cost_breakdown: Final = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
+        if litellm_logging_obj.call_type in NON_INFERENCE_CALL_TYPES:
+            return _ZERO_COST_BREAKDOWN
         return CostBreakdownHeaderValues()
 
     return CostBreakdownHeaderValues(
@@ -2577,10 +2599,15 @@ class ProxyBaseLLMRequestProcessing:
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
         recover_response_cost: Final = not response_cost and hidden_params.get("response_cost") is None
-        llm_cost_for_headers: Final = (
+        computed_cost_for_headers: Final = (
             self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
             if recover_response_cost
             else response_cost
+        )
+        llm_cost_for_headers: Final = (
+            0.0
+            if is_unbilled_non_inference_call_from_params(logging_obj.call_type, logging_obj.litellm_params, response)
+            else computed_cost_for_headers
         )
         _, request_metadata_bucket = get_or_create_metadata_bucket(self.data)
         guardrail_cost_for_headers: Final = guardrail_information_cost(
