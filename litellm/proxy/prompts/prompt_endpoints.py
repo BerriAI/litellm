@@ -1106,6 +1106,9 @@ async def patch_prompt(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
+    if request.litellm_params is not None and is_ambiguous_keyed_prompt_data(request.litellm_params):
+        raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
+
     try:
         # Resolve the target row: find the latest version in the given environment
         base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
@@ -1162,9 +1165,6 @@ async def patch_prompt(
         # Ensure we have valid litellm_params
         if updated_litellm_params is None:
             raise HTTPException(status_code=400, detail="litellm_params cannot be None")
-
-        if is_ambiguous_keyed_prompt_data(updated_litellm_params):
-            raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
 
         # Build update data dict
         update_data: Final[dict[str, str]] = {

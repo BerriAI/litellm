@@ -1,3 +1,4 @@
+import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
@@ -307,6 +308,98 @@ async def test_create_prompt_rejects_keyed_prompt_data_with_prompt_id():
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == AMBIGUOUS_PROMPT_DATA_ERROR
+
+
+@pytest.mark.asyncio
+async def test_patch_prompt_rejects_keyed_prompt_data_with_prompt_id():
+    from fastapi import HTTPException
+
+    from litellm.proxy.prompts.prompt_endpoints import (
+        AMBIGUOUS_PROMPT_DATA_ERROR,
+        PatchPromptRequest,
+        patch_prompt,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    request = PatchPromptRequest(
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="agent-prompt",
+            prompt_integration="dotprompt",
+            prompt_data={"json_prompt": {"content": "AHOY", "metadata": {}}},
+        ),
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        with pytest.raises(HTTPException) as exc_info:
+            await patch_prompt(
+                prompt_id="agent-prompt",
+                request=request,
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == AMBIGUOUS_PROMPT_DATA_ERROR
+
+
+@pytest.mark.asyncio
+async def test_patch_prompt_info_only_keeps_legacy_keyed_row_patchable():
+    from litellm.proxy.prompts.prompt_endpoints import PatchPromptRequest, patch_prompt
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    legacy_params = PromptLiteLLMParams(
+        prompt_id="agent-prompt",
+        prompt_integration="dotprompt",
+        prompt_data={"json_prompt": {"content": "AHOY", "metadata": {}}},
+    )
+    target_row = MagicMock()
+    target_row.id = "row-1"
+    target_row.version = 1
+    updated_row = MagicMock()
+    updated_row.model_dump.return_value = {
+        "prompt_id": "agent-prompt",
+        "version": 1,
+        "environment": "production",
+        "created_by": None,
+        "litellm_params": legacy_params.model_dump_json(),
+        "prompt_info": PromptInfo(prompt_type="db", environment="production").model_dump_json(),
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+        return_value=[target_row]
+    )
+    mock_prisma_client.db.litellm_prompttable.update = AsyncMock(return_value=updated_row)
+
+    existing_prompt = PromptSpec(
+        prompt_id="agent-prompt.v1",
+        litellm_params=legacy_params,
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: keeps the registry reload from touching global callback state
+            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+        ) as mock_registry,
+    ):
+        mock_registry.get_prompt_by_id.return_value = existing_prompt
+
+        await patch_prompt(
+            prompt_id="agent-prompt",
+            request=PatchPromptRequest(prompt_info=PromptInfo(prompt_type="db", environment="production")),
+            user_api_key_dict=mock_user_auth,
+        )
+
+    update_kwargs = mock_prisma_client.db.litellm_prompttable.update.await_args.kwargs
+    assert update_kwargs["where"] == {"id": "row-1"}
+    assert json.loads(update_kwargs["data"]["prompt_info"])["environment"] == "production"
+    assert json.loads(update_kwargs["data"]["litellm_params"])["prompt_data"] == {
+        "json_prompt": {"content": "AHOY", "metadata": {}}
+    }
 
 
 @pytest.mark.asyncio
