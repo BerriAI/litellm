@@ -265,6 +265,53 @@ class TestSingulrRequestPayload:
         assert sent_payload["metadata"] == {"user_api_key_alias": "fallback-alias"}
 
     @pytest.mark.asyncio
+    async def test_user_api_key_user_id_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_user_id": "my-user-id"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_user_id": "my-user-id"}
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_regular_metadata_for_user_id(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"metadata": {"user_api_key_user_id": "fallback-user-id"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_user_id": "fallback-user-id"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_alias_and_user_id_both_forwarded(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {
+            "litellm_metadata": {
+                "user_api_key_alias": "my-key-alias",
+                "user_api_key_user_id": "my-user-id",
+            }
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {
+            "user_api_key_alias": "my-key-alias",
+            "user_api_key_user_id": "my-user-id",
+        }
+
+    @pytest.mark.asyncio
     async def test_no_key_alias_available_sends_no_metadata(self, singulr_guardrail):
         """Regression: with no alias found, metadata must be omitted (None),
         not a {None: None} dict that fails payload validation."""

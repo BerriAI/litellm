@@ -123,12 +123,37 @@ class SingulrGuardrail(CustomGuardrail):
 
         return None
 
+
+    @staticmethod
+    def _resolve_user_id_from_request_data(request_data: Mapping[str, Any]) -> str | None:
+        litellm_metadata: Final = request_data.get("litellm_metadata") or _EMPTY_MAPPING
+        if litellm_metadata:
+            litellm_metadata_alias: Final = litellm_metadata.get("user_api_key_user_id")
+            if litellm_metadata_alias:
+                return litellm_metadata_alias
+
+        metadata: Final = request_data.get("metadata") or _EMPTY_MAPPING
+        if metadata:
+            metadata_user_id: Final = metadata.get("user_api_key_user_id")
+            if metadata_user_id:
+                return metadata_user_id
+
+        return None
+
     @classmethod
     def _build_metadata(cls, request_data: Mapping[str, Any]) -> Mapping[str, Any] | None:
         user_api_key_alias: Final = cls._resolve_key_alias_from_request_data(request_data=request_data)
-        if not user_api_key_alias:
+        user_api_key_user_id: Final = cls._resolve_user_id_from_request_data(request_data=request_data)
+        if not user_api_key_alias and not user_api_key_user_id:
             return None
-        return {"user_api_key_alias": user_api_key_alias}  # mutable-ok: short-lived JSON payload dict
+        return {  # mutable-ok: short-lived JSON payload dict
+            key: value
+            for key, value in (
+                ("user_api_key_alias", user_api_key_alias),
+                ("user_api_key_user_id", user_api_key_user_id),
+            )
+            if value
+        }
 
     @staticmethod
     def _build_user_message(text: str) -> Mapping[str, Any]:
