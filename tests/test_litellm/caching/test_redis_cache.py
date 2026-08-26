@@ -25,6 +25,7 @@ def redis_no_ping():
         ("litellm", "litellm:3997c4abcdef", "litellm:3997c4abcdef"),
         ("litellm", "spend:key:3997c4abcdef", "litellm:spend:key:3997c4abcdef"),
         (None, "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
+        ("", "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
     ],
 )
 def test_check_and_fix_namespace_prefixes_keys_sharing_the_namespace_prefix(
