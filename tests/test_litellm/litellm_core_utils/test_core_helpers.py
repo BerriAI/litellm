@@ -285,6 +285,7 @@ class TestIsExpectedClientError:
         pre-call rejections (no llm_provider) are expected client errors."""
         from litellm.exceptions import AuthenticationError, RateLimitError
         from litellm.litellm_core_utils.core_helpers import is_expected_client_error
+        from litellm.llms.anthropic.common_utils import AnthropicError
 
         provider_auth_failure = AuthenticationError(
             message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
@@ -293,6 +294,9 @@ class TestIsExpectedClientError:
 
         provider_rate_limit = RateLimitError(message="rate limited upstream", llm_provider="openai", model="gpt-4o")
         assert is_expected_client_error(provider_rate_limit) is False
+
+        unmapped_provider_failure = AnthropicError(status_code=401, message='{"type":"authentication_error"}')
+        assert is_expected_client_error(unmapped_provider_failure) is False
 
         class RouterRejection(Exception):
             def __init__(self):
