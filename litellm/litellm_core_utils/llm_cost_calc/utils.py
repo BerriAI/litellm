@@ -801,6 +801,24 @@ def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) ->
     return float(provider_specific_entry.get(inference_geo.lower(), 1.0))
 
 
+def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) -> float:
+    """
+    Resolve Anthropic's "fast" speed-mode multiplier (``provider_specific_entry.fast``)
+    for a request served at ``usage.speed == "fast"``.
+
+    The multiplier scales non-cache token costs only - see
+    ``anthropic/cost_calculation.py::cost_per_token`` - so callers must not apply it to
+    cache read/write costs.
+
+    Returns 1.0 when the request was not served in fast mode or the model carries no
+    fast multiplier.
+    """
+    if getattr(usage, "speed", None) != "fast":
+        return 1.0
+    provider_specific_entry: Final[dict[str, float]] = model_info.get("provider_specific_entry") or {}
+    return float(provider_specific_entry.get("fast", 1.0))
+
+
 def _resolve_reasoning_token_cost(
     model_info: ModelInfo,
     service_tier: str | None,
@@ -1074,6 +1092,13 @@ def get_token_type_cost_breakdown(
         else (flat_reasoning_rate if flat_reasoning_rate is not None else completion_base_cost)
     )
     reasoning_cost = float(reasoning_tokens) * reasoning_rate
+
+    # Anthropic's "fast" speed mode scales non-cache token costs only (cache rates
+    # are unchanged), mirroring anthropic/cost_calculation.py::cost_per_token so this
+    # line item never drifts from the completion total it is a slice of.
+    speed_multiplier: Final = get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
+    if speed_multiplier != 1.0:
+        reasoning_cost *= speed_multiplier
 
     cache_read_tokens = 0
     cache_creation_tokens = 0

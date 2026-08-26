@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_provider_specific_geo_multiplier,
+    get_provider_specific_speed_multiplier,
     parse_prompt_tokens_details,
 )
 
@@ -81,12 +82,9 @@ def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) 
     # Apply provider_specific_entry multipliers for geo/speed routing
     try:
         model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-        provider_specific_entry: Final[dict] = model_info.get("provider_specific_entry") or {}
 
         geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
-        speed_multiplier: Final = (
-            provider_specific_entry.get("fast", 1.0) if getattr(usage, "speed", None) == "fast" else 1.0
-        )
+        speed_multiplier: Final = get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
 
         if speed_multiplier != 1.0:
             cache_cost: Final = _compute_cache_only_cost(model_info=model_info, usage=usage, service_tier=service_tier)
