@@ -135,22 +135,18 @@ def test_map_openai_params_overwrites_existing_extra_body():
     assert result["extra_body"] == {"thinking": {"type": "enabled"}}
 
 
-def test_get_optional_params_merges_thinking_with_user_extra_body():
+def test_get_optional_params_merges_thinking_with_user_extra_body(local_model_cost_map):
     """End-to-end at the get_optional_params layer: a user-supplied extra_body
     and the mapped thinking payload must coexist in the final extra_body."""
     from litellm.utils import get_optional_params
 
-    with patch(
-        "litellm.llms.tencent.chat.transformation.supports_reasoning",
-        return_value=True,
-    ):
-        result = get_optional_params(
-            model="tencent/deepseek-v4-pro",
-            custom_llm_provider="tencent",
-            messages=[{"role": "user", "content": "hi"}],
-            thinking={"type": "enabled"},
-            extra_body={"custom_flag": True},
-        )
+    result = get_optional_params(
+        model="tencent/deepseek-v4-pro",
+        custom_llm_provider="tencent",
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "enabled"},
+        extra_body={"custom_flag": True},
+    )
 
     assert result["extra_body"]["thinking"] == {"type": "enabled"}
     assert result["extra_body"]["custom_flag"] is True
@@ -190,93 +186,58 @@ class TestAdaptiveThinkingCoercion:
     Ref: https://www.tencentcloud.com/document/product/1300/82345
     """
 
-    def test_reasoning_effort_maps_to_adaptive_for_adaptive_only_model(self):
+    def test_reasoning_effort_maps_to_adaptive_for_adaptive_only_model(self, local_model_cost_map):
         config = TencentChatConfig()
-        with (
-            patch(
-                "litellm.llms.tencent.chat.transformation.supports_reasoning",
-                return_value=True,
-            ),
-            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
-        ):
-            result = config.map_openai_params(
-                non_default_params={"reasoning_effort": "medium"},
-                optional_params={},
-                model="tencent/minimax-m3",
-                drop_params=False,
-            )
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "medium"},
+            optional_params={},
+            model="tencent/minimax-m3",
+            drop_params=False,
+        )
 
         assert result["extra_body"]["thinking"] == {"type": "adaptive"}
 
-    def test_explicit_enabled_thinking_coerced_to_adaptive(self):
+    def test_explicit_enabled_thinking_coerced_to_adaptive(self, local_model_cost_map):
         config = TencentChatConfig()
-        with (
-            patch(
-                "litellm.llms.tencent.chat.transformation.supports_reasoning",
-                return_value=True,
-            ),
-            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
-        ):
-            result = config.map_openai_params(
-                non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
-                optional_params={},
-                model="tencent/minimax-m3",
-                drop_params=False,
-            )
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+            optional_params={},
+            model="tencent/minimax-m3",
+            drop_params=False,
+        )
 
         assert result["extra_body"]["thinking"] == {"type": "adaptive", "budget_tokens": 4096}
 
-    def test_disabled_thinking_kept_for_adaptive_only_model(self):
+    def test_disabled_thinking_kept_for_adaptive_only_model(self, local_model_cost_map):
         config = TencentChatConfig()
-        with (
-            patch(
-                "litellm.llms.tencent.chat.transformation.supports_reasoning",
-                return_value=True,
-            ),
-            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
-        ):
-            result = config.map_openai_params(
-                non_default_params={"thinking": {"type": "disabled"}},
-                optional_params={},
-                model="tencent/minimax-m3",
-                drop_params=False,
-            )
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "disabled"}},
+            optional_params={},
+            model="tencent/minimax-m3",
+            drop_params=False,
+        )
 
         assert result["extra_body"]["thinking"] == {"type": "disabled"}
 
-    def test_none_reasoning_effort_disables_thinking_for_adaptive_only_model(self):
+    def test_none_reasoning_effort_disables_thinking_for_adaptive_only_model(self, local_model_cost_map):
         config = TencentChatConfig()
-        with (
-            patch(
-                "litellm.llms.tencent.chat.transformation.supports_reasoning",
-                return_value=True,
-            ),
-            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=True),
-        ):
-            result = config.map_openai_params(
-                non_default_params={"reasoning_effort": "none"},
-                optional_params={},
-                model="tencent/minimax-m3",
-                drop_params=False,
-            )
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="tencent/minimax-m3",
+            drop_params=False,
+        )
 
         assert result["extra_body"]["thinking"] == {"type": "disabled"}
 
-    def test_non_adaptive_model_keeps_enabled(self):
+    def test_non_adaptive_model_keeps_enabled(self, local_model_cost_map):
         config = TencentChatConfig()
-        with (
-            patch(
-                "litellm.llms.tencent.chat.transformation.supports_reasoning",
-                return_value=True,
-            ),
-            patch.object(TencentChatConfig, "_is_adaptive_thinking_model", return_value=False),
-        ):
-            result = config.map_openai_params(
-                non_default_params={"reasoning_effort": "high"},
-                optional_params={},
-                model="tencent/kimi-k3",
-                drop_params=False,
-            )
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model="tencent/deepseek-v4-pro",
+            drop_params=False,
+        )
 
         assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
