@@ -2441,8 +2441,47 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
     assert "extra_headers" not in cleaned
     assert "headers" not in cleaned
     assert "aws_session_token" not in cleaned
-    # routing/admin field still present
     assert cleaned.get("api_base") == "https://example.test/v1"
+
+
+@pytest.mark.parametrize(
+    "credential_field",
+    [
+        "api_key",
+        "client_secret",
+        "azure_ad_token",
+        "azure_username",
+        "azure_password",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "extra_headers",
+        "headers",
+    ],
+)
+@pytest.mark.parametrize("details", [True, False, None])
+def test_clean_endpoint_data_never_displays_credential_fields(credential_field, details):
+    """
+    LIT-6239 / gh-36898: /health entries, healthy and unhealthy alike, must never
+    carry credential-bearing litellm_params, with or without details.
+    """
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    canary = f"CANARY-{credential_field}-VALUE"
+    cleaned = _clean_endpoint_data(
+        {
+            "model": "azure/gpt-5-mini",
+            "api_base": "https://example.test/v1",
+            credential_field: canary,
+        },
+        details=details,
+    )
+
+    assert credential_field not in cleaned
+    assert canary not in str(cleaned)
 
 
 class TestConfigBaseForHealthCheck:
