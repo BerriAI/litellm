@@ -12,7 +12,7 @@ test.describe("AI Hub (internal admin view)", () => {
     // Open the "Select Models to Make Public" modal
     await page.getByRole("button", { name: /Select Models to Make Public/i }).click();
 
-    const modal = page.locator(".ant-modal:visible").filter({ hasText: "Make Models Public" });
+    const modal = page.getByRole("dialog", { name: "Make Models Public" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     // Guard: the "Select All (N)" label only shows a count when filteredData

@@ -5,13 +5,10 @@ Tests xAI's Grok Voice Agent API through LiteLLM's realtime interface.
 Uses the base test class to ensure consistent behavior across providers.
 """
 
-import os
-import sys
 from typing import Tuple
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from tests.llm_translation.realtime.base_realtime_tests import BaseRealtimeTest
 

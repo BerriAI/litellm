@@ -13,6 +13,18 @@ def extract_model_from_target_model_names(target_model_names: Any) -> str | None
     return target_model_names[0] if target_model_names else None
 
 
+def video_reference_to_id(video_ref: object) -> str:
+    if isinstance(video_ref, dict):
+        return video_ref.get("id", "")
+    if not isinstance(video_ref, str):
+        return ""
+    try:
+        parsed_ref: Final = orjson.loads(video_ref)
+    except orjson.JSONDecodeError:
+        return video_ref
+    return parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
+
+
 def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
     custom_llm_provider: Final = data.get("custom_llm_provider")
     if custom_llm_provider:

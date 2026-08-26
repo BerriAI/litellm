@@ -76,14 +76,14 @@ describe("ModelsAndEndpointsPage", () => {
     const { getByRole, getByTestId, queryByTestId } = renderPage();
     await user.click(getByRole("tab", { name: "Health Status" }));
     expect(getByTestId("panel-health")).toBeInTheDocument();
-    expect(queryByTestId("panel-all-models")).toBeNull();
+    expect(queryByTestId("panel-all-models")).not.toBeInTheDocument();
   });
 
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {
     detailState.modelId = "abc-123";
     const { getByTestId, queryByRole } = renderPage();
     expect(getByTestId("model-info")).toHaveTextContent("model:abc-123");
-    expect(queryByRole("tab", { name: "All Models" })).toBeNull();
+    expect(queryByRole("tab", { name: "All Models" })).not.toBeInTheDocument();
   });
 
   it("renders the team detail overlay from the ?team drill-in", () => {
@@ -95,8 +95,8 @@ describe("ModelsAndEndpointsPage", () => {
   it("hides admin-only tabs for a non-admin user", () => {
     mockUseAuthorized.mockReturnValue(NON_ADMIN);
     const { queryByRole } = renderPage();
-    expect(queryByRole("tab", { name: "LLM Credentials" })).toBeNull();
-    expect(queryByRole("tab", { name: "Health Status" })).toBeNull();
+    expect(queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
   });
 
   // Auto-routers are excluded from the All Models table, so this tab is their home: the only
@@ -125,7 +125,7 @@ describe("ModelsAndEndpointsPage", () => {
       mockUseAuthorized.mockReturnValue(NON_ADMIN);
       const { queryByRole } = renderPage();
 
-      expect(queryByRole("tab", { name: /Auto-Routers/ })).toBeNull();
+      expect(queryByRole("tab", { name: /Auto-Routers/ })).not.toBeInTheDocument();
     });
   });
 });

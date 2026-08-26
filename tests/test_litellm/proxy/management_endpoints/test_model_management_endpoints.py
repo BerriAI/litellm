@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,9 +8,6 @@ from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
     LiteLLM_ProxyModelTable,
@@ -140,7 +135,7 @@ class TestModelManagementAuthChecks:
     @pytest.mark.asyncio
     async def test_can_user_make_team_model_call_non_premium_fails(self):
         """Test that non-premium users cannot make team model calls"""
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='You must be a LiteLLM Enterprise user to use this feature\\.') as exc_info:
             ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id="test_team",
                 user_api_key_dict=self.admin_user,
@@ -195,7 +190,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=True)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='You must be a LiteLLM Enterprise user to use this feature\\.') as exc_info:
             await ModelManagementAuthChecks.allow_team_model_action(
                 model_params=model_params,
                 user_api_key_dict=self.admin_user,
@@ -216,7 +211,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=False)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Team id=nonexistent_team does not exist in db'\\}") as exc_info:
             await ModelManagementAuthChecks.allow_team_model_action(
                 model_params=model_params,
                 user_api_key_dict=self.admin_user,
@@ -257,7 +252,7 @@ class TestModelManagementAuthChecks:
         )
         prisma_client = MockPrismaClient(team_exists=True, user_admin=False)
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="Team ID=test_team does not match the API key's team") as exc_info:
             await ModelManagementAuthChecks.can_user_make_model_call(
                 model_params=model_params,
                 user_api_key_dict=self.normal_user,
@@ -1483,7 +1478,7 @@ class TestTeamModelUpdate:
             "litellm.proxy.proxy_server.premium_user",
             True,
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="does not match the API key's team ID=None, OR you are") as exc_info:
                 await _update_team_model_in_db(
                     db_model=db_model,
                     patch_data=patch_data,
@@ -3256,7 +3251,7 @@ class TestPatchModelBlockedAuthGate:
                 new=AsyncMock(return_value=None),
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match="Only proxy admins can change a model's blocked flag\\.") as exc_info:
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(blocked=True),
@@ -3315,6 +3310,61 @@ class TestPatchModelBlockedAuthGate:
             )
             assert result is updated_row
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+
+
+class TestPatchModelRowDeletedBeforeWrite:
+    """A row deleted between the read and the update makes prisma's `update`
+    return None. That must surface patch_model's own 404 not-found contract,
+    not a 500 from dereferencing the missing row."""
+
+    @pytest.mark.asyncio
+    async def test_patch_model_404s_when_update_returns_none(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+        from litellm.proxy.proxy_server import ProxyException
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "openai/gpt-4o-mini"}
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=None)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            patch(  # test-quality-ok: stubs the auth gate so the test exercises the not-found branch under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: stubs the cache write so the test observes only the DB result handling
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(
+                    return_value=ReconcileOutcome(still_desired=None, live_after=None)
+                ),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(blocked=True),
+                    user_api_key_dict=admin,
+                )
+
+        assert exc_info.value.code == "404"
+        assert exc_info.value.message == "Model m1 not found on proxy."
 
 
 class TestWriteSurfacesReloadDrop:
@@ -4118,6 +4168,30 @@ class TestAutoRouterClassifierDefaultPrompt:
         assert "Tiers:" in response.system_prompt
 
     @pytest.mark.asyncio
+    async def test_rubric_preset_selects_the_calibration_examples(self):
+        """A router on the chat preset must not prefill the editor with the agentic rubric, or the
+        operator edits a prompt their classifier never sends."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            get_auto_router_classifier_default_prompt,
+        )
+        from litellm.router_strategy.complexity_router import ClassificationRubric, classification_system_prompt
+
+        for preset in ClassificationRubric:
+            response = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=preset)
+            assert response.system_prompt == classification_system_prompt(5, classification_rubric=preset)
+
+        agentic = await get_auto_router_classifier_default_prompt(
+            context_window_size=5, classification_rubric=ClassificationRubric.AGENTIC
+        )
+        chat = await get_auto_router_classifier_default_prompt(context_window_size=5, classification_rubric=ClassificationRubric.CHAT)
+        unset = await get_auto_router_classifier_default_prompt(context_window_size=5)
+        assert "Calibration on engineering tasks" in agentic.system_prompt
+        assert "Calibration on engineering tasks" not in chat.system_prompt
+        assert "Calibration examples:" in chat.system_prompt
+        # An unset preset must prefill the editor with the rubric an unconfigured router still sends.
+        assert "Calibration" not in unset.system_prompt
+
+    @pytest.mark.asyncio
     async def test_context_window_size_changes_the_closing_line(self):
         """The editor must prefill the prompt matching the configured window, not a fixed one."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -4160,7 +4234,7 @@ class TestAutoRouterClassifierDefaultPrompt:
 
     @pytest.mark.asyncio
     async def test_malformed_tier_labels_are_rejected_rather_than_silently_ignored(self):
-        """An unparseable or invalid rename must not fall back to the canonical rubric: that would
+        """An unparseable or invalid rename must not fall back to the canonical classification_rubric: that would
         prefill tier names the router does not accept while looking like it worked."""
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (

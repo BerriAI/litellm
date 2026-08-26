@@ -2,6 +2,7 @@
 Utility helpers for reading and parsing environment variables.
 """
 
+import logging
 import os
 from typing import Final
 
@@ -20,6 +21,26 @@ def get_env_int(env_var: str, default: int) -> int:
         return int(raw)
     except (ValueError, TypeError):
         return default
+
+
+def get_env_int_in_range(env_var: str, default: int, minimum: int, maximum: int) -> int:
+    """Parse an environment variable as an integer constrained to ``[minimum, maximum]``.
+
+    Values outside the range fall back to the default and warn, so a misconfigured knob can
+    neither crash the caller nor silently change the meaning of what it computes.
+    """
+    value: Final = get_env_int(env_var, default)
+    if minimum <= value <= maximum:
+        return value
+    logging.getLogger("LiteLLM").warning(
+        "%s=%s is outside the supported range [%s, %s]. Falling back to %s.",
+        env_var,
+        value,
+        minimum,
+        maximum,
+        default,
+    )
+    return default
 
 
 def get_env_int_or_none(env_var: str) -> int | None:

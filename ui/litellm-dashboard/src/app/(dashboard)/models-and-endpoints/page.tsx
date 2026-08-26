@@ -175,16 +175,18 @@ export default function ModelsAndEndpointsPage() {
         ) : (
           <Tabs value={activeKey} onValueChange={setActiveKey}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
-              <TabsList variant="line" className="min-w-0 flex-1 justify-start overflow-x-auto">
-                {visibleSlugs.map((slug) => {
-                  const key = slug || BASE_TAB_KEY;
-                  return (
-                    <TabsTrigger key={key} value={key} className="flex-none">
-                      {tabLabel(slug)}
-                    </TabsTrigger>
-                  );
-                })}
-              </TabsList>
+              <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
+                <TabsList variant="line" className="w-max justify-start">
+                  {visibleSlugs.map((slug) => {
+                    const key = slug || BASE_TAB_KEY;
+                    return (
+                      <TabsTrigger key={key} value={key} className="flex-none">
+                        {tabLabel(slug)}
+                      </TabsTrigger>
+                    );
+                  })}
+                </TabsList>
+              </div>
               <div className="flex shrink-0 items-center gap-2 pb-1">
                 {lastRefreshed && (
                   <span className="text-xs text-muted-foreground">Last Refreshed: {lastRefreshed}</span>
