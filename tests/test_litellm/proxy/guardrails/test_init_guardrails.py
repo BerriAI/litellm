@@ -70,6 +70,40 @@ def test_initialize_bedrock_forwards_chunk_budget_chars():
     assert initialized[-1].chunk_budget_chars == 60_000
 
 
+def test_initialize_bedrock_forwards_aws_external_id():
+    """Regression: `aws_external_id` set in config.yaml must reach the guardrail.
+
+    Cross-account roles whose trust policy requires an ExternalId could not be assumed by the
+    bedrock guardrail, because the config field was dropped before the sts:AssumeRole call.
+    """
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+
+    test_guardrail = {
+        "guardrail_name": "test_bedrock_external_id",
+        "litellm_params": {
+            "guardrail": SupportedGuardrailIntegrations.BEDROCK.value,
+            "mode": "pre_call",
+            "guardrailIdentifier": "test-guardrail",
+            "guardrailVersion": "DRAFT",
+            "aws_region_name": "us-east-1",
+            "aws_role_name": "arn:aws:iam::999999999999:role/litellm-guardrail",
+            "aws_external_id": "external-id-from-config",
+        },
+    }
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
+
+    initialized = [
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, BedrockGuardrail) and callback.guardrail_name == "test_bedrock_external_id"
+    ]
+    assert initialized, "bedrock guardrail was not registered as a callback"
+    assert initialized[-1].optional_params["aws_external_id"] == "external-id-from-config"
+
+
 def test_initialize_guardrail_preserves_guardrail_info():
     """
     Regression (LIT-2529): initialize_guardrail must carry guardrail_info into the
