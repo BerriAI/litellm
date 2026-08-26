@@ -36,6 +36,87 @@ const modelMappingsRule = {
 
 const tooltipCodeClassName = "rounded-sm bg-background/20 px-1 py-0.5 font-mono text-xs";
 
+const ANTHROPIC_1M_HEADERS = JSON.stringify(
+  { extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } },
+  null,
+  2,
+);
+
+const publicNameTooltipContent = (
+  <div className="flex flex-col gap-2 text-left font-normal">
+    <div>The name you specify in your API calls to LiteLLM Proxy</div>
+    <div>
+      <strong>Example:</strong> If you name your public model{" "}
+      <code className={tooltipCodeClassName}>example-name</code>, and choose{" "}
+      <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
+    </div>
+    <div>
+      <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
+      <code className={tooltipCodeClassName}>model = &quot;example-name&quot;</code>
+    </div>
+    <div>
+      <strong>Result:</strong> LiteLLM sends <code className={tooltipCodeClassName}>qwen-plus-latest</code> to the
+      provider
+    </div>
+  </div>
+);
+
+const PublicNameInput: React.FC<{ readonly index: number; readonly value: string }> = ({ index, value }) => {
+  const form = useFormContext<MountedFormValues>();
+  const selectedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
+
+  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const typed = event.target.value;
+    const litellmParams = form.getValues("litellm_extra_params") as string | undefined;
+    const wantsAnthropic1m =
+      selectedProvider === Providers.Anthropic && typed.endsWith("-1m") && (litellmParams ?? "").trim() === "";
+
+    if (wantsAnthropic1m) {
+      form.setValue("litellm_extra_params", ANTHROPIC_1M_HEADERS);
+    }
+
+    const publicName = wantsAnthropic1m ? typed.slice(0, -"-1m".length) : typed;
+    const current = (form.getValues("model_mappings") as ModelMapping[]) ?? [];
+    form.setValue(
+      "model_mappings",
+      current.map((mapping, mappingIndex) =>
+        mappingIndex === index ? { ...mapping, public_name: publicName } : mapping,
+      ),
+    );
+  };
+
+  return <Input value={value} onChange={handleChange} />;
+};
+
+/**
+ * Module-level so the header and cell renderers keep a stable identity: React treats a renderer
+ * declared inside the component as a new element type on every render and remounts the input,
+ * which drops focus after each keystroke.
+ */
+const columns: ColumnDef<ModelMapping>[] = [
+  {
+    id: "public_name",
+    accessorKey: "public_name",
+    header: () => (
+      <span className="flex items-center">
+        Public Model Name
+        <SimpleTooltip content={publicNameTooltipContent} width="500px" />
+      </span>
+    ),
+    cell: ({ row }) => <PublicNameInput index={row.index} value={row.original.public_name} />,
+  },
+  {
+    id: "litellm_model",
+    accessorKey: "litellm_model",
+    header: () => (
+      <span className="flex items-center">
+        LiteLLM Model Name
+        <SimpleTooltip content={<div>The model name LiteLLM will send to the LLM API</div>} width="360px" />
+      </span>
+    ),
+  },
+];
+
 const ConditionalPublicModelName: React.FC = () => {
   const form = useFormContext<MountedFormValues>();
 
@@ -123,85 +204,6 @@ const ConditionalPublicModelName: React.FC = () => {
   }, [selectedModels, customModelName, selectedProvider, form]);
 
   if (!showPublicModelName) return null;
-
-  const publicNameTooltipContent = (
-    <div className="flex flex-col gap-2 text-left font-normal">
-      <div>The name you specify in your API calls to LiteLLM Proxy</div>
-      <div>
-        <strong>Example:</strong> If you name your public model{" "}
-        <code className={tooltipCodeClassName}>example-name</code>, and choose{" "}
-        <code className={tooltipCodeClassName}>openai/qwen-plus-latest</code> as the LiteLLM model
-      </div>
-      <div>
-        <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
-        <code className={tooltipCodeClassName}>model = &quot;example-name&quot;</code>
-      </div>
-      <div>
-        <strong>Result:</strong> LiteLLM sends <code className={tooltipCodeClassName}>qwen-plus-latest</code> to the
-        provider
-      </div>
-    </div>
-  );
-
-  const liteLLMModelTooltipContent = <div>The model name LiteLLM will send to the LLM API</div>;
-
-  const columns: ColumnDef<ModelMapping>[] = [
-    {
-      id: "public_name",
-      accessorKey: "public_name",
-      header: () => (
-        <span className="flex items-center">
-          Public Model Name
-          <SimpleTooltip content={publicNameTooltipContent} width="500px" />
-        </span>
-      ),
-      cell: ({ row }) => {
-        return (
-          <Input
-            value={row.original.public_name}
-            onChange={(e) => {
-              const newValue = e.target.value;
-              const newMappings = [...((form.getValues("model_mappings") as ModelMapping[]) ?? [])];
-
-              // Check conditions for Anthropic -1m suffix handling
-              const isAnthropic = selectedProvider === Providers.Anthropic;
-              const endsWith1m = newValue.endsWith("-1m");
-              const litellmParams = form.getValues("litellm_extra_params") as string | undefined;
-              const isLitellmParamsEmpty = !litellmParams || litellmParams.trim() === "";
-
-              let finalPublicName = newValue;
-
-              if (isAnthropic && endsWith1m && isLitellmParamsEmpty) {
-                // Set litellm params with extra_headers
-                const litellmParamsValue = JSON.stringify(
-                  { extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } },
-                  null,
-                  2,
-                );
-                form.setValue("litellm_extra_params", litellmParamsValue);
-
-                // Remove -1m suffix from public_name
-                finalPublicName = newValue.slice(0, -3); // Remove "-1m" (3 characters)
-              }
-
-              newMappings[row.index].public_name = finalPublicName;
-              form.setValue("model_mappings", newMappings);
-            }}
-          />
-        );
-      },
-    },
-    {
-      id: "litellm_model",
-      accessorKey: "litellm_model",
-      header: () => (
-        <span className="flex items-center">
-          LiteLLM Model Name
-          <SimpleTooltip content={liteLLMModelTooltipContent} width="360px" />
-        </span>
-      ),
-    },
-  ];
 
   return (
     <MountedFormField
