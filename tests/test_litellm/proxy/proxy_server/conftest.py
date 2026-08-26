@@ -527,10 +527,17 @@ def reset_login_throttle(monkeypatch):
 
     def _drop_throttle_keys() -> None:
         in_memory = getattr(_FAILED_LOGIN_CACHE, "in_memory_cache", None)
-        cache_dict = getattr(in_memory, "cache_dict", None)
-        if isinstance(cache_dict, dict):
-            for key in [k for k in cache_dict if str(k).startswith(_CACHE_KEY_PREFIX)]:
-                cache_dict.pop(key, None)
+        if in_memory is None:
+            return
+        tracked = tuple(
+            key
+            for store in (getattr(in_memory, "cache_dict", None), getattr(in_memory, "ttl_dict", None))
+            if isinstance(store, dict)
+            for key in tuple(store)
+            if str(key).startswith(_CACHE_KEY_PREFIX)
+        )
+        for key in tracked:
+            in_memory.delete_cache(key)
 
     monkeypatch.setattr(ps, "redis_usage_cache", None)
     _drop_throttle_keys()
