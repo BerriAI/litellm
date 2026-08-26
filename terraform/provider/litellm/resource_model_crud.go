@@ -355,10 +355,6 @@ func resourceLiteLLMModelDelete(d *schema.ResourceData, m interface{}) error {
 	return nil
 }
 
-// mergeAdditionalLiteLLMParams coerces additional_litellm_params values and
-// merges them into litellmParams. additional_drop_params is a first-class
-// LiteLLM litellm_params field (runtime param strip list) and must be sent to
-// the API as []string — it must not be used to delete keys from this request body.
 func mergeAdditionalLiteLLMParams(litellmParams map[string]interface{}, additionalParams map[string]interface{}) {
 	for key, value := range additionalParams {
 		strValue, ok := value.(string)

@@ -31,7 +31,6 @@ func TestMergeAdditionalLiteLLMParams_PassesAdditionalDropParams(t *testing.T) {
 		t.Fatalf("additional_drop_params = %#v, want %#v", got, want)
 	}
 
-	// Must not strip unrelated keys from the request body (old broken behavior).
 	if _, stillThere := litellmParams["model"]; !stillThere {
 		t.Fatalf("model was deleted from litellmParams; additional_drop_params must not mutate sibling keys")
 	}
@@ -58,8 +57,6 @@ func TestMergeAdditionalLiteLLMParams_PassesAdditionalDropParams(t *testing.T) {
 }
 
 func TestMergeAdditionalLiteLLMParams_DoesNotDeleteNamedKeys(t *testing.T) {
-	// Regression: previous implementation treated additional_drop_params as a
-	// list of keys to delete from the Terraform->API payload.
 	litellmParams := map[string]interface{}{
 		"model":               "x",
 		"reasoning_effort":    "high",
@@ -73,10 +70,10 @@ func TestMergeAdditionalLiteLLMParams_DoesNotDeleteNamedKeys(t *testing.T) {
 	mergeAdditionalLiteLLMParams(litellmParams, additional)
 
 	if _, ok := litellmParams["reasoning_effort"]; !ok {
-		t.Fatal("reasoning_effort was deleted from payload; must remain and be stripped at proxy runtime instead")
+		t.Fatal("reasoning_effort was deleted from payload")
 	}
 	if _, ok := litellmParams["reasoningEffort"]; !ok {
-		t.Fatal("reasoningEffort was deleted from payload; must remain and be stripped at proxy runtime instead")
+		t.Fatal("reasoningEffort was deleted from payload")
 	}
 	got := litellmParams["additional_drop_params"].([]string)
 	want := []string{"reasoningEffort", "reasoning_effort"}
