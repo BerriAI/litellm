@@ -695,7 +695,7 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
             "object_permission_id": None,
             "object_permission": None,
             "litellm_budget_table": None,
-            "dict": lambda self=None: {
+            "model_dump": lambda self=None: {
                 "spend": 25.0,
                 "user_id": "enduser-implicit",
                 "blocked": False,
@@ -1948,14 +1948,14 @@ class FakePodLockManager:
         if self.redis_cache is not None:
             self.redis_cache.async_get_cache = AsyncMock(return_value="another-pod" if held_by_other else None)
         self._acquired = acquired
-        self.acquire_calls: List[Dict[str, Any]] = []
+        self.acquire_calls: List[Dict[str, str | int | None]] = []
         self.release_calls: List[str] = []
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
         return f"cronjob_lock:{cronjob_id}"
 
-    async def acquire_lock(self, cronjob_id: str, ttl: Any = None) -> bool:
+    async def acquire_lock(self, cronjob_id: str, ttl: int | None = None) -> bool:
         self.acquire_calls.append({"cronjob_id": cronjob_id, "ttl": ttl})
         return self._acquired
 

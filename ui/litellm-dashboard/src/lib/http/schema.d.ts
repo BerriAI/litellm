@@ -22703,7 +22703,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -26712,7 +26712,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -26752,7 +26752,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -26782,7 +26782,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -27988,7 +27988,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -28018,7 +28018,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -28048,7 +28048,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -30094,7 +30094,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /** Allowed Passthrough Routes */
             allowed_passthrough_routes?: unknown[] | null;
             /** Allowed Vector Store Indexes */
@@ -30138,7 +30138,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -30164,7 +30164,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -33947,7 +33947,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -33977,7 +33977,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -34007,7 +34007,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -34077,7 +34077,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -34112,7 +34112,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members Count
              * @default 0
@@ -34147,7 +34147,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -36262,7 +36262,9 @@ export interface components {
             } | null;
             /** Model Max Budget Usage */
             model_max_budget_usage?: {
-                [key: string]: unknown;
+                [key: string]: {
+                    [key: string]: unknown;
+                };
             } | null;
             /**
              * Models

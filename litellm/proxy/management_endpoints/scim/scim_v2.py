@@ -2766,6 +2766,12 @@ async def patch_group(
         if final_team:
             updated_team = final_team
 
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Group not found with ID: {group_id}"},  # mutable-ok: FastAPI detail contract
+            )
+
         # Convert to SCIM format and return
         scim_group: Final = await ScimTransformations.transform_litellm_team_to_scim_group(
             LiteLLM_TeamTable.model_validate(updated_team.model_dump())

@@ -25,9 +25,18 @@ ILLEGAL_DISPLAY_PARAMS: Final = [
     "api_key",
     "prompt",
     "input",
+    "client_secret",
+    "azure_ad_token",
+    "azure_username",
+    "azure_password",
     "vertex_credentials",
+    "vertex_ai_credentials",
     "aws_access_key_id",
     "aws_secret_access_key",
+    "aws_session_token",
+    "aws_web_identity_token",
+    "extra_headers",
+    "headers",
     "exception",  # internal; not JSON-serializable, never for display
     "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
@@ -183,7 +192,7 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
-def _is_strategy_router_deployment(litellm_params: dict) -> bool:
+def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
     """True for strategy-router deployments."""
     model: Final[object] = litellm_params.get("model", "")
     return isinstance(model, str) and classify_strategy_router_model(model) is not None

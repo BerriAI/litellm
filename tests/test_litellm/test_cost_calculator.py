@@ -1,4 +1,7 @@
 
+import json
+from pathlib import Path
+
 import pytest
 
 
@@ -14,7 +17,13 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
-from litellm.types.utils import ModelInfo, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    CacheCreationTokenDetails,
+    ModelInfo,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import TranscriptionResponse
 
 
@@ -1718,6 +1727,73 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
+
+AZURE_GPT_5_6_MAP_KEYS = (
+    "azure/gpt-5.6",
+    "azure/gpt-5.6-sol",
+    "azure/gpt-5.6-terra",
+    "azure/gpt-5.6-luna",
+    "azure/us/gpt-5.6",
+    "azure/us/gpt-5.6-sol",
+    "azure/us/gpt-5.6-terra",
+    "azure/us/gpt-5.6-luna",
+    "azure/eu/gpt-5.6",
+    "azure/eu/gpt-5.6-sol",
+    "azure/eu/gpt-5.6-terra",
+    "azure/eu/gpt-5.6-luna",
+)
+
+
+def test_azure_gpt_5_6_cache_write_tokens_are_billed(_local_model_cost_map):
+    """
+    Azure bills gpt-5.6 prompt cache writes at 1.25x the input rate on every
+    tier, but the azure entries carried no ``cache_creation_input_token_cost``,
+    so cache-write tokens were billed at the plain input rate instead.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        completion_tokens=100,
+        prompt_tokens=2000,
+        total_tokens=2100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, text_tokens=687),
+        cache_creation_input_tokens=1313,
+    )
+
+    input_cost, output_cost = generic_cost_per_token(
+        model="azure/gpt-5.6-luna", usage=usage, custom_llm_provider="azure"
+    )
+
+    assert input_cost == pytest.approx(687 * 2e-07 + 1313 * 2.5e-07)
+    assert output_cost == pytest.approx(100 * 1.2e-06)
+
+
+@pytest.mark.parametrize("model", AZURE_GPT_5_6_MAP_KEYS)
+def test_azure_gpt_5_6_rates_match_azure_price_page(_local_model_cost_map, model):
+    """
+    Per the Azure OpenAI price page (rendered 2026-08-26): cache writes cost
+    1.25x input on every gpt-5.6 tier, and Data Zone costs 1.1x Global for
+    standard and priority alike (us/eu priority rates previously sat at 1.25x).
+    """
+    entry = litellm.model_cost[model]
+    input_keys = [key for key in entry if key.startswith("input_cost_per_token")]
+    assert input_keys
+    for key in input_keys:
+        suffix = key[len("input_cost_per_token") :]
+        assert entry["cache_creation_input_token_cost" + suffix] == pytest.approx(entry[key] * 1.25)
+
+    zone = model.split("/")[1]
+    if zone in ("us", "eu"):
+        global_entry = litellm.model_cost["azure/" + model.split("/", 2)[2]]
+        prefixes = ("input_cost_per_token", "output_cost_per_token", "cache_read", "cache_creation")
+        token_cost_keys = [key for key in entry if key.startswith(prefixes)]
+        global_token_cost_keys = [key for key in global_entry if key.startswith(prefixes)]
+        assert len(token_cost_keys) >= 9
+        assert sorted(token_cost_keys) == sorted(global_token_cost_keys)
+        for key in token_cost_keys:
+            assert entry[key] == pytest.approx(global_entry[key] * 1.1), key
+
 def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/34393: two Vertex
@@ -2692,12 +2768,10 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier(_l
     """
     Regression for the cache/tier interaction in the Anthropic geo/speed path.
 
-    When a request is served at "priority" and also carries a geo/speed
-    multiplier (here ``speed="fast"``), the cache portion is held out of the
-    multiplier so it is not scaled. That held-out cache cost must use the
-    served tier's cache rate; pricing it at the standard rate while the cache
-    embedded in ``prompt_cost`` is priced at the priority rate leaves a
-    ``(cache_priority - cache_standard)(multiplier - 1)`` billing error.
+    When a request is served at "priority" and also carries the ``fast`` speed
+    multiplier, the cache portion must be priced at the served tier's cache
+    rate and, per Anthropic's fast-mode pricing, scaled by the multiplier like
+    every other token type.
     """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
@@ -2734,10 +2808,7 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier(_l
         model=model, usage=usage, service_tier="priority"
     )
 
-    # non-cache input priced at the priority rate and scaled by the fast
-    # multiplier; the 200 cache-hit tokens priced at the priority cache rate
-    # and held out of the multiplier
-    expected_prompt = (1000 - 200) * 6e-6 * 2 + 200 * 0.6e-6
+    expected_prompt = ((1000 - 200) * 6e-6 + 200 * 0.6e-6) * 2
     expected_completion = 500 * 30e-6 * 2
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
@@ -2805,10 +2876,9 @@ def test_anthropic_geo_multiplier_applies_to_cache_tokens(_local_model_cost_map,
 
 def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monkeypatch):
     """
-    The ``fast`` speed multiplier stays cache-exclusive (the old explicit
-    ``fast/`` entries kept base cache rates) while the geo multiplier scales the
-    whole cost, so a fast + regional row prices as
-    ``((non_cache * fast) + cache) * geo``.
+    Anthropic's fast-mode pricing doubles every token type, cache reads and
+    writes included, and the regional uplift stacks on top, so a fast +
+    regional row prices as ``(non_cache + cache) * fast * geo``.
     """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
@@ -2836,8 +2906,64 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
 
     cache_cost = 2_000 * 0.5e-6 + 6_000 * 6.25e-6
     non_cache_cost = 2_000 * 5e-6
-    assert prompt_cost == pytest.approx((non_cache_cost * 2.0 + cache_cost) * 1.1)
+    assert prompt_cost == pytest.approx((non_cache_cost + cache_cost) * 2.0 * 1.1)
     assert completion_cost == pytest.approx(500 * 25e-6 * 2.0 * 1.1)
+
+
+@pytest.mark.parametrize(
+    "model,expected_fast",
+    [
+        ("claude-opus-5", 2.0),
+        ("claude-opus-4-8", 2.0),
+        ("claude-opus-4-6", None),
+        ("claude-opus-4-6-20260205", None),
+        ("claude-opus-4-7", None),
+        ("claude-opus-4-7-20260416", None),
+    ],
+)
+def test_anthropic_fast_multiplier_only_on_models_with_fast_mode(_local_model_cost_map, model, expected_fast):
+    """
+    Anthropic serves fast mode on Opus 5 and Opus 4.8 only, at 2x. Opus 4.6 and
+    4.7 accept the ``speed`` request param but are always served standard, so a
+    ``fast`` multiplier on their map entries overbills every request that asked
+    for fast and was served standard.
+    """
+    entry = litellm.model_cost[model]
+    assert entry["provider_specific_entry"].get("fast") == expected_fast
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-sonnet-4-6", "claude-mythos-5", "claude-mythos-preview"],
+)
+def test_anthropic_us_data_residency_uplift_on_claude_4_6_and_later_models(
+    _local_model_cost_map, monkeypatch, model
+):
+    """
+    Anthropic bills every Claude 4.6+ model served with ``inference_geo="us"`` at
+    1.1x, and echoes that geo back in the response usage, so each of these real
+    cost-map entries has to carry the ``us`` multiplier or US-pinned traffic is
+    under-reported by 10%.
+    """
+    from litellm.llms.anthropic.cost_calculation import (
+        cost_per_token as anthropic_cost_per_token,
+    )
+    from litellm.types.utils import Usage
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def make_usage() -> "Usage":
+        return Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
+
+    base_prompt_cost, base_completion_cost = anthropic_cost_per_token(model=model, usage=make_usage())
+
+    geo_usage = make_usage()
+    geo_usage.inference_geo = "us"
+    geo_prompt_cost, geo_completion_cost = anthropic_cost_per_token(model=model, usage=geo_usage)
+
+    assert base_prompt_cost > 0
+    assert geo_prompt_cost == pytest.approx(base_prompt_cost * 1.1)
+    assert geo_completion_cost == pytest.approx(base_completion_cost * 1.1)
 
 
 def test_gemini_cache_tokens_details_no_negative_values():
@@ -3781,3 +3907,51 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     )
 
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_1hr_rate"),
+    [("claude-3-haiku-20240307", 5e-07), ("claude-3-opus-20240229", 3e-05)],
+)
+def test_claude_3_one_hour_cache_writes_bill_at_double_input(
+    _local_model_cost_map, model: str, expected_1hr_rate: float
+):
+    """Regression: both models carried the Sonnet 1h cache-write rate (6e-06) instead of
+    2x their own input price, overbilling haiku 12x and underbilling opus 5x."""
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=0,
+            cache_creation_tokens=1000,
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=0, ephemeral_1h_input_tokens=1000
+            ),
+        ),
+    )
+
+    prompt_cost, _ = cost_per_token(model=model, usage_object=usage, custom_llm_provider="anthropic")
+
+    assert prompt_cost == pytest.approx(1000 * expected_1hr_rate, rel=1e-9)
+
+
+def test_every_one_hour_cache_write_rate_is_double_its_input_rate():
+    """Guard against pasting one model's 1h cache-write price onto another: every provider
+    LiteLLM tracks (Anthropic, Bedrock, Vertex, Azure) publishes the 1h write at 2x input."""
+
+    cost_map = json.loads(
+        (Path(__file__).parents[2] / "model_prices_and_context_window.json").read_text()
+    )
+    one_hour_prefix = "cache_creation_input_token_cost_above_1hr"
+    deviations = {
+        (name, key): (entry["input_cost_per_token" + key[len(one_hour_prefix) :]], entry[key])
+        for name, entry in cost_map.items()
+        if isinstance(entry, dict)
+        for key in entry
+        if key.startswith(one_hour_prefix)
+        and entry[key] != pytest.approx(2 * entry["input_cost_per_token" + key[len(one_hour_prefix) :]], rel=1e-9)
+    }
+
+    assert deviations == {}

@@ -51,6 +51,10 @@
 # F632    `is` against a literal. It compares identity, so it passes only where CPython
 #         happens to intern the value and stops meaning what it says the moment the
 #         value is built at runtime
+# B003    `os.environ = {...}` rebinds the mapping instead of mutating it, so `putenv`
+#         never fires and a subprocess still reads the real keys the test believes it
+#         cleared. The manual restore underneath is skipped whenever the body raises,
+#         so every later test in that worker inherits a plain dict for an environment
 # PGH005  an assertion on a mock attribute the library never defines. `assert
 #         m.called_once` and a bare `m.assert_called_once` both read as checks and
 #         neither is one: a Mock invents whatever attribute it is asked for, so the
@@ -112,6 +116,7 @@ lint.select = [
     "B023",
     "B025",
     "F632",
+    "B003",
     "PGH005",
     "F631",
     "F634",
