@@ -102,14 +102,14 @@ class Authenticator:
             cached_info: Final = self._session_cache.get(access_token)
             if cached_info and cached_info.get("expires_at", 0) > time.time():
                 token: Final = cached_info.get("token")
-                if token:
+                if isinstance(token, str):
                     return token
 
             try:
                 api_key_info: Final = self._refresh_api_key(access_token)
                 self._session_cache[access_token] = api_key_info
                 token: Final = api_key_info.get("token")
-                if token:
+                if isinstance(token, str):
                     return token
                 else:
                     raise GetAPIKeyError(
@@ -126,8 +126,10 @@ class Authenticator:
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info: Final = json.load(f)
-                if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
-                    return api_key_info.get("token")
+                if isinstance(api_key_info, dict) and api_key_info.get("expires_at", 0) > datetime.now().timestamp():
+                    token: Final = api_key_info.get("token")
+                    if isinstance(token, str):
+                        return token
                 else:
                     verbose_logger.warning("API key expired, refreshing")
                     raise APIKeyExpiredError(
@@ -150,7 +152,7 @@ class Authenticator:
             except OSError as e:
                 verbose_logger.warning("Error saving API key to file (continuing with in-memory token): %s", e)
             token: Final = api_key_info.get("token")
-            if token:
+            if isinstance(token, str):
                 return token
             else:
                 raise GetAPIKeyError(
@@ -173,9 +175,13 @@ class Authenticator:
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info: Final = json.load(f)
-                endpoints: Final = api_key_info.get("endpoints", {})
-                api_endpoint: Final = endpoints.get("api")
-                return api_endpoint
+                if isinstance(api_key_info, dict):
+                    endpoints: Final = api_key_info.get("endpoints", {})
+                    if isinstance(endpoints, dict):
+                        api_endpoint: Final = endpoints.get("api")
+                        if isinstance(api_endpoint, str):
+                            return api_endpoint
+                return None
         except (OSError, json.JSONDecodeError, KeyError) as e:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
             return None
@@ -200,13 +206,13 @@ class Authenticator:
         max_retries: Final = 3
         for attempt in range(max_retries):
             try:
-                sync_client = _get_httpx_client()
-                response = sync_client.get(api_key_url, headers=headers)
+                sync_client: Final = _get_httpx_client()
+                response: Final = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
-                response_json = response.json()
+                response_json: Final = response.json()
 
-                if "token" in response_json:
+                if isinstance(response_json, dict) and "token" in response_json:
                     return response_json
                 else:
                     verbose_logger.warning("API key response missing token: %s", response_json)
