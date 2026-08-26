@@ -7491,12 +7491,19 @@ class ProxyConfig:
         Driven by the management endpoints so the worker that served the write is correct
         immediately, and by the periodic job in store_model_in_db-off deployments. Gated the same
         way as startup, so an admin who excluded search_tools from supported_db_objects opts out.
+
+        Serialized by MODEL_RECONCILE_LOCK for the reason add_deployment documents: the body is a
+        read-modify-write of the shared ``llm_router`` global, so two of them interleaving lets the
+        older snapshot's wholesale assignment land last and restore a tool the newer one deleted.
+        The lock belongs here rather than in _init_search_tools_in_db, which _init_non_llm_objects_in_db
+        already calls while holding it.
         """
         if not self._should_load_db_object(object_type="search_tools"):
             return
         if prisma_client is None:
             return
-        await self._init_search_tools_in_db(prisma_client=prisma_client)
+        async with MODEL_RECONCILE_LOCK:
+            await self._init_search_tools_in_db(prisma_client=prisma_client)
 
     @staticmethod
     def _merge_config_and_db_search_tools(
