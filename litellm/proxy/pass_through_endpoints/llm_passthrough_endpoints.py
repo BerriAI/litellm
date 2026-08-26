@@ -49,7 +49,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     websocket_passthrough_request,
 )
-from litellm.proxy.utils import hash_token, is_known_model
+from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
@@ -1796,14 +1796,7 @@ _MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
 
 
 def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
-    """Operator-configured caller-key header names.
-
-    ``user_api_key_auth`` also reads the caller's key from
-    ``general_settings.litellm_key_header_name`` and from each
-    ``general_settings.pass_through_endpoints`` entry's
-    ``headers.litellm_user_api_key``. Google never consumes either, so both are
-    dropped by name.
-    """
+    """Operator-configured header names ``user_api_key_auth`` reads the caller's key from."""
     from litellm.proxy.proxy_server import general_settings
 
     custom_key_header: Final = general_settings.get("litellm_key_header_name")
@@ -1823,53 +1816,25 @@ def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
 
 
 def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-    """Whether a header value is a LiteLLM secret that authenticated this caller.
-
-    That is the proxy master key, or a LiteLLM-issued key whose ``hash_token`` is
-    the ``api_key`` ``user_api_key_auth`` resolved (a DB virtual key, or a custom
-    auth returning the key it validated). A value auth only echoed unhashed (a
-    custom auth's own identifier, the no-master-key path returning the raw
-    header) or never consumed (JWT auth resolves ``api_key=None``) is not a
-    LiteLLM secret, so a bring-your-own Google credential in that position is
-    still forwarded.
-    """
+    """Whether a header value is the master key or the key ``user_api_key_auth`` stored as ``api_key``."""
     from litellm.proxy.proxy_server import master_key
 
+    if master_key is None:
+        return False
     normalized: Final = _normalize_credential_value(value)
-    if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
+    if hmac.compare_digest(normalized.encode(), master_key.encode()):
         return True
     authenticated_key: Final = user_api_key_dict.api_key
     if authenticated_key is None:
         return False
-    return hmac.compare_digest(hash_token(normalized).encode(), authenticated_key.encode())
+    stored_representation: Final = UserAPIKeyAuth._safe_hash_litellm_api_key(normalized)  # pyright: ignore[reportPrivateUsage]  # the exact transform auth applied when it stored api_key
+    return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
 
 
 def _forwarded_headers_for_credentialless_vertex_passthrough(
     request: Request, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, str]:
-    """
-    Header set to forward on the bring-your-own-credentials Vertex passthrough
-    branch, used when the proxy has no Vertex credential configured.
-
-    No credential the proxy accepts for caller authentication is forwarded to
-    Google. ``user_api_key_auth`` reads the caller's key from every header in
-    ``SpecialHeaders.litellm_credential_header_names()``, and Vertex only ever
-    authenticates with an OAuth token in ``Authorization`` or an API key in
-    ``x-goog-api-key``. So the proxy-only auth headers Google never consumes
-    (everything in that set except those two, e.g. ``x-litellm-api-key`` /
-    ``api-key`` / ``x-api-key`` / ``Ocp-Apim-Subscription-Key``, plus the mapped
-    pass-through ``litellm_user_api_key`` header and any operator-configured
-    ``litellm_key_header_name`` / ``pass_through_endpoints`` key header) are dropped
-    by name. ``Authorization`` and ``x-goog-api-key`` may instead carry a genuine
-    bring-your-own Google credential, so they are kept unless their value is the
-    LiteLLM secret that authenticated this caller (``_is_authenticated_caller_secret``),
-    which is dropped by value wherever it appears. Matching on what actually
-    authenticated, rather than on header precedence, keeps a caller's own Google
-    token in ``Authorization`` flowing when a custom auth or JWT authenticated
-    them without consuming it. When neither a surviving ``Authorization`` nor
-    ``x-goog-api-key`` remains the request is rejected so the virtual key cannot
-    leak upstream.
-    """
+    """Caller headers to forward on the bring-your-own-credentials Vertex branch, minus LiteLLM secrets."""
     incoming: Final = _safe_get_request_headers(request)
     never_forwarded: Final = _HEADERS_NEVER_FORWARDED_TO_VERTEX.union(
         (_MAPPED_ROUTE_CALLER_KEY_HEADER, *_operator_configured_caller_key_header_names())
