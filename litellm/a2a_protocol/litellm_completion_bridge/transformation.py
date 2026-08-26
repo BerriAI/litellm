@@ -262,6 +262,10 @@ class A2ACompletionBridgeTransformation:
         }
         if usage is not None:
             a2a_response["usage"] = usage.model_dump(exclude_none=True) if hasattr(usage, "model_dump") else usage
+        for field in ("system_fingerprint", "service_tier"):
+            value = getattr(response, field, None)
+            if value is not None:
+                a2a_response[field] = value
         if len(serialized_choices) > 1:
             a2a_response["choices"] = serialized_choices
 
@@ -354,6 +358,7 @@ class A2ACompletionBridgeTransformation:
     def create_artifact_update_event(
         ctx: A2AStreamingContext,
         text: str,
+        index: int | None = None,
     ) -> dict[str, Any]:
         """
         Create an artifact update event with content.
@@ -362,15 +367,18 @@ class A2ACompletionBridgeTransformation:
             ctx: Streaming context
             text: The text content for the artifact
         """
+        artifact: Final[dict[str, Any]] = {
+            "artifactId": str(uuid4()),
+            "name": "response",
+            "parts": [{"kind": "text", "text": text}],
+        }
+        if index is not None:
+            artifact["index"] = index
         return {
             "id": ctx.request_id,
             "jsonrpc": "2.0",
             "result": {
-                "artifact": {
-                    "artifactId": str(uuid4()),
-                    "name": "response",
-                    "parts": [{"kind": "text", "text": text}],
-                },
+                "artifact": artifact,
                 "contextId": ctx.context_id,
                 "kind": "artifact-update",
                 "taskId": ctx.task_id,

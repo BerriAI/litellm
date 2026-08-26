@@ -71,6 +71,16 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         try:
             # Extract text from A2A response
             result: Final = chunk.get("result", {})
+            chunk_index = 0
+            if isinstance(result, Mapping):
+                artifact = result.get("artifact")
+                if isinstance(artifact, Mapping) and isinstance(artifact.get("index"), int):
+                    chunk_index = artifact["index"]
+                choices = result.get("choices")
+                if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
+                    raw_index = choices[0].get("index")
+                    if isinstance(raw_index, int):
+                        chunk_index = raw_index
             status: Final = result.get("status", {}) if isinstance(result, Mapping) else {}
             is_working_status: Final = (
                 isinstance(result, Mapping)
@@ -132,7 +142,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 is_finished=bool(finish_reason or tool_calls),
                 finish_reason=finish_reason or ("tool_calls" if tool_calls else ""),
                 usage=usage,
-                index=0,
+                index=chunk_index,
                 tool_use=tool_calls,
                 provider_specific_fields=provider_fields or None,
             )

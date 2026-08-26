@@ -62,7 +62,7 @@ async def test_route_a2a_model_bypasses_router():
             "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
             mock_registry,
         ):
-            result = await route_request(
+            await route_request(
                 data=data,
                 llm_router=mock_router,
                 user_model=None,
@@ -593,6 +593,7 @@ async def test_route_a2a_stream_uses_registered_provider():
         litellm_params={"custom_llm_provider": "pydantic_ai_agents"},
     )
     logging_obj = Mock(spec=Logging)
+    logging_obj.model_call_details = {}
     data = {
         "model": "a2a/test-agent",
         "messages": [{"role": "user", "content": "Hello"}],
@@ -745,7 +746,7 @@ def _router_without_models():
 
 @pytest.mark.asyncio
 async def test_route_a2a_model_read_through_recovers_agent_created_on_sibling_replica(monkeypatch):
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
     agent_name = "a2a-sibling-replica-agent"

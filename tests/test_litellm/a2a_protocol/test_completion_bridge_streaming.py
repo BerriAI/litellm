@@ -324,10 +324,13 @@ async def test_handle_streaming_preserves_non_text_delta_fields():
         ]
 
     result = events[-1]["result"]
-    assert result["audio"] == {"data": "abc"}
-    assert result["reasoning_content"] == "thinking"
-    assert result["provider_specific_fields"] == {"trace_id": "trace-1"}
-    assert result["logprobs"] == {"content": []}
+    choice_result = result["choices"][0]
+    assert choice_result["delta"] == {
+        "audio": {"data": "abc"},
+        "reasoning_content": "thinking",
+        "provider_specific_fields": {"trace_id": "trace-1"},
+    }
+    assert choice_result["logprobs"] == {"content": []}
 
 
 @pytest.mark.asyncio

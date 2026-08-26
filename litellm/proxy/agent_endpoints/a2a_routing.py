@@ -37,6 +37,7 @@ _FORWARDED_REQUEST_PARAMS: Final = frozenset(
         "frequency_penalty",
         "functions",
         "function_call",
+        "guided_json",
         "include_server_side_tool_invocations",
         "logit_bias",
         "logprobs",
@@ -305,6 +306,10 @@ async def _route_registered_provider(
         id=str(response.get("id") or request_id),
         model=model_name,
         choices=model_choices,
+        system_fingerprint=response.get("system_fingerprint")
+        if isinstance(response.get("system_fingerprint"), str)
+        else None,
+        service_tier=response.get("service_tier") if isinstance(response.get("service_tier"), str) else None,
     )
     raw_usage: Final = response.get("usage")
     usage: Final = litellm.Usage(**raw_usage) if isinstance(raw_usage, Mapping) else raw_usage
@@ -315,10 +320,10 @@ async def _route_registered_provider(
 
     if isinstance(logging_obj, Logging):
 
-        def _enqueue_logging() -> None:
+        def _enqueue_logging(final_response: ModelResponse | None = None) -> None:
             asyncio.create_task(
                 logging_obj.dispatch_success_handlers(
-                    model_response,
+                    final_response if final_response is not None else model_response,
                     cache_hit=False,
                     prefer_async_handlers=True,
                 )
@@ -544,7 +549,7 @@ async def route_a2a_agent_request(
         else registered_params_value or {}
     )
     configured_api_base: Final = registered_params_value.get("api_base") if registered_params_value else None
-    api_base: Final = configured_api_base if isinstance(configured_api_base, str) else agent_url
+    api_base: Final = configured_api_base if isinstance(configured_api_base, str) and configured_api_base else agent_url
     registered_model: Final = registered_params_value.get("model") if registered_params_value else None
     cardless_provider: Final = registered_provider == "watsonx_orchestrate" or (
         registered_provider == "bedrock" and isinstance(registered_model, str) and "agentcore" in registered_model

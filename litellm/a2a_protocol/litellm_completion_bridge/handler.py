@@ -89,11 +89,12 @@ class A2ACompletionBridgeHandler:
             "api_base": api_base,
             "stream": stream,
         }
+        configured_headers: Final[object] = litellm_params.get("extra_headers") or litellm_params.get("headers")
         # Add litellm_params (contains api_key, client_id, client_secret, tenant_id, etc.)
         litellm_params_to_add: Final = {
             k: v
             for k, v in litellm_params.items()
-            if k not in ("model", "custom_llm_provider") and k not in _AGENT_ONLY_PARAMS
+            if k not in ("model", "custom_llm_provider", "extra_headers", "headers") and k not in _AGENT_ONLY_PARAMS
         }
         completion_params.update(litellm_params_to_add)
         # Apply forward metadata AFTER the litellm_params merge so the helper
@@ -105,10 +106,10 @@ class A2ACompletionBridgeHandler:
             params=params,
         )
 
-        if agent_extra_headers:
+        if agent_extra_headers or configured_headers:
             completion_params["extra_headers"] = merge_agent_headers(
                 dynamic_headers=agent_extra_headers,
-                static_headers=completion_params.get("extra_headers"),
+                static_headers=configured_headers if isinstance(configured_headers, Mapping) else None,
             )
 
         return completion_params
@@ -361,6 +362,7 @@ class A2ACompletionBridgeHandler:
                             artifact_event: Final = A2ACompletionBridgeTransformation.create_artifact_update_event(
                                 ctx=ctx,
                                 text=content,
+                                index=choice_index,
                             )
                             yield artifact_event
         finally:
@@ -380,13 +382,10 @@ class A2ACompletionBridgeHandler:
             completed_event["result"]["finish_reason"] = stream_finish_reason
         if stream_usage is not None:
             completed_event["usage"] = stream_usage
-        if choice_delta_fields.get(0):
-            completed_event["result"].update(choice_delta_fields[0])
-        if 0 in choice_logprobs:
-            completed_event["result"]["logprobs"] = choice_logprobs[0]
         if len(choice_texts) > 1:
-            completed_event["result"]["choices"] = [
-                {
+            choice_payloads: list[dict[str, object]] = []
+            for choice_index in sorted(choice_texts):
+                choice_payload: dict[str, object] = {
                     "index": choice_index,
                     "message": {
                         "kind": "message",
@@ -397,7 +396,6 @@ class A2ACompletionBridgeHandler:
                             if choice_tool_calls.get(choice_index)
                             else {}
                         ),
-                        **choice_delta_fields.get(choice_index, {}),
                     },
                     **(
                         {"finish_reason": choice_finish_reasons[choice_index]}
@@ -406,8 +404,29 @@ class A2ACompletionBridgeHandler:
                     ),
                     **({"logprobs": choice_logprobs[choice_index]} if choice_index in choice_logprobs else {}),
                 }
-                for choice_index in sorted(choice_texts)
-            ]
+                if choice_delta_fields.get(choice_index):
+                    choice_payload["delta"] = choice_delta_fields[choice_index]
+                choice_payloads.append(choice_payload)
+            completed_event["result"]["choices"] = choice_payloads
+        else:
+            metadata_indices = sorted(set(choice_delta_fields) | set(choice_logprobs))
+            if metadata_indices:
+                completed_event["result"]["choices"] = [
+                    {
+                        "index": choice_index,
+                        **(
+                            {"delta": choice_delta_fields[choice_index]}
+                            if choice_delta_fields.get(choice_index)
+                            else {}
+                        ),
+                        **(
+                            {"logprobs": choice_logprobs[choice_index]}
+                            if choice_index in choice_logprobs
+                            else {}
+                        ),
+                    }
+                    for choice_index in metadata_indices
+                ]
         yield completed_event
 
         verbose_logger.info(

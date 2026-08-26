@@ -2544,6 +2544,7 @@ class ProxyBaseLLMRequestProcessing:
             ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
                 logging_obj=logging_obj,
                 exception_raised=_exception_raised,
+                response=response,
             )
 
             # Streaming cleanup: if an exception occurred AND the deferred
@@ -3027,6 +3028,7 @@ class ProxyBaseLLMRequestProcessing:
     def _flush_deferred_async_logging(
         logging_obj: Any,
         exception_raised: bool,
+        response: Any | None = None,
     ) -> None:
         """
         Fire the deferred async-success closure stored by wrapper_async, then
@@ -3057,7 +3059,7 @@ class ProxyBaseLLMRequestProcessing:
         if exception_raised:
             return
         try:
-            _enqueue_fn()
+            _enqueue_fn(response) if response is not None else _enqueue_fn()
         except Exception as e:
             verbose_proxy_logger.exception("Error firing deferred logging: %s", e)
 
