@@ -1253,26 +1253,69 @@ async def test_ProxyConfig__init_search_tools_in_db_loads_merged_tools(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__init_search_tools_in_db_skips_empty_router_update(monkeypatch):
+async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool_is_deleted(monkeypatch):
+    """Deleting the last search tool must clear the router, not leave the tool live in memory."""
     from litellm.proxy import proxy_server
-    from litellm.router_utils.search_api_router import SearchAPIRouter
 
     pc = ProxyConfig()
     pc.update_config_state({})
+    fake_router = MagicMock()
+    fake_router.search_tools = [{"search_tool_name": "deleted-search", "litellm_params": {}}]
     mock_get_db_tools = AsyncMock(return_value=[])
-    mock_update_router = AsyncMock()
 
-    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(
         "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
         mock_get_db_tools,
     )
-    monkeypatch.setattr(SearchAPIRouter, "update_router_search_tools", mock_update_router)
 
     await pc._init_search_tools_in_db(prisma_client=MagicMock())
 
     mock_get_db_tools.assert_awaited_once()
-    mock_update_router.assert_not_awaited()
+    assert fake_router.search_tools == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_reload_search_tools_from_db_refreshes_router(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    mock_init = AsyncMock()
+    monkeypatch.setattr(pc, "_init_search_tools_in_db", mock_init)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    await pc.reload_search_tools_from_db()
+
+    mock_init.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_reload_search_tools_from_db_honors_supported_db_objects(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    mock_init = AsyncMock()
+    monkeypatch.setattr(pc, "_init_search_tools_in_db", mock_init)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+
+    await pc.reload_search_tools_from_db()
+
+    mock_init.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_reload_search_tools_from_db_noops_without_prisma(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    mock_init = AsyncMock()
+    monkeypatch.setattr(pc, "_init_search_tools_in_db", mock_init)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    await pc.reload_search_tools_from_db()
+
+    mock_init.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

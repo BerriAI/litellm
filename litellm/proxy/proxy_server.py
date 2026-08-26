@@ -7470,11 +7470,9 @@ class ProxyConfig:
                 len(db_search_tools),
             )
 
-            if llm_router is not None and search_tools:
+            if llm_router is not None:
                 await SearchAPIRouter.update_router_search_tools(router_instance=llm_router, search_tools=search_tools)
                 verbose_proxy_logger.info("Successfully loaded %s search tool(s) into router", len(search_tools))
-            elif llm_router is not None:
-                verbose_proxy_logger.debug("No search tools found in config or database, skipping router update")
             else:
                 verbose_proxy_logger.debug(
                     "Router not initialized yet, search tools will be added when router is created"
@@ -7484,6 +7482,19 @@ class ProxyConfig:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_search_tools_in_db - %s", e
             )
+
+    async def reload_search_tools_from_db(self) -> None:
+        """Refresh this worker's router from the search tools table.
+
+        Driven by the management endpoints so the worker that served the write is correct
+        immediately, and by the periodic job in store_model_in_db-off deployments. Gated the same
+        way as startup, so an admin who excluded search_tools from supported_db_objects opts out.
+        """
+        if not self._should_load_db_object(object_type="search_tools"):
+            return
+        if prisma_client is None:
+            return
+        await self._init_search_tools_in_db(prisma_client=prisma_client)
 
     @staticmethod
     def _merge_config_and_db_search_tools(
@@ -9104,7 +9115,18 @@ class ProxyStartupEvent:
 
         if store_model_in_db is not True:
             await proxy_config.init_mcp_servers_from_db()
+            # Without this branch's own refresh, a UI-created search tool never reaches the router:
+            # the add_deployment job that carries it in store_model_in_db=True mode is not scheduled.
+            await proxy_config.reload_search_tools_from_db()
             if prisma_client is not None:
+                scheduler.add_job(
+                    proxy_config.reload_search_tools_from_db,
+                    "interval",
+                    seconds=config_reload_interval_seconds,
+                    id="reload_search_tools_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
                 # DB-backed MCP servers are live objects in every mode, so the registry refresh that
                 # store_model_in_db=True deployments get via the add_deployment job must run here
                 # too; without it, a server whose OAuth discovery failed at startup is rebuilt only
