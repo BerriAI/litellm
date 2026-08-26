@@ -3,6 +3,7 @@ import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from mcp.types import CallToolResult, TextContent
 
@@ -11,6 +12,7 @@ from litellm.responses.mcp.mcp_streaming_iterator import (
     MAX_MCP_TOOL_CALL_ROUNDS,
     MCPEnhancedStreamingIterator,
 )
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 
 # `litellm.__init__` re-exports a function named `responses`, which shadows the
@@ -258,3 +260,51 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+
+
+class _RecordingByteStream(httpx.AsyncByteStream):
+    def __init__(self):
+        self.aclose_calls = 0
+
+    async def __aiter__(self):
+        yield b""
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+
+
+def _responses_iterator_over(stream: _RecordingByteStream) -> ResponsesAPIStreamingIterator:
+    return ResponsesAPIStreamingIterator(
+        response=httpx.Response(200, stream=stream),
+        model="gpt-4o-mini",
+        responses_api_provider_config=MagicMock(),
+        logging_obj=MagicMock(model_call_details={"litellm_params": {}}),
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_the_current_round_provider_stream():
+    """The MCP iterator swaps `base_iterator` per tool-execution round and holds no
+    `self.response`, so the inherited close is a no-op. Without an override, a client
+    disconnect leaves the round's provider stream generating (#36123)."""
+    stream = _RecordingByteStream()
+    iterator = _make_iterator([])
+    iterator.base_iterator = _responses_iterator_over(stream)
+
+    await iterator.aclose()
+
+    assert stream.aclose_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_iterator",
+    [None, ResponsesAPIResponse(id="resp-1", created_at=0, output=[])],
+    ids=["no_iterator_yet", "non_streaming_response"],
+)
+async def test_aclose_is_a_noop_when_no_provider_stream_is_live(base_iterator):
+    iterator = _make_iterator([])
+    iterator.base_iterator = base_iterator
+
+    await iterator.aclose()

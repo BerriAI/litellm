@@ -11,6 +11,7 @@ from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
+import anyio
 import httpx
 from openai._streaming import SSEDecoder
 from typing_extensions import TypeIs
@@ -183,6 +184,8 @@ class BaseResponsesAPIStreamingIterator:
     This class contains shared logic for both synchronous and asynchronous iterators.
     """
 
+    response: httpx.Response | None = None
+
     def __init__(
         self,
         response: httpx.Response,
@@ -230,6 +233,24 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+
+    async def aclose(self) -> None:
+        """
+        Release the upstream HTTP connection when the stream is abandoned before it is
+        exhausted, e.g. the client disconnected mid-stream and the proxy is unwinding.
+
+        httpx closes a streamed response only on natural exhaustion, so without this the
+        provider keeps decoding into a socket nobody reads. Mirrors
+        ``BaseModelResponseIterator.aclose`` on the chat completions path.
+
+        Subclasses that bypass ``__init__`` hold their upstream somewhere other than
+        ``self.response`` and override this.
+        """
+        response: Final = self.response
+        if response is None or response.is_closed:
+            return
+        with anyio.CancelScope(shield=True):
+            await response.aclose()
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""

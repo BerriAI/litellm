@@ -517,3 +517,86 @@ def test_convert_raw_bytes_survives_truncated_multibyte_sequence():
     lines = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
 
     assert any('"type": "message_delta"' in line for line in lines)
+
+
+class _RecordingByteStream(httpx.AsyncByteStream):
+    """Upstream provider body that records whether the connection was released."""
+
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.aclose_calls = 0
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+
+
+def _run_chunk_processor(response):
+    return PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-haiku-4-5"},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_closes_the_upstream_response():
+    """A /v1/messages client hanging up mid-stream must release the provider
+    connection. httpx auto-closes only on natural exhaustion, so abandoning the
+    generator otherwise leaves the backend decoding into a dead socket (#36123)."""
+    stream = _RecordingByteStream([b"chunk-1", b"chunk-2", b"chunk-3"])
+    response = httpx.Response(200, stream=stream)
+
+    with patch.object(PassThroughStreamingHandler, "_route_streaming_logging_to_handler", new=AsyncMock()):
+        generator = _run_chunk_processor(response)
+        assert await generator.__anext__() == b"chunk-1"
+        assert response.is_closed is False
+
+        await generator.aclose()
+
+    assert stream.aclose_calls == 1
+    assert response.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_disconnect_still_logs_partial_usage_before_closing():
+    """Closing the upstream must not cost us the LIT-2642 spend logging for the
+    bytes already streamed."""
+    stream = _RecordingByteStream([b"chunk-1", b"chunk-2"])
+    response = httpx.Response(200, stream=stream)
+
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=AsyncMock(),
+    ) as mock_route:
+        generator = _run_chunk_processor(response)
+        await generator.__anext__()
+        await generator.aclose()
+        await asyncio.sleep(0)
+
+    mock_route.assert_called_once()
+    assert mock_route.call_args.kwargs["raw_bytes"] == [b"chunk-1"]
+    assert response.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_exhausted_stream_needs_no_extra_close():
+    """httpx already closed the response on natural exhaustion, so the cleanup
+    must not fire a second aclose at the transport."""
+    stream = _RecordingByteStream([b"chunk-1", b"chunk-2"])
+    response = httpx.Response(200, stream=stream)
+
+    with patch.object(PassThroughStreamingHandler, "_route_streaming_logging_to_handler", new=AsyncMock()):
+        async for _ in _run_chunk_processor(response):
+            pass
+
+    assert stream.aclose_calls == 1
+    assert response.is_closed is True

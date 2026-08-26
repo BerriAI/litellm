@@ -2,6 +2,7 @@ from collections.abc import Coroutine
 from datetime import datetime
 from typing import Final, Protocol
 
+import anyio
 import httpx
 
 import litellm
@@ -138,6 +139,9 @@ class PassThroughStreamingHandler:
                     )
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
+
+            with anyio.CancelScope(shield=True):
+                await response.aclose()
 
     @staticmethod
     def _split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:

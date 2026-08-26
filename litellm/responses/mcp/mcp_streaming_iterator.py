@@ -330,6 +330,18 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._error_event_emitted = False
         self._last_sequence_number = 0
 
+    async def aclose(self) -> None:
+        """
+        Close the provider stream of the current tool-execution round.
+
+        This class bypasses ``BaseResponsesAPIStreamingIterator.__init__`` and swaps
+        ``base_iterator`` on every round, so the inherited close finds no
+        ``self.response`` and would leave the live upstream generating on disconnect.
+        """
+        base_iterator: Final = self.base_iterator
+        if isinstance(base_iterator, BaseResponsesAPIStreamingIterator):
+            await base_iterator.aclose()
+
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
 

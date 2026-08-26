@@ -5831,6 +5831,97 @@ class TestStreamingClientDisconnectBilling:
         assert usage.prompt_tokens_details.cached_tokens == 7
 
 
+class TestResponsesStreamDisconnectClosesUpstream:
+    """
+    Regression guard for #36123. The cleanup only closes the upstream when the
+    streamed object exposes ``aclose``; the /v1/responses iterators did not, so a
+    client disconnect left the provider generating into a socket nobody reads.
+    """
+
+    class _RecordingUpstreamStream:
+        def __init__(self):
+            self.aclose_calls = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def aclose(self) -> None:
+            self.aclose_calls += 1
+
+    async def _finalize_on_disconnect(self, response) -> None:
+        await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={},
+            response=response,
+            stream_completed=False,
+            client_disconnected=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_bridged_responses_stream_closes_upstream(self):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        upstream = self._RecordingUpstreamStream()
+        logging_obj = litellm.litellm_core_utils.litellm_logging.Logging(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        response = LiteLLMCompletionStreamingIterator(
+            model="gpt-4o-mini",
+            litellm_custom_stream_wrapper=CustomStreamWrapper(
+                completion_stream=upstream,
+                model="gpt-4o-mini",
+                logging_obj=logging_obj,
+                custom_llm_provider="openai",
+            ),
+            request_input="hi",
+            responses_api_request={},
+        )
+
+        await self._finalize_on_disconnect(response)
+
+        assert upstream.aclose_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_native_responses_stream_closes_upstream(self):
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        class _Stream(httpx.AsyncByteStream):
+            def __init__(self):
+                self.aclose_calls = 0
+
+            async def __aiter__(self):
+                yield b""
+
+            async def aclose(self) -> None:
+                self.aclose_calls += 1
+
+        stream = _Stream()
+        response = ResponsesAPIStreamingIterator(
+            response=httpx.Response(200, stream=stream),
+            model="gpt-4o-mini",
+            responses_api_provider_config=MagicMock(),
+            logging_obj=MagicMock(model_call_details={"litellm_params": {}}),
+            custom_llm_provider="openai",
+        )
+
+        await self._finalize_on_disconnect(response)
+
+        assert stream.aclose_calls == 1
+        assert response.response.is_closed is True
+
+
 def _apply_stream_usage_tracking(
     data: dict,
     general_settings: dict,

@@ -134,6 +134,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self.responses_api_request.get("tools")
         )
 
+    async def aclose(self) -> None:
+        """
+        Close the wrapped chat completions stream so the provider connection is released
+        when a bridged /v1/responses stream is abandoned, e.g. on client disconnect.
+
+        This class never calls ``BaseResponsesAPIStreamingIterator.__init__``, so it has
+        no ``self.response``; the upstream lives inside the ``CustomStreamWrapper``,
+        whose own ``aclose`` already shields against cancellation.
+        """
+        await self.litellm_custom_stream_wrapper.aclose()
+
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing: Final = self._tool_output_index_by_call_id.get(call_id)
         if existing is not None:
