@@ -90,6 +90,9 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     fixed_length_identity as _fixed_length_identity,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
+    order_tags_for_identity_resolution as _order_tags_for_identity_resolution,
+)
+from litellm.proxy.hooks.tag_rate_limits_shared import (
     partition_key as _partition_key,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
@@ -573,8 +576,16 @@ _PENDING_REQUEST_INCREMENTS_FIELD: Final[str] = "_model_based_tag_rate_limits_pe
 # hash, resolved server-side (UserAPIKeyAuth.api_key in
 # async_post_call_failure_hook, metadata["user_api_key"] everywhere else,
 # both authenticated before this hook ever runs) -- confines a collision to
-# a caller overwriting their own other request's entry, which only weakens
-# that caller's own configured cap rather than crossing between callers.
+# one caller reusing its own call_id across two of its own concurrent
+# requests. This is not confined to "weakens only that caller's own cap":
+# for a chain-wide (non scope_by_key_hash) tag, the released reservation is
+# on a bucket that tag value's other callers share too, so the forging
+# caller's own terminal failure can release a slot on a bucket a different
+# caller is also drawing from. Closing this fully needs a per-admission
+# identifier that is both server-generated (unlike litellm_call_id) and
+# survives proxy/utils.py's post_call_failure_hook stripping
+# litellm_logging_obj (unlike everything this comment already ruled out
+# above) -- tracked as a known follow-up rather than attempted here.
 _PENDING_RESERVATIONS_CACHE_KEY_PREFIX: Final = "model_based_tag_rate_limits:pending_reservations:"
 
 
@@ -1080,8 +1091,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         if not configured:
             return healthy_deployments
 
-        tags: Final = _get_tags_from_request_kwargs(
-            resolved_request_kwargs, metadata_variable_name=metadata_variable_name
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(resolved_request_kwargs, metadata_variable_name=metadata_variable_name),
+            resolved_request_kwargs,
+            metadata_variable_name,
         )
 
         present_deployment_ids: Final[frozenset[str]] = frozenset(
@@ -1593,7 +1606,11 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         if not configured:
             return
 
-        tags: Final = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
+            kwargs,
+            metadata_variable_name,
+        )
         if not tags:
             return
 
