@@ -589,6 +589,7 @@ def cost_per_token(
                 prompt_characters=prompt_characters,
                 completion_characters=completion_characters,
                 usage=usage_block,
+                service_tier=service_tier,
                 vertex_location=vertex_location,
             )
         elif cost_router == "cost_per_token":
