@@ -76,10 +76,9 @@ class LoggingWorker:
             if inspect.getcoroutinestate(task["coroutine"]) == inspect.CORO_CREATED
         )
 
-    @staticmethod
-    def _run_coroutine_silently(loop: asyncio.AbstractEventLoop, coroutine: Coroutine) -> bool:
+    def _run_coroutine_silently(self, loop: asyncio.AbstractEventLoop, coroutine: Coroutine) -> bool:
         try:
-            loop.run_until_complete(coroutine)
+            loop.run_until_complete(asyncio.wait_for(coroutine, timeout=self.timeout))
         except Exception:  # noqa: BLE001  # atexit flush must never break the user's program
             return False
         return True
