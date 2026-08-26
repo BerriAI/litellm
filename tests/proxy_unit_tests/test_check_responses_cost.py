@@ -787,5 +787,7 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         metadata = mock_aget.call_args[1]["litellm_metadata"]
+        foreground_read = {"background": False}
         assert metadata[INTERNAL_CALL_ORIGIN_METADATA_KEY] == "background_response_cost_poll"
-        assert is_unbilled_non_inference_call("aget_responses", metadata) is False
+        assert is_unbilled_non_inference_call("aget_responses", metadata, foreground_read) is False
+        assert is_unbilled_non_inference_call("aget_responses", None, foreground_read) is True
