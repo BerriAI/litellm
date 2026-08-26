@@ -342,9 +342,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
           {selectedMode === "flow_builder" && (
             <Alert variant="info" className="mt-4 border border-info/20 bg-info/10">
-              <AlertTitle>
-                You&apos;ll be redirected to the full-screen Flow Builder to design your policy logic visually.
-              </AlertTitle>
+              <AlertTitle>You&apos;ll be taken to the Flow Builder to design your policy logic visually.</AlertTitle>
             </Alert>
           )}
 
