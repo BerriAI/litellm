@@ -1064,6 +1064,11 @@ def responses(
             return _file_search_dispatch
 
         if responses_api_provider_config is None or use_chat_completions_api is True:
+            input = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+                request_input=input,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,

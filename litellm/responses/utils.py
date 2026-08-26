@@ -525,6 +525,107 @@ class ResponsesAPIRequestUtils:
         return request_input
 
     @staticmethod
+    def _normalize_call_id_for_provider(
+        call_id: str,
+        model: str | None,
+        custom_llm_provider: str | None,
+    ) -> str:
+        """Strip Gemini thought signatures from call_id when replaying to non-Gemini models."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+        from litellm.utils import _is_gemini_model, _remove_thought_signature_from_id
+
+        if _is_gemini_model(model=model, custom_llm_provider=custom_llm_provider):
+            return call_id
+        return _remove_thought_signature_from_id(call_id, THOUGHT_SIGNATURE_SEPARATOR)
+
+    @staticmethod
+    def _normalize_function_call_item_id_for_provider(
+        item_id: str,
+        model: str | None,
+        custom_llm_provider: str | None,
+    ) -> str:
+        """Rewrite foreign provider function_call item ids to OpenAI fc_ format."""
+        item_id = ResponsesAPIRequestUtils._normalize_call_id_for_provider(
+            call_id=item_id,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        if custom_llm_provider != "openai":
+            return item_id
+
+        if item_id.startswith("call_"):
+            return f"fc_{item_id[len('call_') :]}"
+        if item_id.startswith("tooluse_"):
+            return f"fc_{item_id[len('tooluse_') :]}"
+        if item_id.startswith("toolu_vrtx_"):
+            return f"fc_{item_id[len('toolu_vrtx_') :]}"
+
+        if not item_id.startswith("fc_"):
+            return f"fc_{item_id}"
+
+        return item_id
+
+    @staticmethod
+    def _normalize_function_call_ids_in_input(
+        request_input: Any,  # noqa: ANN401 -- raw responses-api request body, structurally varied
+        model: str | None,
+        custom_llm_provider: str | None,
+    ) -> Any:  # noqa: ANN401 -- mirrors request_input's type
+        """Normalize function_call / function_call_output IDs before upstream replay.
+
+        - Strips Gemini thought signatures from call_id for non-Gemini targets.
+        - Rewrites foreign function_call item ids (call_, tooluse_, toolu_vrtx_) to fc_
+          for OpenAI-compatible targets.
+
+        Returns a new list; does not mutate the caller's original items.
+        """
+        if not isinstance(request_input, list):
+            return request_input
+
+        normalized_input: Final = []  # mutable-ok: holds passthrough items and normalized dict copies, no single element type
+        for item in request_input:
+            if not isinstance(item, dict):
+                normalized_input.append(item)
+                continue
+
+            item_type = item.get("type")
+            if item_type == "function_call":
+                new_item = dict(item)  # mutable-ok: fresh copy, caller's item stays untouched
+                call_id = new_item.get("call_id")
+                if call_id and isinstance(call_id, str):
+                    new_item["call_id"] = ResponsesAPIRequestUtils._normalize_call_id_for_provider(
+                        call_id=call_id,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+
+                item_id = new_item.get("id")
+                if item_id and isinstance(item_id, str):
+                    new_item["id"] = ResponsesAPIRequestUtils._normalize_function_call_item_id_for_provider(
+                        item_id=item_id,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                normalized_input.append(new_item)
+            elif item_type == "function_call_output":
+                new_item = dict(item)  # mutable-ok: fresh copy, caller's item stays untouched
+                call_id = new_item.get("call_id")
+                if call_id and isinstance(call_id, str):
+                    new_item["call_id"] = ResponsesAPIRequestUtils._normalize_call_id_for_provider(
+                        call_id=call_id,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                normalized_input.append(new_item)
+            else:
+                normalized_input.append(item)
+
+        return normalized_input
+
+    @staticmethod
     def _build_responses_api_response_id(
         custom_llm_provider: str | None,
         model_id: str | None,
