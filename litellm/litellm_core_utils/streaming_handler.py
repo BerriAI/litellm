@@ -1227,6 +1227,9 @@ class CustomStreamWrapper:
                 if not _chunk_has_content and (not isinstance(chunk, dict) or "provider_specific_fields" not in chunk):
                     raise StopIteration
             anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
+            chunk_id = anthropic_response_obj.get("id")
+            if isinstance(chunk_id, str) and chunk_id.strip():
+                model_response = self.set_model_id(chunk_id, model_response)
             completion_obj["content"] = anthropic_response_obj["text"]
             chunk_index = anthropic_response_obj.get("index")
             if isinstance(chunk_index, int):

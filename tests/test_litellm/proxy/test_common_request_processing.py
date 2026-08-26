@@ -6252,7 +6252,7 @@ class TestPerRequestModelGroupAlias:
 
 
     @pytest.mark.asyncio
-    async def test_a2a_reroute_does_not_repeat_pre_call_hook(self, monkeypatch):
+    async def test_a2a_reroute_runs_target_guardrails(self, monkeypatch):
         processing_obj = ProxyBaseLLMRequestProcessing(
             data={"model": "source", "messages": [{"role": "user", "content": "hello"}]}
         )
@@ -6310,7 +6310,7 @@ class TestPerRequestModelGroupAlias:
         )
 
         assert returned_data["model"] == "a2a/agent"
-        assert hook_modes == [False]
+        assert hook_modes == [False, True]
 
 
 class TestInjectCostIntoUsageDict:

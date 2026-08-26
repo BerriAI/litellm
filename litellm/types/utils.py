@@ -317,6 +317,7 @@ class ModelInfo(ModelInfoBase, total=False):
 
 class GenericStreamingChunk(TypedDict, total=False):
     text: Required[str]
+    id: str
     tool_use: ChatCompletionToolCallChunk | list[ChatCompletionToolCallChunk] | None
     is_finished: Required[bool]
     finish_reason: Required[str]

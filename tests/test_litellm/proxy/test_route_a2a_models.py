@@ -116,6 +116,7 @@ async def test_route_a2a_model_uses_registered_provider():
             "kind": "message",
             "role": "agent",
             "parts": [{"kind": "text", "text": "Hello back"}],
+            "refusal": "I cannot complete that request.",
             "messageId": "message-id",
         },
     }
@@ -143,6 +144,7 @@ async def test_route_a2a_model_uses_registered_provider():
     bridge.assert_awaited_once()
     generic_completion.assert_not_called()
     assert response.choices[0].message.content == "Hello back"
+    assert response.choices[0].message.refusal == "I cannot complete that request."
     bridge_kwargs = bridge.await_args.kwargs
     assert bridge_kwargs["litellm_params"]["max_tokens"] == 32
     assert bridge_kwargs["litellm_params"]["temperature"] == 0.2
@@ -675,6 +677,29 @@ async def test_registered_provider_logging_uses_provider_model_for_builtin_prici
     assert logging_obj.model_call_details["model"] == "gpt-4o"
     assert logging_obj.model_call_details["custom_llm_provider"] == "openai"
     assert logging_obj.model_call_details["litellm_params"]["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_native_registered_provider_estimates_usage_when_missing(monkeypatch):
+    response = {"result": {"message": {"parts": [{"kind": "text", "text": "hello"}]}}}
+    counter = Mock(side_effect=[3, 2])
+    monkeypatch.setattr("litellm.utils.token_counter", counter)
+
+    with patch(
+        "litellm.a2a_protocol.litellm_completion_bridge.handler.A2ACompletionBridgeHandler.handle_non_streaming",
+        AsyncMock(return_value=response),
+    ):
+        result = await _route_registered_provider(
+            data={"messages": [{"role": "user", "content": "hello"}]},
+            model_name="a2a/agent",
+            api_base="https://provider.example",
+            litellm_params={"model": "agent", "custom_llm_provider": "pydantic_ai_agents"},
+            static_headers=None,
+        )
+
+    assert result.usage.prompt_tokens == 3
+    assert result.usage.completion_tokens == 2
+    assert result.usage.total_tokens == 5
 
 
 @pytest.mark.asyncio

@@ -260,6 +260,7 @@ async def _route_registered_provider(
             "provider_specific_fields",
             "reasoning_content",
             "reasoning_items",
+            "refusal",
             "thinking_blocks",
         ):
             value = message_payload.get(field)
@@ -319,7 +320,24 @@ async def _route_registered_provider(
         service_tier=response.get("service_tier") if isinstance(response.get("service_tier"), str) else None,
     )
     raw_usage: Final = response.get("usage")
-    usage: Final = litellm.Usage(**raw_usage) if isinstance(raw_usage, Mapping) else raw_usage
+    usage = litellm.Usage(**raw_usage) if isinstance(raw_usage, Mapping) else raw_usage
+    if usage is None and native_provider:
+        try:
+            from litellm.utils import token_counter
+
+            prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=messages)
+            completion_tokens: Final = token_counter(
+                model="gpt-3.5-turbo",
+                text=extract_text_from_a2a_response(response),
+                count_response_tokens=True,
+            )
+            usage = litellm.Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+        except Exception:  # noqa: BLE001 - token estimation must not fail the response
+            pass
     if usage is not None:
         model_response.usage = usage
         if isinstance(logging_obj, Logging):

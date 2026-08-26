@@ -268,23 +268,28 @@ class WatsonxOrchestrateHandler:
         return run_data
 
     @staticmethod
-    async def _accumulate_wxo_sse_text(response: Any) -> str:
-        source: Final[_WXOView] = {"sse_source": response}
-        accumulated_text = ""
-        async for line in source["sse_source"].aiter_lines():
-            if not line.startswith("data:"):
-                continue
-            data_str = line[5:].strip()
-            if not data_str or data_str == "[DONE]":
-                continue
-            try:
-                event = WatsonxOrchestrateHandler._decode_run_event(data_str)
-            except json.JSONDecodeError:
-                continue
-            chunk_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(event)
-            if chunk_text:
-                accumulated_text += chunk_text
-        return accumulated_text
+    async def _accumulate_wxo_sse_text(response: Any, timeout: float | None = None) -> str:
+        async def _collect() -> str:
+            source: Final[_WXOView] = {"sse_source": response}
+            accumulated_text = ""
+            async for line in source["sse_source"].aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if not data_str or data_str == "[DONE]":
+                    continue
+                try:
+                    event = WatsonxOrchestrateHandler._decode_run_event(data_str)
+                except json.JSONDecodeError:
+                    continue
+                chunk_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(event)
+                if chunk_text:
+                    accumulated_text += chunk_text
+            return accumulated_text
+
+        if timeout is None:
+            return await _collect()
+        return await asyncio.wait_for(_collect(), timeout=max(timeout, 0))
 
     @staticmethod
     def _extract_litellm_params(litellm_params: WXOLitellmParams) -> WXORequestParams:
@@ -438,7 +443,7 @@ class WatsonxOrchestrateHandler:
             )
             accumulated_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result)
         else:
-            accumulated_text = await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response)
+            accumulated_text = await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response, timeout=timeout)
 
         async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(
             text=accumulated_text,

@@ -4,6 +4,7 @@ A2A Streaming Response Iterator
 
 from collections.abc import Mapping
 from typing import Any, Final
+from uuid import uuid4
 
 import litellm
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -33,6 +34,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             json_mode=json_mode,
         )
         self.model = model
+        self.response_id: str | None = None
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         """
@@ -69,6 +71,16 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             raise A2AError(status_code=500, message=f"A2A error: {error_message}")
 
         try:
+            if self.response_id is None:
+                raw_response_id = chunk.get("id")
+                raw_result = chunk.get("result")
+                if not isinstance(raw_response_id, str) and isinstance(raw_result, Mapping):
+                    raw_response_id = raw_result.get("id")
+                self.response_id = (
+                    raw_response_id
+                    if isinstance(raw_response_id, str) and raw_response_id.strip()
+                    else f"chatcmpl-{uuid4().hex}"
+                )
             # Extract text from A2A response
             result: Final = chunk.get("result", {})
             chunk_index = 0
@@ -181,6 +193,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                     if streaming_choices:
                         return ModelResponseStream(
                             choices=streaming_choices,
+                            id=self.response_id,
                             usage=usage,
                             provider_specific_fields=provider_fields or None,
                         )
@@ -188,6 +201,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             # Return generic streaming chunk
             return GenericStreamingChunk(
                 text=text,
+                id=self.response_id,
                 is_finished=bool(finish_reason or tool_calls),
                 finish_reason=finish_reason or ("tool_calls" if tool_calls else ""),
                 usage=usage,
@@ -197,8 +211,11 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             )
         except Exception:
             # Return empty chunk on parse error
+            if self.response_id is None:
+                self.response_id = f"chatcmpl-{uuid4().hex}"
             return GenericStreamingChunk(
                 text="",
+                id=self.response_id,
                 is_finished=False,
                 finish_reason="",
                 usage=None,

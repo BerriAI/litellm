@@ -28,6 +28,18 @@ async def test_async_iterator_accepts_decoded_a2a_events():
     assert chunk["text"] == "Hello"
 
 
+def test_chunk_parser_reuses_response_id_for_idless_artifacts():
+    iterator = A2AModelResponseIterator(streaming_response=[], sync_stream=False)
+    first = iterator.chunk_parser(
+        {"result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": "one"}]}}}
+    )
+    second = iterator.chunk_parser(
+        {"result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": "two"}]}}}
+    )
+
+    assert first["id"] == second["id"]
+
+
 @pytest.mark.asyncio
 async def test_async_iterator_ignores_status_message_text():
     async def _events():

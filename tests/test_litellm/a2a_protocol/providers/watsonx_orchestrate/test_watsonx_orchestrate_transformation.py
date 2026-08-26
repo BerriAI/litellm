@@ -48,6 +48,12 @@ class _SSELines:
             yield line
 
 
+class _HangingSSELines:
+    async def aiter_lines(self):
+        await asyncio.Event().wait()
+        yield ""
+
+
 class _InvalidJsonStreamResponse:
     headers = {"content-type": "application/json"}
 
@@ -231,6 +237,12 @@ async def test_accumulate_wxo_sse_text_ignores_non_dict_json_events():
     assert await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response) == (
         "streamed text"
     )
+
+
+@pytest.mark.asyncio
+async def test_accumulate_wxo_sse_text_respects_timeout():
+    with pytest.raises(asyncio.TimeoutError):
+        await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(_HangingSSELines(), timeout=0.001)
 
 
 @pytest.mark.asyncio
