@@ -1,5 +1,6 @@
 
 import httpx
+import openai
 import pytest
 
 import litellm
@@ -12,6 +13,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     extract_and_raise_litellm_exception,
 )
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.types.utils import LlmProviders
 
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
@@ -757,6 +759,352 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
 
     assert excinfo.value.status_code == 404
     assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+class _UpstreamHTTPError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__("upstream failure")
+        self.message = "upstream failure"
+        self.status_code = status_code
+        self.request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+        self.response = httpx.Response(
+            status_code=status_code, request=self.request, text="upstream failure"
+        )
+
+
+UPSTREAM_STATUS_CODES = (400, 401, 403, 404, 408, 422, 429, 500, 503)
+
+OPENAI_SHAPED = {
+    400: (litellm.BadRequestError, 400),
+    401: (litellm.AuthenticationError, 401),
+    403: (litellm.APIError, 403),
+    404: (litellm.NotFoundError, 404),
+    408: (litellm.Timeout, 408),
+    422: (litellm.BadRequestError, 422),
+    429: (litellm.RateLimitError, 429),
+    500: (litellm.InternalServerError, 500),
+    503: (litellm.ServiceUnavailableError, 503),
+}
+
+PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
+
+STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
+
+DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
+    "anthropic": {403: PERMISSION_DENIED},
+    "azure": {500: (litellm.APIError, 500)},
+    "bedrock": {
+        403: PERMISSION_DENIED,
+        500: (litellm.ServiceUnavailableError, 503),
+    },
+    "cloudflare": {403: PERMISSION_DENIED},
+    "cohere": {403: PERMISSION_DENIED},
+    "databricks": {
+        403: PERMISSION_DENIED,
+        422: (litellm.BadRequestError, 400),
+    },
+    "gemini": {403: PERMISSION_DENIED},
+    "huggingface": {
+        404: (litellm.APIError, 404),
+        422: (litellm.APIError, 422),
+        500: (litellm.APIError, 500),
+    },
+    "nlp_cloud": {
+        403: (litellm.AuthenticationError, 403),
+        404: (litellm.APIError, 404),
+        408: (litellm.APIError, 408),
+        500: (litellm.APIError, 500),
+        503: (litellm.APIError, 503),
+    },
+    "ollama": {403: PERMISSION_DENIED},
+    "openrouter": {500: (litellm.APIError, 500)},
+    "replicate": {
+        403: (litellm.APIError, 500),
+        404: (litellm.APIError, 500),
+        422: (litellm.UnprocessableEntityError, 422),
+        500: (litellm.ServiceUnavailableError, 503),
+        503: (litellm.APIError, 500),
+    },
+    "sagemaker": {
+        403: PERMISSION_DENIED,
+        500: (litellm.ServiceUnavailableError, 503),
+    },
+    "vertex_ai": {403: PERMISSION_DENIED},
+    "vllm": {403: PERMISSION_DENIED},
+}
+
+PROVIDERS_WITH_A_HANDLER = (
+    "ai21",
+    "anthropic",
+    "azure",
+    "azure_ai",
+    "bedrock",
+    "cloudflare",
+    "cohere",
+    "databricks",
+    "deepseek",
+    "fireworks_ai",
+    "gemini",
+    "groq",
+    "huggingface",
+    "mistral",
+    "nlp_cloud",
+    "ollama",
+    "openai",
+    "openrouter",
+    "perplexity",
+    "replicate",
+    "runwayml",
+    "sagemaker",
+    "together_ai",
+    "vertex_ai",
+    "vllm",
+    "xai",
+)
+
+PROVIDER_ALIASES_WITH_A_HANDLER = (
+    "aleph_alpha",
+    "anthropic_text",
+    "azure_text",
+    "bedrock_mantle",
+    "cohere_chat",
+    "custom_openai",
+    "lemonade",
+    "litellm_proxy",
+    "ollama_chat",
+    "predibase",
+    "sagemaker_chat",
+    "text-completion-openai",
+    "vertex_ai_beta",
+    "watsonx",
+)
+
+PROVIDERS_WITHOUT_A_HANDLER = tuple(
+    sorted(
+        frozenset(provider.value for provider in LlmProviders)
+        - frozenset(PROVIDERS_WITH_A_HANDLER)
+        - frozenset(PROVIDER_ALIASES_WITH_A_HANDLER)
+        - frozenset(litellm.openai_compatible_providers)
+    )
+)
+
+MINIMAX_401_BODY = (
+    '{"type":"error","error":{"type":"authorized_error","message":"login fail: Please carry the API secret key '
+    "in the 'Authorization' field of the request header (1004)\",\"http_code\":\"401\"},"
+    '"request_id":"06ddc9ba97ee6340e38f10e09787f547"}'
+)
+
+
+def _expected_for(provider: str, status_code: int) -> tuple[type[Exception], int]:
+    return DEVIATIONS_FROM_THE_OPENAI_SHAPE.get(provider, {}).get(
+        status_code, OPENAI_SHAPED[status_code]
+    )
+
+
+@pytest.fixture
+def quiet_exception_mapping(monkeypatch):
+    monkeypatch.setattr(litellm, "suppress_debug_info", True)
+
+
+@pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_an_upstream_status_maps_to_one_exception_per_provider(
+    provider, status_code, quiet_exception_mapping
+):
+    expected_class, expected_status = _expected_for(provider, status_code)
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+
+
+@pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_mapped_exception_keeps_the_provider_and_model_it_came_from(
+    provider, status_code, quiet_exception_mapping
+):
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.llm_provider == provider
+    assert raised.value.model == "test-model"
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_an_already_mapped_litellm_exception_passes_through_untouched(
+    provider, quiet_exception_mapping
+):
+    already_mapped = litellm.RateLimitError(
+        message="already mapped", llm_provider=provider, model="test-model"
+    )
+
+    returned = exception_type(
+        model="test-model",
+        original_exception=already_mapped,
+        custom_llm_provider=provider,
+    )
+
+    assert returned is already_mapped
+
+
+@pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
+@pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
+def test_a_provider_without_a_handler_maps_by_the_upstream_status(
+    provider, status_code, quiet_exception_mapping
+):
+    expected_class, expected_status = STATUS_KEYED[status_code]
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+    assert raised.value.llm_provider == provider
+    assert raised.value.model == "test-model"
+
+
+def test_a_minimax_bad_key_is_an_authentication_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    with pytest.raises(litellm.AuthenticationError) as raised:
+        exception_type(
+            model="MiniMax-M2.5",
+            original_exception=BaseLLMException(status_code=401, message=MINIMAX_401_BODY),
+            custom_llm_provider="minimax",
+        )
+
+    assert raised.value.status_code == 401
+    assert raised.value.llm_provider == "minimax"
+    assert raised.value.message.startswith("litellm.AuthenticationError: MinimaxException - ")
+    assert "login fail" in raised.value.message
+
+
+def test_an_exception_without_a_status_is_still_a_connection_error(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model="MiniMax-M2.5",
+            original_exception=RuntimeError("socket hung up"),
+            custom_llm_provider="minimax",
+        )
+
+
+CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
+CONTENT_POLICY_MESSAGE = (
+    '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
+)
+TIMEOUT_MESSAGE = "Request timed out."
+
+PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
+    "ai21",
+    "anthropic",
+    "azure",
+    "azure_ai",
+    "databricks",
+    "deepseek",
+    "fireworks_ai",
+    "gemini",
+    "groq",
+    "mistral",
+    "openai",
+    "perplexity",
+    "runwayml",
+    "together_ai",
+    "vertex_ai",
+    "xai",
+)
+
+PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK = (
+    "ai21",
+    "azure",
+    "azure_ai",
+    "deepseek",
+    "fireworks_ai",
+    "groq",
+    "mistral",
+    "openai",
+    "perplexity",
+    "runwayml",
+    "together_ai",
+    "xai",
+)
+
+
+class _UpstreamErrorWithMessage(_UpstreamHTTPError):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(status_code=status_code)
+        self.args = (message,)
+        self.message = message
+        self.response = httpx.Response(
+            status_code=status_code, request=self.request, text=message
+        )
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
+    provider, quiet_exception_mapping
+):
+    if provider in PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW:
+        expected_class, expected_status = litellm.ContextWindowExceededError, 400
+    else:
+        expected_class, expected_status = litellm.BadRequestError, 400
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(CONTEXT_WINDOW_MESSAGE, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_content_policy_block_reaches_the_caller_as_the_router_needs_it(
+    provider, quiet_exception_mapping
+):
+    if provider in PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK:
+        expected_class, expected_status = litellm.ContentPolicyViolationError, 400
+    else:
+        expected_class, expected_status = litellm.BadRequestError, 400
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(CONTENT_POLICY_MESSAGE, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_timed_out_request_is_a_timeout_for_every_provider(
+    provider, quiet_exception_mapping
+):
+    with pytest.raises(litellm.Timeout) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(TIMEOUT_MESSAGE, 408),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.status_code == 408
 
 
 def test_bedrock_mantle_400_maps_to_bad_request():

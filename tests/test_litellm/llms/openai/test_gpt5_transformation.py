@@ -1309,3 +1309,79 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+def test_gpt5_6_forwards_reasoning_effort_max_for_the_responses_bridge(config: OpenAIConfig, model: str):
+    """A chat request carrying tools or a reasoning summary is converted to /v1/responses further
+    down main.py, and that surface accepts max. This runs before litellm has decided to bridge, so
+    refusing max here would break the cursor thinking-max shape that works today. Plain chat
+    completions still answer max with a provider 400, and the capability list below is what keeps
+    the level out of the picker."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+def test_gpt5_6_never_advertises_reasoning_effort_max(model: str):
+    """/v1/chat/completions answers max with "Unsupported value: 'reasoning_effort' does not support
+    'max' with this model. Supported values are: 'none', 'low', 'medium', 'high', and 'xhigh'", so no
+    gpt-5.6 entry asserts supports_max_reasoning_effort and the advertised set stops at xhigh."""
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+
+    resolved = resolve_supported_reasoning_efforts(litellm.get_model_info(model), deployment_is_mapped=True)
+    assert resolved is not None
+    assert "max" not in resolved
+    assert "xhigh" in resolved
+
+
+def test_gpt5_6_keeps_reasoning_effort_max_on_the_responses_api(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """/v1/responses accepts max for gpt-5.6, and that is the surface the cursor thinking-max
+    variant resolves onto, so the responses path keeps carrying the level chat refuses."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            reasoning={"effort": "max"},
+        ),
+        model="gpt-5.6",
+        drop_params=False,
+    )
+    assert params["reasoning"] == {"effort": "max"}
+
+
+def test_gpt5_forwards_levels_the_chat_gate_does_not_own(config: OpenAIConfig):
+    """Only xhigh is gated on this surface. max reaches the provider (or the responses bridge) and
+    is answered there, which is what happened before per-group capabilities existed."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "max"
+
+
+def test_gpt5_rejects_xhigh_for_models_without_the_flag(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_drops_xhigh_when_requested(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in params
