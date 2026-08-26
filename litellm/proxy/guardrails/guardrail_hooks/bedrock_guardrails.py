@@ -838,7 +838,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return False
 
         selected_deployment: Final[object | None] = request_data.get("deployment")
-        if selected_deployment is not None:
+        if selected_deployment is not None and not isinstance(selected_deployment, Mapping):
             selected_provider: Final[str | None] = BedrockGuardrail._router_deployment_provider(selected_deployment)
             return selected_provider in ("bedrock", "bedrock_converse") if selected_provider is not None else False
 
