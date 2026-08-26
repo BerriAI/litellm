@@ -108,7 +108,7 @@
     "limit": 3
   },
   "F401": {
-    "limit": 14
+    "limit": 13
   },
   "LOG015": {
     "limit": 5
@@ -171,7 +171,7 @@
     "limit": 175
   },
   "RUF012": {
-    "limit": 240
+    "limit": 239
   },
   "RUF015": {
     "limit": 8
@@ -183,7 +183,7 @@
     "limit": 4
   },
   "RUF059": {
-    "limit": 67
+    "limit": 66
   },
   "RUF100": {
     "limit": 0

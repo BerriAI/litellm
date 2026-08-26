@@ -3042,6 +3042,8 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     recorder: Final = _SuccessEventRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     mock_route: Final = respx_mock.post(
@@ -3057,6 +3059,7 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     )
 
     assert mock_route.called
+    assert mock_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
     speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
     assert speech_event.spend_metadata["user_api_key"] == "hashed-virtual-key"
     assert speech_event.spend_metadata["user_api_key_user_id"] == "user-1"

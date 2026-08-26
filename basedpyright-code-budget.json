@@ -99,7 +99,7 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44530
+    "limit": 44528
   },
   "reportUnknownLambdaType": {
     "limit": 109
@@ -138,9 +138,9 @@
     "limit": 139
   },
   "reportUnusedImport": {
-    "limit": 545
+    "limit": 544
   },
   "reportUnusedVariable": {
-    "limit": 146
+    "limit": 145
   }
 }
