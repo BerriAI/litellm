@@ -230,6 +230,7 @@ class TestDocsGoldenPath:
         ["rest_tools_call_unprefixed.sh", "rest_tools_call_prefixed.sh"],
     )
     def test_rest_tools_call(self, proxy_base_url: str, snippet_name: str) -> None:
+        _run_json_snippet(SNIPPETS_DIR / "rest_tools_list_all.sh", proxy_base_url)
         path: Final = SNIPPETS_DIR / snippet_name
         result: Final = _run_json_snippet(path, proxy_base_url)
         assert result.get("isError") in (None, False), f"{_fail_context(path)}: tool call errored: {result}"
