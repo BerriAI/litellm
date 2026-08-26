@@ -133,7 +133,7 @@ def _pre_masking_scope_indices(
 
 def _apply_redacted_messages_back_preserving_fields(
     guardrail: "LakeraAIGuardrail",
-    data: dict,
+    data: dict[str, object],  # mutable-ok: writes the redacted result back into the caller's request dict in place
     redacted_messages: Sequence[Mapping[str, str]],
 ) -> None:
     """Write masked content back to ``data["messages"]`` without losing fields

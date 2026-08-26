@@ -157,7 +157,7 @@ class TestSharedFilterMessagesBySkipFlagsUtil:
     def test_lakera_delegates_to_shared_function(self):
         guardrail = LakeraAIGuardrail(api_key="test_key", skip_system_message_in_guardrail=True)
         sentinel = ([USER_MSG], True)
-        with patch(
+        with patch(  # test-quality-ok: asserts delegation to the specific shared collaborator, not an HTTP boundary
             "litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.filter_messages_by_skip_flags",
             return_value=sentinel,
         ) as mock_shared:
@@ -417,7 +417,7 @@ class TestPiiMaskingSafetyGuard:
         }
         with (
             patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call,
-            patch(
+            patch(  # test-quality-ok: asserts the wholesale write-back path is never reached for this unsafe case
                 "litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.apply_redacted_messages_back"
             ) as mock_apply_redacted,
         ):
@@ -449,7 +449,7 @@ class TestPiiMaskingSafetyGuard:
         }
         with (
             patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call,
-            patch(
+            patch(  # test-quality-ok: asserts the wholesale write-back path is never reached for this unsafe case
                 "litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2.apply_redacted_messages_back"
             ) as mock_apply_redacted,
         ):
