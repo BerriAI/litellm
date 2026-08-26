@@ -679,7 +679,7 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
 
 
 def _translate_with_metadata(
-    model: str, metadata: dict[str, Any], custom_llm_provider: str | None
+    model: str, metadata: dict[str, str], custom_llm_provider: str | None
 ) -> dict[str, Any]:
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={

@@ -1354,11 +1354,12 @@ def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
     reports no successful request lines. When counts are unknown, stay eligible so
     the next poller pass revisits it. (#37713)
     """
-    if getattr(response, "output_file_id", None) is not None:
+    if response.output_file_id is not None:
         return True
-    request_counts = getattr(response, "request_counts", None)
-    completed = getattr(request_counts, "completed", None)
-    return completed == 0
+    request_counts = response.request_counts
+    if request_counts is None:
+        return False
+    return request_counts.completed == 0
 
 
 async def update_batch_in_database(

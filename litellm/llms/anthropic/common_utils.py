@@ -4,7 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal
@@ -468,7 +468,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def maybe_drop_disabled_thinking(
         model: str,
-        optional_params: dict,  # mutable-ok: in-place out-param, same contract as AnthropicConfig._maybe_drop_speed_param
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
         custom_llm_provider: str,
     ) -> None:
         """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
