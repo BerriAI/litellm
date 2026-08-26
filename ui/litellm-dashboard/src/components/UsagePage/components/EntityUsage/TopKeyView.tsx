@@ -221,7 +221,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             customTooltip={(props) => {
               const item = props.payload?.[0]?.payload;
               return (
-                <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
+                <div className="relative z-floating p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
                   <div className="space-y-1.5">
                     <div className="text-sm">
                       <span className="text-muted-foreground">Key Alias: </span>
@@ -246,7 +246,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       )}
 
       {isModalOpen && selectedKey && keyData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleOutsideClick}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-overlay" onClick={handleOutsideClick}>
           <div className="bg-card rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
             {/* Close button */}
             <button
