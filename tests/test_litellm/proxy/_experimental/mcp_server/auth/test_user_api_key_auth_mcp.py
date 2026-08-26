@@ -1094,12 +1094,6 @@ class TestMCPOAuth2AuthFlow:
         [b"sk-litellm-valid-key", b"Bearer sk-litellm-valid-key", b"bearer sk-litellm-valid-key"],
     )
     async def test_x_litellm_api_key_survives_bearer_only_strip(self, header_value):
-        """
-        x-litellm-api-key accepts a raw key or a Bearer-prefixed one. The value handed
-        to user_api_key_auth must survive its Bearer-only strip (_get_bearer_token),
-        otherwise a raw key blanks to "" and the caller gets a misleading
-        "Ensure Key has Bearer prefix" 401.
-        """
         from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
 
         scope = {
