@@ -31,16 +31,16 @@ SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/meta-models/Muse-Glimmer-30B",
     "together_ai/google/gemma-4-31B-it",
     "together_ai/pearl-ai/gemma-4-31b-it",
-    "together_ai/google/gemma-3n-E4B-it",
     "together_ai/arize-ai/qwen-2-1.5b-instruct",
     "together_ai/Prism-ML/Ternary-Bonsai-27B",
-    "together_ai/meta-llama/Llama-Guard-4-12B",
     "together_ai/openai/gpt-oss-120b",
     "together_ai/openai/gpt-oss-20b",
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
 )
 
 DEPRECATED_MODELS: Final = {
+    "together_ai/google/gemma-3n-E4B-it": "2026-08-25",
+    "together_ai/meta-llama/Llama-Guard-4-12B": "2026-08-25",
     "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": "2026-07-10",
     "together_ai/Qwen/Qwen3.5-397B-A17B": "2026-06-29",
     "together_ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": "2026-06-04",
