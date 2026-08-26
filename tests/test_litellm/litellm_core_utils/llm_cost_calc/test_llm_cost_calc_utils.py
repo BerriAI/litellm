@@ -3377,6 +3377,44 @@ def test_generic_cost_per_token_gemini_35_flash_lite(_local_model_cost_map):
     assert completion_cost == pytest.approx(0.00125)
 
 
+GEMINI_35_FLASH_LITE_SERVICE_TIER_PRICING = [
+    (None, 3e-07, 2.5e-06, 3e-08),
+    ("flex", 1.5e-07, 1.25e-06, 1.5e-08),
+    ("priority", 5.4e-07, 4.5e-06, 5e-08),
+]
+
+
+@pytest.mark.parametrize(
+    "service_tier,input_rate,output_rate,cache_read_rate", GEMINI_35_FLASH_LITE_SERVICE_TIER_PRICING
+)
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-3.5-flash-lite", "gemini/gemini-3.5-flash-lite", "vertex_ai/gemini-3.5-flash-lite"],
+)
+def test_gemini_35_flash_lite_service_tier_pricing(
+    model, service_tier, input_rate, output_rate, cache_read_rate, _local_model_cost_map
+):
+    """Regression: Vertex publishes flash-lite Flex/Batch context caching at $0.015/M
+    (1.5e-08/token), so flex cache reads must not be billed at the 2e-08 rate the map
+    used to carry."""
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200, text_tokens=800),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model.split("/")[-1],
+        usage=usage,
+        custom_llm_provider=model.split("/")[0] if "/" in model else "gemini",
+        service_tier=service_tier,
+    )
+
+    assert prompt_cost == pytest.approx(800 * input_rate + 200 * cache_read_rate, rel=1e-9)
+    assert completion_cost == pytest.approx(500 * output_rate, rel=1e-9)
+
+
 @pytest.mark.parametrize(
     "service_tier,input_rate,cache_read_rate,cache_write_rate,output_rate",
     [
