@@ -8,6 +8,7 @@ Tests:
 4. Validation tests (invalid models, duplicate fallbacks, etc.)
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -553,3 +554,121 @@ class TestDeleteFallback:
 
         assert exc_info.value.status_code == 400
         assert "Database storage not enabled" in str(exc_info.value.detail)
+
+
+class TestScrubModelFromFallbackEntries:
+    def test_drops_mappings_from_deleted_model_and_refs_to_it(self):
+        from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+            scrub_model_from_fallback_entries,
+        )
+
+        cleaned = scrub_model_from_fallback_entries(
+            [
+                {"gone": ["still-there"]},
+                {"kept": ["gone", "other"]},
+                {"also-kept": ["gone"]},
+            ],
+            "gone",
+        )
+
+        assert cleaned == [{"kept": ["other"]}]
+
+    def test_leaves_unrelated_entries_unchanged(self):
+        from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+            scrub_model_from_fallback_entries,
+        )
+
+        existing = [{"primary": ["fb-a", "fb-b"]}]
+        assert scrub_model_from_fallback_entries(existing, "missing") == existing
+
+    def test_treats_non_list_config_as_empty(self):
+        from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+            scrub_model_from_fallback_entries,
+        )
+
+        assert scrub_model_from_fallback_entries(None, "gone") == []
+        assert scrub_model_from_fallback_entries("not-a-list", "gone") == []
+
+    def test_router_lost_last_deployment_only_when_model_names_is_a_real_collection(self):
+        from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+            router_lost_last_deployment_for_model,
+        )
+
+        present = MagicMock()
+        present.model_names = {"kept", "gone"}
+        gone = MagicMock()
+        gone.model_names = {"kept"}
+        unknown = MagicMock()
+
+        assert router_lost_last_deployment_for_model(present, "gone") is False
+        assert router_lost_last_deployment_for_model(gone, "gone") is True
+        assert router_lost_last_deployment_for_model(unknown, "gone") is False
+
+
+@pytest.mark.asyncio
+class TestRemoveDeletedModelFromRouterFallbacks:
+    async def test_persists_scrubbed_lists_and_updates_router(self):
+        from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+            remove_deleted_model_from_router_fallbacks,
+        )
+
+        router = MagicMock()
+        router.fallbacks = [{"primary": ["gone"]}]
+        router.context_window_fallbacks = [{"primary": ["gone", "other"]}]
+        router.content_policy_fallbacks = []
+
+        prisma = MagicMock()
+        prisma.db.litellm_config.upsert = AsyncMock()
+
+        proxy_config = MagicMock()
+        proxy_config.get_config = AsyncMock(
+            return_value={
+                "router_settings": {
+                    "num_retries": 2,
+                    "fallbacks": [{"primary": ["gone"]}],
+                    "context_window_fallbacks": [{"primary": ["gone", "other"]}],
+                }
+            }
+        )
+
+        with patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+            await remove_deleted_model_from_router_fallbacks(
+                model_name="gone",
+                prisma_client=prisma,
+                llm_router=router,
+            )
+
+        prisma.db.litellm_config.upsert.assert_called_once()
+        saved = json.loads(
+            prisma.db.litellm_config.upsert.call_args.kwargs["data"]["update"][
+                "param_value"
+            ]
+        )
+        assert saved["num_retries"] == 2
+        assert saved["fallbacks"] == []
+        assert saved["context_window_fallbacks"] == [{"primary": ["other"]}]
+        assert saved["content_policy_fallbacks"] == []
+        assert router.fallbacks == []
+        assert router.context_window_fallbacks == [{"primary": ["other"]}]
+        assert router.content_policy_fallbacks == []
+
+    async def test_skips_persist_when_model_is_not_referenced(self):
+        from litellm.proxy.management_endpoints.fallback_management_endpoints import (
+            remove_deleted_model_from_router_fallbacks,
+        )
+
+        prisma = MagicMock()
+        prisma.db.litellm_config.upsert = AsyncMock()
+        proxy_config = MagicMock()
+        proxy_config.get_config = AsyncMock(
+            return_value={"router_settings": {"fallbacks": [{"primary": ["other"]}]}}
+        )
+
+        with patch("litellm.proxy.proxy_server.proxy_config", proxy_config):
+            await remove_deleted_model_from_router_fallbacks(
+                model_name="gone",
+                prisma_client=prisma,
+                llm_router=MagicMock(),
+            )
+
+        prisma.db.litellm_config.upsert.assert_not_called()

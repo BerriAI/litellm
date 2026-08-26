@@ -4256,3 +4256,139 @@ class TestAutoRouterClassifierDefaultPrompt:
         for empty in (None, "", "{}"):
             response = await get_auto_router_classifier_default_prompt(context_window_size=5, tier_labels=empty)
             assert response.system_prompt == classification_system_prompt(5)
+
+
+class TestDeleteModelScrubsOrphanFallbacks:
+    """Regression for issue #37670.
+
+    /model/delete left router_settings.fallbacks pointing at the deleted
+    model_name, so a later primary failure retried the missing group and 500'd.
+    """
+
+    @staticmethod
+    def _db_row(model_id: str, model_name: str):
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "model_name": model_name,
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": model_id},
+        }
+        return row
+
+    @pytest.mark.asyncio
+    async def test_delete_last_deployment_drops_fallback_refs(self, monkeypatch):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model,
+        )
+
+        model_id = "fallback-target-id"
+        model_name = "fallback-target"
+        row = self._db_row(model_id, model_name)
+
+        table = MagicMock()
+        table.find_unique = AsyncMock(return_value=row)
+        table.delete = AsyncMock(return_value=row)
+
+        prisma = MagicMock()
+        prisma.db.litellm_proxymodeltable = table
+        prisma.db.litellm_config.upsert = AsyncMock()
+
+        model_names = {"primary", "fallback-target"}
+
+        def _delete_deployment(*, id: str):
+            model_names.discard(model_name)
+            return True
+
+        router = MagicMock()
+        router.model_names = model_names
+        router.fallbacks = [{"primary": ["fallback-target"]}]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.delete_deployment.side_effect = _delete_deployment
+
+        proxy_config = MagicMock()
+        proxy_config.get_config = AsyncMock(
+            return_value={
+                "router_settings": {
+                    "num_retries": 2,
+                    "fallbacks": [{"primary": ["fallback-target"]}],
+                }
+            }
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", proxy_config)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            AsyncMock(return_value=True),
+        )
+
+        result = await delete_model(
+            model_info=ModelInfoDelete(id=model_id),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+            ),
+        )
+        assert "deleted successfully" in result["message"]
+
+        prisma.db.litellm_config.upsert.assert_called_once()
+        saved = json.loads(
+            prisma.db.litellm_config.upsert.call_args.kwargs["data"]["update"][
+                "param_value"
+            ]
+        )
+        assert saved["num_retries"] == 2
+        assert saved["fallbacks"] == []
+        assert router.fallbacks == []
+
+    @pytest.mark.asyncio
+    async def test_delete_keeps_fallbacks_when_a_sibling_deployment_remains(
+        self, monkeypatch
+    ):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model,
+        )
+
+        model_id = "shared-group-replica-1"
+        model_name = "shared-group"
+        row = self._db_row(model_id, model_name)
+
+        table = MagicMock()
+        table.find_unique = AsyncMock(return_value=row)
+        table.delete = AsyncMock(return_value=row)
+
+        prisma = MagicMock()
+        prisma.db.litellm_proxymodeltable = table
+        prisma.db.litellm_config.upsert = AsyncMock()
+
+        router = MagicMock()
+        router.model_names = {model_name}
+        router.delete_deployment = MagicMock(return_value=True)
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            AsyncMock(return_value=True),
+        )
+
+        result = await delete_model(
+            model_info=ModelInfoDelete(id=model_id),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+            ),
+        )
+        assert "deleted successfully" in result["message"]
+        router.delete_deployment.assert_called_once_with(id=model_id)
+        prisma.db.litellm_config.upsert.assert_not_called()
