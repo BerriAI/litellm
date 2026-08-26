@@ -2759,8 +2759,8 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
     assert result.status == "queued"
 
 
-AZURE_AI_HOST = "myfoundry.services.ai.azure.com"
-AZURE_AI_BASE = f"https://{AZURE_AI_HOST}"
+AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
+AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
@@ -2807,8 +2807,8 @@ def _rejection(message: str) -> httpx.Response:
 def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
     import respx
 
-    with respx.mock:
-        respx.route(host=AZURE_AI_HOST).mock(side_effect=recorder)
+    with respx.mock(assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
         return litellm.completion(
             model="azure_ai/grok-3",
             messages=[{"role": "user", "content": "hi"}],
@@ -2894,8 +2894,8 @@ async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_a
         [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
     )
 
-    with respx.mock:
-        respx.route(host=AZURE_AI_HOST).mock(side_effect=recorder)
+    with respx.mock(assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
         response = await litellm.acompletion(
             model="azure_ai/grok-3",
             messages=[{"role": "user", "content": "hi"}],
@@ -2918,8 +2918,8 @@ async def test_a_provider_that_keeps_rejecting_is_not_retried_forever_on_the_asy
 
     recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION)])
 
-    with respx.mock:
-        respx.route(host=AZURE_AI_HOST).mock(side_effect=recorder)
+    with respx.mock(assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
         with pytest.raises(litellm.BadRequestError):
             await litellm.acompletion(
                 model="azure_ai/grok-3",
