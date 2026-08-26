@@ -73,7 +73,7 @@ const AgentsTable: React.FC<AgentsTableProps> = ({
                 render={
                   <div className="flex items-center gap-2">
                     <CircleCheck
-                      className={healthCheckEnabled ? "size-4 text-green-500" : "size-4 text-muted-foreground"}
+                      className={healthCheckEnabled ? "size-4 text-success" : "size-4 text-muted-foreground"}
                     />
                     <span className="text-sm text-muted-foreground">Health Check</span>
                     <Switch
