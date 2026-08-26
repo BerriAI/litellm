@@ -564,10 +564,12 @@ class LoggingWorker:
                     # Run the coroutine synchronously in new loop
                     # Note: We run the coroutine directly, not via create_task,
                     # since we're in a new event loop context
-                    if self._run_coroutine_silently(loop, task["coroutine"]):
-                        processed += 1
-                    # Clear reference to prevent memory leaks
-                    task = None
+                    try:
+                        if self._run_coroutine_silently(loop, task["coroutine"]):
+                            processed += 1
+                    finally:
+                        # Clear reference to prevent memory leaks
+                        task = None
             finally:
                 logging.raiseExceptions = previous_raise_exceptions
 
