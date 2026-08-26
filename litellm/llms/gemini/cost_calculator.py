@@ -61,3 +61,42 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         number_of_web_search_requests = 1
 
     return _cost * number_of_web_search_requests
+
+
+GOOGLE_MAPS_GROUNDING_DEFAULT_COST_PER_QUERY: Final = 14e-3
+GOOGLE_MAPS_GROUNDING_DEFAULT_COST_PER_PROMPT: Final = 25e-3
+
+
+def google_maps_grounding_requests(usage: "Usage | None") -> int | None:
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    details: Final = usage.prompt_tokens_details if usage is not None else None
+    if not isinstance(details, PromptTokensDetailsWrapper) or not hasattr(details, "google_maps_grounding_requests"):
+        return None
+    return details.google_maps_grounding_requests
+
+
+def cost_per_google_maps_grounding_request(usage: "Usage", model_info: "ModelInfo") -> float:
+    """
+    Calculates the cost of Grounding with Google Maps.
+
+    Billing follows ``web_search_billing_unit`` in model_info the same way Google Search grounding
+    does: ``"per_query"`` (Gemini 3.x) multiplies the executed Maps queries, ``"per_prompt"``
+    (default, Gemini 2.x) charges one flat fee per grounded prompt.
+
+    The rate comes from ``google_maps_grounding_cost_per_query`` in ``model_info``, falling back
+    to Google's list price for that billing unit when the pricing JSON has no entry yet.
+    """
+    requests: Final = google_maps_grounding_requests(usage)
+    if not requests or requests <= 0:
+        return 0.0
+    billing_mode: Final = model_info.get("web_search_billing_unit") or "per_prompt"
+    default_cost: Final = (
+        GOOGLE_MAPS_GROUNDING_DEFAULT_COST_PER_QUERY
+        if billing_mode == "per_query"
+        else GOOGLE_MAPS_GROUNDING_DEFAULT_COST_PER_PROMPT
+    )
+    configured_cost: Final = model_info.get("google_maps_grounding_cost_per_query")
+    cost: Final = default_cost if configured_cost is None else configured_cost
+    billed_requests: Final = requests if billing_mode == "per_query" else 1
+    return cost * billed_requests
