@@ -369,21 +369,11 @@ mutate_only_covered_lines = true
 # rejects the SHA256 instance the fixture builds with "Algorithm must be a
 # registered hash algorithm". Nothing to do with mutation coverage, and one
 # erroring test is enough to end the stats phase before any mutant runs.
-# test_google_login_only_threads_user_code_when_enabled is the same story, one
-# test rather than a whole file. It calls google_login inside a bare
-# `except Exception: pass` and then reads a mock's call_args, so any early raise
-# inside the sandbox surfaces as `'NoneType' object has no attribute 'kwargs'`.
-# Deselected rather than ignored so the rest of test_ui_sso.py still counts.
-# Measured, not guessed: running the folder in the sandbox with the -x of the
-# stats phase overridden gives 1 failed, 2901 passed, so this is the only test
-# that cannot run there.
 pytest_add_cli_args = [
     "-p", "no:retry",
     "-p", "no:rerunfailures",
     "-p", "no:xdist",
     "--ignore=tests/test_litellm/proxy/management_endpoints/test_saml_sso.py",
-    "--deselect",
-    "tests/test_litellm/proxy/management_endpoints/test_ui_sso.py::TestCLIKeyRegenerationFlow::test_google_login_only_threads_user_code_when_enabled",
 ]
 
 [tool.coverage.run]
