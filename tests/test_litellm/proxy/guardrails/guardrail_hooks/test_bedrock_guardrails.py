@@ -466,6 +466,79 @@ async def test_bedrock_guardrail_async_uses_callback_filtered_pool(monkeypatch: 
     router_allows.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_async_uses_pre_routed_model(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.routing_strategy = "usage-based-routing-v2"
+    router.async_pre_routing_hook = AsyncMock(
+        return_value=MagicMock(model="bedrock-model", messages=[{"role": "user", "content": "hi"}])
+    )
+    router.async_get_healthy_deployments = AsyncMock(
+        return_value=[{"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}}]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert (
+        await BedrockGuardrail._async_get_bedrock_api_key(
+            {
+                "model": "router-alias",
+                "api_key": "bedrock-key",
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        == "bedrock-key"
+    )
+    assert router.async_get_healthy_deployments.await_args.kwargs["model"] == "bedrock-model"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_async_honors_nested_tag_override(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.routing_strategy = "usage-based-routing-v2"
+    router.async_get_healthy_deployments = AsyncMock(
+        return_value=[{"litellm_params": {"custom_llm_provider": "bedrock"}, "model_info": {}}]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert (
+        await BedrockGuardrail._async_get_bedrock_api_key(
+            {
+                "model": "router-alias",
+                "api_key": "bedrock-key",
+                "router_settings_override": {"enable_tag_filtering": True},
+            }
+        )
+        == "bedrock-key"
+    )
+    assert router.async_get_healthy_deployments.await_args.kwargs["request_kwargs"]["enable_tag_filtering"] is True
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_async_ignores_zero_weight_provider(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.routing_strategy = "simple-shuffle"
+    router.async_get_healthy_deployments = AsyncMock(
+        return_value=[
+            {"litellm_params": {"custom_llm_provider": "openai", "weight": 0}, "model_info": {}},
+            {"litellm_params": {"custom_llm_provider": "bedrock", "weight": 1}, "model_info": {}},
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert (
+        await BedrockGuardrail._async_get_bedrock_api_key(
+            {"model": "router-alias", "api_key": "bedrock-key"}
+        )
+        == "bedrock-key"
+    )
+
+
 def test_bedrock_guardrail_matches_regex_tag_pool(monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy import proxy_server
 

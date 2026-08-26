@@ -839,10 +839,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         router_kwargs.pop("enable_tag_filtering", None)
         for metadata_name in ("metadata", "litellm_metadata"):
             metadata: Final[object] = router_kwargs.get(metadata_name)
-            if isinstance(metadata, Mapping) and "routing_decision" in metadata:
+            if isinstance(metadata, Mapping):
                 router_kwargs[metadata_name] = {
                     key: value for key, value in metadata.items() if key != "routing_decision"
                 }
+        router_settings_override: Final[object] = router_kwargs.get("router_settings_override")
+        if (
+            isinstance(router_settings_override, Mapping)
+            and router_settings_override.get("enable_tag_filtering") is True
+        ):
+            router_kwargs["enable_tag_filtering"] = True
         return router_kwargs
 
     @staticmethod
@@ -870,6 +876,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             params.get("model") if isinstance(params, Mapping) else getattr(params, "model", None)
         )
         return BedrockGuardrail._resolve_model_provider(deployment_model) if isinstance(deployment_model, str) else None
+
+    @staticmethod
+    def _router_deployments_for_provider_check(deployments: Sequence[object]) -> list[object]:
+        if not deployments:
+            return []
+
+        def _weight(deployment: object, weight_by: str) -> object | None:
+            params: Final[object] = (
+                deployment.get("litellm_params")
+                if isinstance(deployment, Mapping)
+                else getattr(deployment, "litellm_params", None)
+            )
+            return (
+                params.get(weight_by)
+                if isinstance(params, Mapping)
+                else getattr(params, weight_by, None)
+            )
+
+        for weight_by in ("weight", "rpm", "tpm"):
+            first_weight: Final[object | None] = _weight(deployments[0], weight_by)
+            if first_weight is None:
+                continue
+            try:
+                weights: Final[list[object]] = [
+                    0 if (value := _weight(deployment, weight_by)) is None else value for deployment in deployments
+                ]
+                if sum(weights) > 0:
+                    return [deployment for deployment, weight in zip(deployments, weights) if weight > 0]
+            except (TypeError, ValueError):
+                return list(deployments)
+        return list(deployments)
 
     @staticmethod
     def _router_allows_bedrock(
@@ -1259,25 +1296,52 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 model: Final[object | None] = request_data.get("model")
                 if isinstance(model, str):
                     effective_model = model
+                    effective_messages: object | None = (
+                        router_request_kwargs.get("messages")
+                        if isinstance(router_request_kwargs.get("messages"), list)
+                        else None
+                    )
+                    effective_input: object | None = (
+                        router_request_kwargs.get("input")
+                        if isinstance(router_request_kwargs.get("input"), (str, list))
+                        else None
+                    )
                     try:
+                        pre_routing_lookup: Final[object] = getattr(llm_router, "async_pre_routing_hook", None)
+                        if callable(pre_routing_lookup):
+                            pre_routing_result = pre_routing_lookup(
+                                model=model,
+                                request_kwargs=router_request_kwargs,
+                                messages=effective_messages,
+                                input=effective_input,
+                                specific_deployment=request_data.get("specific_deployment") is True,
+                            )
+                            if asyncio.iscoroutine(pre_routing_result):
+                                pre_routing_result = await pre_routing_result
+                            routed_model: Final[object] = getattr(pre_routing_result, "model", None)
+                            if isinstance(routed_model, str):
+                                effective_model = routed_model
+                                routed_messages: Final[object] = getattr(pre_routing_result, "messages", None)
+                                effective_messages = routed_messages if isinstance(routed_messages, list) else None
+                                routed_params: Final[object] = getattr(pre_routing_result, "litellm_params", None)
+                                if isinstance(routed_params, Mapping):
+                                    router_request_kwargs.update(routed_params)
                         healthy_deployments: Final = await async_lookup(
                             model=effective_model,
                             request_kwargs=router_request_kwargs,
-                            messages=router_request_kwargs.get("messages")
-                            if isinstance(router_request_kwargs.get("messages"), list)
-                            else None,
-                            input=router_request_kwargs.get("input")
-                            if isinstance(router_request_kwargs.get("input"), (str, list))
-                            else None,
+                            messages=effective_messages,
+                            input=effective_input,
                             specific_deployment=request_data.get("specific_deployment") is True,
                         )
-                        deployments: Final[list[object]] = (
+                        deployments: list[object] = (
                             [healthy_deployments]
                             if isinstance(healthy_deployments, Mapping)
                             else healthy_deployments
                             if isinstance(healthy_deployments, list)
                             else []
                         )
+                        if routing_strategy == "simple-shuffle":
+                            deployments = BedrockGuardrail._router_deployments_for_provider_check(deployments)
                         if deployments:
                             providers: list[str] = []
                             for deployment in deployments:
