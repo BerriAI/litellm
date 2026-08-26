@@ -203,6 +203,11 @@ class LLMCallEvent:
     # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
     # the ``pre_call`` hook but never made an upstream call, so they get no span.
     is_no_upstream_call: bool
+    # True once the request handed off to a provider (``pre_call`` stamped
+    # ``api_call_start_time``). The affirmative signal that an LLM call was
+    # actually attempted — router pre-call rejections, SDK failures before the
+    # provider handoff, and standalone guardrail runs all lack it.
+    upstream_started: bool
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
@@ -221,6 +226,7 @@ class LLMCallEvent:
             dynamic_params=kwargs.get("standard_callback_dynamic_params"),
             auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
+            upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
         )

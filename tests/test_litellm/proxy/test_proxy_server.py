@@ -2,9 +2,9 @@ import asyncio
 import importlib
 import json
 import os
+import re
 import socket
 import subprocess
-import sys
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +19,6 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
@@ -77,6 +76,16 @@ def client_no_auth():
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     asyncio.run(initialize(config=config_fp, debug=True))
     return TestClient(app)
+
+
+def test_cors_exposes_cache_key_header_to_browser_js():
+    from fastapi.middleware.cors import CORSMiddleware
+
+    from litellm.constants import LITELLM_UI_ALLOW_HEADERS
+
+    cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
+    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
 
 
 def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
@@ -1507,7 +1516,7 @@ def test_team_info_masking():
         "langfuse_public_key": "public-test-key",
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="secr\\*\\*\\*\\*\\*\\*\\*-key', 'langfuse_public_key':") as exc_info:
         proxy_config._get_team_config(
             team_id="test_dev",
             all_teams_config=[team1_info],
@@ -1849,6 +1858,38 @@ def test_add_team_models_to_all_models_excludes_other_teams_byok_with_shared_nam
 
     result = _add_team_models_to_all_models(team_db_objects_typed=[team], llm_router=llm_router)
     assert result == {"model-a-id": {"team-a"}}
+
+
+@pytest.mark.asyncio
+async def test_non_admin_all_models_returns_user_models_when_user_row_missing():
+    """
+    Regression test: /key/generate mints keys without a LiteLLM_UserTable row, so
+    find_unique returns None for such a user. That miss must neither raise (a 400
+    here, or the AttributeError on `user_row.teams` that used to surface as a 500)
+    nor leak team models: the user belongs to no team, so only the models they
+    added themselves come back.
+    """
+    from litellm.proxy.proxy_server import non_admin_all_models
+
+    user_added_model = {"model_name": "my-model", "model_info": {"id": "user-model-1"}}
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=MagicMock(created_by="ghost-user"))
+
+    llm_router = MagicMock()
+    llm_router.get_model_list.return_value = [
+        user_added_model,
+        {"model_name": "team-model", "model_info": {"id": "team-model-1", "team_id": "team-a"}},
+    ]
+
+    result = await non_admin_all_models(
+        all_models=[user_added_model],
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="ghost-user"),
+        prisma_client=prisma_client,
+    )
+
+    assert result == [user_added_model]
 
 
 @pytest.mark.asyncio
@@ -2683,7 +2724,7 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
     with open(empty_file, "w") as f:
         f.write("")  # Write empty content which will result in None when loaded
 
-    with pytest.raises(Exception, match="Config cannot be None or Empty."):
+    with pytest.raises(Exception, match=re.escape("Config cannot be None or Empty.")):
         await proxy_config._get_config_from_file(str(empty_file))
 
     # Test Case 5: Using global user_config_file_path when no config_file_path provided
@@ -3344,7 +3385,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -3392,7 +3433,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -11195,3 +11236,191 @@ class TestEmbeddingsFailureHookRequestData:
         hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
         assert hook_request_data is captured["processor_data"]
         assert hook_request_data["litellm_logging_obj"] is logging_obj_sentinel
+
+
+class TestRouterModelNameOnStreamingChunks:
+    """
+    Streaming chunks get the body `model` restamped to the client-requested alias
+    just like non-streaming responses, so an auto-routed request had no way to
+    name the model group that served it without reading response headers. Every
+    emitted chunk now carries `router_model_name`.
+
+    These assert on the serialized SSE bytes, not on the chunk objects. The fast
+    path (`_fast_serialize_simple_model_response_stream`) hand-builds a
+    closed-set dict, so a chunk object can carry the field while the wire drops
+    it, and an object-level assertion would pass against that bug.
+    """
+
+    @staticmethod
+    def _chunk(*, with_usage=False):
+        from litellm.types.utils import ModelResponseStream
+
+        return ModelResponseStream(
+            model="smart-route",
+            choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}}],
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2} if with_usage else None,
+        )
+
+    @staticmethod
+    def _request_data(*, auto_routed):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_params = {
+            "metadata": {
+                **({AUTO_ROUTED_REQUEST_METADATA_KEY: True} if auto_routed else {}),
+                "deployment_model_name": "deep-model",
+            }
+        }
+        return {"model": "smart-route", "litellm_logging_obj": logging_obj}
+
+    async def _drive(self, *, chunks, request_data, on_yield=None):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.proxy_server import async_data_generator
+        from litellm.proxy.utils import ProxyLogging
+
+        class MockStream:
+            def __aiter__(self):
+                return self._stream()
+
+            async def _stream(self):
+                for index, chunk in enumerate(chunks):
+                    if on_yield is not None:
+                        on_yield(index)
+                    yield chunk
+
+        mock_response = MockStream()
+        mock_response.aclose = AsyncMock()
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.has_streaming_callbacks.return_value = False
+        proxy_logging_obj.needs_iterator_wrap.return_value = False
+        proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+        with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj):
+            with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+                return [
+                    data
+                    async for data in async_data_generator(
+                        mock_response, MagicMock(spec=UserAPIKeyAuth), request_data
+                    )
+                ]
+
+    @staticmethod
+    def _data_frames(emitted):
+        return [
+            frame.decode() if isinstance(frame, bytes) else frame
+            for frame in emitted
+            if b"[DONE]" not in (frame if isinstance(frame, bytes) else frame.encode())
+        ]
+
+    @pytest.mark.asyncio
+    async def test_fast_path_chunk_carries_router_model_name_on_the_wire(self):
+        emitted = await self._drive(chunks=[self._chunk()], request_data=self._request_data(auto_routed=True))
+
+        frames = self._data_frames(emitted)
+        assert frames
+        assert all('"router_model_name":"deep-model"' in frame for frame in frames)
+        assert all('"model":"smart-route"' in frame for frame in frames)
+
+    @pytest.mark.asyncio
+    async def test_slow_path_chunk_carries_router_model_name_on_the_wire(self):
+        emitted = await self._drive(
+            chunks=[self._chunk(with_usage=True)], request_data=self._request_data(auto_routed=True)
+        )
+
+        frames = self._data_frames(emitted)
+        assert frames
+        assert all('"router_model_name":"deep-model"' in frame for frame in frames)
+
+    @pytest.mark.asyncio
+    async def test_plain_model_group_stream_has_no_router_model_name(self):
+        emitted = await self._drive(
+            chunks=[self._chunk(), self._chunk(with_usage=True)],
+            request_data=self._request_data(auto_routed=False),
+        )
+
+        frames = self._data_frames(emitted)
+        assert frames
+        assert all("router_model_name" not in frame for frame in frames)
+
+    @pytest.mark.asyncio
+    async def test_fallback_out_of_the_routed_group_drops_the_field(self):
+        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+
+        request_data = self._request_data(auto_routed=True)
+        bucket = request_data["litellm_logging_obj"].litellm_params["metadata"]
+
+        def fall_back(index):
+            if index == 1:
+                bucket.pop(AUTO_ROUTED_REQUEST_METADATA_KEY)
+                bucket["deployment_model_name"] = "backup-model"
+
+        emitted = await self._drive(
+            chunks=[self._chunk(), self._chunk(), self._chunk()],
+            request_data=request_data,
+            on_yield=fall_back,
+        )
+
+        frames = self._data_frames(emitted)
+        assert len(frames) >= 3
+        assert '"router_model_name":"deep-model"' in frames[0]
+        assert all("router_model_name" not in frame for frame in frames[1:])
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_another_auto_router_reports_the_new_tier(self):
+        request_data = self._request_data(auto_routed=True)
+        bucket = request_data["litellm_logging_obj"].litellm_params["metadata"]
+
+        def fall_back(index):
+            if index == 1:
+                bucket["deployment_model_name"] = "backup-tier"
+
+        emitted = await self._drive(
+            chunks=[self._chunk(), self._chunk(), self._chunk()],
+            request_data=request_data,
+            on_yield=fall_back,
+        )
+
+        frames = self._data_frames(emitted)
+        assert len(frames) >= 3
+        assert '"router_model_name":"deep-model"' in frames[0]
+        assert all('"router_model_name":"backup-tier"' in frame for frame in frames[1:])
+
+
+@pytest.mark.asyncio
+async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the_db_read():
+    """A team-member spend reset writes the post-reset floor to the spend_db_floor marker
+    (auth_checks.invalidate_team_member_spend_state). A floor read already in flight when the
+    reset commits would otherwise cache its stale pre-reset DB value over the fresh marker,
+    letting a budget check raise the counter right back above the just-reset spend
+    (regression: PR #37971 Greptile finding)."""
+    from litellm.proxy.proxy_server import _authoritative_floor_spend
+
+    real_spend_counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+    marker_key = f"spend_db_floor:{counter_key}"
+
+    async def db_read_racing_with_a_reset(prisma_client, counter_key):
+        real_spend_counter_cache.in_memory_cache.set_cache(key=marker_key, value=0.0)
+        return 999.0
+
+    with (
+        patch.object(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            proxy_server_module, "spend_counter_cache", real_spend_counter_cache
+        ),
+        patch.object(  # test-quality-ok: the DB read must race the reset; no injectable seam for module-global prisma reads
+            proxy_server_module.SpendCounterReseed,
+            "from_db",
+            AsyncMock(side_effect=db_read_racing_with_a_reset),
+        ),
+    ):
+        result = await _authoritative_floor_spend(counter_key=counter_key)
+
+    assert result == 0.0
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key=marker_key) == 0.0, (
+        "the in-flight DB read clobbered the post-reset floor marker with the stale pre-reset value"
+    )

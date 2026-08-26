@@ -14,14 +14,11 @@ must round-trip through `client.files.content(...)` back to bedrock with AWS
 credentials and the raw S3 URI intact.
 """
 
-import os
-import sys
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache

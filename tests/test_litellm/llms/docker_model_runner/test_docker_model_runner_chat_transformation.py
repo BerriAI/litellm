@@ -5,10 +5,7 @@ This test validates that the DockerModelRunnerChatConfig correctly transforms
 requests to the proper URL, headers, and body format.
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import json
 from typing import cast

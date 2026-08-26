@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
 import {
   getPassThroughEndpointsCall,
   getPoliciesList,
@@ -1202,6 +1203,94 @@ describe("KeyEditView", () => {
       expect(onSubmitMock).toHaveBeenCalled();
       const callArgs = onSubmitMock.mock.calls[0][0];
       expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
+  describe("per-model budgets", () => {
+    const keyDataWithBudgets = {
+      ...MOCK_KEY_DATA,
+      model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "30d" } },
+    };
+
+    const renderWith = (premiumUser: boolean) => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyDataWithBudgets}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={premiumUser}
+        />,
+      );
+      return onSubmit;
+    };
+
+    // Same hazard as the user edit form: keyData changes while this component
+    // stays mounted (the effect re-seeds the form for exactly that reason), and
+    // the editor's rows live in state seeded once.
+    it("re-seeds the editor when a different key is loaded", async () => {
+      const withBudget = (limit: number, token: string) => ({
+        ...MOCK_KEY_DATA,
+        token,
+        model_max_budget: { "gpt-4": { budget_limit: limit, time_period: "1h" } },
+      });
+
+      const { rerender } = renderWithProviders(
+        <KeyEditView
+          keyData={withBudget(5, "tok-a")}
+          onCancel={() => {}}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={true}
+        />,
+      );
+      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(5);
+
+      rerender(
+        <KeyEditView
+          keyData={withBudget(99, "tok-b")}
+          onCancel={() => {}}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={true}
+        />,
+      );
+
+      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(99);
+    });
+
+    it("should say why the editor is locked when the proxy has no enterprise license", async () => {
+      renderWith(false);
+
+      expect(await screen.findByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    });
+
+    it("should leave the editor usable when the proxy has one", async () => {
+      renderWith(true);
+
+      expect(await screen.findByText(/Cap spend per model over its own window/)).toBeInTheDocument();
+      expect(screen.queryByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).not.toBeInTheDocument();
+    });
+
+    // /key/update validates model_max_budget whenever the field is present and
+    // rejects it without a license, so re-sending an untouched budget would turn
+    // every unrelated edit into a 400.
+    it("should leave model_max_budget out of an edit that did not touch it", async () => {
+      const onSubmit = renderWith(true);
+
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("model_max_budget");
     });
   });
 

@@ -1,15 +1,12 @@
 import asyncio
 import json
 import logging
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
@@ -24,8 +21,13 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
+    _collect_ws_project_quota_callbacks,
     _google_genai_streaming_hidden_params,
+    _has_pre_call_deployment_hook,
+    _rust_responses_websocket_enabled,
 )
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
+from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TranscriptionResponse
@@ -2144,6 +2146,77 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     assert retry_authorization != first_attempt_headers["Authorization"]
 
 
+class TestServerFulfilledToolsInRequest:
+    """_server_fulfilled_tools_in_request gates the buffered (non-leaking) streaming
+    mode for server-fulfilled tools like headroom_retrieve."""
+
+    @staticmethod
+    def _logging_obj_with(callbacks):
+        logging_obj = Mock()
+        logging_obj.dynamic_success_callbacks = callbacks
+        return logging_obj
+
+    def test_should_hold_back_when_callback_owns_tool_in_request(self):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class RetrievalCallback(CustomLogger):
+            server_fulfilled_tool_names = frozenset({"headroom_retrieve"})
+
+        tools = [
+            {"name": "Bash", "input_schema": {"type": "object"}},
+            {"name": "headroom_retrieve", "input_schema": {"type": "object"}},
+        ]
+        assert BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+            logging_obj=self._logging_obj_with([RetrievalCallback()]), tools=tools
+        ) == frozenset({"headroom_retrieve"})
+
+    def test_should_stream_live_when_tool_absent_from_request(self):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class RetrievalCallback(CustomLogger):
+            server_fulfilled_tool_names = frozenset({"headroom_retrieve"})
+
+        tools = [{"name": "Bash", "input_schema": {"type": "object"}}]
+        assert (
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+                logging_obj=self._logging_obj_with([RetrievalCallback()]), tools=tools
+            )
+            == frozenset()
+        )
+
+    def test_should_stream_live_when_no_callback_declares_tool_names(self):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        tools = [{"name": "headroom_retrieve", "input_schema": {"type": "object"}}]
+        assert (
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(
+                logging_obj=self._logging_obj_with([CustomLogger()]), tools=tools
+            )
+            == frozenset()
+        )
+
+    def test_should_stream_live_without_tools(self):
+        assert (
+            BaseLLMHTTPHandler._server_fulfilled_tools_in_request(logging_obj=self._logging_obj_with([]), tools=None)
+            == frozenset()
+        )
+
+    def test_interception_callbacks_declare_their_retrieval_tools(self):
+        from litellm.integrations.compression_interception.handler import (
+            LITELLM_CONTENT_RETRIEVE_TOOL_NAME,
+            CompressionInterceptionLogger,
+        )
+        from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
+            HEADROOM_RETRIEVE_TOOL_NAME,
+            HeadroomGuardrail,
+        )
+
+        assert HeadroomGuardrail.server_fulfilled_tool_names == frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
+        assert CompressionInterceptionLogger.server_fulfilled_tool_names == frozenset(
+            {LITELLM_CONTENT_RETRIEVE_TOOL_NAME}
+        )
+
+
 def _make_stub_direct_vector_store_config(response):
     from litellm.llms.base_llm.vector_store.transformation import (
         BaseDirectVectorStoreConfig,
@@ -2369,3 +2442,318 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
 
     unconfigured_deployment = await logging_obj_after_handler(GenericLiteLLMParams())
     assert "vertex_location" not in unconfigured_deployment.litellm_params
+
+
+_GENERIC_STREAM_SSE = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,'
+    b'"model":"test-model","choices":[{"index":0,"delta":{"content":"hi"},'
+    b'"finish_reason":null}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+def _generic_stream_upstream_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={
+            "x-request-id": "generic-req-123",
+            "x-ratelimit-remaining-requests": "42",
+        },
+        content=_GENERIC_STREAM_SSE,
+        request=httpx.Request("POST", "https://fake-vllm.test/v1/chat/completions"),
+    )
+
+
+def test_generic_http_handler_sync_streaming_forwards_provider_response_headers():
+    """
+    Regression test for the generic BaseLLMHTTPHandler streaming path used by
+    ~30 providers (deepseek, groq, hosted_vllm, databricks, openrouter, ...).
+
+    The sync `completion()` streaming branch builds the CustomStreamWrapper from
+    `make_sync_call`, which returns the upstream response headers alongside the
+    stream. Those headers must reach the caller as `llm_provider-*` entries in
+    `_hidden_params["additional_headers"]`, which is what the proxy merges into
+    the client-facing response headers.
+    """
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post = Mock(return_value=_generic_stream_upstream_response())
+
+    response = litellm.completion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in response]) == "hi"
+
+
+@pytest.mark.asyncio
+async def test_generic_http_handler_async_streaming_forwards_provider_response_headers():
+    """
+    Companion to the sync test above for `acompletion_stream_function`, which
+    builds its CustomStreamWrapper from `make_async_call_stream_helper`.
+    """
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=_generic_stream_upstream_response())
+
+    response = await litellm.acompletion(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://fake-vllm.test/v1",
+        api_key="sk-test",
+        stream=True,
+        client=mock_client,
+    )
+
+    additional_headers = response._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "generic-req-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+
+    collected = [chunk async for chunk in response]
+    assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, litellm_params, expected",
+    [
+        ("openai", GenericLiteLLMParams(rust=True), True),
+        ("openai", GenericLiteLLMParams(), False),
+        ("openai", GenericLiteLLMParams(rust=False), False),
+        ("azure", GenericLiteLLMParams(rust=True), False),
+        ("hosted_vllm", GenericLiteLLMParams(rust=True), False),
+        (None, GenericLiteLLMParams(rust=True), False),
+    ],
+)
+def test_the_rust_responses_websocket_needs_both_openai_and_the_rust_flag(
+    custom_llm_provider, litellm_params, expected
+):
+    assert _rust_responses_websocket_enabled(custom_llm_provider, litellm_params) is expected
+
+
+def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _PlainLogger(CustomLogger):
+        pass
+
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    assert _has_pre_call_deployment_hook(logging_obj) is False
+
+    monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
+    assert _has_pre_call_deployment_hook(logging_obj) is False
+
+
+def test_a_callback_that_overrides_the_deployment_hook_is_detected(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _DeploymentHookLogger(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            return None
+
+    class _InheritsTheHook(_DeploymentHookLogger):
+        pass
+
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    monkeypatch.setattr(litellm, "callbacks", [_DeploymentHookLogger()])
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+    monkeypatch.setattr(litellm, "callbacks", [_InheritsTheHook()])
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj.dynamic_success_callbacks = [_DeploymentHookLogger()]
+    assert _has_pre_call_deployment_hook(logging_obj) is True
+
+
+def test_only_callbacks_that_can_charge_a_frame_are_collected_for_ws_quota(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _PlainLogger(CustomLogger):
+        pass
+
+    class _QuotaLogger(CustomLogger):
+        async def enforce_project_io_token_quota_for_frame(self, *args, **kwargs):
+            return None
+
+    class _NotCallableAttribute:
+        enforce_project_io_token_quota_for_frame = "not a method"
+
+    plain, quota, decoy = _PlainLogger(), _QuotaLogger(), _NotCallableAttribute()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, decoy])
+    assert _collect_ws_project_quota_callbacks() == ()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, quota, decoy])
+    assert _collect_ws_project_quota_callbacks() == (quota,)
+
+
+@pytest.mark.asyncio
+async def test_async_rerank_records_llm_api_duration():
+    """arerank must feed the httpx timing into the logging obj, so the proxy can emit
+    x-litellm-overhead-duration-ms / x-litellm-timing-* on /rerank."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "rerank-1",
+                "results": [{"index": 0, "relevance_score": 0.9}],
+                "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 1}},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.arerank(
+        model="cohere/rerank-v3.5",
+        query="what is the capital of france",
+        documents=["paris", "berlin"],
+        top_n=1,
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert response._hidden_params["litellm_overhead_time_ms"] is not None
+    assert response._hidden_params["_response_ms"] >= response._hidden_params["litellm_overhead_time_ms"]
+
+
+class _JSONBodyVideoConfig(OpenAIVideoConfig):
+    def use_multipart_form_data(self) -> bool:
+        return False
+
+
+def _video_create_call_kwargs(config, **optional_params):
+    return {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "video_generation_provider_config": config,
+        "video_generation_optional_request_params": {"seconds": "4", **optional_params},
+        "custom_llm_provider": "openai",
+        "litellm_params": GenericLiteLLMParams(api_key="sk-test", api_base="https://video.example/v1"),
+        "logging_obj": Mock(),
+        "timeout": 10.0,
+    }
+
+
+def _capture_video_create_request(captured):
+    def respond(request):
+        captured["content_type"] = request.headers.get("content-type")
+        captured["body"] = request.content
+        return httpx.Response(
+            200,
+            json={"id": "video_123", "object": "video", "status": "queued", "created_at": 1712697600, "model": "sora-2"},
+        )
+
+    return respond
+
+
+def _multipart_text_fields(content_type: str, body: bytes) -> dict:
+    boundary = content_type.split("boundary=")[1].encode()
+    return {
+        part.split(b'name="')[1].split(b'"')[0].decode(): part.partition(b"\r\n\r\n")[2].rstrip(b"\r\n-").decode()
+        for part in body.split(b"--" + boundary)
+        if b'name="' in part and b"filename=" not in part
+    }
+
+
+def test_video_generation_without_file_sends_multipart_form_data():
+    """Regression for #36493: the OpenAI SDK always sends /videos requests as
+    multipart/form-data, so OpenAI-compatible backends (SGLang Diffusion,
+    vLLM-Omni) reject the JSON body LiteLLM used to send when no
+    input_reference file was attached."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(OpenAIVideoConfig()))
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_async_video_generation_without_file_sends_multipart_form_data():
+    captured = {}
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_capture_video_create_request(captured)))
+
+    result = await BaseLLMHTTPHandler().async_video_generation_handler(
+        client=client, **_video_create_call_kwargs(OpenAIVideoConfig())
+    )
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"
+
+
+def test_azure_video_generation_without_file_sends_multipart_form_data():
+    """AzureVideoConfig subclasses OpenAIVideoConfig, so it inherits the
+    file-less multipart behavior. Azure's /openai/v1/videos surface is
+    OpenAI-SDK-compatible (the SDK sends multipart there too), so this is
+    intentional; lock it so the inherited flip can't silently regress to JSON."""
+    assert AzureVideoConfig().use_multipart_form_data() is True
+
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(AzureVideoConfig()))
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"
+
+
+def test_video_generation_json_provider_keeps_json_body():
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig()))
+
+    assert captured["content_type"] == "application/json"
+    assert json.loads(captured["body"]) == {"model": "sora-2", "prompt": "a cat surfing", "seconds": "4"}
+    assert result.status == "queued"
+
+
+def test_video_generation_with_input_reference_keeps_file_multipart():
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
+
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client,
+        **_video_create_call_kwargs(OpenAIVideoConfig(), input_reference=b"\x89PNG\r\n\x1a\nfakepng"),
+    )
+
+    assert captured["content_type"].startswith("multipart/form-data")
+    assert b'name="input_reference"' in captured["body"]
+    assert b'filename="input_reference.png"' in captured["body"]
+    assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
+        "model": "sora-2",
+        "prompt": "a cat surfing",
+        "seconds": "4",
+    }
+    assert result.status == "queued"

@@ -84,7 +84,7 @@ class TestResponsesAPIWebSocketSupport:
 
     def test_azure_websocket_url_requires_api_base(self):
         config = AzureOpenAIResponsesAPIConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='api_base is required for Azure WebSocket'):
             config.get_websocket_url(api_base=None, litellm_params={})
 
     def test_azure_model_not_in_websocket_url(self):

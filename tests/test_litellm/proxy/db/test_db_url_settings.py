@@ -504,7 +504,7 @@ def test_apply_to_env_rejects_pinned_sqlite_direct_url(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
     monkeypatch.setenv("DIRECT_URL", "sqlite:///data/litellm.db")
 
-    with pytest.raises(RuntimeError, match="DIRECT_URL.*sqlite"):
+    with pytest.raises(RuntimeError, match=r"DIRECT_URL.*sqlite"):
         _apply()
 
 
@@ -514,7 +514,7 @@ def test_apply_to_env_rejects_pinned_non_postgres_reader(monkeypatch):
         "DATABASE_URL_READ_REPLICA", "mysql://u:p@reader.example.com:3306/db"
     )
 
-    with pytest.raises(RuntimeError, match="DATABASE_URL_READ_REPLICA.*mysql"):
+    with pytest.raises(RuntimeError, match=r"DATABASE_URL_READ_REPLICA.*mysql"):
         _apply()
 
 

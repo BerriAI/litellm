@@ -514,21 +514,6 @@ def test_vertex_claude_completion_does_not_mutate_shared_extra_headers():
     ), "extra_headers must not be mutated by completion()"
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so capability flags match this branch."""
-    import litellm
-
-    original = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original
-        litellm.get_model_info.cache_clear()
-
 
 def test_messages_thinking_shape_follows_exact_vertex_entry_flag(local_model_cost_map, monkeypatch):
     """The Vertex messages config must probe capabilities under ``vertex_ai`` so an
@@ -553,7 +538,7 @@ def test_messages_thinking_shape_follows_exact_vertex_entry_flag(local_model_cos
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(

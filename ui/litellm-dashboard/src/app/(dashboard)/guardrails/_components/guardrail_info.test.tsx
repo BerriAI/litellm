@@ -82,6 +82,36 @@ describe("Guardrail Info", () => {
     expect(getByText("Settings")).toBeInTheDocument();
   });
 
+  it("should render a tag-based mode object rather than crashing the detail view", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: {
+        guardrail: "bedrock",
+        mode: { tags: { "Service-Type: internal-service": "post_call" }, default: ["pre_call", "post_call"] },
+        default_on: true,
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { findAllByText } = render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+    );
+
+    expect(await findAllByText("pre_call, post_call (tag-based)")).not.toHaveLength(0);
+  });
+
   it("should render the provider logo from the bundled guardrail logo map", async () => {
     vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
       guardrail_id: "123",

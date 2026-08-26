@@ -176,6 +176,10 @@ class UserProvisionerHelpers:
         is persisted too, so re-upserting an existing email demotes a user who is no
         longer in the admin group instead of leaving the stale role.
 
+        IdPs like Entra manage membership exclusively through /Groups and never send
+        ``groups`` on POST /Users, so a request without teams means "unspecified",
+        not "remove from every team": existing memberships are preserved then.
+
         Args:
             prisma_client: Database client
             new_user_request: New user request data
@@ -194,7 +198,8 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
-        new_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
@@ -487,13 +492,18 @@ class _UnknownMember(NamedTuple):
     value: str
 
 
-_ClassifiedGroupMember = Union[_ResolvedUserMember, _SkippedGroupMember, _UnknownMember]
+class _AmbiguousMember(NamedTuple):
+    value: str
+
+
+_ClassifiedGroupMember = Union[_ResolvedUserMember, _SkippedGroupMember, _UnknownMember, _AmbiguousMember]
 
 
 class _PartitionedMembers(NamedTuple):
     resolved_ids: tuple[str, ...]
     skipped: tuple[_SkippedGroupMember, ...]
     unknown_ids: tuple[str, ...]
+    ambiguous_values: tuple[str, ...]
 
 
 def _member_value(member: SCIMMember) -> str:
@@ -536,6 +546,44 @@ def _team_metadata_has_scim_provenance(team_metadata: object) -> bool:
     return bool(fields.get(SCIM_MANAGED_TEAM_METADATA_KEY)) or fields.get(SCIM_TEAM_DATA_METADATA_KEY) is not None
 
 
+class _CaseInsensitiveMatch(TypedDict):
+    equals: ReadOnly[str]
+    mode: ReadOnly[str]
+
+
+async def _users_named_by_member_value(
+    value: str, prisma_client: PrismaClient, *, take: int | None = 2
+) -> tuple[str, ...]:
+    """Every user id this member value names, by SSO identity or by email.
+
+    Both fields are searched in one pass, because searching either first would hide a
+    value that names one account by its SSO identity and another by its email, and
+    hand the group to whichever field was searched first.
+
+    They are not compared alike. An email is matched the way ``new_user`` matches one
+    before it accepts a new account, case-insensitively: matching more strictly than
+    the layer that would reject the placeholder is what turned a member id whose
+    casing differed from the stored email into a 500 on the whole push. An SSO
+    identity is matched exactly, because OIDC defines ``sub`` as case-sensitive and
+    nothing folds its case on the way in, so treating two subjects that differ in case
+    as one would hand the group to an account the provider never named.
+
+    ``take`` bounds the read for a caller that only needs to know whether the value
+    names one account or several; ``user_email`` carries no index, so letting the scan
+    stop early is worth the two rows. A caller that has to know *which* accounts, as a
+    removal does, passes None. That set is the accounts sharing one identity, which is
+    a handful at worst.
+    """
+    subject: Final = value.strip()
+    email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
+    rows: Final = await _table(UserRepository(prisma_client)).find_many(
+        # mutable-ok: the Prisma serializer requires concrete dicts and a concrete list
+        where={"OR": [{"sso_user_id": subject}, {"user_email": email}]},
+        take=take,
+    )
+    return tuple(dict.fromkeys(row.user_id for row in rows))
+
+
 async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient) -> _ClassifiedGroupMember:
     """
     Decide what a single SCIM group member refers to.
@@ -557,6 +605,20 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
       one the identity provider writes. An id the IdP called a User is a user
       even if some team happens to share the id, and a team created here rather
       than through SCIM is not evidence of anything about the member.
+
+    When those checks miss on an otherwise user-shaped member, its value is looked
+    up as an SSO identity or an email, and a match resolves to that user's
+    ``user_id``. A value that names more than one account is ambiguous rather than
+    unknown: it names a real person we cannot identify, so it is neither guessed at
+    nor provisioned.
+
+    An exact ``user_id`` hit is checked the same way rather than trusted outright. A
+    value can be one account's id and another's SSO identity or email, and taking the
+    id on sight would hand the group to whichever account happened to be keyed by it.
+    The placeholders this bug provisioned are that shape exactly, since they are keyed
+    by the very id the provider keeps pushing, so on a tenant that already has them
+    the membership is refused and named rather than silently landing on the
+    placeholder again.
     """
     value: Final = _member_value(member)
     member_type: Final = _normalized_member_type(member)
@@ -566,6 +628,18 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
 
     user: Final = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": value})
     if user is not None:
+        shared_with: Final = tuple(
+            other for other in await _users_named_by_member_value(value, prisma_client) if other != value
+        )
+        if shared_with:
+            verbose_proxy_logger.warning(
+                "SCIM: group member '%s' is one account's user id and is also account '%s' by SSO identity or email, "
+                "so the membership cannot be attributed. A placeholder an earlier release provisioned under this id "
+                "looks exactly like this and should be deleted so the real account can be matched",
+                value,
+                shared_with[0],
+            )
+            return _AmbiguousMember(value=value)
         return _ResolvedUserMember(user_id=value)
 
     if member_type is not None and member_type != "user":
@@ -576,6 +650,22 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
         if team is not None and _team_metadata_has_scim_provenance(team.metadata):
             return _SkippedGroupMember(value=value, reason="existing_team")
 
+    named: Final = await _users_named_by_member_value(value, prisma_client)
+    if len(named) == 1:
+        verbose_proxy_logger.info(
+            "SCIM: group member '%s' matched user_id '%s' by SSO identity or email",
+            value,
+            named[0],
+        )
+        return _ResolvedUserMember(user_id=named[0])
+    if len(named) > 1:
+        verbose_proxy_logger.warning(
+            "SCIM: group member '%s' names more than one account by SSO identity or email and cannot be resolved "
+            "unambiguously",
+            value,
+        )
+        return _AmbiguousMember(value=value)
+
     return _UnknownMember(value=value)
 
 
@@ -583,11 +673,13 @@ def _bucketed_member(entry: _ClassifiedGroupMember) -> _PartitionedMembers:
     """The single-member partition one classified entry contributes."""
     match entry:
         case _ResolvedUserMember(user_id=user_id):
-            return _PartitionedMembers(resolved_ids=(user_id,), skipped=(), unknown_ids=())
+            return _PartitionedMembers(resolved_ids=(user_id,), skipped=(), unknown_ids=(), ambiguous_values=())
         case _SkippedGroupMember():
-            return _PartitionedMembers(resolved_ids=(), skipped=(entry,), unknown_ids=())
+            return _PartitionedMembers(resolved_ids=(), skipped=(entry,), unknown_ids=(), ambiguous_values=())
         case _UnknownMember(value=value):
-            return _PartitionedMembers(resolved_ids=(), skipped=(), unknown_ids=(value,))
+            return _PartitionedMembers(resolved_ids=(), skipped=(), unknown_ids=(value,), ambiguous_values=())
+        case _AmbiguousMember(value=value):
+            return _PartitionedMembers(resolved_ids=(), skipped=(), unknown_ids=(), ambiguous_values=(value,))
         case _:
             assert_never(entry)
 
@@ -599,6 +691,7 @@ def _partition_classified_members(classified: Iterable[_ClassifiedGroupMember]) 
         resolved_ids=tuple(chain.from_iterable(bucket.resolved_ids for bucket in bucketed)),
         skipped=tuple(chain.from_iterable(bucket.skipped for bucket in bucketed)),
         unknown_ids=tuple(chain.from_iterable(bucket.unknown_ids for bucket in bucketed)),
+        ambiguous_values=tuple(chain.from_iterable(bucket.ambiguous_values for bucket in bucketed)),
     )
 
 
@@ -608,7 +701,7 @@ def _admitted_member_id(entry: _ClassifiedGroupMember, created_ids: frozenset[st
             return user_id
         case _UnknownMember(value=value):
             return value if value in created_ids else None
-        case _SkippedGroupMember():
+        case _SkippedGroupMember() | _AmbiguousMember():
             return None
         case _:
             assert_never(entry)
@@ -662,6 +755,70 @@ async def _ensure_group_member_user(
     raise HTTPException(status_code=500, detail=detail)
 
 
+def _roster_entries_named_by(value: str, roster: frozenset[str], resolved: tuple[str, ...]) -> tuple[str, ...]:
+    """The members of this group a removal value names.
+
+    Both ways of naming one count together. The id as written counts when the roster
+    holds it verbatim, which is how an earlier release recorded a member it could not
+    match, and the accounts it resolves to count when they are on the roster. Counting
+    only the resolved ones would let a value that is one member's canonical id and
+    another member's email revoke both, since each looks singular on its own.
+    """
+    return tuple(
+        dict.fromkeys(
+            chain(
+                (value,) if value in roster else (),
+                (user_id for user_id in resolved if user_id in roster),
+            )
+        )
+    )
+
+
+async def _member_ids_to_drop(
+    members: Sequence[SCIMMember], roster: frozenset[str], prisma_client: PrismaClient
+) -> frozenset[str]:
+    """The members a ``remove`` clears, one per id the request names.
+
+    The roster holds canonical user ids, so a directory that added someone by their
+    email or SSO identity has to be able to remove them by that same value, and a
+    member an earlier release recorded under the raw id has to stay removable by it.
+
+    Ambiguity is a property of the table as it stands, not of the value, so a value
+    that named one person when they were admitted can name two later. Resolving a
+    removal against the whole table would then drop nobody while answering 200, and
+    the person the directory just took out of the group would keep the team. So a
+    removal keeps only the accounts already on the roster: one is unambiguous however
+    many strangers share the address, none means there is nothing to revoke, and only
+    a value naming two of this group's own members is genuinely undecidable. That last
+    case fails rather than reporting a removal it did not perform, or revoking both.
+
+    Raises:
+        HTTPException: 400 when a member id names more than one current member.
+    """
+    written: Final = frozenset(_member_value(member) for member in members)
+    matched: Final = tuple(
+        [
+            (
+                value,
+                _roster_entries_named_by(
+                    value, roster, await _users_named_by_member_value(value, prisma_client, take=None)
+                ),
+            )
+            for value in sorted(written)
+        ]
+    )
+    undecidable: Final = tuple(value for value, entries in matched if len(entries) > 1)
+    if undecidable:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Member ID '{undecidable[0]}' names more than one member of this group, so the removal "
+                "cannot be attributed. Send the LiteLLM user ID as the member value, or resolve the duplicate."
+            },
+        )
+    return frozenset(chain.from_iterable(entries for _, entries in matched))
+
+
 async def _resolve_group_member_ids(
     members: Sequence[SCIMMember],
     created_via: str,
@@ -670,17 +827,18 @@ async def _resolve_group_member_ids(
     """
     Resolve SCIM group members to LiteLLM user ids, dropping members that are not users.
 
-    Only the operations that put ids onto a roster resolve their members: an id
-    that resolves to nothing is created when litellm_settings.scim_upsert_user is
-    True (default) and rejected per SCIM 2.0 otherwise. Removals do not come
-    through here; dropping an id is idempotent, so it needs neither a lookup nor a
-    user to drop.
+    Member ids are matched by ``user_id`` first, then by SSO identity or email. An
+    id that resolves to nothing is created when litellm_settings.scim_upsert_user is
+    True (default) and rejected per SCIM 2.0 otherwise. Removals do not come through
+    here: they resolve through ``_member_ids_to_drop`` instead, which neither creates
+    a user nor fails on an id it cannot place.
 
     Raises:
-        HTTPException: 400 when a member id is empty, or when scim_upsert_user is
-        False and a member id is neither an existing user, an existing team, nor a
-        member declared to be something other than a user. 500 when a member's
-        user row can neither be created nor found.
+        HTTPException: 400 when a member id is empty, when a member id names more
+        than one user, or when scim_upsert_user is False and a member id is neither
+        an existing user, an existing team, nor a member declared to be something
+        other than a user. 500 when a member's user row can neither be created nor
+        found.
     """
     classified: Final = tuple([await _classify_group_member(member, prisma_client) for member in members])
     partition: Final = _partition_classified_members(classified)
@@ -690,6 +848,16 @@ async def _resolve_group_member_ids(
             "SCIM: ignoring non-user group member '%s' (%s); LiteLLM teams contain users only",
             skipped.value,
             skipped.reason,
+        )
+
+    if partition.ambiguous_values:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Member ID '{partition.ambiguous_values[0]}' names more than one LiteLLM user, so the "
+                "group membership cannot be attributed. Resolve the duplicate, which for an id that also matches a "
+                "SCIM-provisioned placeholder means deleting that placeholder."
+            },
         )
 
     if partition.unknown_ids and not await _get_scim_upsert_user_setting():
@@ -702,6 +870,13 @@ async def _resolve_group_member_ids(
         )
 
     unique_unknown_ids: Final = tuple(dict.fromkeys(partition.unknown_ids))
+    for user_id in unique_unknown_ids:
+        verbose_proxy_logger.warning(
+            "SCIM: creating placeholder user for group member '%s'; matched no user by user_id, sso_user_id or "
+            "user_email. An SSO-provisioned user's real account stays teamless if this is a mismatch",
+            user_id,
+        )
+
     creations: Final = tuple(
         [
             (
@@ -2428,7 +2603,9 @@ async def _process_group_patch_operations(
             )
 
             if op_type == "remove":
-                final_members = final_members - {_member_value(member) for member in patched_members}
+                final_members = final_members - await _member_ids_to_drop(
+                    patched_members, frozenset(final_members), prisma_client
+                )
             else:
                 member_result = await _resolve_group_member_ids(
                     members=patched_members,
@@ -2588,6 +2765,12 @@ async def patch_group(
         final_team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": group_id})
         if final_team:
             updated_team = final_team
+
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Group not found with ID: {group_id}"},  # mutable-ok: FastAPI detail contract
+            )
 
         # Convert to SCIM format and return
         scim_group: Final = await ScimTransformations.transform_litellm_team_to_scim_group(

@@ -1,6 +1,4 @@
 import asyncio
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,13 +6,9 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 from litellm.proxy._types import LiteLLM_BudgetTableFull
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 

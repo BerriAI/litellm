@@ -7,8 +7,6 @@ since polling logic was moved to the handler.
 
 import base64
 import json
-import os
-import sys
 import time
 from io import BytesIO
 from typing import Dict, List
@@ -17,9 +15,6 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.black_forest_labs.image_edit.transformation import (
     BlackForestLabsImageEditConfig,

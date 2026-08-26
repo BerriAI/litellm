@@ -484,10 +484,15 @@ class OpenTelemetryV2(CustomLogger):
         # ``pop`` is the dedup: this method runs from both the success and failure
         # paths, and whichever fires first removes the carrier and closes the span.
         carrier: Final = self._open_llm_calls.pop(call_id, None) if call_id else None
-        if carrier is None:
+        # A missing carrier does not always mean nothing happened: a team/key-scoped
+        # logger is a success/failure callback only, so ``pre_call`` never reaches it
+        # and no carrier exists. The payload plus the request-level provider-handoff
+        # stamp (``upstream_started``) is the affirmative signal of a real call; a
+        # gate rejection carries ``is_no_upstream_call`` and gets no span.
+        if carrier is None and (call.is_no_upstream_call or not call.upstream_started or call.payload is None):
             return None
         try:
-            return self._finish_carrier(carrier, call, end_time)
+            return self._finish_carrier(carrier, call, start_time, end_time)
         finally:
             # After the span has ended, so a release-triggered provider shutdown
             # force-flushes it out rather than racing its enqueue.
@@ -497,8 +502,11 @@ class OpenTelemetryV2(CustomLogger):
         """Remember an in-flight LLM call, evicting the oldest if over budget.
 
         A call that opens but never closes (a stream that only fires stream
-        events) would linger otherwise; the evicted span is simply dropped
-        (never exported).
+        events) would linger otherwise. Eviction only drops the boundary carrier,
+        not the call: if that call later closes as a real completed call, it still
+        emits through the deferred branch in ``_close_llm_call`` (the same path a
+        team/key-scoped logger uses, since it never opens a carrier), deduplicated
+        by call id. Only a call that is evicted and never closes goes unexported.
         """
         self._open_llm_calls[call_id] = carrier
         if len(self._open_llm_calls) > _OPEN_CALLS_MAX:
@@ -512,15 +520,20 @@ class OpenTelemetryV2(CustomLogger):
 
     def _finish_carrier(
         self,
-        carrier: _LLMCallSpan,
+        carrier: "_LLMCallSpan | None",
         call: LLMCallEvent,
+        start_time: datetime | float | None,
         end_time: datetime | float | None,
     ) -> Span | None:
         payload: Final = call.payload
+        call_id: Final = call.call_id
         if payload is None:
-            if carrier.span is not None:
+            if carrier is not None and carrier.span is not None:
                 # Opened at the boundary but the payload never materialized — end
-                # it (named provisionally) so it isn't leaked as an open span.
+                # it (named provisionally) so it isn't leaked as an open span, and
+                # register the dedup marker so a later payload-carrying close for
+                # the same call id cannot re-emit through the deferred branch.
+                self._emitter.mark_emitted(call_id, SpanRole.LLM_CALL)
                 carrier.span.end(end_time=to_ns(end_time))
             return None
         data: Final = LLMCallSpanData.from_standard_logging_payload(
@@ -529,10 +542,13 @@ class OpenTelemetryV2(CustomLogger):
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
         )
         end_time_ns: Final = to_ns(end_time)
-        if carrier.span is not None:
+        if carrier is not None and carrier.span is not None:
             # Born at the boundary: stamp attributes from the typed payload, set
             # status, and end it. Its parent (the server span) was captured at
-            # creation from real ambient context.
+            # creation from real ambient context. Register the dedup marker so a
+            # second close for the same call id (success then failure on one
+            # logging object) cannot re-emit through the deferred branch.
+            self._emitter.mark_emitted(call_id, SpanRole.LLM_CALL)
             self._emitter.finish_span(SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns)
             return carrier.span
         # Deferred: ``pre_call`` saw no recordable parent, so create the span now.
@@ -549,7 +565,7 @@ class OpenTelemetryV2(CustomLogger):
                 SpanRole.LLM_CALL,
                 data,
                 parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
-                start_time_ns=carrier.start_time_ns,
+                start_time_ns=(carrier.start_time_ns if carrier is not None else to_ns(start_time)),
                 end_time_ns=end_time_ns,
                 tracer=route.tracer,
                 links=_request_trace_links(parent_ctx) if route.detached else None,

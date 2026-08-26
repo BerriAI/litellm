@@ -1,14 +1,9 @@
 import json
-import os
-import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import traceback
 from typing import Optional
@@ -982,7 +977,7 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
         make_call=_raise_400,
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(Exception, match='litellm\\.BadRequestError: BedrockException') as excinfo:
         await response.__anext__()
     assert not isinstance(excinfo.value, MidStreamFallbackError)
     assert getattr(excinfo.value, "status_code", None) == 400
@@ -2143,10 +2138,13 @@ def test_raise_on_model_repetition(
     chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
 
     if should_raise:
-        with pytest.raises(litellm.InternalServerError) as exc_info:
+        def _feed():
             for chunk in chunks:
                 wrapper.chunks.append(chunk)
                 wrapper.raise_on_model_repetition()
+
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            _feed()
         assert "repeating the same chunk" in str(exc_info.value)
     else:
         for chunk in chunks:
@@ -2719,7 +2717,7 @@ def test_dispatch_text_completion_codestral_requires_string(
     is a programming error and must surface loudly."""
     initialized_custom_stream_wrapper.custom_llm_provider = "text-completion-codestral"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="chunk is not a string: \\{'not': 'a string'\\}"):
         _run_dispatch(initialized_custom_stream_wrapper, {"not": "a string"})
 
 
@@ -3388,6 +3386,128 @@ def test_record_partial_usage_for_failure_noop_without_chunks():
     assert "combined_usage_object" not in logging_obj.model_call_details
 
 
+def _wrapper_with_partial_chunks(
+    chunk_model: str,
+    usage: Optional[Usage] = None,
+    model: str = "gpt-4o-mini",
+    custom_llm_provider: str = "openai",
+) -> tuple:
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "Tell me a long story"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-alias",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    logging_obj.optional_params = {}
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-partial-alias-1",
+            created=1742056047,
+            model=chunk_model,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=usage,
+        )
+    ]
+    return wrapper, logging_obj
+
+
+def test_record_partial_usage_for_failure_prices_alias_restamped_chunks_at_real_model():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="bedrock-claude-opus-5",
+        usage=Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45),
+        model="us.anthropic.claude-opus-5",
+        custom_llm_provider="bedrock",
+    )
+    assert "bedrock/bedrock-claude-opus-5" not in litellm.model_cost
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.completion_tokens == 5
+    rates = litellm.model_cost["us.anthropic.claude-opus-5"]
+    expected = 40 * rates["input_cost_per_token"] + 5 * rates["output_cost_per_token"]
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+
+
+def test_record_partial_usage_for_failure_counts_prompt_tokens_from_request_messages():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="my-public-alias")
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.prompt_tokens > 0
+
+
+def test_record_partial_usage_for_failure_backfills_missing_cache_fields():
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="gpt-4o-mini")
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_creation_input_tokens == 0
+    assert stashed.cache_read_input_tokens == 0
+    assert stashed.prompt_tokens_details is not None
+    assert stashed.prompt_tokens_details.cached_tokens == 0
+
+
+def test_record_partial_usage_for_failure_carries_up_openai_style_cached_tokens():
+    recovered = Usage(
+        prompt_tokens=1000,
+        completion_tokens=10,
+        total_tokens=1010,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=500),
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini", usage=recovered
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_read_input_tokens == 500
+    assert stashed.cache_creation_input_tokens == 0
+
+
+def test_record_partial_usage_for_failure_keeps_cache_values_recovered_from_chunks():
+    recovered = Usage(
+        prompt_tokens=40,
+        completion_tokens=5,
+        total_tokens=45,
+        cache_read_input_tokens=7,
+        cache_creation_input_tokens=3,
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini", usage=recovered
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.cache_read_input_tokens == 7
+    assert stashed.cache_creation_input_tokens == 3
+    assert stashed.prompt_tokens_details is not None
+    assert stashed.prompt_tokens_details.cached_tokens == 7
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_stream_chunk_builder_raise_at_end_of_stream_still_recovers_usage(
@@ -3616,9 +3736,12 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     )
 
     received = []
-    with pytest.raises(MidStreamFallbackError):
+    async def _drain():
         async for chunk in response:
             received.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError):
+        await _drain()
 
     fabricated_finish_reasons = [
         chunk.choices[0].finish_reason
