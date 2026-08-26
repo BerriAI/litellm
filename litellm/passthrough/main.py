@@ -152,7 +152,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
     ) -> bytes:
         if not self._initialized:
             await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
-        return await self._iterator.athrow(typ, val, tb)
+        return await self._iterator.athrow(typ, val, tb)  # pyright: ignore[reportCallIssue, reportArgumentType]  # matches one of the athrow overloads
 
     async def aclose(self) -> None:
         self._start_flush()
@@ -226,7 +226,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         val: BaseException | object = None,
         tb: TracebackType | None = None,
     ) -> bytes:
-        return self._iterator.throw(typ, val, tb)
+        return self._iterator.throw(typ, val, tb)  # pyright: ignore[reportCallIssue, reportArgumentType]  # matches one of the throw overloads
 
     def close(self) -> None:
         self._start_flush()
@@ -488,10 +488,13 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
+    _request_data: dict | None = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    )  # rebind-ok: conditional
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params=litellm_params_dict,
-        request_data=data if data else json,
+        request_data=_request_data,
         api_base=str(updated_url),
         model=model,
     )
@@ -513,9 +516,12 @@ def llm_passthrough_route(
     )
 
     ## IS STREAMING REQUEST
+    _streaming_request_data: dict = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else {})
+    )  # rebind-ok: conditional
     is_streaming_request: Final = provider_config.is_streaming_request(
         endpoint=endpoint,
-        request_data=data or json or {},
+        request_data=_streaming_request_data,
     )
 
     # Update logging object with streaming status

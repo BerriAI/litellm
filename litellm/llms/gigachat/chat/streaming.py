@@ -75,21 +75,21 @@ class GigaChatModelResponseIterator:
 
         if chunk_finish_reason == "stop":
             usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
-            if usage_data:
-                validated_usage: Final = {
-                    k: int(v) for k, v in dict(usage_data).items()
-                }  # rebind-ok: dict comprehension
+            if usage_data and isinstance(usage_data, dict):
+                validated_usage: Final = {k: int(v) for k, v in usage_data.items()}
                 usage = convert_usage(validated_usage)
-                usage_block = ChatCompletionUsageBlock(
+                _prompt_details: dict | None = (
+                    usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
+                )  # rebind-ok: conditional
+                _completion_details: dict | None = (
+                    usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
+                )  # rebind-ok: conditional
+                usage_block = ChatCompletionUsageBlock(  # pyright: ignore[reportCallIssue]  # TypedDict kwarg constructor
                     prompt_tokens=usage.prompt_tokens,
                     completion_tokens=usage.completion_tokens,
                     total_tokens=usage.total_tokens,
-                    prompt_tokens_details=(
-                        usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
-                    ),
-                    completion_tokens_details=(
-                        usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
-                    ),
+                    prompt_tokens_details=_prompt_details,
+                    completion_tokens_details=_completion_details,
                 )
 
         return GenericStreamingChunk(
