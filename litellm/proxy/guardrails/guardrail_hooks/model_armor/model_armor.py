@@ -842,6 +842,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         return response
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
