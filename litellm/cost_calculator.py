@@ -1411,7 +1411,13 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = litellm.utils._count_characters(text=prompt)
+                    # Vertex AI bills TTS characters excluding whitespace; every other
+                    # character-priced TTS provider (OpenAI, Azure, ElevenLabs, Groq,
+                    # Minimax, AWS Polly) bills the raw character count.
+                    if custom_llm_provider == "vertex_ai":
+                        prompt_characters = litellm.utils._count_characters(text=prompt)
+                    else:
+                        prompt_characters = len(prompt)
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     # Check _hidden_params first (duration stored there to
                     # avoid polluting the response body), then fall back to
