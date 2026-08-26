@@ -1979,16 +1979,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _calculate_web_search_requests(grounding_metadata: list[dict]) -> int | None:
-        web_search_requests: int | None = None
-
-        if grounding_metadata and isinstance(grounding_metadata, list) and len(grounding_metadata) > 0:
-            for grounding_metadata_item in grounding_metadata:
-                web_search_queries = grounding_metadata_item.get("webSearchQueries")
-                if web_search_queries and web_search_requests:
-                    web_search_requests += len([q for q in web_search_queries if q])
-                elif web_search_queries:
-                    web_search_requests = len([q for q in web_search_queries if q])
-        return web_search_requests
+        if not (grounding_metadata and isinstance(grounding_metadata, list)):
+            return None
+        unique_queries: Final = {
+            query
+            for grounding_metadata_item in grounding_metadata
+            for query in (grounding_metadata_item.get("webSearchQueries") or [])
+            if query
+        }
+        return len(unique_queries) or None
 
     @staticmethod
     def _create_streaming_choice(
