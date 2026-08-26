@@ -114,3 +114,46 @@ def test_assistant_message_after_tool_call_is_folded_into_it():
     tool_call_idx = next(i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("tool_calls"))
     assert msgs[tool_call_idx].get("role") == "assistant"
     assert msgs[tool_call_idx + 1].get("role") == "tool"
+
+
+def test_assistant_message_before_function_call_keeps_one_assistant_turn():
+    """The chat->responses bridge emits an assistant message ahead of its function_call.
+
+    Round-tripping that order back to chat must fold both into a single assistant
+    turn, so the tool result still follows the message that made the call.
+    """
+    msgs = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+        input=[
+            {
+                "role": "user",
+                "type": "message",
+                "content": [{"type": "input_text", "text": "What is the weather?"}],
+            },
+            {
+                "role": "assistant",
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Let me check."}],
+            },
+            {
+                "type": "function_call",
+                "name": "get_weather",
+                "call_id": "call_1",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "sunny",
+            },
+        ]
+    )
+
+    assistant_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "assistant"]
+    assert len(assistant_msgs) == 1
+    assistant = assistant_msgs[0]
+    assert assistant["content"] == [{"type": "text", "text": "Let me check."}]
+    assert [tc["function"]["name"] for tc in assistant["tool_calls"]] == ["get_weather"]
+
+    assistant_idx = msgs.index(assistant)
+    assert msgs[assistant_idx + 1].get("role") == "tool"
+    assert msgs[assistant_idx + 1].get("tool_call_id") == "call_1"

@@ -27,6 +27,13 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
+from litellm.proxy.rag_endpoints.upload_security import (
+    MAX_UPLOAD_SIZE_BYTES,
+    EicarTestMalwareScanner,
+    MalwareScanner,
+    RejectedUpload,
+    validate_upload,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
@@ -287,8 +294,22 @@ async def _save_vector_store_to_db_from_rag_ingest(
         verbose_proxy_logger.exception("Failed to save vector store %s to database: %s", vector_store_id, db_error)
 
 
+def _secure_uploaded_file(
+    file_data: tuple[str, bytes, str],
+    scanner: MalwareScanner,
+) -> tuple[str, bytes, str]:
+    validation: Final = validate_upload(content=file_data[1], scanner=scanner)
+    if isinstance(validation, RejectedUpload):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": validation.message, "reason": validation.reason.value},
+        )
+    return validation.safe_filename, file_data[1], validation.content_type
+
+
 async def parse_rag_ingest_request(
     request: Request,
+    scanner: MalwareScanner,
 ) -> tuple[dict[str, Any], tuple[str, bytes, str] | None, str | None, str | None]:
     """
     Parse RAG ingest request.
@@ -296,6 +317,11 @@ async def parse_rag_ingest_request(
     Supports:
     - Form: file + request JSON in form field
     - JSON body for URL-based ingestion
+
+    Uploaded file bytes are validated against the vector-store upload controls
+    (size limit, format allowlist with content inspection, archive rejection,
+    and the injected malware scanner) and given a server-generated filename
+    before they are returned.
 
     Returns:
         Tuple of (ingest_options, file_data, file_url, file_id)
@@ -315,7 +341,7 @@ async def parse_rag_ingest_request(
         # Get file
         file_obj = form_data.get("file")
         if file_obj is not None and hasattr(file_obj, "read"):
-            file_content = await file_obj.read()
+            file_content = await file_obj.read(MAX_UPLOAD_SIZE_BYTES + 1)
             file_data = (file_obj.filename, file_content, file_obj.content_type)
 
         # Parse JSON from 'request' form field (contains full request body as JSON)
@@ -356,6 +382,10 @@ async def parse_rag_ingest_request(
             status_code=400,
             detail={"error": "Must provide file, file_url, or file_id"},
         )
+
+    secured_file_data: Final[tuple[str, bytes, str] | None] = (
+        _secure_uploaded_file(file_data, scanner) if file_data is not None else None
+    )
 
     if "vector_store" not in ingest_options:
         raise HTTPException(
@@ -398,7 +428,7 @@ async def parse_rag_ingest_request(
                     },
                 )
 
-    return ingest_options, file_data, file_url, file_id
+    return ingest_options, secured_file_data, file_url, file_id
 
 
 @router.post(
@@ -461,7 +491,9 @@ async def rag_ingest(
 
     try:
         # Parse request
-        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
+        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
+            request, scanner=EicarTestMalwareScanner()
+        )
 
         # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
         if user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value and not ingest_options.get(

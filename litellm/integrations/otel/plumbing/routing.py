@@ -15,7 +15,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 from urllib.parse import quote
 
 from opentelemetry.sdk.trace import TracerProvider
@@ -28,9 +28,11 @@ from litellm.integrations.otel.plumbing.providers import (
     get_tracer,
 )
 from litellm.integrations.otel.presets import (
+    dynamic_otlp_endpoint,
     dynamic_otlp_headers,
     project_routing_headers,
 )
+from litellm.types.utils import StandardCallbackDynamicParams
 
 # Exporter kinds that ignore headers — never rewritten with dynamic credentials.
 _NON_OTLP_KINDS: Final = ("console", "in_memory", "inmemory", "memory")
@@ -129,7 +131,9 @@ class TenantTracerCache:
         # thread-pool workers concurrently with the event loop, so cache
         # updates, span counts, and retirement must be atomic.
         self._lock: Final = threading.Lock()
-        self._providers: OrderedDict[tuple[_HeaderItems, _HeaderItems], TracerProvider] = OrderedDict()
+        self._providers: OrderedDict[tuple[_HeaderItems, _HeaderItems, str | None], TracerProvider] = (
+            OrderedDict()  # mutable-ok: bounded LRU; eviction needs in-place ordered mutation
+        )
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
         # Oldest-first so an overflow of draining providers sheds the stalest.
         self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
@@ -163,7 +167,7 @@ class TenantTracerCache:
     def route_for(
         self,
         default: Tracer,
-        dynamic_params: Any,
+        dynamic_params: StandardCallbackDynamicParams | None,
         auth_metadata: Mapping[str, str] | None = None,
     ) -> TenantRoute:
         """Return the tracer (and trace-detachment flag) for this request.
@@ -182,12 +186,16 @@ class TenantTracerCache:
         project_headers: Final = self._project_headers(auth_metadata)
         if not credential_headers and not project_headers:
             return TenantRoute(tracer=default, detached=False)
+        # A fixed per-integration region endpoint (New Relic us/eu), never a
+        # caller-supplied host; ``None`` keeps the preset's own endpoint.
+        endpoint: Final = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
         cache_key: Final = (
             tuple(sorted(credential_headers.items())),
             tuple(sorted(project_headers.items())),
+            endpoint,
         )
         with self._lock:
-            provider: Final = self._cached_provider_locked(cache_key, credential_headers, project_headers)
+            provider: Final = self._cached_provider_locked(cache_key, credential_headers, project_headers, endpoint)
             self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
             evicted: Final = self._evicted_on_overflow_locked()
         if evicted is not None:
@@ -200,15 +208,16 @@ class TenantTracerCache:
 
     def _cached_provider_locked(
         self,
-        cache_key: tuple[_HeaderItems, _HeaderItems],
+        cache_key: tuple[_HeaderItems, _HeaderItems, str | None],
         credential_headers: Mapping[str, str],
         project_headers: Mapping[str, str],
+        endpoint: str | None,
     ) -> TracerProvider:
         cached: Final = self._providers.get(cache_key)
         if cached is not None:
             self._providers.move_to_end(cache_key)
             return cached
-        built: Final = build_tracer_provider(self._routed_config(credential_headers, project_headers))
+        built: Final = build_tracer_provider(self._routed_config(credential_headers, project_headers, endpoint))
         self._providers[cache_key] = built
         return built
 
@@ -257,6 +266,7 @@ class TenantTracerCache:
         self,
         credential_headers: Mapping[str, str],
         project_headers: Mapping[str, str],
+        endpoint: str | None = None,
     ) -> OpenTelemetryV2Config:
         """Clone the config, rewriting headers on the callback's own exporter.
 
@@ -272,7 +282,8 @@ class TenantTracerCache:
         ``Authorization``), which must survive routing to a project.
         """
         exporters: Final = [
-            self._routed_exporter(spec, credential_headers, project_headers) for spec in self._config.exporters
+            self._routed_exporter(spec, credential_headers, project_headers, endpoint)
+            for spec in self._config.exporters
         ]
         return self._config.model_copy(update={"exporters": exporters})
 
@@ -281,6 +292,7 @@ class TenantTracerCache:
         spec: ExporterSpec,
         credential_headers: Mapping[str, str],
         project_headers: Mapping[str, str],
+        endpoint: str | None = None,
     ) -> ExporterSpec:
         kind: Final = spec.kind.lower()
         if spec.owner != self._callback_name or kind in _NON_OTLP_KINDS:
@@ -291,4 +303,10 @@ class TenantTracerCache:
             if project_headers and kind not in _GRPC_KINDS
             else base
         )
-        return spec if routed == spec.headers else spec.model_copy(update={"headers": routed})
+        update: Final = {  # mutable-ok: model_copy(update=...) requires a plain dict
+            field: value
+            for field, value in (("headers", routed), ("endpoint", endpoint))
+            if (field == "headers" and routed != spec.headers)
+            or (field == "endpoint" and endpoint is not None and endpoint != spec.endpoint)
+        }
+        return spec if not update else spec.model_copy(update=update)

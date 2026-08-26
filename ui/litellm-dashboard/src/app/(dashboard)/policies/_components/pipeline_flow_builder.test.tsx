@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
-import PipelineFlowBuilder, { PipelineInfoDisplay } from "./pipeline_flow_builder";
+import PipelineFlowBuilder, { FlowBuilderPage, PipelineInfoDisplay } from "./pipeline_flow_builder";
 import { GuardrailPipeline, PipelineStep } from "@/components/policies/types";
 import { Guardrail } from "@/components/guardrails/types";
 
@@ -165,5 +165,26 @@ describe("PipelineFlowBuilder", () => {
     // guardrail is the one displayed is covered by the PipelineInfoDisplay tests above.
     expect(screen.getByText("Guardrail")).toBeInTheDocument();
     expect(screen.getAllByRole("combobox").length).toBeGreaterThan(0);
+  });
+});
+
+describe("FlowBuilderPage", () => {
+  it("stacks its full-screen shell below the portalled popup layer", () => {
+    const portalLayerZIndex = 50;
+    const { container } = renderWithProviders(
+      <FlowBuilderPage
+        onBack={vi.fn()}
+        onSuccess={vi.fn()}
+        accessToken="sk-test"
+        availableGuardrails={guardrails}
+        createPolicy={vi.fn()}
+        updatePolicy={vi.fn()}
+      />,
+    );
+
+    const shell = container.firstElementChild as HTMLElement;
+
+    expect(shell).toHaveStyle({ position: "fixed" });
+    expect(Number(shell.style.zIndex)).toBeLessThan(portalLayerZIndex);
   });
 });

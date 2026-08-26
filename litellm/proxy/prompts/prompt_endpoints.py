@@ -93,7 +93,7 @@ class _PromptTableActions(Protocol):
 
     def create(self, *, data: Mapping[str, str | int | None]) -> Awaitable[_PromptRow]: ...
 
-    def update(self, *, where: Mapping[str, str | int], data: Mapping[str, str]) -> Awaitable[_PromptRow]: ...
+    def update(self, *, where: Mapping[str, str | int], data: Mapping[str, str]) -> Awaitable[_PromptRow | None]: ...
 
     def delete_many(self, *, where: Mapping[str, str]) -> Awaitable[int]: ...
 
@@ -1156,6 +1156,12 @@ async def patch_prompt(
             where={"id": target_row.id},
             data=update_data,
         )
+
+        if updated_prompt_db_entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt with ID {base_prompt_id} not found in environment {env}",
+            )
 
         updated_prompt_spec: Final = create_versioned_prompt_spec(db_prompt=updated_prompt_db_entry)
 

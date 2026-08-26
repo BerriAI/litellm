@@ -87,6 +87,21 @@ describe("ChatMessageBubble", () => {
     expect(screen.getByText("Hi there")).toBeInTheDocument();
   });
 
+  it.each([
+    { role: "user" as const, bubble: ["bg-info/10", "border-info/20"], avatar: "bg-info/20" },
+    { role: "assistant" as const, bubble: ["bg-card", "border-border"], avatar: "bg-muted" },
+  ])("should paint the $role surface from theme tokens, not fixed colours", ({ role, bubble, avatar }) => {
+    render(<ChatMessageBubble {...defaultProps} message={{ role, content: "Hello" }} />);
+
+    const header = screen.getByText(role).closest("div") as HTMLElement;
+    const surface = header.parentElement as HTMLElement;
+
+    expect(surface).toHaveClass(...bubble);
+    expect(surface).not.toHaveAttribute("style");
+    expect(header.firstElementChild).toHaveClass(avatar);
+    expect(header.firstElementChild).not.toHaveAttribute("style");
+  });
+
   it("should show model badge for assistant messages when model is provided", () => {
     render(<ChatMessageBubble {...defaultProps} message={{ role: "assistant", content: "Reply", model: "gpt-4" }} />);
 

@@ -13,7 +13,7 @@ from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 OPENAI_BACKEND = "openai/gpt-4o-mini"
 CHAT_PATH = "/chat/completions"

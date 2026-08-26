@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _base_vertex_proxy_route,
 )
@@ -323,6 +324,7 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
             vertex_location="us-central1",
             base_target_url="https://us-central1-aiplatform.googleapis.com",
             get_vertex_pass_through_handler=mock_handler,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-secret-key"),
         )
 
         # Verify that allowlisted headers are preserved
@@ -417,6 +419,7 @@ async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
             vertex_location="us-central1",
             base_target_url="https://us-central1-aiplatform.googleapis.com",
             get_vertex_pass_through_handler=mock_handler,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-secret-key"),
         )
 
         # The ONLY Authorization header should be the Vertex token
