@@ -2268,6 +2268,9 @@ async def ui_view_spend_logs(
         default="desc",
         description="Sort order: asc or desc",
     ),
+    filter_time_by: str | None = fastapi.Query(
+        default="startTime", description="Filter field for date range: 'startTime' (default) or 'endTime'"
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -2321,6 +2324,16 @@ async def ui_view_spend_logs(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
+    valid_filter_fields: Final = ("startTime", "endTime")
+    if filter_time_by not in valid_filter_fields:
+        raise ProxyException(
+            message=f"Invalid filter_time_by: {filter_time_by}. Must be one of: {', '.join(sorted(valid_filter_fields))}",
+            type="bad_request",
+            param="filter_time_by",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    filter_time_field: Final = "startTime" if filter_time_by == "startTime" else "endTime"
+
     try:
         is_admin_view: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         is_request_id_lookup: Final = request_id is not None and not is_v2
@@ -2362,7 +2375,7 @@ async def ui_view_spend_logs(
         # Build where conditions
         where_conditions: Final[dict[str, Any]] = {}
         if start_date_obj is not None and end_date_obj is not None:
-            where_conditions["startTime"] = {
+            where_conditions[filter_time_field] = {
                 "gte": start_date_obj.isoformat(),  # Already in UTC, no need to add Z
                 "lte": end_date_obj.isoformat(),
             }
@@ -2509,10 +2522,10 @@ async def ui_view_spend_logs(
         # against the plain `timestamp` column does not depend on the DB session
         # timezone (see #22529). Absent for a request_id-only lookup (see above).
         if start_date_obj is not None and end_date_obj is not None:
-            sql_conditions.append(f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')")
+            sql_conditions.append(f"\"{filter_time_field}\" >= (${p}::timestamptz AT TIME ZONE 'UTC')")
             sql_params.append(start_date_obj)
             p += 1
-            sql_conditions.append(f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')")
+            sql_conditions.append(f"\"{filter_time_field}\" <= (${p}::timestamptz AT TIME ZONE 'UTC')")
             sql_params.append(end_date_obj)
             p += 1
 

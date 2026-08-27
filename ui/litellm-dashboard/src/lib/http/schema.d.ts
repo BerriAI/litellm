@@ -53298,6 +53298,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Filter field for date range: 'startTime' (default) or 'endTime' */
+                filter_time_by?: string | null;
             };
             header?: never;
             path?: never;
@@ -53406,6 +53408,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Filter field for date range: 'startTime' (default) or 'endTime' */
+                filter_time_by?: string | null;
             };
             header?: never;
             path?: never;

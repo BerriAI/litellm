@@ -879,6 +879,237 @@ async def test_ui_view_spend_logs_sort_validation_errors(
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+# req_a: start 10:00:00, end 10:05:00
+# req_b: start 09:55:00, end 10:00:30
+# req_c: start 10:10:00, end 10:12:00
+_FILTER_TIME_TEST_LOGS = [
+    {
+        "request_id": "req_a",
+        "api_key": "sk-test-key",
+        "user": "user1",
+        "spend": 0.10,
+        "total_tokens": 500,
+        "startTime": "2025-01-01T10:00:00+00:00",
+        "endTime": "2025-01-01T10:05:00+00:00",
+        "model": "gpt-3.5-turbo",
+    },
+    {
+        "request_id": "req_b",
+        "api_key": "sk-test-key",
+        "user": "user1",
+        "spend": 0.05,
+        "total_tokens": 200,
+        "startTime": "2025-01-01T09:55:00+00:00",
+        "endTime": "2025-01-01T10:00:30+00:00",
+        "model": "gpt-3.5-turbo",
+    },
+    {
+        "request_id": "req_c",
+        "api_key": "sk-test-key",
+        "user": "user1",
+        "spend": 0.20,
+        "total_tokens": 50,
+        "startTime": "2025-01-01T10:10:00+00:00",
+        "endTime": "2025-01-01T10:12:00+00:00",
+        "model": "gpt-3.5-turbo",
+    },
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filter_time_by,start_date,end_date,expected_request_ids,expected_filter_field",
+    [
+        # filter_time_by not passed -> defaults to startTime
+        (None, "2025-01-01 09:59:00", "2025-01-01 10:01:00", ["req_a"], "startTime"),
+        # explicit startTime behaves identically to the default
+        (
+            "startTime",
+            "2025-01-01 09:59:00",
+            "2025-01-01 10:01:00",
+            ["req_a"],
+            "startTime",
+        ),
+        # endTime flips the result: req_a ends at 10:05 (outside), req_b at 10:00:30 (inside)
+        (
+            "endTime",
+            "2025-01-01 09:59:00",
+            "2025-01-01 10:01:00",
+            ["req_b"],
+            "endTime",
+        ),
+        # endTime window catching req_a's endTime 10:05
+        ("endTime", "2025-01-01 10:04:00", "2025-01-01 10:06:00", ["req_a"], "endTime"),
+        # startTime window catching req_b's startTime 09:55
+        (
+            "startTime",
+            "2025-01-01 09:54:00",
+            "2025-01-01 09:56:00",
+            ["req_b"],
+            "startTime",
+        ),
+        # wide window: both req_a and req_b fall inside regardless of the field
+        (
+            "startTime",
+            "2025-01-01 09:54:00",
+            "2025-01-01 10:06:00",
+            ["req_a", "req_b"],
+            "startTime",
+        ),
+        (
+            "endTime",
+            "2025-01-01 09:54:00",
+            "2025-01-01 10:06:00",
+            ["req_a", "req_b"],
+            "endTime",
+        ),
+    ],
+)
+async def test_ui_view_spend_logs_filter_time_by(
+    client,
+    monkeypatch,
+    filter_time_by,
+    start_date,
+    end_date,
+    expected_request_ids,
+    expected_filter_field,
+):
+    """Test that the date range is applied to startTime (default) or endTime."""
+    base_logs = list(_FILTER_TIME_TEST_LOGS)
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    captured_sql = []
+
+    async def mock_query_raw(sql_query, *params):
+        captured_sql.append(sql_query)
+        # The endpoint emits `"<field>" >= ($n::timestamptz ...)` for whichever
+        # column filter_time_by selected; parse it back out of the SQL so the
+        # mock applies the date window against the same column the endpoint chose.
+        field_match = re.search(r'"(\w+)" >= \(\$(\d+)', sql_query)
+        if field_match:
+            filter_field = field_match.group(1)
+            gte_param = params[int(field_match.group(2)) - 1]
+            lte_match = re.search(r'"(\w+)" <= \(\$(\d+)', sql_query)
+            lte_param = params[int(lte_match.group(2)) - 1] if lte_match else None
+        else:
+            filter_field, gte_param, lte_param = None, None, None
+
+        filtered = []
+        for log in base_logs:
+            if filter_field is not None and gte_param is not None and lte_param is not None:
+                log_dt = datetime.datetime.fromisoformat(log[filter_field].replace("Z", "+00:00"))
+                if log_dt < gte_param or log_dt > lte_param:
+                    continue
+            filtered.append(log)
+
+        if "COUNT(*)" in sql_query:
+            cap_plus_one = params[-1]
+            return [{"total_count": min(len(filtered), cap_plus_one)}]
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return [row for row in filtered[skip : skip + page_size]]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        params = {
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        if filter_time_by is not None:
+            params["filter_time_by"] = filter_time_by
+
+        response = client.get(
+            "/spend/logs/ui",
+            params=params,
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert "data" in data
+
+        actual_ids = [log["request_id"] for log in data["data"]]
+        assert actual_ids == expected_request_ids, (
+            f"Expected {expected_request_ids}, got {actual_ids} "
+            f"(filter_time_by={filter_time_by}, start_date={start_date}, end_date={end_date})"
+        )
+
+        page_sql = next((sql for sql in captured_sql if "COUNT(*)" not in sql), None)
+        assert page_sql is not None, "expected a page query"
+        assert f'"{expected_filter_field}" >=' in page_sql, (
+            f"SQL must filter on `{expected_filter_field}`, got:\n{page_sql}"
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "filter_time_by",
+    [
+        None,  # httpx encodes None as an empty query value
+        "timestamp",
+        "invalid_field",
+    ],
+)
+async def test_ui_view_spend_logs_filter_time_by_validation_errors(client, monkeypatch, filter_time_by):
+    """Test that invalid filter_time_by values return 400."""
+
+    async def mock_count(*args, **kwargs):
+        return 0
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.find_many = AsyncMock(return_value=[])
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date = "2024-12-25 00:00:00"
+        end_date = "2025-01-02 23:59:59"
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "filter_time_by": filter_time_by,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatch):
     """Test that request_duration_ms is accepted as a valid sort_by field."""
