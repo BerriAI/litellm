@@ -493,12 +493,21 @@ async def _resolve_scim_group_organization_id(display_name: str, settings: SCIMS
         ) from e
 
 
-async def _refresh_scim_updated_team_cache(updated_team: _CacheableTeamRow | None) -> None:
+class _ScimCacheableTeamRow(_CacheableTeamRow, Protocol):
+    @property
+    def team_alias(self) -> str | None: ...
+
+
+async def _refresh_scim_updated_team_cache(
+    updated_team: _ScimCacheableTeamRow | None, previous_team_alias: str | None
+) -> None:
     """Keep the cached team object used by auth checks in sync after a SCIM write,
     so an organization or alias change takes effect immediately instead of after TTL expiry.
 
     Best-effort: the DB write has already committed, so a cache backend failure
     must not fail the SCIM response and trigger an IdP retry of a successful write.
+    On failure both the current and previous alias keys are evicted alongside the
+    id key, so alias-based auth cannot keep serving the pre-write organization policy.
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
@@ -512,16 +521,36 @@ async def _refresh_scim_updated_team_cache(updated_team: _CacheableTeamRow | Non
         )
     except Exception as e:  # noqa: BLE001  # the row is committed; evict instead of failing the SCIM response so auth re-reads the DB
         verbose_proxy_logger.warning(
-            "Failed to refresh cached team %s after SCIM update; evicting the cache entry so the next auth check reads the DB: %s",
+            "Failed to refresh cached team %s after SCIM update; evicting the cache entries so the next auth check reads the DB: %s",
             updated_team.team_id,
             e,
         )
         await delete_cache_team_object(
             team_id=updated_team.team_id,
-            team_alias=None,
+            team_alias=updated_team.team_alias,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if previous_team_alias is not None and previous_team_alias != updated_team.team_alias:
+            await delete_cache_team_object(
+                team_id=updated_team.team_id,
+                team_alias=previous_team_alias,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+
+def _team_with_final_roster(existing_team: LiteLLM_TeamTable, final_member_ids: Iterable[str]) -> LiteLLM_TeamTable:
+    """Destination-organization validation auto-adds the snapshot's members to the
+    organization, so it must see the post-write roster, not members this same
+    request is removing."""
+    return existing_team.model_copy(
+        update={
+            "members_with_roles": tuple(
+                Member(user_id=member_id, role="user") for member_id in sorted(final_member_ids)
+            )
+        }
+    )
 
 
 async def _validate_mapped_organization_exists(
@@ -2648,7 +2677,11 @@ async def update_group(
             mapped_organization_id is not None and mapped_organization_id != existing_team.organization_id
         )
         if organization_changed and mapped_organization_id is not None:
-            await _validate_mapped_organization_exists(prisma_client, mapped_organization_id, existing_team)
+            await _validate_mapped_organization_exists(
+                prisma_client,
+                mapped_organization_id,
+                _team_with_final_roster(existing_team, member_result.all_member_ids),
+            )
 
         update_data: Final = {
             "team_alias": group.displayName,
@@ -2661,7 +2694,7 @@ async def update_group(
             where={"team_id": group_id},
             data=update_data,
         )
-        await _refresh_scim_updated_team_cache(updated_team)
+        await _refresh_scim_updated_team_cache(updated_team, existing_team.team_alias)
 
         # Handle user-team relationship changes
         current_members: Final = set(await _get_team_member_user_ids_from_team(existing_team))
@@ -2820,7 +2853,9 @@ async def _process_group_patch_operations(
     return update_data, final_members, replace_target
 
 
-async def _apply_group_patch_updates(group_id: str, update_data: dict[str, object], prisma_client: PrismaClient):
+async def _apply_group_patch_updates(
+    group_id: str, update_data: dict[str, object], prisma_client: PrismaClient, previous_team_alias: str | None
+):
     """Apply the group's metadata/displayName patch updates to the database.
 
     Membership itself is not written here; it is reconciled onto the source of
@@ -2837,7 +2872,7 @@ async def _apply_group_patch_updates(group_id: str, update_data: dict[str, objec
             where={"team_id": group_id},
             data=update_data,
         )
-        await _refresh_scim_updated_team_cache(updated_team)
+        await _refresh_scim_updated_team_cache(updated_team, previous_team_alias)
         return updated_team
     return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
 
@@ -2931,11 +2966,15 @@ async def patch_group(
                 patch_mapped_organization_id is not None
                 and patch_mapped_organization_id != existing_team.organization_id
             ):
-                await _validate_mapped_organization_exists(prisma_client, patch_mapped_organization_id, existing_team)
+                await _validate_mapped_organization_exists(
+                    prisma_client,
+                    patch_mapped_organization_id,
+                    _team_with_final_roster(existing_team, final_members),
+                )
                 update_data["organization_id"] = patch_mapped_organization_id
 
         # Apply the metadata/displayName updates to the database
-        updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client)
+        updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client, existing_team.team_alias)
 
         refreshed_team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": group_id})
         refreshed_current: Final = (

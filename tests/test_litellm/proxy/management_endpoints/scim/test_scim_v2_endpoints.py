@@ -3228,6 +3228,7 @@ async def test_apply_group_patch_updates_does_not_write_legacy_members(mocker):
         group_id="team-1",
         update_data={"team_alias": "Renamed"},
         prisma_client=mock_prisma_client,
+        previous_team_alias="Old",
     )
 
     assert result is updated
@@ -5782,7 +5783,10 @@ async def test_update_group_rename_assigns_mapped_organization(mocker: MockerFix
 
     await update_group(group_id=group_id, group=scim_group_update)
 
-    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng", existing_team)
+    validate_mock.assert_awaited_once()
+    assert validate_mock.await_args.args[0] is mock_prisma_client
+    assert validate_mock.await_args.args[1] == "org-eng"
+    assert validate_mock.await_args.args[2].team_id == existing_team.team_id
     update_call_data = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
     assert update_call_data["organization_id"] == "org-eng"
 
@@ -5868,7 +5872,10 @@ async def test_patch_group_rename_assigns_mapped_organization(mocker: MockerFixt
 
     await patch_group(group_id=group_id, patch_ops=patch_ops)
 
-    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng", existing_team)
+    validate_mock.assert_awaited_once()
+    assert validate_mock.await_args.args[0] is mock_prisma_client
+    assert validate_mock.await_args.args[1] == "org-eng"
+    assert validate_mock.await_args.args[2].team_id == existing_team.team_id
     update_call_data = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
     assert update_call_data["organization_id"] == "org-eng"
 
@@ -5983,6 +5990,65 @@ async def test_refresh_cache_failure_evicts_stale_team_entry(mocker: MockerFixtu
         AsyncMock(),
     )
 
-    await _refresh_scim_updated_team_cache(updated_team)
+    await _refresh_scim_updated_team_cache(updated_team, "Sales")
 
-    assert evict_mock.await_args.kwargs["team_id"] == "team-1"
+    evicted = [(call.kwargs["team_id"], call.kwargs["team_alias"]) for call in evict_mock.await_args_list]
+    assert evicted == [("team-1", "Engineering-Platform"), ("team-1", "Sales")]
+
+
+@pytest.mark.asyncio
+async def test_org_validation_sees_final_roster_not_removed_members(mocker: MockerFixture):  # test-quality-ok: the observable is the roster snapshot the destination-org validator receives; the validator's auto-add is covered by team_endpoints tests
+    """A PUT that moves a team into a mapped organization while removing a member
+    must validate against the post-write roster, or the removed member would be
+    auto-added to the destination organization."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "team-1"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Sales",
+        members=["user1", "user2"],
+        members_with_roles=[Member(user_id="user1", role="user"), Member(user_id="user2", role="user")],
+        metadata={},
+    )
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Engineering-Platform",
+        members=[SCIMMember(value="user1")],
+    )
+
+    _mock_group_prisma_client(mocker, existing_team=existing_team)
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_settings",
+        AsyncMock(return_value=_org_mapping_settings()),
+    )
+    validate_mock = mocker.patch(  # test-quality-ok: asserts the roster snapshot the validator receives
+        "litellm.proxy.management_endpoints.scim.scim_v2._validate_mapped_organization_exists",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_team",
+        AsyncMock(),
+    )
+    mocker.patch.object(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group_update),
+    )
+
+    await update_group(group_id=group_id, group=scim_group_update)
+
+    validated_team = validate_mock.await_args.args[2]
+    assert [m.user_id for m in validated_team.members_with_roles] == ["user1"]
