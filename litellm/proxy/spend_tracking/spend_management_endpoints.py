@@ -18,7 +18,7 @@ from typing import (
 )
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from typing_extensions import ReadOnly
 
 import litellm
@@ -208,9 +208,18 @@ async def _find_spend_logs(
     prisma_client: PrismaClient,
     where: Mapping[str, object],
     order: Mapping[str, str],
+    take: int,
+    http_response: Response,
 ) -> Sequence[_SupportsModelDump]:
-    """Read spend log rows as Prisma model instances."""
-    return await _spend_logs_table(prisma_client).find_many(where=where, order=order)
+    """Read spend log rows as Prisma model instances, capped at ``take`` rows."""
+    rows: Final = await _spend_logs_table(prisma_client).find_many(where=where, order=order, take=take)
+    if len(rows) == take:
+        http_response.headers["x-litellm-spend-logs-truncated"] = "true"
+        verbose_proxy_logger.warning(
+            "/spend/logs result truncated to the %s most recent rows; use /spend/logs/v2 for paginated access",
+            take,
+        )
+    return rows
 
 
 async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
@@ -2851,6 +2860,7 @@ async def ui_view_request_response_for_request_id(
     },
 )
 async def view_spend_logs(
+    fastapi_response: Response,
     api_key: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -2880,6 +2890,8 @@ async def view_spend_logs(
     """
     [DEPRECATED] This endpoint is not paginated and can cause performance issues.
     Please use `/spend/logs/v2` instead for paginated access to spend logs.
+
+    Row results are capped at 10,000 most recent entries per response.
 
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
 
@@ -2931,7 +2943,6 @@ async def view_spend_logs(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        spend_logs = []
         if (
             start_date is not None
             and isinstance(start_date, str)
@@ -2970,6 +2981,8 @@ async def view_spend_logs(
                     prisma_client,
                     where=filter_query,
                     order={"startTime": "desc"},
+                    take=SPEND_LOGS_PAGINATION_COUNT_CAP,
+                    http_response=fastapi_response,
                 )
                 return data
 
@@ -3040,14 +3053,12 @@ async def view_spend_logs(
             if user_id is not None and isinstance(user_id, str):
                 scoped_filter["user"] = user_id
 
-            if not scoped_filter:
-                spend_logs = await prisma_client.get_data(table_name="spend", query_type="find_all")
-                return spend_logs
-
             data = await _find_spend_logs(
                 prisma_client,
                 where=scoped_filter,
                 order={"startTime": "desc"},
+                take=SPEND_LOGS_PAGINATION_COUNT_CAP,
+                http_response=fastapi_response,
             )
             return data
 

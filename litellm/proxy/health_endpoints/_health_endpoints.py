@@ -1113,6 +1113,7 @@ async def health_endpoint(
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
+                router=llm_router,
                 **_hc_filter,
             )
             return _post_process(router_result)
@@ -1796,6 +1797,7 @@ async def test_model_connection(
         "audio_speech",
         "audio_transcription",
         "image_generation",
+        "image_edit",
         "video_generation",
         "batch",
         "rerank",

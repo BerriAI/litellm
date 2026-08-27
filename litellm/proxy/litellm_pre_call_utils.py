@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -1629,7 +1629,7 @@ class LiteLLMProxyRequestSetup:
 
 
 def refresh_proxy_server_request_body_snapshot(
-    data: dict,  # mutable-ok: mutates proxy_server_request.body in place on the shared request dict
+    data: MutableMapping[str, object],
 ) -> None:
     """
     Re-snapshot ``data["proxy_server_request"]["body"]`` from the current state of ``data``.

@@ -45,7 +45,6 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
-    AUTO_ROUTED_REQUEST_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
@@ -205,6 +204,7 @@ from litellm.types.router import (
     PreRoutingStrategy,
     RetryPolicy,
     RouterCacheEnum,
+    RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
     RouterRateLimitError,
@@ -7344,7 +7344,7 @@ class Router:
             ):
                 raise error  # then raise the error
 
-        if isinstance(error, openai.AuthenticationError):
+        if isinstance(error, (openai.AuthenticationError, openai.PermissionDeniedError)):
             """
             - if other deployments available -> retry
             - else -> raise error
@@ -10697,10 +10697,9 @@ class Router:
                 _router_model_name: str = model_value
             elif isinstance(model_value, dict):
                 _model_value = RouterModelGroupAliasItem(**model_value)
-                if _model_value["hidden"] is True:
+                if _model_value["hidden"] is True and model_name is None:
                     continue
-                else:
-                    _router_model_name = _model_value["model"]
+                _router_model_name = _model_value["model"]
             else:
                 continue
 
@@ -11521,10 +11520,8 @@ class Router:
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
-                message: Final = f"You passed in model={model}. There are no healthy deployments for this model"
-
                 raise litellm.BadRequestError(
-                    message=message,
+                    message=f"You passed in model={model}. {RouterErrors.no_healthy_deployments.value}",
                     model=model,
                     llm_provider="",
                 )
@@ -11535,11 +11532,18 @@ class Router:
             ]  # update the model to the actual value if an alias has been passed in
 
         marker_flags: Final = tuple(self._is_strategy_marker_deployment(d) for d in healthy_deployments)
-        if all(marker_flags) or not any(marker_flags):
+        if not any(marker_flags):
             return model, healthy_deployments
-        return model, [  # mutable-ok: matches this function's list contract expected by downstream filters
+        selectable: Final = [  # mutable-ok: matches this function's list contract expected by downstream filters
             d for d, is_marker in zip(healthy_deployments, marker_flags, strict=True) if not is_marker
         ]
+        if not selectable:
+            raise litellm.BadRequestError(
+                message=f"You passed in model={model}. {RouterErrors.only_strategy_marker_deployments.value}",
+                model=model,
+                llm_provider="",
+            )
+        return model, selectable
 
     def _filter_deployments_by_model_access_groups(
         self,
@@ -12128,7 +12132,15 @@ class Router:
         This hook is called before the routing decision is made.
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
+
+        `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
+        strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
+        every lookup below resolves the alias first. Only the lookups: the caller-facing name stays
+        the alias, since spend metadata is stamped before routing and the response carries the tier
+        group the strategy picked.
         """
+        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+
         #########################################################
         # Run the routing-plugin pipeline, if any plugins are configured.
         # Plugins narrow the candidate deployment pool (consumed later by
@@ -12136,9 +12148,13 @@ class Router:
         # downstream strategies (auto-router, complexity-router, ...) to read.
         #########################################################
         if self.routing_plugins:
-            await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
+            await self._run_routing_plugins(
+                model=registered_model_name, request_kwargs=request_kwargs, messages=messages
+            )
 
-        selected_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
+        selected_strategy: Final = self._select_pre_routing_strategy(
+            model=registered_model_name, request_kwargs=request_kwargs
+        )
         if selected_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
@@ -12147,13 +12163,10 @@ class Router:
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
-            self._stamp_or_clear_metadata_key(
-                request_kwargs=request_kwargs, key=AUTO_ROUTED_REQUEST_METADATA_KEY, value=None
-            )
             return None
 
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
-            model=model,
+            model=registered_model_name,
             request_kwargs=request_kwargs,
             messages=messages,
             input=input,
@@ -12177,13 +12190,6 @@ class Router:
                 request_tags=_get_tags_from_request_kwargs(request_kwargs),
             ),
         )
-        # Gates the proxy's `router_model_name` response field; the body `model` is
-        # always restamped back to the alias the client sent.
-        self._stamp_or_clear_metadata_key(
-            request_kwargs=request_kwargs,
-            key=AUTO_ROUTED_REQUEST_METADATA_KEY,
-            value=(True if pre_routing_hook_response is not None else None),
-        )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
         # called - apply the router marker's own litellm_params to the request,
@@ -12205,7 +12211,7 @@ class Router:
         # Per-tier `litellm_params` on the hook response are deliberate overrides
         # the caller applies on top, so those keys are never forwarded here.
         marker_params: Final = (
-            self._forwardable_alias_marker_params(model=model, strategy_tags=selected_strategy.tags)
+            self._forwardable_alias_marker_params(model=registered_model_name, strategy_tags=selected_strategy.tags)
             if pre_routing_hook_response is not None
             else ()
         )

@@ -14,9 +14,34 @@ _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 
 
 def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
-    if callback_name != _NEWRELIC_CALLBACK or not callback_vars:
+    if not callback_vars:
+        return None
+    env_error: Final = _langfuse_environment_error(callback_vars)
+    if env_error is not None:
+        return env_error
+    if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
+
+
+def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
+    """Reject langfuse_environment values Langfuse ingestion would drop.
+
+    Accepting an invalid value here would 200 the config write and then
+    silently lose every trace for that key/team at request time.
+    """
+    value: Final = callback_vars.get("langfuse_environment")
+    if value is None:
+        return None
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_langfuse_environment_value,
+    )
+
+    try:
+        validate_langfuse_environment_value(value)
+    except ValueError as e:
+        return str(e)
+    return None
 
 
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:

@@ -32,6 +32,7 @@ class GenAIOperation(str, Enum):
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
     LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
+    LITELLM_RESPONSES_MANAGEMENT = "litellm.responses_management"
     LITELLM_MODERATION = "litellm.moderation"
 
 
@@ -307,6 +308,15 @@ class LiteLLM:
     GUARDRAIL_ID: Final = "litellm.guardrail.id"
     GUARDRAIL_POLICY_TEMPLATE: Final = "litellm.guardrail.policy_template"
     GUARDRAIL_DETECTION_METHOD: Final = "litellm.guardrail.detection_method"
+    # Provider-reported billable usage counters, JSON-serialized into one value.
+    GUARDRAIL_USAGE: Final = "litellm.guardrail.usage"
+    # Numeric USD cost of the guardrail invocation; lives under the litellm.cost.*
+    # namespace (COST_PREFIX) beside the LLM call's litellm.cost.total.
+    GUARDRAIL_COST: Final = "litellm.cost.guardrail"
+    # Whether litellm.cost.guardrail is already inside litellm.cost.total (True,
+    # the billed default) or reported alongside it (False) — without this a trace
+    # consumer cannot tell whether adding the two double-counts.
+    GUARDRAIL_COST_IN_SPEND: Final = "litellm.guardrail.cost_in_spend"
     SERVICE_NAME: Final = "litellm.service.name"
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
@@ -374,6 +384,14 @@ _OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
     "aembedding": GenAIOperation.EMBEDDINGS,
     "responses": GenAIOperation.CHAT,
     "aresponses": GenAIOperation.CHAT,
+    "get_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "aget_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "delete_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "adelete_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "cancel_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "acancel_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "list_input_items": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "alist_input_items": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
     "image_generation": GenAIOperation.GENERATE_CONTENT,
     "aimage_generation": GenAIOperation.GENERATE_CONTENT,
     "moderation": GenAIOperation.LITELLM_MODERATION,

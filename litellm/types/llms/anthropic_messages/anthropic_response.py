@@ -1,11 +1,12 @@
 from typing import Any, Literal, TypeAlias
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
     ContextManagementResponse,
+    ServerToolUsage,
 )
 
 
@@ -70,6 +71,11 @@ class AnthropicUsage(TypedDict, total=False):
     """
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+
+    """
+    Server-side tool usage (e.g. web search request counts)
+    """
+    server_tool_use: NotRequired[ReadOnly[ServerToolUsage]]
 
 
 class AnthropicMessagesResponse(TypedDict, total=False):

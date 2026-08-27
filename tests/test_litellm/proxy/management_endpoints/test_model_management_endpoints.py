@@ -20,6 +20,7 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     _get_team_deployments,
+    _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
 )
@@ -4256,3 +4257,41 @@ class TestAutoRouterClassifierDefaultPrompt:
         for empty in (None, "", "{}"):
             response = await get_auto_router_classifier_default_prompt(context_window_size=5, tier_labels=empty)
             assert response.system_prompt == classification_system_prompt(5)
+
+
+class TestEnforceRpmTpmOnModelAdd:
+    def test_passes_when_disabled_even_without_limits(self):
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                litellm_params=LiteLLM_Params(model="azure/gpt-5.2"),
+                enforced=False,
+            )
+            is None
+        )
+
+    def test_passes_when_enabled_and_both_set(self):
+        assert (
+            _raise_if_rate_limits_required_but_missing(
+                litellm_params=LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=1000),
+                enforced=True,
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        "params, expected_missing",
+        [
+            (LiteLLM_Params(model="azure/gpt-5.2"), "rpm and tpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", rpm=10), "tpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", tpm=1000), "rpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", rpm=0, tpm=1000), "rpm"),
+            (LiteLLM_Params(model="azure/gpt-5.2", rpm=10, tpm=-1), "tpm"),
+        ],
+    )
+    def test_raises_when_enabled_and_missing(self, params, expected_missing):
+        from litellm.proxy._types import ProxyException
+
+        with pytest.raises(ProxyException) as exc_info:
+            _raise_if_rate_limits_required_but_missing(litellm_params=params, enforced=True)
+        assert expected_missing in str(exc_info.value.message)
+        assert exc_info.value.code == "400"
