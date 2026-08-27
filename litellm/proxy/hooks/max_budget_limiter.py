@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, cast
 
 from fastapi import HTTPException
 
@@ -53,6 +53,27 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             if user_counter_key in get_reserved_counter_keys(user_api_key_dict.budget_reservation):
                 return
 
+            # Zero-cost models are exempt from budget checks — mirrors the auth
+            # layer (user_api_key_auth.py). A free model must stay usable when
+            # the user's personal budget is exhausted. Imported lazily like the
+            # other proxy_server imports in this hook to avoid import cycles.
+            from litellm.proxy.auth.auth_checks import (
+                _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # auth layer's own exemption helper, reused for parity across budget gates
+            )
+            from litellm.proxy.proxy_server import llm_router
+
+            # cast-ok: `data` is an untyped dict at this boundary; every reader
+            # treats "model" as a single name or a fallback list.
+            requested_model: Final[str | list[str] | None] = (
+                cast("str | list[str] | None", data.get("model")) if data else None  # pyright: ignore[reportUnknownMemberType]  # bare `dict` param, same pattern as the raise site below
+            )
+            if _is_model_cost_zero(model=requested_model, llm_router=llm_router):
+                verbose_proxy_logger.info(
+                    "Skipping MaxBudgetLimiter check for zero-cost model: %s",
+                    requested_model,
+                )
+                return
+
             from litellm.proxy.proxy_server import get_current_spend
 
             curr_spend: Final = await get_current_spend(
@@ -69,7 +90,9 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
 
             # CHECK IF REQUEST ALLOWED
             if curr_spend >= max_budget:
-                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model") if data else None)
+                # cast-ok: this call site labels a single model; a fallback list
+                # narrows to None so the label stays deterministic.
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(cast("str | None", requested_model))
                 raise ProxyRateLimitError(
                     detail="Max budget limit reached.",
                     rate_limit_type=RateLimitType.BUDGET,

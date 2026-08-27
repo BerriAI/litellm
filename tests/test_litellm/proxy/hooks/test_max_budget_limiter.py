@@ -196,12 +196,15 @@ async def test_team_keys_enforce_personal_budget_when_flag_enabled():
         team_id="team-1",
     )
 
-    with patch.dict(
-        "litellm.proxy.proxy_server.general_settings",
-        {"apply_user_budget_to_team_keys": True},
-    ), patch(
-        "litellm.proxy.proxy_server.get_current_spend",
-        new=AsyncMock(return_value=999.0),
+    with (
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {"apply_user_budget_to_team_keys": True},
+        ),
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=999.0),
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await handler.async_pre_call_hook(
@@ -235,3 +238,105 @@ async def test_no_max_budget_passes():
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+def _router_with_free_and_paid_models():
+    """Real router with one explicitly zero-cost model and one priced model.
+
+    `_is_model_cost_zero` only bypasses when both per-token costs are
+    explicitly configured as 0 — a real Router (not a stand-in) is required so
+    the cost fields land in the router's model_cost registry the way
+    `mock_router_with_zero_cost_model` in test_zero_cost_model_budget_bypass.py
+    sets them up.
+    """
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "chat-model-free",
+                "litellm_params": {
+                    "model": "openai/chat-model-free",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "chat-model-free-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "chat-model-paid",
+                "litellm_params": {
+                    "model": "openai/chat-model-paid",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 0.000003,
+                    "output_cost_per_token": 0.000015,
+                },
+                "model_info": {
+                    "id": "chat-model-paid-id",
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_zero_cost_model_skips_personal_budget_check():
+    """Regression for #38515: once the user's personal max_budget is exhausted,
+    a zero-cost model must stay usable — the auth layer already exempts it
+    (user_api_key_auth.py), this hook must not become the stricter second
+    gate."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=0.12, user_spend=0.12)
+
+    with (
+        patch(  # test-quality-ok: proxy_server module global is the hook's only router injection point
+            "litellm.proxy.proxy_server.llm_router",
+            new=_router_with_free_and_paid_models(),
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the hook's only injection point
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=999.0),
+        ) as mock_get_spend,
+    ):
+        result = await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"model": "chat-model-free"},
+            call_type="completion",
+        )
+
+    assert result is None
+    mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_priced_model_still_rejected_when_budget_exhausted():
+    """The zero-cost exemption must not leak: a priced model on the same
+    exhausted budget still gets the 429."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=0.12, user_spend=0.12)
+
+    with (
+        patch(  # test-quality-ok: proxy_server module global is the hook's only router injection point
+            "litellm.proxy.proxy_server.llm_router",
+            new=_router_with_free_and_paid_models(),
+        ),
+        patch(  # test-quality-ok: proxy_server module global is the hook's only injection point
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=0.12),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={"model": "chat-model-paid"},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+    assert "Max budget limit reached." in exc_info.value.detail
