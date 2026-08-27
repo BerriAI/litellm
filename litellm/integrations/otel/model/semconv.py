@@ -307,6 +307,15 @@ class LiteLLM:
     GUARDRAIL_ID: Final = "litellm.guardrail.id"
     GUARDRAIL_POLICY_TEMPLATE: Final = "litellm.guardrail.policy_template"
     GUARDRAIL_DETECTION_METHOD: Final = "litellm.guardrail.detection_method"
+    # Provider-reported billable usage counters, JSON-serialized into one value.
+    GUARDRAIL_USAGE: Final = "litellm.guardrail.usage"
+    # Numeric USD cost of the guardrail invocation; lives under the litellm.cost.*
+    # namespace (COST_PREFIX) beside the LLM call's litellm.cost.total.
+    GUARDRAIL_COST: Final = "litellm.cost.guardrail"
+    # Whether litellm.cost.guardrail is already inside litellm.cost.total (True,
+    # the billed default) or reported alongside it (False) — without this a trace
+    # consumer cannot tell whether adding the two double-counts.
+    GUARDRAIL_COST_IN_SPEND: Final = "litellm.guardrail.cost_in_spend"
     SERVICE_NAME: Final = "litellm.service.name"
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
