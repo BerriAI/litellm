@@ -4,7 +4,7 @@ This file contains the transformation logic for the Gemini realtime API.
 
 import json
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 import litellm
@@ -384,17 +384,25 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return bool(entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live"))
 
     @staticmethod
-    def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:
-        """Map unsupported TEXT responseModalities to AUDIO for audio-only Live models."""
-        normalized: Final = [
+    def _is_text_only_live_model(model: str) -> bool:
+        return GeminiRealtimeConfig._model_cost_entry(model).get("mode") == "audio_transcription"
+
+    @staticmethod
+    def _default_response_modality(model: str) -> GeminiResponseModalities:
+        return "TEXT" if GeminiRealtimeConfig._is_text_only_live_model(model) else "AUDIO"
+
+    @staticmethod
+    def _coerce_response_modalities(model: str, modalities: Sequence[Any]) -> tuple[str, ...]:
+        """Swap responseModalities a Live model cannot produce: TEXT to AUDIO for
+        audio-only models, AUDIO to TEXT for text-only ones (e.g. transcribe-live)."""
+        normalized: Final = tuple(
             modality.upper() if isinstance(modality, str) else str(modality).upper() for modality in modalities
-        ]
-        if not GeminiRealtimeConfig._is_audio_only_live_model(model):
-            return normalized
-        if "TEXT" not in normalized:
-            return normalized
-        without_text: Final = [modality for modality in normalized if modality != "TEXT"]
-        return without_text if without_text else ["AUDIO"]
+        )
+        if GeminiRealtimeConfig._is_audio_only_live_model(model) and "TEXT" in normalized:
+            return tuple(modality for modality in normalized if modality != "TEXT") or ("AUDIO",)
+        if GeminiRealtimeConfig._is_text_only_live_model(model) and "AUDIO" in normalized:
+            return tuple(modality for modality in normalized if modality != "AUDIO") or ("TEXT",)
+        return normalized
 
     @staticmethod
     def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:
@@ -436,7 +444,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         if session_configuration_request is None:
             generation_config: Final = new_overrides.setdefault("generationConfig", {})
-            generation_config.setdefault("responseModalities", ["AUDIO"])
+            generation_config.setdefault("responseModalities", [GeminiRealtimeConfig._default_response_modality(model)])
             new_overrides.setdefault("inputAudioTranscription", {})
             new_overrides["model"] = f"models/{model}"
             verbose_logger.debug("Gemini Realtime: Sending initial setup with tools to backend")
@@ -1583,7 +1591,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         ```
         """
 
-        response_modalities: Final[list[GeminiResponseModalities]] = ["AUDIO"]
+        response_modalities: Final[list[GeminiResponseModalities]] = [
+            GeminiRealtimeConfig._default_response_modality(model)
+        ]
         output_audio_transcription: Final = False
         # if "audio" in model: ## UNCOMMENT THIS WHEN AUDIO IS SUPPORTED
         #     output_audio_transcription = True
