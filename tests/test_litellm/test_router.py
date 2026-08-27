@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import threading
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10264,14 +10265,28 @@ async def test_anthropic_messages_raised_provider_error_before_content_triggers_
     assert source.closed is True
 
 
+class _AnthropicMessagesStringStatusError(Exception):
+    def __init__(self):
+        super().__init__("bad request")
+        self.status_code = "400"
+
+
+class _AnthropicMessagesResponseOnlyStatusError(Exception):
+    def __init__(self):
+        super().__init__("bad request")
+        self.response = SimpleNamespace(status_code=400)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "raised_error",
     [
         BedrockError(status_code=400, message='validationException {"message": "Malformed input"}'),
         BedrockError(status_code=424, message='modelStreamErrorException {"message": "Model stream error"}'),
+        _AnthropicMessagesStringStatusError(),
+        _AnthropicMessagesResponseOnlyStatusError(),
     ],
-    ids=["400", "424"],
+    ids=["400", "424", "str-400", "response-only-400"],
 )
 async def test_anthropic_messages_raised_non_retriable_provider_error_propagates_unchanged(raised_error):
     """A raised 4xx (other than 429) is a client error no other deployment can
@@ -10295,7 +10310,7 @@ async def test_anthropic_messages_raised_non_retriable_provider_error_propagates
             async for chunk in wrapped:
                 collected.append(chunk)
 
-        with pytest.raises(BedrockError) as exc_info:
+        with pytest.raises(type(raised_error)) as exc_info:
             await _consume()
 
     assert collected == []
