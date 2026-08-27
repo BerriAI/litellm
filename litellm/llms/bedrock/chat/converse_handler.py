@@ -331,7 +331,7 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
-        credentials: Final[Credentials] = self.get_credentials(
+        credentials: Final[Credentials | None] = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
@@ -368,17 +368,24 @@ class BedrockConverseLLM(BaseAWSLLM):
         # The Rust core owns the whole call for the subset it accepts. Ask
         # before transforming so whichever path runs emits pre_call once, and
         # hand down the credentials, region and endpoint this handler already
-        # resolved so both paths sign as the same principal.
+        # resolved so both paths sign as the same principal. A bearer-token-only
+        # deployment (AWS_BEARER_TOKEN_BEDROCK, no IAM keys anywhere in the
+        # resolution chain) has no boto3 Credentials to hand down; api_key below
+        # already carries that bearer token to the core independently.
+        iam_credential_pairs: Final = (
+            (
+                ("aws_access_key_id", credentials.access_key),
+                ("aws_secret_access_key", credentials.secret_key),
+                ("aws_session_token", credentials.token),
+            )
+            if credentials is not None
+            else ()
+        )
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **optional_params,
             **{  # mutable-ok: merged into its mutable parent above
                 key: value
-                for key, value in (
-                    ("aws_access_key_id", credentials.access_key),
-                    ("aws_secret_access_key", credentials.secret_key),
-                    ("aws_session_token", credentials.token),
-                    ("aws_region_name", aws_region_name),
-                )
+                for key, value in (*iam_credential_pairs, ("aws_region_name", aws_region_name))
                 if value is not None
             },
         }

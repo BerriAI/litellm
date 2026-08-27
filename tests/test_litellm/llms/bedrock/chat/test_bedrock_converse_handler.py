@@ -135,6 +135,21 @@ def test_the_core_receives_the_credentials_this_handler_already_resolved():
     assert params["aws_region_name"] == "us-east-1"
 
 
+def test_bearer_token_only_deployment_omits_iam_keys_without_crashing():
+    """A bearer-token-only deployment (no IAM keys anywhere in the resolution
+    chain) resolves no boto3 Credentials; the core still gets the call, with
+    no IAM keys that do not exist rather than a crash reading them (#38579)."""
+    seen = _inject()
+    with patch.object(BedrockConverseLLM, "get_credentials", return_value=None):
+        BedrockConverseLLM().completion(**_completion_kwargs())
+
+    params = seen["call"][0]["optional_params"]
+    assert "aws_access_key_id" not in params
+    assert "aws_secret_access_key" not in params
+    assert "aws_session_token" not in params
+    assert params["aws_region_name"] == "us-east-1"
+
+
 def test_the_core_receives_the_converse_url_this_handler_already_built():
     seen = _inject()
     _run()
