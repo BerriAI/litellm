@@ -20378,6 +20378,7 @@
         "supports_image_size": false
     },
     "gemini-live-2.5-flash-native-audio": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -20422,6 +20423,7 @@
         "gemini_native_audio": true
     },
     "gemini/gemini-live-2.5-flash-native-audio": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -20451,6 +20453,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -20458,6 +20461,11 @@
         "supports_vision": true,
         "supports_web_search": true,
         "tpm": 8000000,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.035,
+            "search_context_size_medium": 0.035,
+            "search_context_size_high": 0.035
+        },
         "gemini_native_audio": true
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
