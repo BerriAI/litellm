@@ -53273,6 +53273,8 @@ export interface operations {
                 page_size?: number;
                 /** @description Filter logs by status (e.g., success, failure) */
                 status_filter?: string | null;
+                /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
+                cache_hit_filter?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -53381,6 +53383,8 @@ export interface operations {
                 page_size?: number;
                 /** @description Filter logs by status (e.g., success, failure) */
                 status_filter?: string | null;
+                /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
+                cache_hit_filter?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */

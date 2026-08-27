@@ -2002,6 +2002,8 @@ interface UiSpendLogsParams {
   user_id?: string;
   end_user?: string;
   status_filter?: string;
+  /** Filter by cache state: "hit" or "miss" */
+  cache_hit_filter?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */
