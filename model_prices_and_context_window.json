@@ -15177,7 +15177,7 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Billing reads the per-token dollar fields; the '*_dbu_cost_per_token' fields are the published Databricks rates, kept for reference."
         },
         "mode": "chat",
         "output_cost_per_token": 4.39999e-06,
@@ -15472,7 +15472,7 @@
         "max_output_tokens": 1048576,
         "max_tokens": 1048576,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Billing reads the per-token dollar fields; the '*_dbu_cost_per_token' fields are the published Databricks rates, kept for reference."
         },
         "mode": "chat",
         "output_cost_per_token": 1.500002e-05,
