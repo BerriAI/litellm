@@ -120,6 +120,7 @@ def test_together_glm_53_flash_pricing_and_capabilities(cost_map: CostMap):
     assert info["max_output_tokens"] == 1048575
     assert info["supports_function_calling"] is True
     assert info["supports_parallel_function_calling"] is True
+    assert info["supports_prompt_caching"] is True
     assert info["supports_tool_choice"] is True
     assert info["supports_response_schema"] is True
     assert info["supports_vision"] is True
