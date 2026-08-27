@@ -762,19 +762,30 @@ class ChunkProcessor:
         prompt_tokens_provided = "prompt_tokens" in usage_chunk
         completion_tokens_provided = "completion_tokens" in usage_chunk
 
-        if prompt_tokens_provided and (usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0):
-            prompt_tokens = usage_chunk_dict["prompt_tokens"]
-        if completion_tokens_provided and (usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0):
-            completion_tokens = usage_chunk_dict["completion_tokens"]
-            if completion_tokens > 0:
-                completion_usage_updates += 1
+        updated_prompt_tokens = (
+            usage_chunk_dict["prompt_tokens"]
+            if prompt_tokens_provided and (usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0)
+            else prompt_tokens
+        )
+        updated_completion_tokens = (
+            usage_chunk_dict["completion_tokens"]
+            if completion_tokens_provided and (usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0)
+            else completion_tokens
+        )
+        updated_completion_usage_updates = (
+            completion_usage_updates + 1
+            if completion_tokens_provided
+            and (usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0)
+            and updated_completion_tokens > 0
+            else completion_usage_updates
+        )
 
         return (
-            prompt_tokens,
-            completion_tokens,
+            updated_prompt_tokens,
+            updated_completion_tokens,
             prompt_tokens_provided,
             completion_tokens_provided,
-            completion_usage_updates,
+            updated_completion_usage_updates,
         )
 
     def _calculate_usage_per_chunk(
