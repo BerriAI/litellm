@@ -128,6 +128,21 @@ def test_key_derivation_is_deterministic():
     assert envelope_keys_from_master_key(_MASTER_KEY) == envelope_keys_from_master_key(_MASTER_KEY)
 
 
+def test_fips_mode_derivation_avoids_scrypt_and_round_trips(monkeypatch):
+    """Under LITELLM_FIPS_MODE the KDF is PBKDF2 (distinct keys from scrypt) and
+    mint/open still round-trip. Distinct master keys per arm sidestep the lru_cache."""
+    scrypt_keys = envelope_keys_from_master_key("sk-fips-kdf-test-non-fips-arm")
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    fips_keys = envelope_keys_from_master_key("sk-fips-kdf-test-fips-arm")
+    fips_keys_again = envelope_keys_from_master_key.__wrapped__("sk-fips-kdf-test-fips-arm")
+    scrypt_keys_same_input = envelope_keys_from_master_key.__wrapped__("sk-fips-kdf-test-non-fips-arm")
+
+    assert fips_keys == fips_keys_again
+    assert scrypt_keys != scrypt_keys_same_input
+    result = resolve_bridge_envelope(_sealed_token(fips_keys), fips_keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeAdmitted)
+
+
 def test_key_derivation_signing_and_encryption_differ():
     keys = envelope_keys_from_master_key(_MASTER_KEY)
     assert keys.signing_key.get_secret_value() != keys.encryption_key.get_secret_value()

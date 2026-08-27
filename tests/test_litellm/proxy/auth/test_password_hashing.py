@@ -67,3 +67,38 @@ class TestVerifyPasswordFallbacks:
 
     def test_scrypt_invalid_base64_rejected(self):
         assert verify_password("test", "scrypt:not-valid-base64!!!") is False
+
+
+@pytest.fixture
+def fips_mode(monkeypatch):
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+
+
+class TestFipsModePasswordHashing:
+    def test_produces_pbkdf2_prefix(self, fips_mode):
+        assert hash_password("test").startswith("pbkdf2:")
+
+    def test_round_trip(self, fips_mode):
+        h = hash_password("correct")
+        assert verify_password("correct", h) is True
+        assert verify_password("wrong", h) is False
+
+    def test_pbkdf2_hash_verifies_outside_fips_mode(self, fips_mode, monkeypatch):
+        h = hash_password("portable")
+        monkeypatch.delenv("LITELLM_FIPS_MODE")
+        assert verify_password("portable", h) is True
+        assert verify_password("wrong", h) is False
+
+    def test_scrypt_hash_rejected_in_fips_mode(self, monkeypatch):
+        h = hash_password("legacy")
+        assert h.startswith("scrypt:")
+        monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+        assert verify_password("legacy", h) is False
+
+    def test_sha256_fallback_still_works_in_fips_mode(self, fips_mode):
+        stored = hashlib.sha256("oldpass".encode()).hexdigest()
+        assert verify_password("oldpass", stored) is True
+        assert verify_password("wrong", stored) is False
+
+    def test_pbkdf2_invalid_base64_rejected(self, fips_mode):
+        assert verify_password("test", "pbkdf2:not-valid-base64!!!") is False

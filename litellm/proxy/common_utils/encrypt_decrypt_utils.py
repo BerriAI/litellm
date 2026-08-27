@@ -31,14 +31,41 @@ def _get_salt_key():
     return salt_key
 
 
+def _fips_encryption_algorithm() -> str:
+    """Resolve the write algorithm under FIPS mode: always AES-256-GCM.
+
+    An explicit ``encryption_algorithm: xsalsa20-poly1305`` setting is an
+    unsupported configuration and fails loudly rather than silently writing
+    non-approved ciphertext.
+    """
+    try:
+        from litellm.proxy.proxy_server import general_settings
+
+        configured: Final = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING)
+    except ImportError:
+        return _ALGO_AES_GCM
+
+    if isinstance(configured, str) and configured.lower() == _ALGO_XSALSA20:
+        raise ValueError(
+            "encryption_algorithm=xsalsa20-poly1305 is not FIPS-approved. Remove the setting or set it to "
+            "aes-256-gcm when LITELLM_FIPS_MODE is enabled."
+        )
+    return _ALGO_AES_GCM
+
+
 def _get_encryption_algorithm() -> str:
     """
     Resolve the configured at-rest encryption algorithm for *new writes*.
 
     Read from ``general_settings.encryption_algorithm`` at write time. Defaults to
     the legacy XSalsa20-Poly1305 algorithm so deployments that have not opted in
-    keep producing byte-for-byte identical ciphertext.
+    keep producing byte-for-byte identical ciphertext, and to AES-256-GCM under
+    ``LITELLM_FIPS_MODE``.
     """
+    from litellm.proxy.common_utils.fips import is_fips_mode
+
+    if is_fips_mode():
+        return _fips_encryption_algorithm()
     try:
         from litellm.proxy.proxy_server import general_settings
 

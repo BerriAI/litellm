@@ -130,6 +130,33 @@ def test_callback_prefix_composes_with_v2(monkeypatch):
     assert _decrypt_or_passthrough("gcs_path_service_account", stored) == "my-sa-secret"
 
 
+def test_fips_mode_forces_aes_gcm(monkeypatch):
+    """With LITELLM_FIPS_MODE and no algorithm setting, writes are AES-256-GCM."""
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+
+    ct = encrypt_value_helper("fips-secret")
+    assert ct.startswith(_V2_GCM_PREFIX)
+    assert decrypt_value_helper(ct, key="t") == "fips-secret"
+
+
+def test_fips_mode_rejects_explicit_xsalsa20(monkeypatch):
+    """An explicit xsalsa20-poly1305 setting under FIPS mode fails loudly."""
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+
+    with pytest.raises(ValueError, match="not FIPS-approved"):
+        encrypt_value_helper("fips-secret")
+
+
+def test_legacy_value_still_decrypts_under_fips_mode(monkeypatch):
+    """Migration readback: a pre-FIPS nacl value decrypts once FIPS mode is on."""
+    legacy = encrypt_value_helper("legacy-secret")
+    assert not legacy.startswith(_V2_GCM_PREFIX)
+
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    assert decrypt_value_helper(legacy, key="t") == "legacy-secret"
+
+
 def test_unknown_algorithm_falls_back_to_legacy(monkeypatch):
     """An unrecognized encryption_algorithm value does not produce v2 writes."""
     monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "rot13"})

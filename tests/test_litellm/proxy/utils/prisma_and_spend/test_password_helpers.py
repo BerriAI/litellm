@@ -205,7 +205,7 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
         "all_scrypt_prefixed": new_password_prefixes,
     }
     assert outcome == {
-        "message": "Migrated 2 plaintext passwords to scrypt",
+        "message": "Migrated 2 plaintext passwords to hashed storage",
         "update_count": 2,
         "updated_ids": ["plaintext-user-1", "plaintext-user-2"],
         "all_scrypt_prefixed": ["scrypt:", "scrypt:"],

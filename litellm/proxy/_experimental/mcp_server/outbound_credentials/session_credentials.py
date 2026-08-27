@@ -8,14 +8,13 @@ recovered litellm user (consumer), reloading the live user record and policy bef
 anything runs. This module is the pure surface for both sides; the token-endpoint and
 admission wiring live in their respective call sites.
 
-The signing key is derived with the same memory-hard scrypt construction as
+The signing key is derived with the same expensive-KDF construction as
 :func:`~.bridge_credentials.envelope_keys_from_master_key` but under a distinct domain
 label, so session tokens and bridge envelopes never share key material: a token of one
 family is unverifiable in the other by key separation, on top of the distinct issuers,
 prefixes, and claim shapes.
 """
 
-import hashlib
 from datetime import datetime
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
@@ -32,15 +31,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     open_session_refresh_token,
     open_session_token,
 )
+from litellm.proxy.common_utils.fips import derive_master_subkey_hex
 
 _SESSION_SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-gateway:session-signing:"
-
-# scrypt work factors (RFC 7914), identical to the envelope KDF: memory-hard so a captured
-# session token is not a cheap offline oracle for the master key.
-_SCRYPT_N: Final = 2**15
-_SCRYPT_R: Final = 8
-_SCRYPT_P: Final = 1
-_SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
 _DERIVED_KEY_BYTES: Final = 32
 
 
@@ -48,23 +41,16 @@ _DERIVED_KEY_BYTES: Final = 32
 def session_keys_from_master_key(master_key: str) -> SessionKeys:
     """Derive the session signing key from the proxy master key.
 
-    A memory-hard scrypt KDF (RFC 7914) over a session-specific domain-label salt yields a
-    256-bit subkey from the one secret, so the producer (mint) and consumer (open) agree on
-    the key without persisting any. The domain label differs from both envelope labels in
-    :mod:`.bridge_credentials`, so compromise or misuse of one token family never crosses
-    into the other. The result is cached (the master key is fixed for a process); rotating
-    ``master_key`` invalidates every outstanding session, which is the intended behavior
-    for a signing-key change.
+    An expensive KDF (scrypt per RFC 7914, or PBKDF2-HMAC-SHA256 under ``LITELLM_FIPS_MODE``,
+    see :func:`~litellm.proxy.common_utils.fips.derive_master_subkey_hex`) over a
+    session-specific domain-label salt yields a 256-bit subkey from the one secret, so the
+    producer (mint) and consumer (open) agree on the key without persisting any. The domain
+    label differs from both envelope labels in :mod:`.bridge_credentials`, so compromise or
+    misuse of one token family never crosses into the other. The result is cached (the master
+    key is fixed for a process); rotating ``master_key`` (or toggling FIPS mode) invalidates
+    every outstanding session, which is the intended behavior for a signing-key change.
     """
-    signing: Final = hashlib.scrypt(
-        master_key.encode(),
-        salt=_SESSION_SIGNING_KEY_DOMAIN,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-        maxmem=_SCRYPT_MAXMEM,
-        dklen=_DERIVED_KEY_BYTES,
-    ).hex()
+    signing: Final = derive_master_subkey_hex(master_key, _SESSION_SIGNING_KEY_DOMAIN, _DERIVED_KEY_BYTES)
     return SessionKeys(signing_key=SecretStr(signing))
 
 

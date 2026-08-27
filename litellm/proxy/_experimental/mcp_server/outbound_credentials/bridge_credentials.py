@@ -9,7 +9,6 @@ to the upstream MCP server (consumer). This module is the pure surface for both 
 token-endpoint and admission wiring live in their respective call sites.
 """
 
-import hashlib
 from datetime import datetime
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
@@ -32,18 +31,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     open_envelope,
     open_refresh_envelope,
 )
+from litellm.proxy.common_utils.fips import derive_master_subkey_hex
 
 _SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-signing:"
 _ENCRYPTION_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-encryption:"
-
-# scrypt work factors (RFC 7914). n=2**15 with r=8/p=1 costs ~50ms and ~32MB per derivation, which
-# makes offline guessing of a candidate master key memory-hard rather than a bare hash comparison.
-_SCRYPT_N: Final = 2**15
-_SCRYPT_R: Final = 8
-_SCRYPT_P: Final = 1
-# scrypt's working-set is ~128 * N * r * p bytes; cap at twice that so the maxmem ceiling scales
-# with every work factor and a future p or r bump does not trip "memory limit exceeded".
-_SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
 _DERIVED_KEY_BYTES: Final = 32
 
 
@@ -51,34 +42,20 @@ _DERIVED_KEY_BYTES: Final = 32
 def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
     """Derive the envelope signing and encryption keys from the proxy master key.
 
-    A memory-hard scrypt KDF (RFC 7914) over two distinct domain-label salts yields two
-    independent 256-bit subkeys from the one secret, so the producer (mint) and consumer
-    (open) agree on keys without persisting any. scrypt is used rather than a bare hash or
-    HMAC so that a captured envelope is not a cheap offline oracle for the master key: each
-    candidate guess costs a full memory-hard derivation, which is what protects a deployment
-    whose master key is weaker than it should be. The result is cached (the master key is
-    fixed for a process), so the KDF runs once per key and adds nothing to the per-request
-    admission path. The derivation is deterministic; rotating ``master_key`` invalidates
-    every outstanding envelope, which is the intended behavior for a signing-key change.
+    A deliberately expensive KDF (scrypt per RFC 7914, or PBKDF2-HMAC-SHA256 under
+    ``LITELLM_FIPS_MODE``, see :func:`~litellm.proxy.common_utils.fips.derive_master_subkey_hex`)
+    over two distinct domain-label salts yields two independent 256-bit subkeys from the one
+    secret, so the producer (mint) and consumer (open) agree on keys without persisting any.
+    An expensive KDF rather than a bare hash or HMAC means a captured envelope is not a cheap
+    offline oracle for the master key: each candidate guess costs a full derivation, which is
+    what protects a deployment whose master key is weaker than it should be. The result is
+    cached (the master key is fixed for a process), so the KDF runs once per key and adds
+    nothing to the per-request admission path. The derivation is deterministic; rotating
+    ``master_key`` (or toggling FIPS mode) invalidates every outstanding envelope, which is
+    the intended behavior for a signing-key change.
     """
-    signing: Final = hashlib.scrypt(
-        master_key.encode(),
-        salt=_SIGNING_KEY_DOMAIN,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-        maxmem=_SCRYPT_MAXMEM,
-        dklen=_DERIVED_KEY_BYTES,
-    ).hex()
-    encryption: Final = hashlib.scrypt(
-        master_key.encode(),
-        salt=_ENCRYPTION_KEY_DOMAIN,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-        maxmem=_SCRYPT_MAXMEM,
-        dklen=_DERIVED_KEY_BYTES,
-    ).hex()
+    signing: Final = derive_master_subkey_hex(master_key, _SIGNING_KEY_DOMAIN, _DERIVED_KEY_BYTES)
+    encryption: Final = derive_master_subkey_hex(master_key, _ENCRYPTION_KEY_DOMAIN, _DERIVED_KEY_BYTES)
     return EnvelopeKeys(signing_key=SecretStr(signing), encryption_key=SecretStr(encryption))
 
 

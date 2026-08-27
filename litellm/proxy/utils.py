@@ -5946,23 +5946,46 @@ def hash_token(token: str):
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using scrypt with a random salt."""
+    """Hash a password with a random salt: PBKDF2-HMAC-SHA256 in FIPS mode, scrypt otherwise."""
     import base64
     import hashlib
     import os
 
+    from litellm.proxy.common_utils.fips import PBKDF2_ITERATIONS, is_fips_mode
+
     salt: Final = os.urandom(16)
+    if is_fips_mode():
+        dk_pbkdf2: Final = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS, dklen=32)
+        return "pbkdf2:" + base64.b64encode(salt + dk_pbkdf2).decode()
     dk: Final = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
     return "scrypt:" + base64.b64encode(salt + dk).decode()
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored hash. Supports scrypt and SHA256."""
+    """Verify a password against a stored hash. Supports PBKDF2, scrypt, and SHA256."""
     import base64
     import hashlib
     import secrets
 
+    from litellm.proxy.common_utils.fips import PBKDF2_ITERATIONS, is_fips_mode
+
+    if stored.startswith("pbkdf2:"):
+        try:
+            raw_pbkdf2: Final = base64.b64decode(stored[7:])
+            salt_pbkdf2, dk_pbkdf2 = raw_pbkdf2[:16], raw_pbkdf2[16:]
+            dk_pbkdf2_check: Final = hashlib.pbkdf2_hmac(
+                "sha256", password.encode(), salt_pbkdf2, PBKDF2_ITERATIONS, dklen=32
+            )
+            return secrets.compare_digest(dk_pbkdf2, dk_pbkdf2_check)
+        except (ValueError, TypeError):
+            return False
     if stored.startswith("scrypt:"):
+        if is_fips_mode():
+            verbose_proxy_logger.error(
+                "Cannot verify a scrypt password hash under LITELLM_FIPS_MODE: scrypt is not FIPS-approved. "
+                "Reset this user's password so it is re-hashed with PBKDF2-HMAC-SHA256."
+            )
+            return False
         try:
             raw: Final = base64.b64decode(stored[7:])
             salt, dk = raw[:16], raw[16:]
@@ -5992,7 +6015,7 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
     plaintext_users: Final = [
         (u.user_id, u.password)
         for u in all_with_pw
-        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        if u.password and not u.password.startswith(("scrypt:", "pbkdf2:")) and not _is_sha256_hex(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"
@@ -6002,7 +6025,7 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
             where={"user_id": user_id},
             data={"password": hash_password(plaintext_password)},
         )
-    return f"Migrated {len(plaintext_users)} plaintext passwords to scrypt"
+    return f"Migrated {len(plaintext_users)} plaintext passwords to hashed storage"
 
 
 def _hash_token_if_needed(token: str) -> str:
