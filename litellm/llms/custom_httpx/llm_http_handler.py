@@ -1954,6 +1954,16 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        # Resolve the request timeout so a silent upstream is not waited on
+        # indefinitely.  Priority: per-request kwargs["request_timeout"] >
+        # litellm_params.timeout > litellm.request_timeout > client default.
+        _request_timeout: Optional[Union[float, httpx.Timeout]] = (
+            kwargs.get("request_timeout")
+            or litellm_params.get("timeout")
+            or litellm.request_timeout
+            or None
+        )
+
         try:
             response = await async_httpx_client.post(
                 url=request_url,
@@ -1961,6 +1971,7 @@ class BaseLLMHTTPHandler:
                 data=signed_json_body or json.dumps(request_body),
                 stream=stream or False,
                 logging_obj=logging_obj,
+                timeout=_request_timeout,
             )
             response.raise_for_status()
         except Exception as e:

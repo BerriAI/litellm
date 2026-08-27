@@ -288,3 +288,87 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_passes_request_timeout():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/38358.
+
+    async_anthropic_messages_handler must forward the per-request timeout
+    (from kwargs["request_timeout"] or litellm_params.timeout) to the
+    underlying httpx POST so that a silent upstream is abandoned at the
+    configured deadline instead of waiting up to 600 s.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-sonnet-4-20250514", "messages": []}
+    )
+    mock_config.get_complete_url = Mock(
+        return_value="https://api.anthropic.com/v1/messages"
+    )
+    mock_config.sign_request = Mock(return_value=({"x-api-key": "test-key"}, None))
+    mock_config.get_async_streaming_response_iterator = Mock(return_value=iter([]))
+
+    # Build a mock that mimics AsyncHTTPHandler so the handler uses it directly
+    # instead of calling get_async_httpx_client().
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    mock_http_handler = Mock(spec=AsyncHTTPHandler)
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = Mock()
+    mock_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    mock_http_handler.post = AsyncMock(return_value=mock_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    # Provide a request_timeout in kwargs, simulating litellm_settings.request_timeout
+    kwargs = {"request_timeout": 8.0}
+
+    with patch(
+        "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
+    ) as mock_provider_headers:
+        mock_provider_headers.return_value = None
+
+        try:
+            await handler.async_anthropic_messages_handler(
+                model="claude-sonnet-4-20250514",
+                messages=[{"role": "user", "content": "Hello"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params={},
+                custom_llm_provider="anthropic",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=mock_logging_obj,
+                client=mock_http_handler,
+                kwargs=kwargs,
+            )
+        except Exception:
+            pass
+
+    # The httpx post must have been called with the timeout from kwargs
+    assert mock_http_handler.post.call_count >= 1
+    call_kwargs = mock_http_handler.post.call_args
+    assert call_kwargs is not None
+    passed_timeout = call_kwargs.kwargs.get("timeout") if call_kwargs.kwargs else None
+    assert passed_timeout == 8.0, (
+        f"Expected timeout=8.0 to be forwarded to httpx.post, got {passed_timeout!r}. "
+        "A missing timeout causes silent upstreams to hang for 600 s (issue #38358)."
+    )
