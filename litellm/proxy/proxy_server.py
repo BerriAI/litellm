@@ -16402,6 +16402,13 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "tab": "prompt_caching",
         "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
     },
+    "budget_rollover": {  # mutable-ok: registry literal, frozen with its siblings below
+        "type": "Boolean",
+        "description": (
+            "Carry spend beyond max_budget into the next window when budgets reset, instead of "
+            "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
+        ),
+    },
     "max_ui_session_budget": {
         "type": "Dollar",
         "default": 1.0,

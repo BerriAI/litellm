@@ -1646,6 +1646,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "enable_anthropic_prompt_caching",
     "anthropic_prompt_caching_ttl",
     "max_ui_session_budget",
+    "budget_rollover",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
