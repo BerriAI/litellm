@@ -417,7 +417,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return bedrock_request
 
         budget: Final = _ImageFetchBudget()
-        per_message = await asyncio.gather(
+        per_message: Final = await asyncio.gather(
             *(self._build_input_content_items(message=message, budget=budget) for message in messages)
         )
         # mutable-ok: BedrockRequest["content"] is a list in the AWS wire format

@@ -455,8 +455,8 @@ async def _async_get_capped(
     Returns a fully-read response so callers keep using ``.content`` as before.
     """
     async with _underlying_httpx_client(client).stream("GET", url, **request_kwargs) as response:
-        chunks: list[bytes] = []  # mutable-ok: accumulator for the capped body
-        total = 0
+        chunks: Final[list[bytes]] = []  # mutable-ok: accumulator for the capped body
+        total = 0  # rebind-ok: running byte count for the cap
         async for chunk in response.aiter_bytes():
             total += len(chunk)
             if total > max_bytes:

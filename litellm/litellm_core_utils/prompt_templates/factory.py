@@ -3571,7 +3571,8 @@ class BedrockImageProcessor:
             # against the previous signature, so an additive parameter would
             # break them; omitting it keeps the call byte-for-byte as it was.
             capped: Final = {} if max_bytes is None else {"max_bytes": max_bytes}  # mutable-ok: kwargs for one call
-            img_bytes, mime_type = await BedrockImageProcessor.get_image_details_async(image_url, **capped)
+            fetched: Final = await BedrockImageProcessor.get_image_details_async(image_url, **capped)
+            img_bytes, mime_type = fetched  # rebind-ok: mime_type is overridden below by `format`
             image_format = mime_type.split("/")[1]
         else:
             raise ValueError("Unsupported image type. Expected either image url or base64 encoded string")
