@@ -94,16 +94,19 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
     daily_spend_per_user_threshold: float | None = Field(
         default=None,
         gt=0,
+        allow_inf_nan=False,
         description="Alert when a user's spend for the current day (UTC) crosses this USD amount. Off by default.",
     )
     monthly_spend_per_user_threshold: float | None = Field(
         default=None,
         gt=0,
+        allow_inf_nan=False,
         description="Alert when a user's spend for the current calendar month (UTC) crosses this USD amount. Off by default.",
     )
     spend_anomaly_multiplier: float = Field(
         default=3.0,
         gt=0,
+        allow_inf_nan=False,
         description="Flag a user's spend as anomalous when today's spend exceeds this multiple of their trailing daily average.",
     )
     spend_anomaly_baseline_days: int = Field(
@@ -114,6 +117,7 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
     spend_anomaly_min_spend: float = Field(
         default=10.0,
         gt=0,
+        allow_inf_nan=False,
         description="Minimum spend (USD) a user must reach today before an anomaly alert can fire. Reduces false positives.",
     )
     user_spend_check_interval: int = Field(

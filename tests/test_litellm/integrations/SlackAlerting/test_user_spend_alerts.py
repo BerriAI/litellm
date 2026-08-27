@@ -85,7 +85,7 @@ def test_anomaly_detected_above_multiple_of_baseline():
     )
     assert [e.kind for e in events] == ["anomaly"]
     assert events[0].alert_type == AlertType.user_spend_anomalies
-    assert "`$10.00`" in events[0].message  # baseline daily average
+    assert "`$10.00`" in events[0].message
     assert events[0].cache_key == "user_spend_alert_anomaly_user-1_2026-08-15"
 
 
@@ -127,6 +127,17 @@ def test_invalid_config_rejected():
         SlackAlertingArgs(spend_anomaly_baseline_days=0)
     with pytest.raises(ValidationError, match="user_spend_check_interval"):
         SlackAlertingArgs(user_spend_check_interval=10)
+
+
+def test_non_finite_config_rejected():
+    with pytest.raises(ValidationError, match="daily_spend_per_user_threshold"):
+        SlackAlertingArgs(daily_spend_per_user_threshold=float("inf"))
+    with pytest.raises(ValidationError, match="spend_anomaly_multiplier"):
+        SlackAlertingArgs(spend_anomaly_multiplier=float("nan"))
+    with pytest.raises(ValidationError, match="spend_anomaly_min_spend"):
+        SlackAlertingArgs(spend_anomaly_min_spend=float("inf"))
+    with pytest.raises(ValidationError, match="user_spend_check_interval"):
+        SlackAlertingArgs(user_spend_check_interval=float("inf"))
 
 
 def test_anomalies_disabled_suppresses_anomaly_events():
