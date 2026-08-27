@@ -13,8 +13,8 @@ import { ModelGroupInfo } from "./prompt_utils";
 interface PromptTableProps {
   promptsList: PromptSpec[];
   isLoading: boolean;
-  onPromptClick?: (id: string) => void;
-  onDeleteClick?: (id: string, name: string) => void;
+  onPromptClick?: (id: string, environment: string) => void;
+  onDeleteClick?: (id: string, name: string, environment: string) => void;
   accessToken: string | null;
   isAdmin: boolean;
 }

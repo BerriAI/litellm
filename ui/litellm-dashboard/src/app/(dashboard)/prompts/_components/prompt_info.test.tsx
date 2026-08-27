@@ -29,6 +29,35 @@ const promptWithoutTemplate = {
   environments: [],
 };
 
+describe("PromptInfoView environment scoping", () => {
+  beforeEach(() => {
+    vi.mocked(networking.getPromptInfo).mockReset().mockResolvedValue(promptWithoutTemplate);
+    vi.mocked(networking.getPromptVersions).mockReset().mockResolvedValue({ prompts: [] });
+  });
+
+  it("fetches the initial environment it was opened with", async () => {
+    render(
+      <PromptInfoView
+        promptId="support-reply"
+        initialEnvironment="staging"
+        onClose={vi.fn()}
+        accessToken="sk-test"
+        isAdmin={true}
+      />,
+    );
+
+    await screen.findByRole("tab", { name: "Raw JSON" });
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", "staging");
+  });
+
+  it("fetches the serve default when opened without an environment", async () => {
+    render(<PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    await screen.findByRole("tab", { name: "Raw JSON" });
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", undefined);
+  });
+});
+
 describe("PromptInfoView tabs", () => {
   beforeEach(() => {
     vi.mocked(networking.getPromptInfo).mockReset().mockResolvedValue(promptWithoutTemplate);

@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 
 export interface PromptInfoProps {
   promptId: string;
+  initialEnvironment?: string;
   onClose: () => void;
   accessToken: string | null;
   isAdmin: boolean;
@@ -27,7 +28,15 @@ export interface PromptInfoProps {
   onEdit?: (promptData: any) => void;
 }
 
-const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete, onEdit }) => {
+const PromptInfoView: React.FC<PromptInfoProps> = ({
+  promptId,
+  initialEnvironment,
+  onClose,
+  accessToken,
+  isAdmin,
+  onDelete,
+  onEdit,
+}) => {
   const [promptData, setPromptData] = useState<PromptSpec | null>(null);
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null);
   const [rawApiResponse, setRawApiResponse] = useState<any>(null);
@@ -43,7 +52,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [loadingVersions, setLoadingVersions] = useState(false);
 
-  // Initial fetch — no environment filter, gets default + all environments list
+  // Fetches the requested environment (or the serve-time default when omitted) plus the environments list
   const fetchPromptInfo = async (environment?: string) => {
     try {
       setLoading(true);
@@ -89,7 +98,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     setSelectedEnv(null);
     setEnvironments([]);
     setVersionHistory([]);
-    fetchPromptInfo();
+    fetchPromptInfo(initialEnvironment);
   }, [promptId, accessToken]);
 
   // When environment changes (user clicks tab), re-fetch — skip initial mount
@@ -493,7 +502,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             <DialogTitle>Delete Prompt</DialogTitle>
           </DialogHeader>
           <p>
-            Are you sure you want to delete prompt: <strong>{basePromptId}</strong>?
+            Are you sure you want to delete prompt: <strong>{basePromptId}</strong> from every environment?
           </p>
           <p>This action cannot be undone.</p>
           <DialogFooter>
