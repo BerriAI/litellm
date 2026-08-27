@@ -719,6 +719,7 @@ class ClassificationOutcome(NamedTuple):
         "heuristic_scorer",
         "reasoning_override",
         "llm_classifier",
+        "heuristic_first_short_circuit",
         "classifier_plugin",
         "classifier_fallback",
         "default_model_fallback",
@@ -859,7 +860,7 @@ class ComplexityRouter(CustomLogger):
 
         # Both are pure functions of the config, so building them per classifier call would
         # re-run create_model and the schema conversion on every request for the same result.
-        llm_classifier_configured: Final = self.config.classifier_type == "llm" and (
+        llm_classifier_configured: Final = self.config.uses_llm_classifier and (
             self.config.classifier_llm_config is not None
         )
         self._classifier_system_prompt: str | None = (
@@ -1237,17 +1238,63 @@ class ComplexityRouter(CustomLogger):
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
 
-        Falls back to the local heuristic scorer if classifier_type is "heuristic". If the LLM call
-        or the classifier plugin fails, times out, or produces no usable tier, the configured
-        fallback_tier wins on a custom tier set, and classifier_fallback otherwise decides between
-        the heuristic scorer and default_model. The outcome's `cause` reports which path actually ran.
+        Falls back to the local heuristic scorer if classifier_type is "heuristic". Under
+        "heuristic_first" the scorer runs first and the classifier is called only for requests it
+        could not place at or below heuristic_first_max_tier. If the LLM call or the classifier
+        plugin fails, times out, or produces no usable tier, the configured fallback_tier wins on a
+        custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
+        default_model. The outcome's `cause` reports which path actually ran.
         """
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
+        if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
+            return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
 
+    async def _classify_heuristic_first(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        """Score locally, and only pay for the classifier call when the scorer did not confidently
+        place the request at or below heuristic_first_max_tier.
+
+        Confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
+        which is below simple_medium and so lands SIMPLE by default rather than by evidence, and a
+        threshold check alone would hand that traffic to the cheapest model without ever consulting
+        the classifier. Scores also go negative when simple indicators fire, so a score threshold
+        would reject exactly the trivial prompts this path exists to serve.
+        """
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        threshold: Final = self.config.heuristic_first_max_tier
+        decided_cheaply: Final = (
+            threshold is not None
+            and bool(signals)
+            and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
+        )
+        if decided_cheaply:
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    async def _llm_classifier_outcome(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+        scored: ClassificationOutcome | None = None,
+    ) -> ClassificationOutcome:
+        """Call the LLM classifier and turn its verdict, or its failure, into an outcome.
+
+        `scored` is the heuristic outcome the caller already computed, which only "heuristic_first"
+        has. It is handed to the failure path so a classifier error does not re-run the scorer.
+        """
         try:
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
             return ClassificationOutcome(
@@ -1258,11 +1305,20 @@ class ComplexityRouter(CustomLogger):
                 classifier_cost=classifier_cost,
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
-            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt)
+            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
 
-    def _classifier_failure_outcome(self, reason: str, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+    def _classifier_failure_outcome(
+        self,
+        reason: str,
+        prompt: str,
+        system_prompt: str | None,
+        scored: ClassificationOutcome | None = None,
+    ) -> ClassificationOutcome:
         """The outcome when the LLM classifier or classifier plugin produced no usable tier:
-        fallback_tier on a custom tier set, classifier_fallback otherwise."""
+        fallback_tier on a custom tier set, classifier_fallback otherwise.
+
+        A caller that already scored the prompt passes `scored` so the heuristic arm returns that
+        verdict instead of running the same scan again on the request path."""
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
@@ -1277,6 +1333,8 @@ class ComplexityRouter(CustomLogger):
         )
         if self.config.classifier_fallback == "default_model":
             return self._default_model_fallback_outcome()
+        if scored is not None:
+            return scored
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
         return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
 

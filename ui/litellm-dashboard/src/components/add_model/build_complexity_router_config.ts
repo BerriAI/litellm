@@ -18,6 +18,7 @@ import {
   TokenThresholds,
   effectiveTierLabel,
   heuristicScoringRoleFor,
+  usesLlmClassifier,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -86,6 +87,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
+  heuristicFirstMaxTier: string | undefined;
   sessionAffinity: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
@@ -118,6 +120,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  heuristic_first_max_tier?: string;
   session_affinity: boolean;
   deployment_affinity: boolean;
   custom_technical_keywords?: string[];
@@ -208,7 +211,7 @@ export const getKeywordTierRulesError = (
 export const getClassifierModelError = (
   config: Pick<ComplexityRouterConfigValue, "classifier_type" | "classifier_llm_config">,
 ): string | null =>
-  config.classifier_type === "llm" && !config.classifier_llm_config?.model
+  usesLlmClassifier(config.classifier_type) && !config.classifier_llm_config?.model
     ? "Please select a classifier model, or switch back to Heuristic"
     : null;
 
@@ -236,6 +239,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
+  heuristicFirstMaxTier,
   sessionAffinity,
   deploymentAffinity,
   customTechnicalKeywords,
@@ -276,18 +280,21 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-    ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
+      classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+    ...(classifierType === "heuristic_first" &&
+      heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+    ...(usesLlmClassifier(classifierType) &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
       }),
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
       classifierContextBudgetChars !== undefined && {
         classifier_context_budget_chars: classifierContextBudgetChars,
       }),
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
