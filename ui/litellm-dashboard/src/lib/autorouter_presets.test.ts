@@ -604,6 +604,28 @@ describe("autorouter_presets", () => {
       });
     });
 
+    // Two spellings of one model in a tier collapse to a single registered key, and one model can
+    // only hold one param set downstream. Merging keeps whatever only one spelling set instead of
+    // dropping that spelling's params wholesale.
+    it("merges rather than drops params when two spellings resolve to the same registered model", () => {
+      const config = {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: ["claude-sonnet-4-5", "claude-sonnet-4.5"] },
+        tier_model_configs: {
+          REASONING: [
+            { model_name: "claude-sonnet-4-5", litellm_params: { reasoning_effort: "high", temperature: 0.2 } },
+            { model_name: "claude-sonnet-4.5", litellm_params: { reasoning_effort: "low" } },
+          ],
+        },
+        classifier_type: "heuristic" as const,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
+      // temperature survives from the spelling that would otherwise have been overwritten;
+      // reasoning_effort, set by both, resolves last-wins.
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { "claude-sonnet-4.5": { reasoning_effort: "low", temperature: 0.2 } },
+      });
+    });
+
     it("leaves tier_model_params undefined for a preset that carries no per-model params", () => {
       const config = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },

@@ -12,7 +12,11 @@ import {
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
-import { TierModelParamsByTier, hydrateTierModelParams } from "@/components/add_model/complexity_router_tiers";
+import {
+  TierModelParams,
+  TierModelParamsByTier,
+  hydrateTierModelParams,
+} from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import presetsRaw from "@/autorouter_presets.json";
@@ -248,12 +252,20 @@ export const buildPresetPrefill = (
   // Params key on the model name the preset spells while every tier entry is rewritten to the
   // caller's registered spelling, so the keys have to be rewritten the same way. Otherwise
   // serializeTierModelConfigs drops them for naming a model the tier no longer holds.
+  //
+  // Two spellings in one tier can resolve to the same registered model, and one model holds one
+  // param set here and in the payload, so a collision has to collapse. Merge rather than replace:
+  // params only one spelling set still survive, and a key both set resolves last-wins, matching
+  // how hydrateTierModelParams already collapses two entries spelled identically.
   const resolveParamKeys = (params: TierModelParamsByTier | undefined): TierModelParamsByTier | undefined =>
     params &&
     Object.fromEntries(
       Object.entries(params).map(([tier, byModel]) => [
         tier,
-        Object.fromEntries(Object.entries(byModel).map(([model, litellmParams]) => [resolve(model), litellmParams])),
+        Object.entries(byModel).reduce<Record<string, TierModelParams>>((byResolved, [model, litellmParams]) => {
+          const resolved = resolve(model);
+          return { ...byResolved, [resolved]: { ...byResolved[resolved], ...litellmParams } };
+        }, {}),
       ]),
     );
 
