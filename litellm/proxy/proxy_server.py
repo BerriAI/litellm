@@ -1363,7 +1363,7 @@ _OPENAPI_HTTP_METHODS: Final = {
 # the UI. Kept here at module scope to match the analogous descriptor
 # `is_secret` flags in litellm.proxy.config_resolvers and the
 # `_CACHE_SENSITIVE_FIELDS` constant in the cache endpoint file.
-_ALERTING_SENSITIVE_VARS: Final[set[str]] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+_ALERTING_SENSITIVE_VARS: Final[set[str]] = {"ALERTING_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -16537,6 +16537,7 @@ async def create_config_audit_log(
 
 _EXTRA_SECRET_CALLBACK_ENV_VARS: Final = frozenset(
     {
+        "ALERTING_WEBHOOK_URL",
         "GALILEO_USERNAME",
         "GENERIC_LOGGER_HEADERS",
         "OTEL_HEADERS",
