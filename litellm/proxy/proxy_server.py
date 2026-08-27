@@ -9608,8 +9608,11 @@ class ProxyStartupEvent:
                 replace_existing=True,
             )
 
+            slack_alerting_args: Final = proxy_logging_obj.slack_alerting_instance.alerting_args
             user_spend_check_interval: Final = (
-                proxy_logging_obj.slack_alerting_instance.alerting_args.user_spend_check_interval
+                slack_alerting_args.user_spend_check_interval
+                if isinstance(slack_alerting_args, SlackAlertingArgs)  # pyright: ignore[reportUnnecessaryIsInstance]  # tests inject a mock slack_alerting_instance
+                else SlackAlertingArgs().user_spend_check_interval
             )
 
             async def _scheduled_user_spend_alerts() -> None:
