@@ -43373,6 +43373,7 @@
         ]
     },
     "xai/grok-2": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -43385,6 +43386,7 @@
         "supports_web_search": true
     },
     "xai/grok-2-1212": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -43397,6 +43399,7 @@
         "supports_web_search": true
     },
     "xai/grok-2-latest": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -43409,6 +43412,7 @@
         "supports_web_search": true
     },
     "xai/grok-2-vision": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_image": 2e-06,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
@@ -43438,6 +43442,7 @@
         "supports_web_search": true
     },
     "xai/grok-2-vision-latest": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_image": 2e-06,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
@@ -43836,7 +43841,7 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "max_tokens": 1000000,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
@@ -44018,6 +44023,7 @@
         "supports_web_search": true
     },
     "xai/grok-beta": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -44094,6 +44100,7 @@
         "deprecation_date": "2026-05-15"
     },
     "xai/grok-vision-beta": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_image": 5e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "xai",
@@ -50703,7 +50710,7 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "max_tokens": 1000000,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
