@@ -17493,6 +17493,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Mcp Servers
+         * @description Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON
+         */
+        post: operations["import_mcp_servers_v1_mcp_server_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/server/oauth/session": {
         parameters: {
             query?: never;
@@ -17685,6 +17705,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/{server_id}/user-env-vars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mcp User Env Vars
+         * @description Return the calling user's per-user MCP env var status for this server.
+         */
+        get: operations["get_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_get"];
+        put?: never;
+        /**
+         * Store Mcp User Env Vars
+         * @description Store the calling user's per-user MCP env var values for this server. Submitted values are merged over any previously stored values, so you only send the fields you want to set or change; a variable omitted (or sent empty) keeps its stored value. Use DELETE to clear all stored values.
+         */
+        post: operations["store_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_post"];
+        /**
+         * Clear Mcp User Env Vars
+         * @description Clear the calling user's per-user MCP env var values for this server.
+         */
+        delete: operations["clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/tools": {
         parameters: {
             query?: never;
@@ -17769,6 +17817,26 @@ export interface paths {
          * @description List all OAuth2 MCP credentials stored for the calling user
          */
         get: operations["list_mcp_user_credentials_v1_mcp_user_credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/user-env-vars/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mcp User Env Var Status
+         * @description Per-user MCP env var status across every server the user can access. Used by the dashboard to highlight servers with missing per-user vars.
+         */
+        get: operations["list_mcp_user_env_var_status_v1_mcp_user_env_vars_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -27058,8 +27126,10 @@ export interface components {
             approval_status: string | null;
             /** Args */
             args?: string[];
+            /** Audience */
+            audience?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Authorization Url */
             authorization_url?: string | null;
             /**
@@ -27073,17 +27143,28 @@ export interface components {
             byok_description?: string[];
             /** Command */
             command?: string | null;
+            /** Connected App Reachable */
+            connected_app_reachable?: boolean | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
             credentials?: components["schemas"]["MCPCredentials"] | null;
+            /** Dcr Bridge */
+            dcr_bridge?: boolean | null;
+            /**
+             * Delegate Auth To Upstream
+             * @default false
+             */
+            delegate_auth_to_upstream: boolean;
             /** Description */
             description?: string | null;
             /** Env */
             env?: {
                 [key: string]: string;
             };
+            /** Env Vars */
+            env_vars?: components["schemas"]["MCPEnvVar"][] | null;
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -27097,14 +27178,25 @@ export interface components {
              * @default false
              */
             is_byok: boolean;
+            /** Issuer */
+            issuer?: string | null;
             /** Last Health Check */
             last_health_check?: string | null;
+            /** Max Concurrent Requests */
+            max_concurrent_requests?: number | null;
             /** Mcp Access Groups */
             mcp_access_groups?: string[];
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth2 Flow */
+            oauth2_flow?: ("client_credentials" | "authorization_code") | null;
+            /**
+             * Oauth Passthrough
+             * @default false
+             */
+            oauth_passthrough: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -27129,6 +27221,8 @@ export interface components {
              * @default unknown
              */
             status: ("healthy" | "unhealthy" | "unknown") | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
             /** Submitted At */
             submitted_at?: string | null;
             /** Submitted By */
@@ -27137,6 +27231,12 @@ export interface components {
             teams?: {
                 [key: string]: string | null;
             }[];
+            /** Timeout */
+            timeout?: number | null;
+            /** Token Exchange Endpoint */
+            token_exchange_endpoint?: string | null;
+            /** Token Exchange Profile */
+            token_exchange_profile?: string | null;
             /** Token Url */
             token_url?: string | null;
             /** Tool Name To Description */
@@ -29175,8 +29275,74 @@ export interface components {
              */
             status?: "healthy" | "unhealthy";
         };
+        /** MCPConnectorEntry */
+        MCPConnectorEntry: {
+            /** Args */
+            args?: string[];
+            /** Authorization Token */
+            authorization_token?: string | null;
+            /** Command */
+            command?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            } | null;
+            /** Name */
+            name?: string | null;
+            /** Type */
+            type?: string | null;
+            /** Url */
+            url?: string | null;
+        };
+        /** MCPConnectorImportFailure */
+        MCPConnectorImportFailure: {
+            /** Error */
+            error: string;
+            /** Name */
+            name: string;
+        };
+        /** MCPConnectorImportRequest */
+        MCPConnectorImportRequest: {
+            /** Mcp Servers */
+            mcp_servers: {
+                [key: string]: components["schemas"]["MCPConnectorEntry"];
+            } | components["schemas"]["MCPConnectorEntry"][];
+        };
+        /** MCPConnectorImportResponse */
+        MCPConnectorImportResponse: {
+            /** Errors */
+            errors: components["schemas"]["MCPConnectorImportFailure"][];
+            /** Imported */
+            imported: components["schemas"]["MCPConnectorImportResult"][];
+            /** Skipped */
+            skipped: components["schemas"]["MCPConnectorImportSkipped"][];
+        };
+        /** MCPConnectorImportResult */
+        MCPConnectorImportResult: {
+            /** Alias */
+            alias: string;
+            /** Name */
+            name: string;
+            /** Server Id */
+            server_id: string;
+        };
+        /** MCPConnectorImportSkipped */
+        MCPConnectorImportSkipped: {
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+        };
         /** MCPCredentials */
         MCPCredentials: {
+            /** Audience */
+            audience?: string | null;
             /** Auth Value */
             auth_value?: string | null;
             /** Aws Access Key Id */
@@ -29193,13 +29359,68 @@ export interface components {
             aws_session_name?: string | null;
             /** Aws Session Token */
             aws_session_token?: string | null;
+            /** Client Assertion Signing Alg */
+            client_assertion_signing_alg?: string | null;
             /** Client Id */
             client_id?: string | null;
+            /** Client Private Key */
+            client_private_key?: string | null;
+            /** Client Private Key Id */
+            client_private_key_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
+            /** Id Jag Resource */
+            id_jag_resource?: string | null;
+            /** Id Jag Resource Token Endpoint */
+            id_jag_resource_token_endpoint?: string | null;
+            /** Redirect Uris */
+            redirect_uris?: string[] | null;
             /** Scopes */
             scopes?: string[] | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
+            /** Token Endpoint Auth Method */
+            token_endpoint_auth_method?: ("client_secret_basic" | "client_secret_post") | null;
+            /** Token Exchange Endpoint */
+            token_exchange_endpoint?: string | null;
+            /** Token Exchange Profile */
+            token_exchange_profile?: string | null;
+            /** Upstream Resource */
+            upstream_resource?: string | null;
         };
+        /**
+         * MCPEnvVar
+         * @description One environment variable for an MCP server.
+         *
+         *     Variables can be interpolated into ``static_headers`` using ``${NAME}``
+         *     syntax. ``scope=global`` values are stored on the server. ``scope=user``
+         *     values are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by
+         *     each user.
+         */
+        MCPEnvVar: {
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** @default global */
+            scope: components["schemas"]["MCPEnvVarScope"];
+            /**
+             * Value
+             * @default
+             */
+            value: string;
+        };
+        /**
+         * MCPEnvVarScope
+         * @description Scope for an MCP server environment variable.
+         *
+         *     - ``global``: value is provided by the admin and used for all users.
+         *     - ``user``: each user must provide their own value via the per-user
+         *       env-var endpoint. The admin-supplied ``value`` is treated as a
+         *       placeholder/hint and is not used at request time.
+         * @enum {string}
+         */
+        MCPEnvVarScope: "global" | "user";
         /**
          * MCPOAuthUserCredentialRequest
          * @description Stores a user's OAuth2 token for an OpenAPI MCP server.
@@ -29360,6 +29581,55 @@ export interface components {
             has_credential: boolean;
             /** Server Id */
             server_id: string;
+        };
+        /**
+         * MCPUserEnvVarSpec
+         * @description Describes one per-user env var slot for the calling user.
+         *
+         *     Stored values are write-only: the status only reports whether a value
+         *     ``is_set`` and never echoes the decrypted secret back to the client.
+         */
+        MCPUserEnvVarSpec: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Is Set
+             * @default false
+             */
+            is_set: boolean;
+            /** Name */
+            name: string;
+        };
+        /**
+         * MCPUserEnvVarsRequest
+         * @description Payload for storing the calling user's per-user env var values.
+         */
+        MCPUserEnvVarsRequest: {
+            /** Values */
+            values: {
+                [key: string]: string;
+            };
+        };
+        /**
+         * MCPUserEnvVarsStatus
+         * @description Per-user env var status for a single MCP server.
+         */
+        MCPUserEnvVarsStatus: {
+            /** Alias */
+            alias?: string | null;
+            /**
+             * Missing Count
+             * @default 0
+             */
+            missing_count: number;
+            /** Required */
+            required?: components["schemas"]["MCPUserEnvVarSpec"][];
+            /** Server Id */
+            server_id: string;
+            /** Server Name */
+            server_name?: string | null;
+            /** Setup Url */
+            setup_url?: string | null;
         };
         /** MakeAgentsPublicRequest */
         MakeAgentsPublicRequest: {
@@ -29773,8 +30043,10 @@ export interface components {
             approval_status?: string | null;
             /** Args */
             args?: string[];
+            /** Audience */
+            audience?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Authorization Url */
             authorization_url?: string | null;
             /**
@@ -29789,12 +30061,21 @@ export interface components {
             /** Command */
             command?: string | null;
             credentials?: components["schemas"]["MCPCredentials"] | null;
+            /** Dcr Bridge */
+            dcr_bridge?: boolean | null;
+            /**
+             * Delegate Auth To Upstream
+             * @default false
+             */
+            delegate_auth_to_upstream: boolean;
             /** Description */
             description?: string | null;
             /** Env */
             env?: {
                 [key: string]: string;
             };
+            /** Env Vars */
+            env_vars?: components["schemas"]["MCPEnvVar"][] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -29804,6 +30085,10 @@ export interface components {
              * @default false
              */
             is_byok: boolean;
+            /** Issuer */
+            issuer?: string | null;
+            /** Max Concurrent Requests */
+            max_concurrent_requests?: number | null;
             /** Mcp Access Groups */
             mcp_access_groups?: string[];
             /** Mcp Info */
@@ -29812,6 +30097,11 @@ export interface components {
             } | null;
             /** Oauth2 Flow */
             oauth2_flow?: ("client_credentials" | "authorization_code") | null;
+            /**
+             * Oauth Passthrough
+             * @default false
+             */
+            oauth_passthrough: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -29826,6 +30116,8 @@ export interface components {
             static_headers?: {
                 [key: string]: string;
             } | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
             /**
              * Submitted At
              * @description Server-managed: set by the endpoint; caller values are overridden.
@@ -29836,6 +30128,12 @@ export interface components {
              * @description Server-managed: set by the endpoint; caller values are overridden.
              */
             submitted_by?: string | null;
+            /** Timeout */
+            timeout?: number | null;
+            /** Token Exchange Endpoint */
+            token_exchange_endpoint?: string | null;
+            /** Token Exchange Profile */
+            token_exchange_profile?: string | null;
             /** Token Url */
             token_url?: string | null;
             /** Tool Name To Description */
@@ -35129,8 +35427,10 @@ export interface components {
             allowed_tools?: string[] | null;
             /** Args */
             args?: string[];
+            /** Audience */
+            audience?: string | null;
             /** Auth Type */
-            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token") | null;
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
             /** Authorization Url */
             authorization_url?: string | null;
             /**
@@ -35145,12 +35445,21 @@ export interface components {
             /** Command */
             command?: string | null;
             credentials?: components["schemas"]["MCPCredentials"] | null;
+            /** Dcr Bridge */
+            dcr_bridge?: boolean | null;
+            /**
+             * Delegate Auth To Upstream
+             * @default false
+             */
+            delegate_auth_to_upstream: boolean;
             /** Description */
             description?: string | null;
             /** Env */
             env?: {
                 [key: string]: string;
             };
+            /** Env Vars */
+            env_vars?: components["schemas"]["MCPEnvVar"][] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -35160,12 +35469,23 @@ export interface components {
              * @default false
              */
             is_byok: boolean;
+            /** Issuer */
+            issuer?: string | null;
+            /** Max Concurrent Requests */
+            max_concurrent_requests?: number | null;
             /** Mcp Access Groups */
             mcp_access_groups?: string[];
             /** Mcp Info */
             mcp_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth2 Flow */
+            oauth2_flow?: ("client_credentials" | "authorization_code") | null;
+            /**
+             * Oauth Passthrough
+             * @default false
+             */
+            oauth_passthrough: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -35180,6 +35500,14 @@ export interface components {
             static_headers?: {
                 [key: string]: string;
             } | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
+            /** Timeout */
+            timeout?: number | null;
+            /** Token Exchange Endpoint */
+            token_exchange_endpoint?: string | null;
+            /** Token Exchange Profile */
+            token_exchange_profile?: string | null;
             /** Token Url */
             token_url?: string | null;
             /** Tool Name To Description */
@@ -58702,6 +59030,8 @@ export interface operations {
             query?: {
                 /** @description Filter MCP servers by team scope. When provided, returns only servers the team has access to plus globally available (allow_all_keys) servers. Used by the Create Key UI to show team-scoped MCP servers. */
                 team_id?: string | null;
+                /** @description Annotate each returned server with connected_app_reachable: whether a connected app authorized by the calling user (a gateway OAuth session) is served this server on the aggregate MCP endpoint. */
+                connected_app_view?: boolean;
             };
             header?: never;
             path?: never;
@@ -58820,6 +59150,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_mcp_servers_v1_mcp_server_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPConnectorImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPConnectorImportResponse"];
                 };
             };
             /** @description Validation Error */
@@ -59216,6 +59579,103 @@ export interface operations {
             };
         };
     };
+    get_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPUserEnvVarsStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    store_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPUserEnvVarsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPUserEnvVarsStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPUserEnvVarsStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_mcp_tools_v1_mcp_tools_get: {
         parameters: {
             query?: never;
@@ -59406,6 +59866,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPUserCredentialListItem"][];
+                };
+            };
+        };
+    };
+    list_mcp_user_env_var_status_v1_mcp_user_env_vars_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPUserEnvVarsStatus"][];
                 };
             };
         };

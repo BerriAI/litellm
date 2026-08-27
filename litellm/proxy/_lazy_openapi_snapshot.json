@@ -14727,6 +14727,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -14738,7 +14749,11 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "oauth2_id_jag",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -14793,6 +14808,17 @@
               ],
               "title": "Command"
             },
+            "connected_app_reachable": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connected App Reachable"
+            },
             "created_at": {
               "anyOf": [
                 {
@@ -14826,6 +14852,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -14843,6 +14885,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "items": {
@@ -14889,6 +14945,17 @@
               "title": "Is Byok",
               "type": "boolean"
             },
+            "issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Issuer"
+            },
             "last_health_check": {
               "anyOf": [
                 {
@@ -14900,6 +14967,17 @@
                 }
               ],
               "title": "Last Health Check"
+            },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
             },
             "mcp_access_groups": {
               "items": {
@@ -14919,6 +14997,26 @@
                 }
               ],
               "title": "Mcp Info"
+            },
+            "oauth2_flow": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_credentials",
+                    "authorization_code"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -15023,6 +15121,17 @@
               "description": "Health status: 'healthy', 'unhealthy', 'unknown'",
               "title": "Status"
             },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
             "submitted_at": {
               "anyOf": [
                 {
@@ -15062,6 +15171,39 @@
               },
               "title": "Teams",
               "type": "array"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -15153,8 +15295,236 @@
           "title": "LiteLLM_MCPServerTable",
           "type": "object"
         },
+        "MCPConnectorEntry": {
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Args",
+              "type": "array"
+            },
+            "authorization_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization Token"
+            },
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Command"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Env",
+              "type": "object"
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Url"
+            }
+          },
+          "title": "MCPConnectorEntry",
+          "type": "object"
+        },
+        "MCPConnectorImportFailure": {
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "error"
+          ],
+          "title": "MCPConnectorImportFailure",
+          "type": "object"
+        },
+        "MCPConnectorImportRequest": {
+          "properties": {
+            "mcp_servers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "Mcp Servers"
+            }
+          },
+          "required": [
+            "mcp_servers"
+          ],
+          "title": "MCPConnectorImportRequest",
+          "type": "object"
+        },
+        "MCPConnectorImportResponse": {
+          "properties": {
+            "errors": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportFailure"
+              },
+              "title": "Errors",
+              "type": "array"
+            },
+            "imported": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportResult"
+              },
+              "title": "Imported",
+              "type": "array"
+            },
+            "skipped": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportSkipped"
+              },
+              "title": "Skipped",
+              "type": "array"
+            }
+          },
+          "required": [
+            "imported",
+            "skipped",
+            "errors"
+          ],
+          "title": "MCPConnectorImportResponse",
+          "type": "object"
+        },
+        "MCPConnectorImportResult": {
+          "properties": {
+            "alias": {
+              "title": "Alias",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "server_id",
+            "alias"
+          ],
+          "title": "MCPConnectorImportResult",
+          "type": "object"
+        },
+        "MCPConnectorImportSkipped": {
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "reason"
+          ],
+          "title": "MCPConnectorImportSkipped",
+          "type": "object"
+        },
         "MCPCredentials": {
           "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_value": {
               "anyOf": [
                 {
@@ -15243,6 +15613,17 @@
               ],
               "title": "Aws Session Token"
             },
+            "client_assertion_signing_alg": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Assertion Signing Alg"
+            },
             "client_id": {
               "anyOf": [
                 {
@@ -15254,6 +15635,28 @@
               ],
               "title": "Client Id"
             },
+            "client_private_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Private Key"
+            },
+            "client_private_key_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Private Key Id"
+            },
             "client_secret": {
               "anyOf": [
                 {
@@ -15264,6 +15667,42 @@
                 }
               ],
               "title": "Client Secret"
+            },
+            "id_jag_resource": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource"
+            },
+            "id_jag_resource_token_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Resource Token Endpoint"
+            },
+            "redirect_uris": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Redirect Uris"
             },
             "scopes": {
               "anyOf": [
@@ -15278,10 +15717,112 @@
                 }
               ],
               "title": "Scopes"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
+            "token_endpoint_auth_method": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_secret_basic",
+                    "client_secret_post"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Endpoint Auth Method"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
+            },
+            "upstream_resource": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Resource"
             }
           },
           "title": "MCPCredentials",
           "type": "object"
+        },
+        "MCPEnvVar": {
+          "description": "One environment variable for an MCP server.\n\nVariables can be interpolated into ``static_headers`` using ``${NAME}``\nsyntax. ``scope=global`` values are stored on the server. ``scope=user``\nvalues are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by\neach user.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "scope": {
+              "$ref": "#/components/schemas/MCPEnvVarScope",
+              "default": "global"
+            },
+            "value": {
+              "default": "",
+              "title": "Value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPEnvVar",
+          "type": "object"
+        },
+        "MCPEnvVarScope": {
+          "description": "Scope for an MCP server environment variable.\n\n- ``global``: value is provided by the admin and used for all users.\n- ``user``: each user must provide their own value via the per-user\n  env-var endpoint. The admin-supplied ``value`` is treated as a\n  placeholder/hint and is not used at request time.",
+          "enum": [
+            "global",
+            "user"
+          ],
+          "title": "MCPEnvVarScope",
+          "type": "string"
         },
         "MCPOAuthUserCredentialRequest": {
           "description": "Stores a user's OAuth2 token for an OpenAPI MCP server.",
@@ -15537,6 +16078,112 @@
           "title": "MCPUserCredentialResponse",
           "type": "object"
         },
+        "MCPUserEnvVarSpec": {
+          "description": "Describes one per-user env var slot for the calling user.\n\nStored values are write-only: the status only reports whether a value\n``is_set`` and never echoes the decrypted secret back to the client.",
+          "properties": {
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "is_set": {
+              "default": false,
+              "title": "Is Set",
+              "type": "boolean"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "MCPUserEnvVarSpec",
+          "type": "object"
+        },
+        "MCPUserEnvVarsRequest": {
+          "description": "Payload for storing the calling user's per-user env var values.",
+          "properties": {
+            "values": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Values",
+              "type": "object"
+            }
+          },
+          "required": [
+            "values"
+          ],
+          "title": "MCPUserEnvVarsRequest",
+          "type": "object"
+        },
+        "MCPUserEnvVarsStatus": {
+          "description": "Per-user env var status for a single MCP server.",
+          "properties": {
+            "alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Alias"
+            },
+            "missing_count": {
+              "default": 0,
+              "title": "Missing Count",
+              "type": "integer"
+            },
+            "required": {
+              "items": {
+                "$ref": "#/components/schemas/MCPUserEnvVarSpec"
+              },
+              "title": "Required",
+              "type": "array"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            },
+            "server_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Server Name"
+            },
+            "setup_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Setup Url"
+            }
+          },
+          "required": [
+            "server_id"
+          ],
+          "title": "MCPUserEnvVarsStatus",
+          "type": "object"
+        },
         "MakeMCPServersPublicRequest": {
           "properties": {
             "mcp_server_ids": {
@@ -15604,6 +16251,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -15615,7 +16273,11 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "oauth2_id_jag",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -15680,6 +16342,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -15697,6 +16375,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "anyOf": [
@@ -15727,6 +16419,28 @@
               "default": false,
               "title": "Is Byok",
               "type": "boolean"
+            },
+            "issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Issuer"
+            },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
             },
             "mcp_access_groups": {
               "items": {
@@ -15761,6 +16475,11 @@
                 }
               ],
               "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -15831,6 +16550,17 @@
               ],
               "title": "Static Headers"
             },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
             "submitted_at": {
               "anyOf": [
                 {
@@ -15855,6 +16585,39 @@
               ],
               "description": "Server-managed: set by the endpoint; caller values are overridden.",
               "title": "Submitted By"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -16008,6 +16771,17 @@
               "title": "Args",
               "type": "array"
             },
+            "audience": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
             "auth_type": {
               "anyOf": [
                 {
@@ -16019,7 +16793,11 @@
                     "authorization",
                     "oauth2",
                     "aws_sigv4",
-                    "token"
+                    "token",
+                    "oauth2_token_exchange",
+                    "oauth2_id_jag",
+                    "true_passthrough",
+                    "oauth_delegate"
                   ],
                   "type": "string"
                 },
@@ -16084,6 +16862,22 @@
                 }
               ]
             },
+            "dcr_bridge": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Bridge"
+            },
+            "delegate_auth_to_upstream": {
+              "default": false,
+              "title": "Delegate Auth To Upstream",
+              "type": "boolean"
+            },
             "description": {
               "anyOf": [
                 {
@@ -16101,6 +16895,20 @@
               },
               "title": "Env",
               "type": "object"
+            },
+            "env_vars": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPEnvVar"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Env Vars"
             },
             "extra_headers": {
               "anyOf": [
@@ -16132,6 +16940,28 @@
               "title": "Is Byok",
               "type": "boolean"
             },
+            "issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Issuer"
+            },
+            "max_concurrent_requests": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Concurrent Requests"
+            },
             "mcp_access_groups": {
               "items": {
                 "type": "string"
@@ -16150,6 +16980,26 @@
                 }
               ],
               "title": "Mcp Info"
+            },
+            "oauth2_flow": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "client_credentials",
+                    "authorization_code"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Oauth2 Flow"
+            },
+            "oauth_passthrough": {
+              "default": false,
+              "title": "Oauth Passthrough",
+              "type": "boolean"
             },
             "registration_url": {
               "anyOf": [
@@ -16212,6 +17062,50 @@
                 }
               ],
               "title": "Static Headers"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
+            },
+            "timeout": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timeout"
+            },
+            "token_exchange_endpoint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Endpoint"
+            },
+            "token_exchange_profile": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token Exchange Profile"
             },
             "token_url": {
               "anyOf": [
@@ -16331,6 +17225,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -16600,6 +17501,18 @@
                 "description": "Filter MCP servers by team scope. When provided, returns only servers the team has access to plus globally available (allow_all_keys) servers. Used by the Create Key UI to show team-scoped MCP servers.",
                 "title": "Team Id"
               }
+            },
+            {
+              "description": "Annotate each returned server with connected_app_reachable: whether a connected app authorized by the calling user (a gateway OAuth session) is served this server on the aggregate MCP endpoint.",
+              "in": "query",
+              "name": "connected_app_view",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Annotate each returned server with connected_app_reachable: whether a connected app authorized by the calling user (a gateway OAuth session) is served this server on the aggregate MCP endpoint.",
+                "title": "Connected App View",
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -16822,6 +17735,53 @@
             }
           ],
           "summary": "Health Check Servers",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/import": {
+        "post": {
+          "description": "Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON",
+          "operationId": "import_mcp_servers_v1_mcp_server_import_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConnectorImportRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPConnectorImportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Import Mcp Servers",
           "tags": [
             "mcp_management"
           ]
@@ -17438,6 +18398,156 @@
           ]
         }
       },
+      "/v1/mcp/server/{server_id}/user-env-vars": {
+        "delete": {
+          "description": "Clear the calling user's per-user MCP env var values for this server.",
+          "operationId": "clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Clear Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "get": {
+          "description": "Return the calling user's per-user MCP env var status for this server.",
+          "operationId": "get_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "post": {
+          "description": "Store the calling user's per-user MCP env var values for this server. Submitted values are merged over any previously stored values, so you only send the fields you want to set or change; a variable omitted (or sent empty) keeps its stored value. Use DELETE to clear all stored values.",
+          "operationId": "store_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPUserEnvVarsRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Store Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
       "/v1/mcp/tools": {
         "get": {
           "description": "Get all MCP tools available for the current key, including those from access groups",
@@ -17742,6 +18852,37 @@
             }
           ],
           "summary": "List Mcp User Credentials",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/user-env-vars/status": {
+        "get": {
+          "description": "Per-user MCP env var status across every server the user can access. Used by the dashboard to highlight servers with missing per-user vars.",
+          "operationId": "list_mcp_user_env_var_status_v1_mcp_user_env_vars_status_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/MCPUserEnvVarsStatus"
+                    },
+                    "title": "Response List Mcp User Env Var Status V1 Mcp User Env Vars Status Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Mcp User Env Var Status",
           "tags": [
             "mcp_management"
           ]

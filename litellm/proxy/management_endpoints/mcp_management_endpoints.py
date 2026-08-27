@@ -133,6 +133,7 @@ if MCP_AVAILABLE:
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
+        get_all_mcp_servers,
         get_all_mcp_servers_for_user,
         get_draft_mcp_server,
         get_mcp_server,
@@ -199,6 +200,16 @@ if MCP_AVAILABLE:
         populate_request_with_path_params,
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.mcp_connector_import import (
+        ConnectorConversionError,
+        ConvertedConnector,
+        MCPConnectorImportFailure,
+        MCPConnectorImportRequest,
+        MCPConnectorImportResponse,
+        MCPConnectorImportResult,
+        MCPConnectorImportSkipped,
+        convert_connector_entries,
+    )
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import (
         MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
@@ -1606,6 +1617,112 @@ if MCP_AVAILABLE:
             )
 
         return _redact_mcp_credentials(new_mcp_server)
+
+    @router.post(
+        "/server/import",
+        description="Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON",
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=MCPConnectorImportResponse,
+        status_code=status.HTTP_200_OK,
+    )
+    @management_endpoint_wrapper
+    async def import_mcp_servers(
+        payload: MCPConnectorImportRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    ):
+        """
+        Bulk-import MCP connectors. Accepts the Claude Desktop / Claude Code
+        ``mcpServers`` mapping or the Anthropic Messages API ``mcp_servers``
+        array, creates each entry as a LiteLLM MCP server, and returns
+        per-entry results so partial imports are visible to the caller.
+        """
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                    "error": "User does not have permission to import mcp servers. You can only import mcp servers if you are a PROXY_ADMIN."
+                },
+            )
+
+        conversions: Final = convert_connector_entries(payload)
+        existing_servers: Final = await get_all_mcp_servers(prisma_client)
+        existing_names: Final = frozenset(
+            name for server in existing_servers for name in (server.alias, server.server_name) if name
+        )
+
+        def _classify(
+            index: int, conversion: ConvertedConnector | ConnectorConversionError
+        ) -> ConvertedConnector | ConnectorConversionError | MCPConnectorImportSkipped:
+            if isinstance(conversion, ConnectorConversionError):
+                return conversion
+            alias: Final = conversion.request.alias or ""
+            if alias in existing_names:
+                return MCPConnectorImportSkipped(
+                    name=conversion.name, reason=f"An MCP server named '{alias}' already exists."
+                )
+            earlier_aliases: Final = frozenset(
+                earlier.request.alias or ""
+                for earlier in conversions[:index]
+                if isinstance(earlier, ConvertedConnector)
+            )
+            if alias in earlier_aliases:
+                return MCPConnectorImportSkipped(
+                    name=conversion.name, reason=f"Duplicate connector name '{alias}' in the import payload."
+                )
+            return conversion
+
+        async def _create(
+            conversion: ConvertedConnector,
+        ) -> MCPConnectorImportResult | MCPConnectorImportFailure:
+            try:
+                validate_and_normalize_mcp_server_payload(conversion.request)
+            except HTTPException as e:
+                error_text: Final = (
+                    str(e.detail.get("error", e.detail)) if isinstance(e.detail, dict) else str(e.detail)
+                )
+                return MCPConnectorImportFailure(name=conversion.name, error=error_text)
+            try:
+                created: Final = await create_mcp_server(
+                    prisma_client,
+                    conversion.request,
+                    touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                )
+            except Exception as e:  # noqa: BLE001  # any create failure must become a per-entry error, not a 500
+                verbose_proxy_logger.exception("Error importing mcp server %s: %s", conversion.name, e)
+                return MCPConnectorImportFailure(name=conversion.name, error=str(e))
+            return MCPConnectorImportResult(
+                name=conversion.name, server_id=created.server_id, alias=created.alias or ""
+            )
+
+        classified: Final = tuple(_classify(index, conversion) for index, conversion in enumerate(conversions))
+        outcomes: Final = tuple(
+            [
+                await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified
+            ]  # mutable-ok: await is illegal in a generator expression here
+        )
+
+        imported: Final = tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportResult))
+        if imported:
+            # Best-effort registry refresh, mirroring add_mcp_server: rows are
+            # already committed, so a refresh failure must not surface as a 500.
+            try:
+                await global_mcp_server_manager.reload_servers_from_database()
+            except Exception as e:  # noqa: BLE001  # rows are committed; a refresh failure must not surface as a 500
+                verbose_proxy_logger.exception("MCP connector import committed but registry refresh failed: %s", e)
+
+        return MCPConnectorImportResponse(
+            imported=imported,
+            skipped=tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportSkipped)),
+            errors=tuple(
+                MCPConnectorImportFailure(name=entry.name, error=entry.error)
+                if isinstance(entry, ConnectorConversionError)
+                else entry
+                for entry in outcomes
+                if isinstance(entry, (ConnectorConversionError, MCPConnectorImportFailure))
+            ),
+        )
 
     @router.post(
         "/server/oauth/session",
