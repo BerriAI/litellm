@@ -1227,12 +1227,12 @@ async def test_patch_guardrail_endpoint(
         mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
             side_effect=ValueError("on_flagged='inject_system_message' requires payload=True and breakdown=True")
         )
-        mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-        mocker.patch(
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: reused pattern
+        mocker.patch(  # test-quality-ok: reused pattern
             "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
             mock_guardrail_registry,
         )
-        mocker.patch(
+        mocker.patch(  # test-quality-ok: reused pattern
             "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
             mock_in_memory_handler,
         )

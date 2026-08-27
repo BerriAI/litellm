@@ -602,7 +602,7 @@ class TestReinitializeGuardrailRestoresOnFailure:
         try:
             handler.reinitialize_guardrail(_lakera_guardrail("lakera-restore-meta", on_flagged="block"), source="db")
 
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
                 handler.reinitialize_guardrail(
                     _lakera_guardrail("lakera-restore-meta", on_flagged="inject_system_message", breakdown=False),
                     source="db",

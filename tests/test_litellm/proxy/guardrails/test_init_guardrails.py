@@ -159,11 +159,17 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
 def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     """
     Regression: one guardrail with an invalid litellm_params combination (Lakera's
-    on_flagged="inject_system_message" with mode="during_call", which LakeraAIGuardrail's
-    __init__ rejects with ValueError) must not take down the entire proxy at startup.
-    init_guardrails_v2 previously had no try/except around initialize_guardrail, so this
-    ValueError propagated all the way through proxy_server.py's load_config and crashed
-    the whole process, including every other, correctly-configured guardrail in the list.
+    on_flagged="inject_system_message" with payload=False, which LakeraAIGuardrail's
+    __init__ rejects with ValueError since masking can't happen without payload data)
+    must not take down the entire proxy at startup. init_guardrails_v2 previously had
+    no try/except around initialize_guardrail, so this ValueError propagated all the
+    way through proxy_server.py's load_config and crashed the whole process, including
+    every other, correctly-configured guardrail in the list.
+
+    mode="during_call" + on_flagged="inject_system_message" is deliberately NOT used
+    here anymore (maintainer finding on BerriAI/litellm#34940): that combination is
+    now accepted at construction time, since async_moderation_hook already degrades
+    it gracefully at runtime instead of needing a config-time rejection.
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
@@ -175,8 +181,9 @@ def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
             "guardrail_name": "broken_lakera_advisory",
             "litellm_params": {
                 "guardrail": SupportedGuardrailIntegrations.LAKERA_V2.value,
-                "mode": "during_call",
+                "mode": "pre_call",
                 "on_flagged": "inject_system_message",
+                "payload": False,
                 "api_key": "fake-key",
             },
         },
@@ -198,6 +205,39 @@ def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     }
     assert "broken_lakera_advisory" not in guardrail_names
     assert "healthy_presidio" in guardrail_names
+
+
+def test_init_guardrails_v2_accepts_during_call_advisory_mode():
+    """
+    Maintainer finding on BerriAI/litellm#34940: on_flagged='inject_system_message'
+    with mode='during_call' must construct successfully now -- async_moderation_hook
+    already masks whatever's maskable and falls back to a log-only warning when the
+    advisory itself can't be delivered, so rejecting this combination at config time
+    disabled a guardrail that runtime already handles safely.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "during_call_advisory",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.LAKERA_V2.value,
+                "mode": "during_call",
+                "on_flagged": "inject_system_message",
+                "api_key": "fake-key",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    guardrail_names = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "during_call_advisory" in guardrail_names
 
 
 def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
