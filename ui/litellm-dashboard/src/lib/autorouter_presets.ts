@@ -55,7 +55,7 @@ export const getRequiredModels = (
 // differing only in that separator. Canonicalizing on "-" (the presets' own convention) lets both
 // spellings match without doing anything looser - two DIFFERENT model names never collide here,
 // only the punctuation within one version number does.
-const normalizeModelName = (model: string): string => model.replace(/(\d)\.(\d)/g, "$1-$2");
+export const normalizeModelName = (model: string): string => model.replace(/(\d)\.(\d)/g, "$1-$2");
 
 export interface DeploymentModelRef {
   modelGroup: string;

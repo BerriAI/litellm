@@ -11,6 +11,7 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
+  normalizeModelName,
 } from "./autorouter_presets";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
@@ -25,6 +26,29 @@ describe("autorouter_presets", () => {
     for (const p of presets) {
       expect(p).toMatchObject({ key: expect.any(String), label: expect.any(String), description: expect.any(String) });
       expect(p.complexity_router_config.tiers).toBeTruthy();
+    }
+  });
+
+  // buildPresetPrefill resolves every model reference through normalizeModelName, so two spellings
+  // of the same model in one tier (e.g. "claude-sonnet-4-5" and "claude-sonnet-4.5") collapse to one
+  // key. For tier_model_configs that silently drops one model's litellm_params; catch it in the
+  // bundled data itself, since nothing else validates preset authoring.
+  it("never spells the same model two ways within a single tier", () => {
+    for (const preset of getAllPresets()) {
+      const { tiers, tier_model_configs: configs } = preset.complexity_router_config;
+      for (const tier of Object.keys(tiers) as (keyof typeof tiers)[]) {
+        const fromTierList = tiers[tier] ?? [];
+        const fromConfigs = (configs?.[tier] ?? []).map((entry) => entry.model_name);
+        const names = new Set([...fromTierList, ...fromConfigs]);
+        const byNormalized = new Map<string, string[]>();
+        for (const name of names) {
+          const key = normalizeModelName(name);
+          byNormalized.set(key, [...(byNormalized.get(key) ?? []), name]);
+        }
+        for (const spellings of byNormalized.values()) {
+          expect(new Set(spellings).size, `${preset.key}.${tier}: ${spellings.join(", ")}`).toBe(1);
+        }
+      }
     }
   });
 
