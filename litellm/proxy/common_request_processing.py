@@ -1432,11 +1432,7 @@ def _log_llm_api_exception(e: Exception, litellm_call_id: str | None = None) -> 
     log_fn(
         "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s",
         e,
-        extra=(
-            {"litellm_call_id": litellm_call_id}
-            if litellm_call_id is not None
-            else None
-        ),
+        extra=({"litellm_call_id": litellm_call_id} if litellm_call_id is not None else None),
     )
 
 
