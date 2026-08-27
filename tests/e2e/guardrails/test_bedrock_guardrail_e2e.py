@@ -49,23 +49,17 @@ class TestBedrockGuardrail:
         version = os.environ["BEDROCK_GUARDRAIL_VERSION"]
 
         name = f"e2e-bedrock-guard-{unique_marker()}"
-        guardrail_id = client.create_bedrock_guardrail(
-            name, identifier=identifier, version=version
-        )
+        guardrail_id = client.create_bedrock_guardrail(name, identifier=identifier, version=version)
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
         # Selected per request rather than registered default_on, so an upstream
         # ApplyGuardrail failure surfaces here instead of 403ing every other suite
         # running against this proxy.
-        result = poll_until_blocked(
-            lambda: client.chat(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name])
-        )
+        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, BLOCKED_PROMPT, guardrails=[name]))
 
         match result:
             case UnknownApiError(status_code=status, body=body):
-                assert status in {400, 403}, (
-                    f"expected a guardrail block status, got {status}: {body[:400]}"
-                )
+                assert status in {400, 403}, f"expected a guardrail block status, got {status}: {body[:400]}"
                 body_lower = body.lower()
                 assert any(
                     token in body_lower
@@ -79,9 +73,7 @@ class TestBedrockGuardrail:
                     )
                 ), f"block body should name the guardrail reason; got: {body[:400]}"
             case _:
-                pytest.fail(
-                    f"bedrock default-on guardrail did not block harmful prompt; got {result}"
-                )
+                pytest.fail(f"bedrock default-on guardrail did not block harmful prompt; got {result}")
 
     @pytest.mark.covers(
         "guardrail.bedrock.post_call.blocks",
@@ -110,24 +102,20 @@ class TestBedrockGuardrail:
         # model: ask it to echo the word verbatim. The word in the prompt itself
         # is not scanned in this mode.
         prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
-        result = poll_until_blocked(
-            lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
-        )
+        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128))
 
         match result:
             case UnknownApiError(status_code=status, body=body):
-                assert status in {400, 403}, (
-                    f"expected a guardrail block status, got {status}: {body[:400]}"
-                )
+                # A policy block is a 400 naming the verdict; a failed
+                # ApplyGuardrail call surfaces as 403 "guardrail request
+                # failed", which must not count as a block.
+                assert status == 400, f"expected the guardrail block status 400, got {status}: {body[:400]}"
                 body_lower = body.lower()
-                assert any(
-                    token in body_lower
-                    for token in ("guardrail", "violated", "blocked", "intervened")
-                ), f"block body should name the guardrail reason; got: {body[:400]}"
+                assert any(token in body_lower for token in ("violated", "blocked", "intervened")), (
+                    f"block body should name the guardrail verdict; got: {body[:400]}"
+                )
                 assert blocked_word not in body, (
                     f"the blocked model output must not leak into the error body; got: {body[:400]}"
                 )
             case _:
-                pytest.fail(
-                    f"bedrock post_call guardrail did not block denied model output; got {result}"
-                )
+                pytest.fail(f"bedrock post_call guardrail did not block denied model output; got {result}")
