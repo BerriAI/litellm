@@ -1,4 +1,4 @@
-from typing import Final, cast
+from typing import Final
 
 from fastapi import HTTPException
 
@@ -62,11 +62,11 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             )
             from litellm.proxy.proxy_server import llm_router
 
-            # cast-ok: `data` is an untyped dict at this boundary; every reader
-            # treats "model" as a single name or a fallback list.
-            requested_model: Final[str | list[str] | None] = (
-                cast("str | list[str] | None", data.get("model")) if data else None  # pyright: ignore[reportUnknownMemberType]  # bare `dict` param, same pattern as the raise site below
-            )
+            # Runtime-checked narrowing: `data` is an untyped dict at this
+            # boundary, and pre-call data carries the caller's single model
+            # name, which is also what the 429 label below accepts.
+            raw_model: Final[object] = data.get("model") if data else None  # pyright: ignore[reportUnknownMemberType]  # bare `dict` param, same pattern the raise site below has always used
+            requested_model: Final[str | None] = raw_model if isinstance(raw_model, str) else None
             if _is_model_cost_zero(model=requested_model, llm_router=llm_router):
                 verbose_proxy_logger.info(
                     "Skipping MaxBudgetLimiter check for zero-cost model: %s",
@@ -90,9 +90,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
 
             # CHECK IF REQUEST ALLOWED
             if curr_spend >= max_budget:
-                # cast-ok: this call site labels a single model; a fallback list
-                # narrows to None so the label stays deterministic.
-                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(cast("str | None", requested_model))
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(requested_model)
                 raise ProxyRateLimitError(
                     detail="Max budget limit reached.",
                     rate_limit_type=RateLimitType.BUDGET,
