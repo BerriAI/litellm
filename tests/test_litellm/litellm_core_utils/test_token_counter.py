@@ -1160,3 +1160,170 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+        {"type": "url", "url": "https://example.com/image.png"},
+        {"type": "file", "file_id": "file-abc123"},
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
+    """
+    Anthropic-native `image` blocks must NOT raise, for every source variant.
+
+    Before this fix `_count_content_list` raised
+    `Invalid content item type: image`. That 500s /v1/messages/count_tokens and
+    /utils/token_counter, and it makes the router's context-window pre-call
+    check swallow the error and return every deployment unfiltered, so an
+    oversized prompt carrying an image is dispatched upstream instead of being
+    rejected locally.
+    """
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image", "source": source},
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, (
+        f"Expected the image block to contribute tokens, got {tokens}"
+    )
+
+
+def test_anthropic_image_block_matches_equivalent_image_url():
+    """
+    An Anthropic `image` block must price identically to the OpenAI `image_url`
+    block carrying the same bytes, so the count does not depend on which
+    endpoint shape the caller used.
+    """
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    },
+                }
+            ],
+        }
+    ]
+    openai_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                }
+            ],
+        }
+    ]
+
+    anthropic_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages
+    )
+    openai_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
+    )
+    assert anthropic_tokens == openai_tokens
+
+
+def test_anthropic_image_block_nested_in_tool_result():
+    """
+    An `image` block nested inside a `tool_result.content` list must be counted
+    too. `_count_anthropic_content` recurses back into `_count_content_list`, so
+    the nested case failed for the same reason the top-level one did.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgo=",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > 0
+
+
+def test_anthropic_image_block_with_empty_base64_data():
+    """
+    A base64 source carrying no bytes must still price as an image rather than
+    raise: the block is well-formed enough to count, and an empty `data` only
+    means there is nothing to measure the dimensions from.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    tokens = _count_content_list(
+        count_function=len,
+        content_list=[
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}
+        ],
+        use_default_image_token_count=False,
+        default_token_count=None,
+    )
+    assert tokens > 0
+
+
+def test_anthropic_image_block_without_source_raises():
+    """
+    An `image` block with no `source` is malformed, and must fail the same way
+    the OpenAI `image_url` block with no `url` does - a ValueError the caller
+    can turn into a 400 - instead of being silently counted as a valid image.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError):
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    # ... and `default_token_count`, the caller's opt-out from raising, still wins.
+    assert (
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=7,
+        )
+        == 7
+    )

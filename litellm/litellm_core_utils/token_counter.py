@@ -3,7 +3,7 @@
 import base64
 import io
 import struct
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, Final, Literal, cast
 
 import tiktoken
@@ -25,6 +25,10 @@ from litellm.litellm_core_utils.default_encoding import encoding as default_enco
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
+    AnthropicContentParamSource,
+    AnthropicContentParamSourceFileId,
+    AnthropicContentParamSourceUrl,
+    AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
 )
@@ -32,7 +36,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
-    OpenAIMessageContent,
+    OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
 
@@ -646,6 +650,25 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     return expected_cls
 
 
+def _anthropic_image_source_data(
+    source: AnthropicContentParamSource | AnthropicContentParamSourceUrl | AnthropicContentParamSourceFileId,
+) -> str:
+    """
+    Resolve an Anthropic image `source` to the data string `calculate_img_tokens` prices.
+
+    Returns "" for a `file` source, whose bytes the proxy cannot resolve locally.
+    """
+    if source["type"] == "base64":
+        data: Final = source.get("data")
+        if not data:
+            return ""
+        media_type: Final = source.get("media_type") or "image/png"
+        return f"data:{media_type};base64,{data}"
+    if source["type"] == "url":
+        return source.get("url") or ""
+    return ""
+
+
 def _count_anthropic_content(
     content: Mapping[str, Any],
     count_function: TokenCounterFunction,
@@ -697,12 +720,16 @@ def _count_anthropic_content(
 
 def _count_content_list(
     count_function: TokenCounterFunction,
-    content_list: OpenAIMessageContent,
+    content_list: str | Iterable[OpenAIMessageContentListBlock | AnthropicMessagesImageParam],
     use_default_image_token_count: bool,
     default_token_count: int | None,
 ) -> int:
     """
     Recursively count tokens from a list of content blocks.
+
+    The block union is wider than OpenAI's: the proxy's Anthropic endpoints count
+    their native blocks through this same helper, so an `image` block is as much
+    an input here as OpenAI's `image_url`.
     """
     try:
         num_tokens = 0
@@ -714,6 +741,12 @@ def _count_content_list(
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
+            elif c["type"] == "image":
+                num_tokens += calculate_img_tokens(
+                    data=_anthropic_image_source_data(c["source"]),
+                    mode="auto",
+                    use_default_image_token_count=use_default_image_token_count,
+                )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -742,7 +775,8 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
+                    f"Expected str or dict with 'type' field "
+                    f"(text, image_url, image, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:
