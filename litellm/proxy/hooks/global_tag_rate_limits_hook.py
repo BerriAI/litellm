@@ -47,7 +47,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -112,7 +111,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     policy_fingerprint as _policy_fingerprint,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
-    resolve_success_event_metadata_variable_name as _resolve_success_event_metadata_variable_name,
+    resolve_authoritative_metadata_variable_name as _resolve_authoritative_metadata_variable_name,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_strategy.tag_based_routing import (
@@ -544,7 +543,12 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # re-charging.
         stash: Final = _claim_stash_for_data(data)
 
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(data)
+        # Not get_metadata_variable_name_from_kwargs (naive key-presence
+        # check): a caller can forge an empty (or None) litellm_metadata on
+        # an ordinary request to make that check pick it over the real,
+        # populated metadata the proxy wrote identity/tags into, seeing no
+        # tags at all and admitting past every configured limit.
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(data)
         tags: Final = _order_tags_for_identity_resolution(
             _get_tags_from_request_kwargs(data, metadata_variable_name=metadata_variable_name),
             data,
@@ -716,7 +720,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         litellm_params_for_metadata: Final[Mapping[str, object]] = (
             litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
         )
-        metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
 

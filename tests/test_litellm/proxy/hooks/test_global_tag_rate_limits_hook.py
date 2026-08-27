@@ -1509,3 +1509,42 @@ async def test_concurrency_limit_admission_refreshes_ttl_end_to_end(time_control
     inflight_keys = [key for key in in_memory_cache.ttl_dict if key.endswith(":inflight")]
     assert len(inflight_keys) == 1
     assert in_memory_cache.ttl_dict[inflight_keys[0]] > time.time()
+
+
+# ---------------------------------------------------------------------------
+# Admission must resolve the authoritative metadata bucket, not the naive
+# key-presence check -- veria-ai finding on the sibling model-based hook,
+# same vulnerability class in this hook's own admission call site
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admission_ignores_a_forged_empty_litellm_metadata_key(time_controller, monkeypatch):
+    """
+    get_metadata_variable_name_from_kwargs picks "litellm_metadata" whenever
+    that key is merely present, regardless of its value. A caller adding an
+    empty "litellm_metadata" alongside the real, populated "metadata" made
+    admission read no tags at all, sailing past every configured limit.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+    poisoned = {"metadata": {"tags": ["end_user_id:u1"]}, "litellm_metadata": {}}
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(), cache=DualCache(), data={**poisoned, "litellm_call_id": "call-1"}, call_type="completion"
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={**poisoned, "litellm_call_id": "call-2"},
+            call_type="completion",
+        )
