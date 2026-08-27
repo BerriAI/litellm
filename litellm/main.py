@@ -8632,16 +8632,14 @@ def _chunks_for_streaming_choice_index(
 def _renumbered_first_choice(response: object, index: int) -> Choices | None:
     """The single choice a per-index build produced, renumbered to that index.
 
-    None when the build did not yield a usable non-streaming choice: `stream_chunk_builder`
-    is typed to admit a streaming response and a streaming choice, and either one leaves
-    nothing to merge.
+    None when the build did not yield a usable non-streaming response: `stream_chunk_builder`
+    is typed to admit a streaming one, which leaves nothing to merge.
     """
     if not isinstance(response, ModelResponse) or not response.choices:
         return None
-    first: Final = response.choices[0]
-    if not isinstance(first, Choices):
-        return None
-    return first.model_copy(update={"index": index})  # mutable-ok: model_copy stores what it is given
+    # ModelResponse.choices is declared list[Choices], so the first entry needs no
+    # further narrowing; only the response itself can be the streaming variant.
+    return response.choices[0].model_copy(update={"index": index})  # mutable-ok: model_copy stores what it is given
 
 
 def _build_streaming_choices_per_index(
