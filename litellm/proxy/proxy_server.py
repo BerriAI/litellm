@@ -7291,6 +7291,16 @@ class ProxyConfig:
                         prompt_spec.prompt_id,
                         prompt_sync_error,
                     )
+            # An unparsable row still exists in the DB, so skip the sweep rather than unload its in-memory copy
+            every_row_parsed: Final = len(parsed_specs) == len(prompts_in_db)
+            if every_row_parsed:
+                deleted_db_prompt_ids: Final = tuple(
+                    prompt_id
+                    for prompt_id, spec in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.items()
+                    if spec.prompt_info.prompt_type == "db" and prompt_id not in newest_spec_per_id
+                )
+                for deleted_prompt_id in deleted_db_prompt_ids:
+                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id=deleted_prompt_id)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 

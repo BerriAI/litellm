@@ -1021,19 +1021,7 @@ async def delete_prompt(
         # Delete versions from the database (scoped to environment if provided)
         await _prompt_table(prisma_client).delete_many(where=delete_where)
 
-        # Remove matching prompts from memory — scope to environment if provided
-        if environment:
-            prompts_to_delete: Final = [
-                pid
-                for pid, prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.items()
-                if get_base_prompt_id(prompt_id=pid) == base_prompt_id and prompt.environment == environment
-            ]
-            for pid in prompts_to_delete:
-                del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[pid]
-                if pid in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
-                    del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[pid]
-        else:
-            IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id)
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id, environment=environment or None)
 
         env_msg: Final = f" from {environment}" if environment else ""
         return {"message": f"Prompt {base_prompt_id} deleted successfully{env_msg}"}

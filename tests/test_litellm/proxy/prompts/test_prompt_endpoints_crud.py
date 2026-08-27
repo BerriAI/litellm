@@ -79,7 +79,7 @@ async def test_delete_prompt_success():
 
             # 2. Memory deletion should use base ID
             mock_registry.delete_prompts_by_base_id.assert_called_once_with(
-                expected_base_id
+                expected_base_id, environment=None
             )
 
             assert response == {
@@ -150,12 +150,43 @@ async def test_delete_prompt_by_base_id_success():
 
             # 2. Memory deletion should use base ID
             mock_registry.delete_prompts_by_base_id.assert_called_once_with(
-                expected_base_id
+                expected_base_id, environment=None
             )
 
             assert response == {
                 "message": f"Prompt {expected_base_id} deleted successfully"
             }
+
+
+@pytest.mark.asyncio
+async def test_delete_prompt_environment_scope_reaches_db_and_registry():
+    from litellm.proxy.prompts.prompt_endpoints import delete_prompt
+
+    mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
+
+    with patch(  # test-quality-ok: stubs the collaborator so the test pins what the endpoint deletes
+        "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+    ) as mock_registry:
+        mock_registry.get_prompt_by_id.return_value = PromptSpec(
+            prompt_id="test_prompt.v2",
+            litellm_params=PromptLiteLLMParams(prompt_id="test_prompt", prompt_integration="dotprompt"),
+            prompt_info=PromptInfo(prompt_type="db"),
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            response = await delete_prompt(
+                prompt_id="test_prompt.v2",
+                environment="production",
+                user_api_key_dict=mock_user_auth,
+            )
+
+    mock_prisma_client.db.litellm_prompttable.delete_many.assert_called_once_with(
+        where={"prompt_id": "test_prompt", "environment": "production"}
+    )
+    mock_registry.delete_prompts_by_base_id.assert_called_once_with("test_prompt", environment="production")
+    assert response == {"message": "Prompt test_prompt deleted successfully from production"}
 
 
 @pytest.mark.asyncio
