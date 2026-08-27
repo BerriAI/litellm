@@ -6,6 +6,7 @@ Symbols pinned here:
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -103,6 +104,40 @@ async def test_send_email_error_missing_subject() -> None:
 async def test_send_email_error_missing_html() -> None:
     with pytest.raises(ValueError, match="HTML"):
         await send_email(receiver_email="x@y", subject="s", html=None)
+
+
+@pytest.mark.asyncio
+async def test_send_email_sets_connection_timeout(in_memory_smtp: Any) -> None:
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.connection_kwargs[0].get("timeout") == 30.0
+
+
+@pytest.mark.asyncio
+async def test_send_email_timeout_env_override(
+    in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SMTP_TIMEOUT", "5")
+    monkeypatch.setenv("SMTP_USE_SSL", "True")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.connection_kwargs[0].get("timeout") == 5.0
+
+
+@pytest.mark.asyncio
+async def test_send_email_runs_off_event_loop_thread(in_memory_smtp: Any) -> None:
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.sent[0].thread_ident != threading.get_ident()
 
 
 @pytest.mark.asyncio
