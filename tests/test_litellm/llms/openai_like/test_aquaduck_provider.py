@@ -144,15 +144,11 @@ class TestAquaduckCostTracking:
 
     @pytest.fixture(autouse=True)
     def _use_local_model_cost_map(self, monkeypatch: pytest.MonkeyPatch):
-        original_model_cost = litellm.model_cost
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
         litellm.get_model_info.cache_clear()
-        try:
-            yield
-        finally:
-            litellm.model_cost = original_model_cost
-            litellm.get_model_info.cache_clear()
+        yield
+        litellm.get_model_info.cache_clear()
 
     @staticmethod
     def _load(path_parts):
@@ -221,15 +217,11 @@ class TestAquaduckCostTracking:
 class TestAquaduckRouting:
     @pytest.fixture(autouse=True)
     def _use_local_model_cost_map(self, monkeypatch: pytest.MonkeyPatch):
-        original_model_cost = litellm.model_cost
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+        monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
         litellm.get_model_info.cache_clear()
-        try:
-            yield
-        finally:
-            litellm.model_cost = original_model_cost
-            litellm.get_model_info.cache_clear()
+        yield
+        litellm.get_model_info.cache_clear()
 
     @pytest.mark.asyncio
     async def test_router_spend_is_attributed_to_aquaduck_pricing(self):
