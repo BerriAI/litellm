@@ -206,15 +206,17 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
                 # Application Inference Profile ARNs don't encode provider info in the ARN
                 # itself. Try to derive the provider from the original LiteLLM model name
                 # (e.g. "global.anthropic.claude-opus-4-7") stored in logging context.
-                fallback_model: Final = litellm_logging_obj.model_call_details.get("litellm_params", {}).get(
-                    "model", ""
-                )
+                fallback_model: Final = litellm_logging_obj.model_call_details.get(
+                    "litellm_params",
+                    {},  # mutable-ok: read-only empty fallback
+                ).get("model", "")
                 if fallback_model:
                     invoke_provider = AmazonInvokeConfig.get_bedrock_invoke_provider(fallback_model)
             if invoke_provider is None:
                 verbose_logger.warning(
-                    f"Could not determine Bedrock invoke provider for model: {model!r}. "
-                    "Skipping streaming response logging for this passthrough request."
+                    "Could not determine Bedrock invoke provider for model: %r. "
+                    "Skipping streaming response logging for this passthrough request.",
+                    model,
                 )
                 return None
             obj = get_bedrock_event_stream_decoder(
