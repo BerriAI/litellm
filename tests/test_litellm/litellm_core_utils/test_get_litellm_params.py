@@ -11,6 +11,9 @@ from litellm.litellm_core_utils.get_litellm_params import (
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
 )
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
+from litellm.types.utils import all_litellm_params
+from litellm.utils import get_non_default_completion_params
 
 
 class TestGetBaseModelFromLitellmCallMetadata:
@@ -30,9 +33,7 @@ class TestGetBaseModelFromLitellmCallMetadata:
         assert _get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = _get_base_model_from_litellm_call_metadata(
-            {"model_info": {"base_model": "gpt-4"}}
-        )
+        result = _get_base_model_from_litellm_call_metadata({"model_info": {"base_model": "gpt-4"}})
         assert result == "gpt-4"
 
 
@@ -73,6 +74,16 @@ class TestGetLitellmParamsKwargsExtraction:
         for key in _OPTIONAL_KWARGS_KEYS:
             assert result[key] == f"val_{key}"
 
+    def test_github_copilot_token_dir_is_internal_credential_config(self):
+        token_dir = "/var/lib/litellm/copilot/account-a"
+
+        assert get_non_default_completion_params({"github_copilot_token_dir": token_dir}) == {}
+        assert "github_copilot_token_dir" in all_litellm_params
+        normalized = CredentialLiteLLMParams.model_validate(
+            GenericLiteLLMParams(github_copilot_token_dir=token_dir).model_dump(exclude_none=True)
+        ).model_dump(exclude_none=True)
+        assert normalized["github_copilot_token_dir"] == token_dir
+
 
 class TestGetLitellmParamsBaseModel:
     """Verify base_model resolution precedence."""
@@ -85,9 +96,7 @@ class TestGetLitellmParamsBaseModel:
         assert result["base_model"] == "explicit"
 
     def test_falls_back_to_metadata(self):
-        result = get_litellm_params(
-            metadata={"model_info": {"base_model": "from-metadata"}}
-        )
+        result = get_litellm_params(metadata={"model_info": {"base_model": "from-metadata"}})
         assert result["base_model"] == "from-metadata"
 
     def test_none_when_no_source(self):
