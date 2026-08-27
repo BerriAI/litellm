@@ -324,7 +324,12 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     is_error: bool
     content: (
         str
-        | Iterable[AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam]
+        | Iterable[
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
+        ]
     )
     cache_control: dict | ChatCompletionCachedContent | None
 

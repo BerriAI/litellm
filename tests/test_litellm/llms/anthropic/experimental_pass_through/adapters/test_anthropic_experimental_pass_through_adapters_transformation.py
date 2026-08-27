@@ -3997,3 +3997,72 @@ def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_ca
     assert result == [
         {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
     ]
+
+
+def _tool_reference_block(tool_name="WebFetch"):
+    return {"type": "tool_reference", "tool_name": tool_name}
+
+
+def test_tool_result_tool_reference_is_carried_through_untouched():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_tool_reference_block()]}),
+        ]
+    )
+
+    assert [m["role"] for m in result] == ["assistant", "tool"]
+    assert result[1]["tool_call_id"] == "toolu_01"
+    assert result[1]["content"] == [{"type": "tool_reference", "tool_name": "WebFetch"}]
+
+
+def test_tool_result_text_beside_tool_reference_keeps_both_parts_in_order():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {"toolu_01": [{"type": "text", "text": "loaded"}, _tool_reference_block("Grep")]}
+            ),
+        ]
+    )
+
+    assert result[1]["content"] == [
+        {"type": "text", "text": "loaded"},
+        {"type": "tool_reference", "tool_name": "Grep"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "tool_result_content",
+    [
+        [],
+        None,
+        "",
+        {"not": "a list"},
+        [{"type": "future_block", "payload": 1}],
+        [{"type": "search_result", "source": "https://example.com", "title": "t", "content": []}],
+    ],
+    ids=["empty_list", "null", "empty_string", "non_list", "unknown_block", "search_result_only"],
+)
+def test_tool_result_without_translatable_content_still_answers_its_tool_use(tool_result_content):
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}],
+            },
+        ]
+    )
+
+    assert result == [
+        result[0],
+        {"role": "tool", "tool_call_id": "toolu_01", "content": ""},
+    ]
+    assert result[0]["role"] == "assistant"
