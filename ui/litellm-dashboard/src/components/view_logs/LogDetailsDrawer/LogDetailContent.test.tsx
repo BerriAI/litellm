@@ -359,6 +359,19 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("Response Cache")).not.toBeInTheDocument();
   });
 
+  it("should display the Cache Key next to the Response Cache result", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True", cache_key: "abc123cachekey" })} />);
+
+    expect(screen.getByText("Cache Key")).toBeInTheDocument();
+    expect(screen.getByText("abc123cachekey")).toBeInTheDocument();
+  });
+
+  it("should hide the Cache Key row when caching is off", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "False", cache_key: "Cache OFF" })} />);
+
+    expect(screen.queryByText("Cache Key")).not.toBeInTheDocument();
+  });
+
   it("should display LiteLLM Overhead when litellm_overhead_time_ms is in metadata", () => {
     render(
       <LogDetailContent

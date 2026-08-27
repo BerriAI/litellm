@@ -104,6 +104,10 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["OR"] = where.get("OR", []) + [{"multi_team": True}]
         elif "status = 'success'" in cond:
             where["OR"] = where.get("OR", []) + [{"status": "success"}]
+        elif cond == "LOWER(cache_hit) = 'true'":
+            where["cache_hit"] = {"is_hit": True}
+        elif "cache_hit IS NULL" in cond:
+            where["cache_hit"] = {"is_hit": False}
         elif sess:
             where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
         elif status:
@@ -2303,6 +2307,100 @@ async def test_ui_view_spend_logs_with_status(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_cache_hit(client, monkeypatch):
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "cache_hit": "True",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "cache_hit": "False",
+        },
+    ]
+
+    def filter_by_cache_hit(where):
+        cache_cond = where.get("cache_hit")
+        if cache_cond is None:
+            return mock_spend_logs
+        if cache_cond["is_hit"]:
+            return [log for log in mock_spend_logs if str(log.get("cache_hit", "")).lower() == "true"]
+        return [log for log in mock_spend_logs if str(log.get("cache_hit", "")).lower() != "true"]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_cache_hit),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "cache_hit": "true",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["request_id"] == "req1"
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "cache_hit": "false",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["request_id"] == "req2"
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "cache_hit": "maybe",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 400
+        assert "cache_hit" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_model(client, monkeypatch):
     mock_spend_logs = [
         {
@@ -3747,6 +3845,62 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
     _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
     assert call_args[1] == [session_id]
     assert call_args[2] == [api_key]
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_session_cache_hit_count():
+    """
+    Each row of a session must carry session_cache_hit_count aggregated across
+    the whole session so the UI can show how many requests in the session were
+    served from the response cache.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-cache-hits"
+    api_key = "hashed-key-xyz"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "completion", "api_key": api_key},
+        {"request_id": "req-3", "session_id": None, "call_type": "completion", "api_key": api_key},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"session_id": session_id, "_count": {"session_id": 2}}]
+    )
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "session_total_spend": 0.05,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 2,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert rows[0]["session_cache_hit_count"] == 2
+    assert rows[1]["session_cache_hit_count"] == 2
+    assert "session_cache_hit_count" not in rows[2]
+
+    # The aggregate SQL must actually compute the cache-hit count.
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    assert "session_cache_hit_count" in call_args[0]
+    assert "LOWER(cache_hit) = 'true'" in call_args[0]
 
 
 # ---------------------------------------------------------------------------

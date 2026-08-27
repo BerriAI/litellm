@@ -26,6 +26,7 @@ export const LOG_FILTER_IDS = {
   ERROR_MESSAGE: "error_message",
   KEY_HASH: "key_hash",
   SESSION_ID: "session_id",
+  CACHE_HIT: "cache_hit",
   MODEL_ID: "model_id",
   PUBLIC_MODEL_OR_SEARCH_TOOL: "model",
   REQUEST_ID: "request_id",
@@ -42,6 +43,7 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.ERROR_MESSAGE]: "Error Message",
   [LOG_FILTER_IDS.KEY_HASH]: "Key Hash",
   [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
+  [LOG_FILTER_IDS.CACHE_HIT]: "Cache Hit",
   [LOG_FILTER_IDS.MODEL_ID]: "Model",
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
 };
@@ -167,6 +169,7 @@ export function useLogFilterLogic({
           user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
           status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
+          cache_hit: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_HIT),
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
           model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),

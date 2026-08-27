@@ -278,6 +278,7 @@ export function LogDetailsDrawer({
   ).length;
   const agentCount = sessionLogs.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length;
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
+  const cacheHitCount = sessionLogs.filter((row) => String(row.cache_hit ?? "").toLowerCase() === "true").length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
   const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
@@ -383,7 +384,8 @@ export function LogDetailsDrawer({
                   {isSessionMode && (
                     <>
                       <span className="mx-1.5">·</span>
-                      {sessionDurationSeconds}s
+                      {sessionDurationSeconds}s<span className="mx-1.5">·</span>
+                      {cacheHitCount}/{logsForList.length} cached
                     </>
                   )}
                 </div>

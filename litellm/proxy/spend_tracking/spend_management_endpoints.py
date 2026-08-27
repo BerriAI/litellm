@@ -152,6 +152,7 @@ class _SessionSpendRow(TypedDict):
     session_total_spend: float
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
+    session_cache_hit_count: ReadOnly[int]
 
 
 class _SpendSumAggregate(TypedDict, total=False):
@@ -2239,6 +2240,10 @@ async def ui_view_spend_logs(
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
     ),
+    cache_hit: str | None = fastapi.Query(
+        default=None,
+        description="Filter logs by response cache result: 'true' (served from cache) or 'false' (cache miss)",
+    ),
     model: str | None = fastapi.Query(default=None, description="Filter logs by model"),
     model_id: str | None = fastapi.Query(
         default=None,
@@ -2309,6 +2314,13 @@ async def ui_view_spend_logs(
             message=f"Invalid sort_order: {sort_order}. Must be one of: asc, desc",
             type="bad_request",
             param="sort_order",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if cache_hit is not None and cache_hit.lower() not in {"true", "false"}:
+        raise ProxyException(
+            message=f"Invalid cache_hit: {cache_hit}. Must be one of: true, false",
+            type="bad_request",
+            param="cache_hit",
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -2541,6 +2553,12 @@ async def ui_view_spend_logs(
             sql_conditions.append(f"session_id LIKE ${p}")
             sql_params.append(f"%{like_escaped_session_id}%")
             p += 1
+
+        if cache_hit is not None:
+            if cache_hit.lower() == "true":
+                sql_conditions.append("LOWER(cache_hit) = 'true'")
+            else:
+                sql_conditions.append("(cache_hit IS NULL OR LOWER(cache_hit) <> 'true')")
 
         # Status filter
         if status_filter is not None:
@@ -4093,7 +4111,8 @@ async def _build_ui_spend_logs_response(
                        )::int AS mcp_tool_call_count,
                        COALESCE(SUM(spend) FILTER (
                            WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
-                       ), 0)::double precision AS mcp_tool_call_spend
+                       ), 0)::double precision AS mcp_tool_call_spend,
+                       COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count
                 FROM "LiteLLM_SpendLogs"
                 WHERE session_id = ANY($1::text[])
                   AND api_key = ANY($2::text[])
@@ -4107,6 +4126,7 @@ async def _build_ui_spend_logs_response(
                     "session_total_spend": float(row.get("session_total_spend") or 0.0),
                     "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
                     "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
+                    "session_cache_hit_count": int(row.get("session_cache_hit_count") or 0),
                 }
                 for row in rows
                 if row.get("session_id")
@@ -4129,6 +4149,7 @@ async def _build_ui_spend_logs_response(
                 if session_stats["mcp_tool_call_count"]:
                     row_dict["mcp_tool_call_count"] = session_stats["mcp_tool_call_count"]
                     row_dict["mcp_tool_call_spend"] = session_stats["mcp_tool_call_spend"]
+                row_dict["session_cache_hit_count"] = session_stats["session_cache_hit_count"]
             enriched.append(row_dict)
         response_data: list = enriched
     else:
