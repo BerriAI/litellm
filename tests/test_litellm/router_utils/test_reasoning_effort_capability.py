@@ -1,5 +1,6 @@
 import pytest
 
+import litellm
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -196,3 +197,158 @@ class TestIntersectSupportedReasoningEfforts:
 
     def test_disjoint_sets_intersect_to_empty(self):
         assert intersect_supported_reasoning_efforts(["max"], ["minimal"]) == ()
+
+
+class TestDeclaredEffortList:
+    """reasoning_effort_levels is what the catalog DECLARES per deployment;
+    ModelGroupInfo.supported_reasoning_efforts is what a group COMPUTED. test_router.py pins that
+    the computed one is never seeded from model_info, so the two names must stay apart."""
+
+    def test_a_declared_list_answers_where_no_flag_could(self):
+        """No flag can drop medium, so before this key the entry could only stay silent or
+        over-advertise a level the model does not document."""
+        resolved = resolve_supported_reasoning_efforts(
+            {"supports_reasoning": True, "reasoning_effort_levels": ["low", "high", "max"]},
+            deployment_is_mapped=True,
+        )
+        assert resolved == ("low", "high", "max")
+
+    def test_a_declared_list_wins_whole_over_the_flags(self):
+        resolved = resolve_supported_reasoning_efforts(
+            {
+                "supports_reasoning": True,
+                "reasoning_effort_levels": ["low", "high", "max"],
+                "supports_none_reasoning_effort": True,
+                "supports_minimal_reasoning_effort": True,
+                "supports_xhigh_reasoning_effort": True,
+                "supports_max_reasoning_effort": False,
+            },
+            deployment_is_mapped=True,
+        )
+        assert resolved == ("low", "high", "max")
+
+    def test_a_declaration_is_reordered_into_the_advertisement_order(self):
+        resolved = resolve_supported_reasoning_efforts(
+            {"supports_reasoning": True, "reasoning_effort_levels": ["max", "low", "high"]},
+            deployment_is_mapped=True,
+        )
+        assert resolved == ("low", "high", "max")
+
+    def test_a_declared_empty_list_empties_the_group(self):
+        assert (
+            resolve_supported_reasoning_efforts(
+                {"supports_reasoning": True, "reasoning_effort_levels": []},
+                deployment_is_mapped=True,
+            )
+            == ()
+        )
+
+    @pytest.mark.parametrize("declared", [["low", "bogus"], ["bogus"], ["low", 7, None]])
+    def test_an_unknown_level_is_dropped_rather_than_raised(self, declared):
+        """A config.yaml model_info block bypasses the map's enum schema, and one mistyped level
+        must not fail every sibling on the proxy."""
+        resolved = resolve_supported_reasoning_efforts(
+            {"supports_reasoning": True, "reasoning_effort_levels": declared},
+            deployment_is_mapped=True,
+        )
+        assert resolved == tuple(effort for effort in ("low",) if effort in declared)
+
+    @pytest.mark.parametrize("malformed", ["low,high,max", {"low": True}, 3, True])
+    def test_a_malformed_declaration_falls_through_to_the_flags(self, malformed):
+        resolved = resolve_supported_reasoning_efforts(
+            {
+                "supports_reasoning": True,
+                "reasoning_effort_levels": malformed,
+                "supports_max_reasoning_effort": True,
+            },
+            deployment_is_mapped=True,
+        )
+        assert resolved == ("none", "minimal", "low", "medium", "high", "max")
+
+    def test_a_model_the_map_calls_non_reasoning_ignores_its_declaration(self):
+        assert (
+            resolve_supported_reasoning_efforts(
+                {"supports_reasoning": False, "reasoning_effort_levels": ["low", "high", "max"]},
+                deployment_is_mapped=True,
+            )
+            == ()
+        )
+
+    def test_a_declaration_is_read_through_the_bare_twin(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "some-declared-reasoner",
+            {"supports_reasoning": True, "reasoning_effort_levels": ["low", "max"]},
+        )
+        resolved = resolve_supported_reasoning_efforts(
+            {
+                "supports_reasoning": True,
+                "litellm_provider": "openai",
+                "key": "openai/some-declared-reasoner",
+            },
+            deployment_is_mapped=True,
+        )
+        assert resolved == ("low", "max")
+
+
+KIMI_K3_PASSTHROUGH_KEYS = (
+    "azure_ai/FW-Kimi-K3",
+    "moonshot/kimi-k3",
+    "together_ai/moonshotai/Kimi-K3",
+    "fireworks_ai/kimi-k3",
+    "fireworks_ai/kimi-k3-fast",
+    "fireworks_ai/kimi-k3-us",
+    "fireworks_ai/accounts/fireworks/models/kimi-k3",
+    "fireworks_ai/accounts/fireworks/routers/kimi-k3-fast",
+    "fireworks_ai/accounts/fireworks/routers/kimi-k3-us",
+)
+KIMI_K3_PERPLEXITY_KEY = "perplexity/perplexity/kimi-k3"
+
+
+class TestKimiK3AdvertisesItsDocumentedLevels:
+    @pytest.mark.parametrize("model_key", KIMI_K3_PASSTHROUGH_KEYS)
+    def test_a_passthrough_entry_advertises_the_models_own_levels(self, local_model_cost_map, model_key):
+        """platform.kimi.ai documents exactly low, high and max, and these providers forward the
+        level unchanged. Undeclared, each entry resolves to unknown and the dashboard falls back to
+        a capability-blind list that omits max."""
+        entry = dict(litellm.model_cost[model_key], key=model_key)
+
+        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == ("low", "high", "max")
+
+    def test_the_perplexity_entry_advertises_the_wider_set_it_maps_down(self, local_model_cost_map):
+        """Perplexity's Agent API takes a six-value enum and maps it down internally, so this
+        deployment is legitimately wider than a passthrough. One blanket list could not say both."""
+        entry = dict(litellm.model_cost[KIMI_K3_PERPLEXITY_KEY], key=KIMI_K3_PERPLEXITY_KEY)
+
+        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
+
+    @pytest.mark.parametrize("model, provider", [("kimi-k3", "moonshot"), ("kimi-k3", "fireworks_ai")])
+    def test_the_declaration_survives_model_info_hydration(self, local_model_cost_map, model, provider):
+        """The hydration line is the load-bearing seam: without it the key the map carries never
+        reaches the resolver and reads as absent everywhere downstream."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=provider))
+
+        assert model_info["reasoning_effort_levels"] == ["low", "high", "max"]
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == ("low", "high", "max")
+
+    def test_a_kimi_k3_deployment_now_narrows_a_mixed_group(self, local_model_cost_map):
+        """kimi used to contribute unknown, which never narrows, so the group advertised whatever
+        its other deployments agreed on."""
+        kimi = resolve_supported_reasoning_efforts(
+            dict(litellm.model_cost["fireworks_ai/kimi-k3"], key="fireworks_ai/kimi-k3"),
+            deployment_is_mapped=True,
+        )
+
+        assert intersect_supported_reasoning_efforts(("none", "minimal", "low", "medium", "high", "xhigh"), kimi) == (
+            "low",
+            "high",
+        )
