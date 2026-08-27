@@ -70,7 +70,7 @@ export const buildTeamsCsvRows = (
 };
 
 export const buildTeamsCsv = (teams: Team[], budgets: TeamMemberBudget[]): string =>
-  Papa.unparse(buildTeamsCsvRows(teams, budgets));
+  Papa.unparse(buildTeamsCsvRows(teams, budgets), { escapeFormulae: true });
 
 const downloadCsv = (csv: string, fileName: string): void => {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });

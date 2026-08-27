@@ -153,4 +153,11 @@ describe("buildTeamsCsv", () => {
     expect(row).toContain('"sales, emea"');
     expect(row).toContain('"m1, m2"');
   });
+
+  it("neutralizes formula-leading values so spreadsheets render them as text", () => {
+    const csv = buildTeamsCsv([makeTeam({ team_alias: "=SUM(A1:A9)" })], []);
+    const [, row] = csv.split("\r\n");
+    expect(row).toContain('"\'=SUM(A1:A9)"');
+    expect(row).not.toContain("=SUM(A1:A9),");
+  });
 });
