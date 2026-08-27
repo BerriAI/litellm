@@ -570,10 +570,10 @@ class ResponsesAPIRequestUtils:
 
     @staticmethod
     def normalize_function_call_ids_in_input(
-        request_input: object,
+        request_input: str | ResponseInputParam,
         model: str | None,
         custom_llm_provider: str | None,
-    ) -> object:
+    ) -> str | ResponseInputParam:
         if not isinstance(request_input, list):
             return request_input
 
@@ -585,7 +585,7 @@ class ResponsesAPIRequestUtils:
             if item_type == "function_call":
                 call_id: Final = item.get("call_id")
                 if isinstance(call_id, str):
-                    item["call_id"] = ResponsesAPIRequestUtils.normalize_call_id_for_provider(  # pyright: ignore[reportGeneralTypeIssues,reportUnnecessaryIsInstance]  # in-place rewrite on input dict
+                    item["call_id"] = ResponsesAPIRequestUtils.normalize_call_id_for_provider(
                         call_id=call_id,
                         model=model,
                         custom_llm_provider=custom_llm_provider,
@@ -593,7 +593,7 @@ class ResponsesAPIRequestUtils:
 
                 item_id: Final = item.get("id")
                 if isinstance(item_id, str):
-                    item["id"] = ResponsesAPIRequestUtils.normalize_function_call_item_id_for_provider(  # pyright: ignore[reportGeneralTypeIssues,reportUnnecessaryIsInstance]  # in-place rewrite on input dict
+                    item["id"] = ResponsesAPIRequestUtils.normalize_function_call_item_id_for_provider(
                         item_id=item_id,
                         model=model,
                         custom_llm_provider=custom_llm_provider,
@@ -601,7 +601,7 @@ class ResponsesAPIRequestUtils:
             elif item_type == "function_call_output":
                 call_id_output: Final = item.get("call_id")
                 if isinstance(call_id_output, str):
-                    item["call_id"] = ResponsesAPIRequestUtils.normalize_call_id_for_provider(  # pyright: ignore[reportGeneralTypeIssues,reportUnnecessaryIsInstance]  # in-place rewrite on input dict
+                    item["call_id"] = ResponsesAPIRequestUtils.normalize_call_id_for_provider(
                         call_id=call_id_output,
                         model=model,
                         custom_llm_provider=custom_llm_provider,
