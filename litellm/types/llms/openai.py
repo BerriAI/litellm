@@ -107,7 +107,17 @@ EmbeddingInput = str | list[str]
 
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
-    _hidden_params: dict = {}
+    _hidden_params: dict
+
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(response)
+        self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+
+    def set_response_cost(self, response_cost: float | None) -> None:
+        if response_cost is None:
+            self._hidden_params.pop("response_cost", None)
+            return
+        self._hidden_params["response_cost"] = response_cost
 
 
 class NotGiven:
