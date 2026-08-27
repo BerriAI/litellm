@@ -1473,6 +1473,12 @@ LITELLM_PROXY_MASTER_KEY_ALIAS: Final = "litellm_proxy_master_key"
 # ``ProxyLogging._handle_logging_proxy_only_error``.
 LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: Final = "litellm_no_upstream_llm_call"
 
+# Key/team metadata fields naming the OTel Resource ``service.name``, highest
+# precedence first. Shared between the OTel v2 tenant router (which reads them
+# out of ``user_api_key_auth_metadata``) and proxy request setup (which re-applies
+# the key's values after the team metadata merge so a key outranks its team).
+OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_service_name")
+
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED: Final = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = int(
