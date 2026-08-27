@@ -382,8 +382,10 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       : null;
 
   const responseCacheValue = String(logEntry.cache_hit ?? "").toLowerCase();
+  const responseCacheKey =
+    logEntry.cache_key && logEntry.cache_key !== "Cache OFF" ? logEntry.cache_key : undefined;
   const isResponseCacheHit = responseCacheValue === "true";
-  const showResponseCache = isResponseCacheHit || responseCacheValue === "false";
+  const showResponseCache = isResponseCacheHit || responseCacheValue === "false" || responseCacheKey != null;
   const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;
   const promptCacheCreationTokens = Number(metadata?.additional_usage_values?.cache_creation_input_tokens) || 0;
 
@@ -438,11 +440,11 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 </Badge>
               </DescriptionItem>
             )}
-            {showResponseCache && logEntry.cache_key && logEntry.cache_key !== "Cache OFF" && (
+            {responseCacheKey && (
               <DescriptionItem
                 label={<MetricLabel label="Cache Key" tooltip={CACHE_KEY_TOOLTIP} docsUrl={RESPONSE_CACHE_DOCS_URL} />}
               >
-                <TruncatedValue value={logEntry.cache_key} />
+                <TruncatedValue value={responseCacheKey} />
               </DescriptionItem>
             )}
             {promptCacheReadTokens > 0 && (

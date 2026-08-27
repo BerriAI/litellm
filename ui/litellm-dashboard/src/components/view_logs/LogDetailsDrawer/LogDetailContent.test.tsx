@@ -366,9 +366,30 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("abc123cachekey")).toBeInTheDocument();
   });
 
+  it("should display a cache miss and Cache Key for the request that populates the response cache", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({ cache_hit: "None", cache_key: "abc123cachekey" })}
+      />,
+    );
+
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    expect(screen.getByText("Miss")).toBeInTheDocument();
+    expect(screen.getByText("Cache Key")).toBeInTheDocument();
+    expect(screen.getByText("abc123cachekey")).toBeInTheDocument();
+  });
+
   it("should hide the Cache Key row when caching is off", () => {
     render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "False", cache_key: "Cache OFF" })} />);
 
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    expect(screen.queryByText("Cache Key")).not.toBeInTheDocument();
+  });
+
+  it("should hide response cache metadata when caching is off and cache_hit is None", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "None", cache_key: "Cache OFF" })} />);
+
+    expect(screen.queryByText("Response Cache")).not.toBeInTheDocument();
     expect(screen.queryByText("Cache Key")).not.toBeInTheDocument();
   });
 
