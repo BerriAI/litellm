@@ -333,6 +333,44 @@ class TestMCPClient:
         assert headers["Authorization"] == "token my-token"
         assert headers["X-Custom-Header"] == "custom-value"
 
+    def test_oauth_token_lands_on_the_configured_header_beside_a_static_authorization(self):
+        """A gateway can require its own static Authorization plus the minted OAuth token on another
+        header; the static entry must not shadow the token and the token must not displace it."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+            auth_type=MCPAuth.oauth2,
+            auth_value="minted-m2m",
+            oauth_token_header="esb-oauth",
+            extra_headers={"Authorization": "Bearer static-pat", "esb-oauth": "placeholder", "envlbl": "prod"},
+        )
+
+        headers = client._get_auth_headers()
+
+        assert headers == {
+            "Authorization": "Bearer static-pat",
+            "esb-oauth": "Bearer minted-m2m",
+            "envlbl": "prod",
+        }
+
+    def test_oauth_token_defaults_to_authorization_and_still_defers_to_static_headers(self):
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+            auth_type=MCPAuth.oauth2,
+            auth_value="minted-m2m",
+        )
+        assert client._get_auth_headers() == {"Authorization": "Bearer minted-m2m"}
+
+        with_static = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+            auth_type=MCPAuth.oauth2,
+            auth_value="minted-m2m",
+            extra_headers={"Authorization": "Bearer static-pat"},
+        )
+        assert with_static._get_auth_headers() == {"Authorization": "Bearer static-pat"}
+
     def test_get_auth_headers_strips_static_header_whitespace(self):
         """
         Static header names/values must be stripped of surrounding whitespace.

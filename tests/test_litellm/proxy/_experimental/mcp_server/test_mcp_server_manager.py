@@ -43,7 +43,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _obo_retry_applies,
     _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
-    _without_authorization,
+    _without_header,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -966,6 +966,18 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.oauth2_flow == "client_credentials"
         assert server.has_client_credentials is True
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_reads_the_oauth_token_header(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="client_credentials", oauth_token_header="esb-oauth")
+            )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.oauth_token_header == "esb-oauth"
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_accepts_explicit_authorization_code(self):
@@ -2406,6 +2418,42 @@ class TestMCPServerManager:
         assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
 
     @pytest.mark.asyncio
+    async def test_minted_token_on_a_custom_header_leaves_a_static_authorization_intact(self):
+        """A gateway can require its own static Authorization plus the minted token on another
+        header. Only the header the resolved auth writes is dropped from the static set, so the
+        static credential the upstream also needs still ships."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="esb-oauth"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="m2m-custom-header",
+            name="m2m-custom-header-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            client_id="cid",
+            client_secret="csec",
+            token_url="https://idp.example.com/token",
+            oauth_token_header="esb-oauth",
+        )
+
+        client = await manager._create_mcp_client(
+            server,
+            extra_headers={"Authorization": "Bearer static-pat", "esb-oauth": "placeholder", "envlbl": "prod"},
+        )
+
+        assert client._resolved_auth is not None
+        assert client.extra_headers == {"Authorization": "Bearer static-pat", "envlbl": "prod"}
+
+    @pytest.mark.asyncio
     async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
         """A subject the IdP rejects must raise the RFC 9728 401 challenge from the preflight, so a
         single-server route fails observably at the transport edge instead of the old behavior of
@@ -2624,14 +2672,18 @@ class TestMCPServerManager:
         if captured_extra_headers:
             assert "authorization" not in {k.lower() for k in captured_extra_headers}
 
-    def test_without_authorization_drops_only_the_credential(self):
+    def test_without_header_drops_only_the_credential(self):
         # None / empty -> None
-        assert _without_authorization(None) is None
-        assert _without_authorization({}) is None
+        assert _without_header(None) is None
+        assert _without_header({}) is None
         # Only Authorization present -> nothing left -> None (case-insensitive)
-        assert _without_authorization({"authorization": "Bearer x"}) is None
+        assert _without_header({"authorization": "Bearer x"}) is None
         # Authorization dropped, other headers kept
-        assert _without_authorization({"Authorization": "Bearer x", "X-Trace-Id": "t"}) == {"X-Trace-Id": "t"}
+        assert _without_header({"Authorization": "Bearer x", "X-Trace-Id": "t"}) == {"X-Trace-Id": "t"}
+        # A custom header name leaves a static Authorization intact
+        assert _without_header({"Authorization": "Bearer pat", "esb-oauth": "Bearer stale"}, "ESB-OAuth") == {
+            "Authorization": "Bearer pat"
+        }
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(

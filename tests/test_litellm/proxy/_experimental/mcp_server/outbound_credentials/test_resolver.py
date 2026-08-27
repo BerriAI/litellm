@@ -162,6 +162,19 @@ async def test_authorization_code_emits_bearer_for_a_stored_token():
 
 
 @pytest.mark.asyncio
+async def test_authorization_code_emits_the_stored_token_on_a_configured_custom_header():
+    store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="at-alice")})
+    result = await UpstreamCredentialProvider(oauth_token_store=store).resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"),
+        _spec(AuthorizationCodeConfig(token_header="x-upstream-oauth")),
+    )
+    assert isinstance(result, Ok)
+    emitted = _emitted(result.ok)
+    assert emitted["x-upstream-oauth"] == "Bearer at-alice"
+    assert "authorization" not in emitted
+
+
+@pytest.mark.asyncio
 async def test_authorization_code_without_token_is_semantically_unauthorized():
     result = await UpstreamCredentialProvider(oauth_token_store=_FakeTokenStore({})).resolve_credentials(
         Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
@@ -284,6 +297,18 @@ async def test_token_exchange_emits_the_exchanged_bearer():
 
 
 @pytest.mark.asyncio
+async def test_token_exchange_emits_the_exchanged_bearer_on_a_configured_custom_header():
+    exchanger = _FakeExchanger(Ok(OAuthToken(access_token="exchanged-at")))
+    subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-jwt"))
+    config = _OBO.model_copy(update={"token_header": "x-upstream-oauth"})
+    result = await UpstreamCredentialProvider(token_exchanger=exchanger).resolve_credentials(subject, _spec(config))
+    assert isinstance(result, Ok)
+    emitted = _emitted(result.ok)
+    assert emitted["x-upstream-oauth"] == "Bearer exchanged-at"
+    assert "authorization" not in emitted
+
+
+@pytest.mark.asyncio
 async def test_invalidate_credentials_drops_the_exchanged_token_for_the_subject_and_tenant():
     exchanger = _FakeExchanger(Ok(OAuthToken(access_token="exchanged-at")))
     provider = UpstreamCredentialProvider(token_exchanger=exchanger)
@@ -401,6 +426,19 @@ async def test_client_credentials_emits_the_minted_bearer():
 
 
 @pytest.mark.asyncio
+async def test_client_credentials_emits_the_minted_token_on_the_configured_header():
+    source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
+    config = _M2M.model_copy(update={"token_header": "esb-oauth"})
+    result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(
+        _SUBJECT, _spec(config)
+    )
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["esb-oauth"] == "Bearer m2m-at"
+    assert "Authorization" not in headers
+
+
+@pytest.mark.asyncio
 async def test_client_credentials_ignores_the_subject():
     # The contract's no-user-context clause: every caller shares the one client identity.
     source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
@@ -494,6 +532,24 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
     assert leg2_params["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer"
     # The leg-1 token is forwarded verbatim as the leg-2 assertion.
     assert leg2_params["assertion"] == "the-id-jag"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_emits_the_leg2_bearer_on_a_configured_custom_header():
+    endpoint = _FakeTokenEndpoint(
+        [
+            Ok(ExchangedToken(access_token="the-id-jag", expires_in=300)),
+            Ok(ExchangedToken(access_token="final-access", expires_in=3600)),
+        ]
+    )
+    config = _id_jag_config().model_copy(update={"token_header": "x-upstream-oauth"})
+    result = await UpstreamCredentialProvider(token_endpoint=endpoint).resolve_credentials(
+        _with_inbound("user-id-token"), _spec(config)
+    )
+    assert isinstance(result, Ok)
+    emitted = _emitted(result.ok)
+    assert emitted["x-upstream-oauth"] == "Bearer final-access"
+    assert "authorization" not in emitted
 
 
 @pytest.mark.asyncio

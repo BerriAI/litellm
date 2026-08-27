@@ -425,3 +425,29 @@ def test_bearer_auth_rejects_sync_clients():
     with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)), auth=auth) as client:
         with pytest.raises(RuntimeError):
             client.get("https://upstream.example.com/mcp")
+
+
+@pytest.mark.asyncio
+async def test_bearer_auth_writes_a_custom_header_and_leaves_authorization_alone():
+    # A gateway that reads the minted token beside its own static Authorization: the minted token
+    # must land on the configured header and must not displace the static credential.
+    seen: "list[tuple[str, str]]" = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.headers.get("Authorization", ""), request.headers.get("esb-oauth", "")))
+        return httpx.Response(401 if len(seen) == 1 else 200)
+
+    async def refetch(failed: str) -> "str | None":
+        return "fresh-token"
+
+    auth = ClientCredentialsBearerAuth("stale-token", refetch, header_name="esb-oauth")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
+        response = await client.get(
+            "https://upstream.example.com/mcp",
+            headers={"Authorization": "Bearer static-pat"},
+        )
+    assert response.status_code == 200
+    assert seen == [
+        ("Bearer static-pat", "Bearer stale-token"),
+        ("Bearer static-pat", "Bearer fresh-token"),
+    ]

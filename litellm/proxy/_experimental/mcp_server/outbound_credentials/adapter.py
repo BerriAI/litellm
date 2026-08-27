@@ -35,7 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth
+from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE, MCPAuth, resolve_oauth_token_header
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -122,7 +122,7 @@ def _oauth2_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         return ServerSpec(
             server_id=server.server_id,
             resource=resource,
-            config=AuthorizationCodeConfig(),
+            config=AuthorizationCodeConfig(token_header=resolve_oauth_token_header(server.oauth_token_header)),
         )
     return None
 
@@ -147,6 +147,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
             audience=server.audience,
             upstream_resource=resolve_upstream_resource(server),
             token_endpoint_auth_method=server.token_endpoint_auth_method,
+            token_header=resolve_oauth_token_header(server.oauth_token_header),
         ),
     )
 
@@ -181,6 +182,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
             client_secret=SecretStr(server.client_secret),
             token_endpoint_auth_method=server.token_endpoint_auth_method,
             scopes=tuple(server.scopes or ()),
+            token_header=resolve_oauth_token_header(server.oauth_token_header),
         ),
     )
 
@@ -239,6 +241,7 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
             audience=server.audience,
             resource=server.id_jag_resource,
             scopes=tuple(server.scopes or ()),
+            token_header=resolve_oauth_token_header(server.oauth_token_header),
         ),
     )
 

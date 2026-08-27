@@ -34,6 +34,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, BaseModel
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -149,6 +150,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
+    DEFAULT_OAUTH_TOKEN_HEADER,
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
     MCPStdioConfig,
@@ -349,6 +351,7 @@ class MCPServerConfig(TypedDict, total=False):
     audience: str
     subject_token_type: str
     upstream_resource: str
+    oauth_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
     client_private_key: str
@@ -828,15 +831,17 @@ def _should_strip_caller_authorization(
     )
 
 
-def _without_authorization(
+def _without_header(
     headers: dict[str, str] | None,
+    name: str = DEFAULT_OAUTH_TOKEN_HEADER,
 ) -> dict[str, str] | None:
-    """A copy of ``headers`` with any ``Authorization`` key removed (case-insensitive), or
-    None if nothing remains. Drops only the credential, keeping other forwarded headers.
+    """A copy of ``headers`` with ``name`` (``Authorization`` by default) removed
+    (case-insensitive), or None if nothing remains. Drops only that one header, keeping every
+    other forwarded header.
     """
     if not headers:
         return None
-    filtered: Final = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+    filtered: Final = {k: v for k, v in headers.items() if k.lower() != name.lower()}
     return filtered or None
 
 
@@ -914,7 +919,7 @@ def _resolve_openapi_tool_auth(
 
     if isinstance(per_server, dict):
         authorization: Final = next((v for k, v in per_server.items() if k.lower() == "authorization"), None)
-        merged: Final = merge_mcp_headers(extra_headers=forwarded, static_headers=_without_authorization(per_server))
+        merged: Final = merge_mcp_headers(extra_headers=forwarded, static_headers=_without_header(per_server))
         if authorization is None:
             byok: Final = _format_byok_openapi_auth_header(mcp_server, mcp_auth_header) if mcp_auth_header else None
             return byok, merged, mcp_auth_header
@@ -981,7 +986,7 @@ def _client_forwarded_authorization_headers(
         raw_headers=raw_headers,
         user_api_key_auth=user_api_key_auth,
     ):
-        return _without_authorization(extra_headers)
+        return _without_header(extra_headers)
     return extra_headers
 
 
@@ -994,7 +999,7 @@ def _take_forwarded_authorization(
     if not headers:
         return None, headers
     value: Final = next((v for k, v in headers.items() if k.lower() == "authorization"), None)
-    return value, _without_authorization(headers)
+    return value, _without_header(headers)
 
 
 def _passthrough_token_from_mcp_auth_header(
@@ -2166,6 +2171,7 @@ class MCPServerManager:
                     DEFAULT_SUBJECT_TOKEN_TYPE,
                 ),
                 upstream_resource=server_config.get("upstream_resource", None),
+                oauth_token_header=server_config.get("oauth_token_header", None),
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
@@ -2698,6 +2704,7 @@ class MCPServerManager:
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
             upstream_resource=(credentials_dict.get("upstream_resource") if credentials_dict else None),
+            oauth_token_header=(credentials_dict.get("oauth_token_header") if credentials_dict else None),
             # ID-JAG fields — read from credentials JSON blob
             id_jag_resource_token_endpoint=(
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
@@ -3541,8 +3548,10 @@ class MCPServerManager:
                     # Authorization must NOT shadow it (otherwise the upstream gets e.g. the
                     # signer's JWT instead of the minted token and rejects it, and for M2M the
                     # one-shot 401 refetch is lost with it). Drop the conflicting header so the
-                    # resolved token reaches upstream.
-                    return auth, _without_authorization(extra_headers)
+                    # resolved token reaches upstream. Only that header is dropped, since a
+                    # client_credentials server can mint onto a custom oauth_token_header while a
+                    # static Authorization the upstream also requires rides alongside it.
+                    return auth, _without_header(extra_headers, header_name or DEFAULT_OAUTH_TOKEN_HEADER)
                 # Other modes: an Authorization already supplied via extra_headers (a forwarded caller
                 # header or static_headers) is intentional and wins; v1 applies those last.
                 return None, extra_headers
@@ -3760,6 +3769,7 @@ class MCPServerManager:
                 auth_value=auth_value,
                 timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
                 extra_headers=extra_headers,
+                oauth_token_header=resolved_server.oauth_token_header,
                 aws_auth=aws_auth,
                 sampling_callback=sampling_cb,
                 elicitation_callback=elicitation_cb,
@@ -5304,7 +5314,7 @@ class MCPServerManager:
                     raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
                 ):
-                    extra_headers = _without_authorization(extra_headers)
+                    extra_headers = _without_header(extra_headers)
         elif mcp_server.is_client_forwarded_token:
             extra_headers = _client_forwarded_authorization_headers(
                 mcp_server=mcp_server,

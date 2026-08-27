@@ -432,7 +432,7 @@ if MCP_AVAILABLE:
         _client_forwarded_authorization_headers,
         _resolve_openapi_tool_auth,
         _should_strip_caller_authorization,
-        _without_authorization,
+        _without_header,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -1732,7 +1732,7 @@ if MCP_AVAILABLE:
                     raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
                 ):
-                    extra_headers = _without_authorization(extra_headers)
+                    extra_headers = _without_header(extra_headers)
         elif is_client_forwarded_mode:
             if not withhold_forwarded_authorization:
                 extra_headers = _client_forwarded_authorization_headers(

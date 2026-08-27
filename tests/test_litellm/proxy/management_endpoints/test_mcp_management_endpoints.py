@@ -1573,6 +1573,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
         existing_server.upstream_resource = None
+        existing_server.oauth_token_header = None
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = existing_server
@@ -1608,6 +1609,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
         existing_server.upstream_resource = None
+        existing_server.oauth_token_header = None
         for key, value in server_overrides.items():
             setattr(existing_server, key, value)
 
@@ -1656,6 +1658,13 @@ class TestTemporaryMCPSessionEndpoints:
         updated = self._inherit_with({"upstream_resource": "api://typed"}, upstream_resource="api://stored")
 
         assert updated.credentials["upstream_resource"] == "api://typed"
+
+    def test_inheritance_carries_oauth_token_header_to_the_session_server(self):
+        """Dropping it makes the temporary server mint onto Authorization, displacing the static
+        credential the upstream also requires."""
+        updated = self._inherit_with(None, oauth_token_header="x-upstream-oauth")
+
+        assert updated.credentials["oauth_token_header"] == "x-upstream-oauth"
 
     def test_cache_temporary_mcp_server_stores_entry_with_ttl(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -2256,6 +2265,7 @@ class TestTemporaryMCPSessionEndpoints:
             aws_region_name=None,
             aws_service_name=None,
             upstream_resource=None,
+            oauth_token_header=None,
         )
         built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
         mock_manager = MagicMock()

@@ -739,6 +739,7 @@ if MCP_AVAILABLE:
         ("aws_region_name", "aws_region_name"),
         ("aws_service_name", "aws_service_name"),
         ("upstream_resource", "upstream_resource"),
+        ("oauth_token_header", "oauth_token_header"),
     )
 
     def _has_non_admin_config_credentials(credentials: "MCPCredentials | None") -> bool:

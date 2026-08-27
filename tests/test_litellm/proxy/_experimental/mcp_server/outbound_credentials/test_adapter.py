@@ -185,6 +185,86 @@ def test_client_credentials_resolves_upstream_resource_onto_the_config():
     assert spec.config.upstream_resource == "https://up.example.com/mcp"
 
 
+def test_client_credentials_carries_the_configured_token_header():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            oauth_token_header="esb-oauth",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.token_header == "esb-oauth"
+
+
+def test_client_credentials_token_header_defaults_to_authorization():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.token_header == "Authorization"
+
+
+def test_authorization_code_carries_the_configured_token_header():
+    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2, oauth_token_header="x-upstream-oauth"))
+    assert spec is not None
+    assert isinstance(spec.config, AuthorizationCodeConfig)
+    assert spec.config.token_header == "x-upstream-oauth"
+
+
+def test_token_exchange_carries_the_configured_token_header():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            oauth_token_header="x-upstream-oauth",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.token_header == "x-upstream-oauth"
+
+
+def test_id_jag_carries_the_configured_token_header():
+    spec = to_server_spec(_id_jag_server(oauth_token_header="x-upstream-oauth"))
+    assert spec is not None
+    assert isinstance(spec.config, IdJagConfig)
+    assert spec.config.token_header == "x-upstream-oauth"
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        _server(auth_type=MCPAuth.oauth2),
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        ),
+        _id_jag_server(),
+    ],
+)
+def test_oauth_modes_default_their_token_header_to_authorization(server):
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert isinstance(spec.config, (AuthorizationCodeConfig, TokenExchangeConfig, IdJagConfig))
+    assert spec.config.token_header == "Authorization"
+
+
 def test_client_credentials_with_incomplete_grant_fields_is_owned_for_fail_closed():
     # An M2M server missing its grant fields is still owned by v2 (spec, not None) so it fails
     # closed at the source (misconfigured, 500) rather than deferring to v1, which would connect

@@ -51,11 +51,13 @@ from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
+    DEFAULT_OAUTH_TOKEN_HEADER,
     MCPAuth,
     MCPAuthType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
+    resolve_oauth_token_header,
 )
 
 
@@ -276,6 +278,7 @@ class MCPClient:
         timeout: float | None = None,
         stdio_config: MCPStdioConfig | None = None,
         extra_headers: dict[str, str] | None = None,
+        oauth_token_header: str | None = None,
         ssl_verify: VerifyTypes | None = None,
         aws_auth: httpx.Auth | None = None,
         resolved_auth: httpx.Auth | None = None,
@@ -290,6 +293,7 @@ class MCPClient:
         self._mcp_auth_value: str | dict[str, str] | None = None
         self.stdio_config: MCPStdioConfig | None = stdio_config
         self.extra_headers: dict[str, str] | None = extra_headers
+        self.oauth_token_header: str = resolve_oauth_token_header(oauth_token_header)
         self.ssl_verify: VerifyTypes | None = ssl_verify
         self._aws_auth: httpx.Auth | None = aws_auth
         # A pre-resolved httpx.Auth (e.g. from the v2 credential resolver) attached to the
@@ -516,19 +520,24 @@ class MCPClient:
                     # This auth type means the caller owns the whole header value.
                     headers["Authorization"] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.oauth2:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    headers[self.oauth_token_header] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
                 elif self.auth_type == MCPAuth.token:
                     headers["Authorization"] = f"token {strip_auth_scheme(self._mcp_auth_value, 'token')}"
                 elif self.auth_type == MCPAuth.oauth2_token_exchange:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    headers[self.oauth_token_header] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
         # signing (including the body hash), so it uses httpx.Auth flow instead
         # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
         # update the headers with the extra headers
+        minted_oauth_token: Final = headers.get(self.oauth_token_header)
         if self.extra_headers:
             headers.update(self.extra_headers)
+            # A custom oauth_token_header exists so the minted token can ride beside a static
+            # Authorization, so it owns that header instead of being shadowed by a static entry.
+            if minted_oauth_token is not None and self.oauth_token_header != DEFAULT_OAUTH_TOKEN_HEADER:
+                headers[self.oauth_token_header] = minted_oauth_token
         return _strip_header_whitespace(headers)
 
     def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
