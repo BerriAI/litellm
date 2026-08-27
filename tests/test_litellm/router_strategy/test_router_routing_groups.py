@@ -8,7 +8,7 @@ the implicit `"default"` group driven by the router's top-level
 from unittest.mock import patch
 
 import pytest
-
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router
@@ -485,6 +485,45 @@ def test_build_strategy_selector_constructs_for_known_strategies(monkeypatch):
     assert selector is not None
 
 
+def test_replace_routing_groups_swaps_state_and_drops_old_selectors(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(
+        routing_groups=[
+            {
+                "group_name": "fast",
+                "models": ["filtered-model"],
+                "routing_strategy": "least-busy",
+            }
+        ]
+    )
+    old_selector = router._group_selectors["fast"]["least-busy"]
+
+    replacement = RoutingGroup(
+        group_name="quality",
+        models=["other-model"],
+        routing_strategy="latency-based-routing",
+    )
+    new_selector = router._build_strategy_selector(
+        strategy=replacement.routing_strategy,
+        routing_strategy_args={},
+        register_callbacks=True,
+    )
+    router._replace_routing_groups(((replacement, new_selector),))
+
+    assert set(router._routing_groups) == {"quality"}
+    assert router._model_to_group == {"other-model": "quality"}
+    assert router._group_selectors == {"quality": {"latency-based-routing": new_selector}}
+    assert all(c is not old_selector for c in litellm.callbacks)
+    assert new_selector in litellm.callbacks
+
+    router._replace_routing_groups(())
+    assert router._routing_groups == {}
+    assert router._model_to_group == {}
+    assert router._group_selectors == {}
+    assert all(c is not new_selector for c in litellm.callbacks)
+
+
 def test_unregister_router_selectors_removes_by_identity(monkeypatch):
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "input_callback", [])
@@ -723,6 +762,106 @@ def test_strategy_reinit_unregisters_override_selectors():
     assert router._override_selectors == {}
     assert not any(id(cb) == id(override_selector) for cb in litellm.callbacks)
     assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
+
+
+def test_failed_routing_groups_update_keeps_previous_groups():
+    router = _build_router(
+        routing_groups=[
+            {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+        ],
+    )
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValueError, match="appears in"):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+                {"group_name": "g2", "models": ["filtered-model"], "routing_strategy": "least-busy"},
+            ],
+        )
+
+    assert list(router._routing_groups) == ["g1"]
+    assert router._model_to_group == {"filtered-model": "g1"}
+    assert router._group_selectors["g1"]["latency-based-routing"] is selector
+    assert router._get_routing_context("filtered-model", None) == ("latency-based-routing", selector)
+
+
+def test_overlap_error_names_every_conflicting_model():
+    with pytest.raises(ValueError, match="appears in") as exc_info:
+        _build_router(
+            routing_groups=[
+                {
+                    "group_name": "g1",
+                    "models": ["filtered-model", "other-model"],
+                    "routing_strategy": "latency-based-routing",
+                },
+                {
+                    "group_name": "g2",
+                    "models": ["filtered-model", "other-model"],
+                    "routing_strategy": "least-busy",
+                },
+            ],
+        )
+    message = str(exc_info.value)
+    assert "'filtered-model' appears in 'g1' and 'g2'" in message
+    assert "'other-model' appears in 'g1' and 'g2'" in message
+
+
+def test_invalid_group_strategy_does_not_leak_a_selector():
+    router = _build_router(
+        routing_groups=[
+            {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+        ],
+    )
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValueError, match="Invalid routing_strategy"):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g2", "models": ["other-model"], "routing_strategy": "not-a-real-strategy"},
+            ],
+        )
+
+    assert list(router._routing_groups) == ["g1"]
+    assert any(id(cb) == id(selector) for cb in litellm.callbacks)
+
+
+def test_unbuildable_group_selector_keeps_previous_groups():
+    router = _build_router(
+        routing_groups=[
+            {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+        ],
+    )
+    selector = router._group_selectors["g1"]["latency-based-routing"]
+
+    with pytest.raises(ValidationError, match="ttl"):
+        router.update_settings(
+            routing_groups=[
+                {"group_name": "g1", "models": ["filtered-model"], "routing_strategy": "latency-based-routing"},
+                {
+                    "group_name": "g2",
+                    "models": ["other-model"],
+                    "routing_strategy": "latency-based-routing",
+                    "routing_strategy_args": {"ttl": "not-a-number"},
+                },
+            ],
+        )
+
+    assert list(router._routing_groups) == ["g1"]
+    assert router._model_to_group == {"filtered-model": "g1"}
+    assert router._group_selectors["g1"]["latency-based-routing"] is selector
+    assert sum(1 for cb in litellm.callbacks if type(cb) is type(selector)) == 1
+    assert isinstance(
+        router._try_build_group_selector(
+            RoutingGroup(
+                group_name="g2",
+                models=["other-model"],
+                routing_strategy="latency-based-routing",
+                routing_strategy_args={"ttl": "not-a-number"},
+            )
+        ),
+        ValidationError,
+    )
 
 
 def _quality_group(strategy="latency-based-routing"):
