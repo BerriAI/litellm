@@ -92,6 +92,16 @@ def get_web_search_requests(server_tool_use: Any) -> int | None:
     return getattr(server_tool_use, "web_search_requests", None)
 
 
+def get_web_search_requests_from_usage(usage: Usage) -> int | None:
+    """Read ``web_search_requests`` from a ``Usage``'s ``server_tool_use``.
+
+    ``Usage`` deletes unset optional fields from ``__dict__`` (see
+    ``SafeAttributeModel``), so direct attribute access can raise
+    ``AttributeError``; ``getattr`` with a default is required here.
+    """
+    return get_web_search_requests(getattr(usage, "server_tool_use", None))
+
+
 def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
         return True
