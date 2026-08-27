@@ -1106,7 +1106,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                       >
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent alignItemWithTrigger={false}>
+                      <SelectContent>
                         {GUARDRAIL_MODES.map((mode) => (
                           <SelectItem key={mode.value} value={mode.value} title={mode.label}>
                             {mode.label}
