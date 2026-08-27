@@ -859,12 +859,40 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
+        """Normalize an Anthropic image block into strings a guardrail can read.
+
+        `source` is one of three shapes (types/llms/anthropic.py:259):
+
+            {"type": "base64", "media_type": "image/png", "data": "<b64>"}
+            {"type": "url",    "url": "https://..."}
+            {"type": "file",   "file_id": "..."}
+
+        base64 is returned as a data URI rather than the bare payload: consumers of
+        ``GenericGuardrailAPIInputs["images"]`` otherwise have no way to know the
+        format, and an API like Bedrock's ApplyGuardrail requires it. url is passed
+        through so the consumer can fetch it under its own SSRF policy.
+
+        file is not resolvable here (the bytes live behind the Files API), so it
+        yields nothing. That is a silent gap for any consumer that treats a missing
+        entry as "no image to scan"; scanning a file_id needs a fetch this extractor
+        has no client for.
+        """
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
             return ()
-        # Could be base64 or url
+
+        source_type: Final = source.get("type")
+        if source_type == "url":
+            url: Final = source.get("url")
+            return (url,) if isinstance(url, str) and url else ()
+
         data: Final = source.get("data")
-        return (data,) if data else ()
+        if not isinstance(data, str) or not data:
+            return ()
+        media_type: Final = source.get("media_type")
+        if isinstance(media_type, str) and media_type:
+            return (f"data:{media_type};base64,{data}",)
+        return (data,)
 
     async def _apply_guardrail_responses_to_input(
         self,
