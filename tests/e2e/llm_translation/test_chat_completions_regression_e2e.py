@@ -308,7 +308,8 @@ class TestGeminiChatCompletions:
                             content=f"Reply with the single word pong. marker={tag}",
                         )
                     ],
-                    max_tokens=32,
+                    max_tokens=64,
+                    reasoning_effort="none",
                 ),
             )
         )

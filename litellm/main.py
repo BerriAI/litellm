@@ -24,6 +24,7 @@ from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 from litellm._logging import _redact_string
@@ -1807,6 +1808,56 @@ def _complete_fireworks_ai(
             additional_args={"headers": headers},
         )
         raise e
+
+    return response
+
+
+def _complete_together_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion: Final = ctx.acompletion
+    api_base: Final = ctx.api_base
+    api_key: Final = ctx.api_key
+    client: Final = _dispatch_client_http(ctx)
+    custom_llm_provider: Final = ctx.custom_llm_provider
+    headers: Final = ctx.headers
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    provider_config: Final = ctx.provider_config
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    try:
+        response: Final = base_llm_http_handler.completion(
+            model=model,
+            messages=messages,
+            headers=headers,
+            model_response=model_response,
+            api_key=api_key,
+            api_base=api_base,
+            acompletion=acompletion,
+            logging_obj=logging,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            shared_session=shared_session,
+            timeout=timeout,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            encoding=_get_encoding(),
+            stream=stream,
+            provider_config=provider_config,
+        )
+    except Exception as e:
+        logging.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=str(e),
+            additional_args=MappingProxyType({"headers": headers}),
+        )
+        raise
 
     return response
 
@@ -5600,6 +5651,8 @@ def completion(
         elif custom_llm_provider == "fireworks_ai":
             ## COMPLETION CALL
             response = _complete_fireworks_ai(_dispatch_ctx)
+        elif custom_llm_provider == "together_ai":
+            response = _complete_together_ai(_dispatch_ctx)
         elif custom_llm_provider == "heroku":
             response = _complete_heroku(_dispatch_ctx)
 
@@ -5649,7 +5702,6 @@ def completion(
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
-            or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
@@ -5699,14 +5751,6 @@ def completion(
             response = _complete_openrouter(_dispatch_ctx)
         elif custom_llm_provider == "vercel_ai_gateway":
             response = _complete_vercel_ai_gateway(_dispatch_ctx)
-        elif (
-            custom_llm_provider == "together_ai"
-            or ("togethercomputer" in model)
-            or (model in litellm.together_ai_models)
-        ):
-            """
-            Deprecated. We now do together ai calls via the openai client - https://docs.together.ai/docs/openai-api-compatibility
-            """
         elif custom_llm_provider == "palm":
             raise ValueError(
                 "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
@@ -7969,7 +8013,7 @@ def speech(
 
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = get_litellm_params(metadata=metadata, api_key=api_key or dynamic_api_key, **kwargs)
 
     # Get provider-specific text-to-speech config and map parameters
     text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(

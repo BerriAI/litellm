@@ -157,7 +157,12 @@ class _PrismaVectorStoreRow(Protocol):
 
 class _PrismaUserRow(Protocol):
     user_id: str
-    organization_memberships: Sequence[LiteLLM_OrganizationMembershipTable | None] | None
+
+    @property
+    def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
+
+    @organization_memberships.setter
+    def organization_memberships(self, value: Sequence[_PrismaModelDumpRow] | None) -> None: ...
 
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
@@ -215,9 +220,14 @@ def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_P
     return repo.table
 
 
+class _VectorStorePermissionsRow(Protocol):
+    @property
+    def vector_stores(self) -> Sequence[str] | None: ...
+
+
 def _object_permission_table(
-    repo: _PrismaTableHolder[LiteLLM_ObjectPermissionTable],
-) -> _PrismaAuthTable[LiteLLM_ObjectPermissionTable]:
+    repo: _PrismaTableHolder[_VectorStorePermissionsRow],
+) -> _PrismaAuthTable[_VectorStorePermissionsRow]:
     return repo.table
 
 
@@ -1130,7 +1140,8 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 
     Parameters:
     - user_route: str - the route the user is trying to call
-    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
+    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user. Entries are a route group name
+      (e.g. "openai_routes"), an exact route, or a trailing-wildcard prefix (e.g. "/internal-models/*").
     """
     from starlette.routing import compile_path
 
@@ -1140,7 +1151,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
                 regex, _, _ = compile_path(template)
                 if regex.match(user_route):
                     return True
-        elif allowed_route == user_route:
+        elif RouteChecks.route_matches_wildcard_pattern(route=user_route, pattern=allowed_route):
             return True
     return False
 
@@ -2577,13 +2588,29 @@ async def _delete_cache_key_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ):
+    """
+    Evict one key object, best-effort, matching `delete_cache_team_object` and
+    `delete_cache_key_objects`.
+
+    Every caller runs this after its own write has already committed, and the in-memory entry is
+    dropped before the Redis round trip. Letting a cache-backend error raise here therefore reports
+    failure for work that succeeded without making the cache any less stale; the leftover Redis
+    entry expires at its TTL either way.
+    """
     key: Final = hashed_token
 
-    user_api_key_cache.delete_cache(key=key)
+    try:
+        user_api_key_cache.delete_cache(key=key)
 
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        ## UPDATE REDIS CACHE ##
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # best-effort: a cache error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to invalidate cached key entry %s; a stale key object may be served until its TTL expires: %s",
+            key,
+            e,
+        )
 
 
 async def delete_cache_key_objects(
@@ -5375,7 +5402,7 @@ async def vector_store_access_check(
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org"],
     vector_store_ids_to_run: list[str],
-    object_permissions: LiteLLM_ObjectPermissionTable | None,
+    object_permissions: _VectorStorePermissionsRow | None,
 ):
     """
     Raises ProxyException if the object (key, team, org) cannot access the specific vector store.

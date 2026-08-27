@@ -20,6 +20,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
     validate_no_callback_env_reference,
 )
 from litellm.types.integrations.compression_interception import (
@@ -2027,6 +2028,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
+            if key == "langfuse_environment":
+                validate_langfuse_environment_value(callback_vars[key])
         return values
 
 
@@ -2507,6 +2510,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
+    model_list_healthy_only: bool | None = Field(
+        None,
+        description=(
+            "When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing "
+            "deployments are all unhealthy, for every caller, without needing `healthy_only=true` "
+            "per request. Requires `background_health_checks: true`, and keeps deployment health "
+            "state cached without turning on `enable_health_check_routing`, so routing is "
+            "unaffected. With no health state nothing is hidden. Hiding is presentation-only, a "
+            "hidden model can still be called."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
@@ -2819,7 +2833,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
     # and validating it here would make one malformed row fail auth outright.
     # resolve_model_budget validates the single entry a request actually needs.
-    user_model_max_budget: dict[str, object] | None = None
+    user_model_max_budget: Mapping[str, object] | None = None
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
@@ -2997,8 +3011,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     sso_user_id: str | None = None
     teams: list[str] = []  # Just team IDs, not full team objects
     object_permission: LiteLLM_ObjectPermissionTable | None = None
-    model_max_budget: dict | None = None
-    model_max_budget_usage: dict | None = None
+    model_max_budget: Mapping[str, object] | None = None
+    model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3546,6 +3560,8 @@ class SpendLogsMetadata(TypedDict):
     litellm_overhead_time_ms: float | None  # LiteLLM overhead time in milliseconds
     attempted_retries: int | None  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: int | None  # Max retries configured for this request
+    attempted_fallbacks: ReadOnly[int | None]  # Number of fallbacks attempted (0 = primary model group served)
+    original_model_group: ReadOnly[str | None]  # Model group requested before any fallbacks
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed

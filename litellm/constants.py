@@ -49,6 +49,8 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
+# in-memory stand-in handed to provider converters for redacted arguments; never stored
+REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
 
 MAX_STRING_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", 4096)
 
@@ -147,6 +149,7 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-adaptive-router-model",
     "x-litellm-applied-guardrails",
     "x-litellm-guardrail-scan-id",
+    "x-litellm-cache-key",
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -378,6 +381,7 @@ AZURE_OPERATION_POLLING_TIMEOUT: Final = int(os.getenv("AZURE_OPERATION_POLLING_
 AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: Final = str(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30"))
 AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: Final = int(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96))
 REDIS_SOCKET_TIMEOUT: Final = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
+CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS: Final[float] = 5.0
 REDIS_CONNECTION_POOL_TIMEOUT: Final = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
 REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5))
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60))
@@ -461,6 +465,8 @@ CONNECTION_ERROR_PATTERNS: Final[list[str]] = [
 ]
 STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
+STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
+STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = float(
     os.getenv("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400)
@@ -1358,8 +1364,6 @@ X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
-AUTO_ROUTED_REQUEST_METADATA_KEY: Final = "_auto_routed_request"
-ROUTER_MODEL_NAME_RESPONSE_FIELD: Final = "router_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
@@ -1807,6 +1811,43 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 )
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+
+# A retrieved response replays the usage of the call that created it, so pricing these
+# read/management routes like inference bills the same tokens twice.
+NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "get_responses",
+        "aget_responses",
+        "delete_responses",
+        "adelete_responses",
+        "cancel_responses",
+        "acancel_responses",
+        "list_input_items",
+        "alist_input_items",
+        "vector_store_create",
+        "avector_store_create",
+        "vector_store_retrieve",
+        "avector_store_retrieve",
+        "vector_store_list",
+        "avector_store_list",
+        "vector_store_update",
+        "avector_store_update",
+        "vector_store_delete",
+        "avector_store_delete",
+        "vector_store_file_create",
+        "avector_store_file_create",
+        "vector_store_file_list",
+        "avector_store_file_list",
+        "vector_store_file_retrieve",
+        "avector_store_file_retrieve",
+        "vector_store_file_content",
+        "avector_store_file_content",
+        "vector_store_file_update",
+        "avector_store_file_update",
+        "vector_store_file_delete",
+        "avector_store_file_delete",
+    }
+)
 
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request

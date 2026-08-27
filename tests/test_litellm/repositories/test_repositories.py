@@ -541,17 +541,19 @@ class TestTeamRepository:
 
         assert [m.user_id for m in members] == expected_ids
         sql = tx.query_raw.call_args.args[0]
-        assert "FOR UPDATE" in sql
+        assert "FOR UPDATE" not in sql, (
+            "a row lock here can deadlock with the access-group endpoints; the caller must "
+            "already hold the team's advisory lock, so a plain read is all this needs"
+        )
         assert tx.query_raw.call_args.args[1] == "team-1"
 
     @pytest.mark.asyncio
     async def test_get_members_with_roles_locked_missing_row(self, repo):
         """None, not [], so a caller can tell a deleted team from an empty one.
 
-        /team/member_add reconciles membership under this lock and has to fail,
-        and clean up the references it already wrote, when a /team/delete
-        committed underneath it. An empty list would look like a live team with
-        no members and it would carry on writing.
+        /team/member_add reconciles membership under the team's advisory lock and has to
+        fail, without writing anything, when a /team/delete committed underneath it. An
+        empty list would look like a live team with no members and it would carry on writing.
         """
         tx = MagicMock()
         tx.query_raw = AsyncMock(return_value=[])

@@ -8152,6 +8152,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -8605,9 +8614,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -11029,11 +11042,9 @@ export interface paths {
          *         -d '{
          *             "prompt_id": "my_prompt",
          *             "litellm_params": {
-         *                 "prompt_id": "json_prompt",
+         *                 "prompt_id": "my_prompt",
          *                 "prompt_integration": "dotprompt",
-         *                 ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
-         *                 "prompt_directory": "/path/to/dotprompt/folder",
-         *                 "prompt_data": {"json_prompt": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}}
+         *                 "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
          *             },
          *             "prompt_info": {
          *                 "prompt_type": "config"
@@ -13165,6 +13176,8 @@ export interface paths {
          * @description [DEPRECATED] This endpoint is not paginated and can cause performance issues.
          *     Please use `/spend/logs/v2` instead for paginated access to spend logs.
          *
+         *     Row results are capped at 10,000 most recent entries per response.
+         *
          *     View all spend logs, if request_id is provided, only logs for that request_id will be returned
          *
          *     When start_date and end_date are provided:
@@ -14838,6 +14851,7 @@ export interface paths {
          *         - langfuse_secret_key: The secret key for the Langfuse callback
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
+         *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -17936,6 +17950,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -17993,9 +18016,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -22703,7 +22730,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -24264,6 +24291,11 @@ export interface components {
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
             mcp_xff_num_trusted_hops?: number | null;
+            /**
+             * Model List Healthy Only
+             * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
+             */
+            model_list_healthy_only?: boolean | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -26712,7 +26744,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -26752,7 +26784,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -26782,7 +26814,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -27552,6 +27584,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Google Maps Grounding Cost Per Query */
+            google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -27988,7 +28022,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -28018,7 +28052,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -28048,7 +28082,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -30094,7 +30128,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /** Allowed Passthrough Routes */
             allowed_passthrough_routes?: unknown[] | null;
             /** Allowed Vector Store Indexes */
@@ -30138,7 +30172,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -30164,7 +30198,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -32541,12 +32575,12 @@ export interface components {
             classifier_context_window_size: number;
             /**
              * Classifier Fallback
-             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm' or 'custom'.
+             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm', 'custom', or 'heuristic_first'.
              * @default heuristic
              * @enum {string}
              */
             classifier_fallback: "heuristic" | "default_model";
-            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
+            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' or 'heuristic_first' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
              * Classifier Plugin
@@ -32561,11 +32595,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, an LLM call, or a custom classifier plugin
+             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm" | "custom";
+            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -32609,6 +32643,11 @@ export interface components {
              * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
              */
             fallback_tier?: string | null;
+            /**
+             * Heuristic First Max Tier
+             * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
+             */
+            heuristic_first_max_tier?: string | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -33668,7 +33707,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -33947,7 +33986,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -33977,7 +34016,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -34007,7 +34046,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -34077,7 +34116,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -34112,7 +34151,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members Count
              * @default 0
@@ -34147,7 +34186,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -36262,7 +36301,9 @@ export interface components {
             } | null;
             /** Model Max Budget Usage */
             model_max_budget_usage?: {
-                [key: string]: unknown;
+                [key: string]: {
+                    [key: string]: unknown;
+                };
             } | null;
             /**
              * Models
@@ -36772,6 +36813,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Google Maps Grounding Cost Per Query */
+            google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -47638,6 +47681,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -53254,6 +53298,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Exclude LiteLLM internal health check requests from results */
+                exclude_internal_health_checks?: boolean;
             };
             header?: never;
             path?: never;
@@ -53362,6 +53408,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Exclude LiteLLM internal health check requests from results */
+                exclude_internal_health_checks?: boolean;
             };
             header?: never;
             path?: never;
@@ -59618,6 +59666,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;

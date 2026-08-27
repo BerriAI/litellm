@@ -177,6 +177,7 @@ LLM_CONFIG_NAMES: Final = (
     "AmazonAnthropicClaudeMessagesConfig",
     "AmazonMantleMessagesConfig",
     "TogetherAIConfig",
+    "TogetherAIChatConfig",
     "NLPCloudConfig",
     "VertexGeminiConfig",
     "GoogleAIStudioGeminiConfig",
@@ -741,6 +742,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "AmazonMantleMessagesConfig",
     ),
     "TogetherAIConfig": (".llms.together_ai.chat", "TogetherAIConfig"),
+    "TogetherAIChatConfig": (
+        ".llms.together_ai.chat.transformation",
+        "TogetherAIChatConfig",
+    ),
     "NLPCloudConfig": (".llms.nlp_cloud.chat.handler", "NLPCloudConfig"),
     "VertexGeminiConfig": (
         ".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini",

@@ -4,13 +4,26 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Protocol, TypedDict, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    cast,  # noqa: TID251  # prisma group_by returns untyped aggregate mappings
+)
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -23,6 +36,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
@@ -30,6 +44,8 @@ from litellm.repositories.verification_token_repository import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.proxy_server import PrismaClient
     from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 else:
@@ -38,6 +54,11 @@ else:
 router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
+
+_INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
+)
 
 _RowT = TypeVar("_RowT")
 
@@ -139,6 +160,18 @@ class _SessionSpendRow(TypedDict):
     mcp_tool_call_spend: float
 
 
+class _SpendSumAggregate(TypedDict, total=False):
+    spend: ReadOnly[float]
+
+
+class _SpendGroupByRow(TypedDict):
+    api_key: ReadOnly[str]
+    user: ReadOnly[str | None]
+    model: ReadOnly[str]
+    startTime: ReadOnly[object]
+    _sum: ReadOnly[_SpendSumAggregate]
+
+
 async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
     """Run a raw read query and return its rows as the row type the caller declares."""
     return await prisma_client.db.query_raw(sql_query, *args)
@@ -147,24 +180,6 @@ async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object)
 async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT] | None:
     """``_query_raw`` for the call sites that guard the result against ``None``."""
     return await _query_raw(prisma_client, sql_query, *args)
-
-
-class _SpendLogsTable(Protocol):
-    """The subset of the Prisma spend-logs table API this module uses."""
-
-    async def find_many(
-        self, *, where: Mapping[str, object], order: Mapping[str, str]
-    ) -> Sequence[_SupportsModelDump]: ...
-
-    async def find_unique(
-        self, *, where: Mapping[str, object], include: None = None
-    ) -> _SpendLogOwnershipRow | None: ...
-
-    async def count(self, *, where: Mapping[str, object]) -> int: ...
-
-    async def group_by(
-        self, *, by: Sequence[str], where: Mapping[str, object], count: Mapping[str, bool]
-    ) -> Sequence[_SessionCountRow]: ...
 
 
 class _TeamTable(Protocol):
@@ -183,7 +198,7 @@ class _VerificationTokenTable(Protocol):
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
-def _spend_logs_table(prisma_client: PrismaClient) -> _SpendLogsTable:
+def _spend_logs_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_SpendLogs"]:
     return SpendLogsRepository(prisma_client).table
 
 
@@ -199,9 +214,18 @@ async def _find_spend_logs(
     prisma_client: PrismaClient,
     where: Mapping[str, object],
     order: Mapping[str, str],
+    take: int,
+    http_response: Response,
 ) -> Sequence[_SupportsModelDump]:
-    """Read spend log rows as Prisma model instances."""
-    return await _spend_logs_table(prisma_client).find_many(where=where, order=order)
+    """Read spend log rows as Prisma model instances, capped at ``take`` rows."""
+    rows: Final = await _spend_logs_table(prisma_client).find_many(where=where, order=order, take=take)
+    if len(rows) == take:
+        http_response.headers["x-litellm-spend-logs-truncated"] = "true"
+        verbose_proxy_logger.warning(
+            "/spend/logs result truncated to the %s most recent rows; use /spend/logs/v2 for paginated access",
+            take,
+        )
+    return rows
 
 
 async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
@@ -221,11 +245,12 @@ async def _count_logs_per_session(
     prisma_client: PrismaClient, session_ids: Sequence[str | None]
 ) -> Sequence[_SessionCountRow]:
     """Count spend log rows per session for the given session ids."""
-    return await _spend_logs_table(prisma_client).group_by(
+    rows: Final = await _spend_logs_table(prisma_client).group_by(
         by=["session_id"],
         where={"session_id": {"in": session_ids}},
         count={"session_id": True},
     )
+    return cast(Sequence[_SessionCountRow], rows)  # cast-ok: group_by(count=) shape is fixed by the by/count args
 
 
 async def _find_team_row(prisma_client: PrismaClient, team_id: str) -> _SupportsModelDump | None:
@@ -2249,6 +2274,10 @@ async def ui_view_spend_logs(
         default="desc",
         description="Sort order: asc or desc",
     ),
+    exclude_internal_health_checks: bool = fastapi.Query(
+        default=False,
+        description="Exclude LiteLLM internal health check requests from results",
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -2540,6 +2569,11 @@ async def ui_view_spend_logs(
                 sql_conditions.append(f"status = ${p}")
                 sql_params.append(status_filter)
                 p += 1
+
+        if exclude_internal_health_checks:
+            sql_conditions.append(f"api_key NOT IN (${p}, ${p + 1})")
+            sql_params.extend(_INTERNAL_HEALTH_CHECK_API_KEYS)
+            p += 2  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Spend range
         if min_spend is not None:
@@ -2841,6 +2875,7 @@ async def ui_view_request_response_for_request_id(
     },
 )
 async def view_spend_logs(
+    fastapi_response: Response,
     api_key: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -2870,6 +2905,8 @@ async def view_spend_logs(
     """
     [DEPRECATED] This endpoint is not paginated and can cause performance issues.
     Please use `/spend/logs/v2` instead for paginated access to spend logs.
+
+    Row results are capped at 10,000 most recent entries per response.
 
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
 
@@ -2921,7 +2958,6 @@ async def view_spend_logs(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        spend_logs = []
         if (
             start_date is not None
             and isinstance(start_date, str)
@@ -2960,6 +2996,8 @@ async def view_spend_logs(
                     prisma_client,
                     where=filter_query,
                     order={"startTime": "desc"},
+                    take=SPEND_LOGS_PAGINATION_COUNT_CAP,
+                    http_response=fastapi_response,
                 )
                 return data
 
@@ -2974,8 +3012,9 @@ async def view_spend_logs(
             )
 
             if isinstance(response, list) and len(response) > 0 and isinstance(response[0], dict):
+                spend_rows: Final = cast(Sequence[_SpendGroupByRow], response)  # cast-ok: by/sum fix the shape
                 result: Final[dict] = {}
-                for record in response:
+                for record in spend_rows:
                     dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")
                     date = dt_object.date()
                     if date not in result:
@@ -3029,14 +3068,12 @@ async def view_spend_logs(
             if user_id is not None and isinstance(user_id, str):
                 scoped_filter["user"] = user_id
 
-            if not scoped_filter:
-                spend_logs = await prisma_client.get_data(table_name="spend", query_type="find_all")
-                return spend_logs
-
             data = await _find_spend_logs(
                 prisma_client,
                 where=scoped_filter,
                 order={"startTime": "desc"},
+                take=SPEND_LOGS_PAGINATION_COUNT_CAP,
+                http_response=fastapi_response,
             )
             return data
 

@@ -7012,6 +7012,86 @@ def test_model_has_no_cost_mapping_alias_to_a_group_priced_through_model_info_is
     assert model_has_no_cost_mapping(model="model-info-priced-alias", llm_router=router) is False
 
 
+@pytest.mark.parametrize(
+    "user_route, expected",
+    [
+        ("/internal-models/v1/chat/completions", True),
+        ("/internal-models/newly-registered-model/predict", True),
+        ("/internal-models-other/v1/chat/completions", False),
+        ("/anthropic/v1/messages", False),
+    ],
+)
+def test_team_allowed_routes_wildcard_prefix_matches_unregistered_passthrough_routes(user_route, expected):
+    """A `/prefix/*` entry in `team_allowed_routes` must cover every route under that prefix, so
+    passthrough endpoints registered after the proxy config was written are reachable without an
+    exact-route config change."""
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=user_route,
+            litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/*"]),
+        )
+        is expected
+    )
+
+
+def test_team_allowed_routes_exact_route_does_not_become_a_prefix_grant():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(team_allowed_routes=["/internal-models/model-a"])
+
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-a", litellm_proxy_roles=roles)
+        is True
+    )
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/internal-models/model-b", litellm_proxy_roles=roles)
+        is False
+    )
+
+
+def test_admin_allowed_routes_wildcard_prefix_is_honored():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(admin_allowed_routes=["/internal-models/*"])
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/internal-models/anything", litellm_proxy_roles=roles
+        )
+        is True
+    )
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_route="/other/anything", litellm_proxy_roles=roles
+        )
+        is False
+    )
+
+
+def test_team_allowed_routes_named_route_group_still_resolves():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    roles = LiteLLM_JWTAuth(team_allowed_routes=["openai_routes"])
+
+    assert (
+        allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM, user_route="/v1/chat/completions", litellm_proxy_roles=roles
+        )
+        is True
+    )
+    assert (
+        allowed_routes_check(user_role=LitellmUserRoles.TEAM, user_route="/key/generate", litellm_proxy_roles=roles)
+        is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_clears_both_membership_cache_keys():
     """A team-member budget reset (new_spend passed) must SET the spend counter to the reset
@@ -7314,3 +7394,57 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
     assert (
         local_spend_counter_cache.in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0
     ), "the handler's self-delivered broadcast erased the post-reset floor marker, reopening the stale-floor race"
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_key_object_is_best_effort_when_the_cache_backend_fails(caplog):
+    """
+    LIT-5898: `_delete_cache_key_object` must not propagate a cache-backend error.
+
+    Every caller runs it after its own write has committed, so a raise here turned a persisted
+    `/key/update` into `400 Authentication Error` (and `/key/block`, `/key/regenerate` into 500s)
+    for operators whose Redis ACL denies `DEL` on LiteLLM's unprefixed token-hash keys. The
+    in-memory entry is already dropped by then, so raising never made the cache less stale.
+    """
+    import logging
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+
+    hashed_token = "a" * 64
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+
+    failing_cache = MagicMock()
+    failing_cache.delete_cache = MagicMock()
+    failing_logging_obj = MagicMock()
+    failing_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
+        side_effect=Exception("No permissions to access a key")
+    )
+
+    await _delete_cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_cache=failing_cache,
+        proxy_logging_obj=failing_logging_obj,
+    )
+
+    failing_cache.delete_cache.assert_called_once_with(key=hashed_token)
+    failing_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(key=hashed_token)
+    assert any("Failed to invalidate cached key entry" in record.getMessage() for record in caplog.records), (
+        "a swallowed cache-eviction failure must still be logged, or a stale auth entry goes unnoticed"
+    )
+
+    caplog.clear()
+    healthy_cache = MagicMock()
+    healthy_cache.delete_cache = MagicMock()
+    healthy_logging_obj = MagicMock()
+    healthy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
+
+    await _delete_cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_cache=healthy_cache,
+        proxy_logging_obj=healthy_logging_obj,
+    )
+
+    healthy_cache.delete_cache.assert_called_once_with(key=hashed_token)
+    healthy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(key=hashed_token)
+    assert caplog.records == [], "a healthy eviction must stay silent, and must still reach both caches"
