@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -78,6 +79,7 @@ _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+_SPEND_LOGS_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 # W3C Trace Context traceparent header: https://www.w3.org/TR/trace-context/
 # e.g. "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
@@ -995,16 +997,19 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def _get_spend_logs_metadata_from_request_headers(headers: dict) -> dict | None:
+    def get_spend_logs_metadata_from_request_headers(
+        headers: Mapping[str, object],
+    ) -> dict[str, object] | None:  # mutable-ok: request metadata is stored in a TypedDict
         """
         Get the `spend_logs_metadata` from the request headers.
         """
-        from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-
         spend_logs_metadata_header: Final = headers.get("x-litellm-spend-logs-metadata", None)
-        if spend_logs_metadata_header is not None:
-            return safe_json_loads(spend_logs_metadata_header)
-        return None
+        if not isinstance(spend_logs_metadata_header, str):
+            return None
+        try:
+            return _SPEND_LOGS_METADATA_ADAPTER.validate_json(spend_logs_metadata_header)
+        except PydanticValidationError:
+            return None
 
     @staticmethod
     def _get_forwardable_headers(
@@ -1236,7 +1241,7 @@ class LiteLLMProxyRequestSetup:
         from litellm.proxy._types import LitellmMetadataFromRequestHeaders
 
         metadata_from_headers: Final = LitellmMetadataFromRequestHeaders()
-        spend_logs_metadata: Final = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
+        spend_logs_metadata: Final = LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(headers)
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
 

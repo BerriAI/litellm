@@ -530,6 +530,79 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "header_value, expected_spend_logs_metadata",
+    [
+        pytest.param(
+            json.dumps({"my_request_id": "req_rejected_2"}),
+            {"my_request_id": "req_rejected_2"},
+            id="valid_header_overrides_body",
+        ),
+        pytest.param(
+            "{invalid-json",
+            {"source": "request-body"},
+            id="invalid_header_keeps_body",
+        ),
+        pytest.param(
+            "null",
+            {"source": "request-body"},
+            id="null_header_keeps_body",
+        ),
+    ],
+)
+async def test_budget_auth_failure_logs_spend_metadata_from_request_header(
+    header_value: str,
+    expected_spend_logs_metadata: dict[str, str],
+) -> None:
+    request_data: dict[str, object] = {
+        "model": "gpt-4o",
+        "metadata": {
+            "existing": "keep-me",
+            "spend_logs_metadata": {"source": "request-body"},
+        },
+    }
+
+    with (
+        patch(  # test-quality-ok: identity seeding is outside the failure-log payload contract
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity"
+        ),
+        patch(  # test-quality-ok: capture the exact payload sent to the spend logger
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_hook,
+        patch(  # test-quality-ok: disable the unrelated database-outage fallback
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100),
+                _http_request(
+                    headers={
+                        "x-litellm-spend-logs-metadata": header_value,
+                    }
+                ),
+                request_data,
+                "/v1/chat/completions",
+                None,
+                "sk-over-budget",
+            )
+
+    logged_request_data = mock_hook.call_args.kwargs["request_data"]
+    assert logged_request_data["metadata"]["spend_logs_metadata"] == expected_spend_logs_metadata
+    assert logged_request_data["metadata"]["existing"] == "keep-me"
+    assert request_data == {
+        "model": "gpt-4o",
+        "metadata": {
+            "existing": "keep-me",
+            "spend_logs_metadata": {"source": "request-body"},
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "auth_error, general_settings, request_kwargs, expected_ip",
     [
         pytest.param(
