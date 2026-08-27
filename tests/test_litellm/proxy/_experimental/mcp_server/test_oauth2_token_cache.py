@@ -13,6 +13,7 @@ import pytest
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPOAuth2TokenCache,
     resolve_mcp_auth,
+    resolved_token_header,
 )
 from litellm.proxy._types import MCPTransport
 from litellm.types.mcp import MCPAuth
@@ -411,3 +412,50 @@ async def test_m2m_mint_uses_admin_entered_token_url_when_issuer_yield_empties_r
 
     assert result == "m2m-token-configured"
     assert mock_client.post.call_args[0][0] == "https://auth.example.com/token"
+
+
+def _m2m_server(**overrides):
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    fields = dict(
+        server_id="s",
+        name="n",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        client_id="cid",
+        client_secret="csec",
+        token_url="https://idp.example.com/token",
+    )
+    fields.update(overrides)
+    return MCPServer(**fields)
+
+
+def test_resolved_token_header_follows_the_configured_header_for_a_gateway_resolved_token():
+    # resolve_mcp_auth mints the M2M token on this branch, so the value is the gateway's own and
+    # follows upstream_token_header.
+    assert resolved_token_header(_m2m_server(upstream_token_header="esb-oauth")) == "esb-oauth"
+
+
+def test_resolved_token_header_is_none_when_the_server_configures_nothing():
+    assert resolved_token_header(_m2m_server()) is None
+
+
+def test_a_caller_supplied_credential_never_moves():
+    # The caller aimed their own token at the slot the upstream normally uses. Relocating it would
+    # break every existing x-mcp-auth caller on a server that sets the field for its own token.
+    server = _m2m_server(upstream_token_header="esb-oauth")
+    assert resolved_token_header(server, "Bearer caller-token") is None
+    assert resolved_token_header(server, {"Authorization": "Bearer caller-token"}) is None
+
+
+def test_the_header_and_the_value_agree_on_which_branch_they_took():
+    # The two helpers are read as a pair at one call site, so they must never disagree about
+    # whether the credential came from the caller or from the server's own config.
+    import asyncio
+
+    server = _m2m_server(upstream_token_header="esb-oauth", authentication_token="static-tok")
+    caller = "Bearer caller-token"
+    assert asyncio.run(resolve_mcp_auth(server, caller)) == caller
+    assert resolved_token_header(server, caller) is None
