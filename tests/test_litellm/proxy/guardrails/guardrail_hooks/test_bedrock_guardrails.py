@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import sys
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -5537,6 +5538,69 @@ class TestBedrockGuardrailImageInput:
             )
 
         assert sent and sent[0]["source"] == "OUTPUT"
+
+    @pytest.mark.asyncio
+    async def test_oversized_image_is_rejected_before_sending(self):
+        """ApplyGuardrail caps images at 4 MB; AWS's rejection is not worth a round trip.
+
+        Built as a real data URI rather than a patched decoder so the size check runs
+        against what the decoder actually produces.
+        """
+        oversized_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (5 * 1024 * 1024)).decode()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(
+                source="INPUT",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{oversized_png}"}}
+                        ],
+                    }
+                ],
+            )
+
+        assert "4 MB limit" in str(exc_info.value.detail)
+
+    def test_bin_packing_respects_the_twenty_image_limit(self):
+        """An image measures 0 against the character budget, so count them separately."""
+        image = {"image": {"format": "png", "source": {"bytes": "AAAA"}}}
+        batches = BedrockGuardrail._bin_pack_bedrock_content([image] * 45, budget=25_000)
+        sizes = [len(batch) for batch in batches]
+        assert all(size <= 20 for size in sizes), sizes
+        assert sum(sizes) == 45, sizes
+
+    def test_bin_packing_still_splits_on_the_text_budget(self):
+        text = {"text": {"text": "x" * 20_000}}
+        batches = BedrockGuardrail._bin_pack_bedrock_content([text] * 3, budget=25_000)
+        assert [len(batch) for batch in batches] == [1, 1, 1]
+
+    @pytest.mark.asyncio
+    async def test_many_images_are_split_before_the_first_call(self):
+        """Chunking is reactive; an image-count rejection may never match the too-large check."""
+        g = self._guardrail()
+        sent: list = []
+
+        async def fake_post(content, **kwargs):
+            sent.append(sum(1 for item in content if "image" in item))
+            return {"action": "NONE", "outputs": []}
+
+        image = {"image": {"format": "png", "source": {"bytes": "AAAA"}}}
+        with patch.object(g, "_post_apply_guardrail_content_with_retry", new=fake_post):
+            await g._apply_guardrail_content_with_chunking(
+                content=[image] * 45,
+                base_request_data={},
+                credentials=None,
+                aws_region_name="us-west-2",
+                api_key=None,
+                request_data=None,
+                event_type=GuardrailEventHooks.pre_call,
+                start_time=datetime.now(timezone.utc),
+                allow_chunking=True,
+                completed_chunk_usages=[],
+            )
+        assert sent == [20, 20, 5], sent
 
     def test_masking_keeps_image_parts_in_the_request(self):
         """Masking rewrites text in place; the image must survive to reach the model."""

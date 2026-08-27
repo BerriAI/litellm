@@ -146,6 +146,17 @@ _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
 
 # ApplyGuardrail only accepts png/jpeg image blocks. Anything else (gif, webp, ...)
 # has no representation in the payload, so it cannot be scanned at all.
+# AWS's hard limits for image content filters:
+# https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-mmfilter.html
+#   4 MB per image, 20 images per request, 8000x8000, PNG/JPEG only, 25 images/second,
+#   and only the first 100 words of text inside an image are evaluated.
+# Nothing in litellm checked these. BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS is the
+# text-side quota and says nothing about images, and the strings
+# _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS matches are all text-shaped, so an image-count
+# rejection would not even reach the chunking fallback.
+_MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
+_MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL: Final = 20
+
 _APPLY_GUARDRAIL_IMAGE_FORMATS: Final[
     dict[str, BedrockGuardrailImageFormat]
 ] = {  # mutable-ok: module-level lookup table, never mutated
@@ -486,6 +497,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         image_bytes: Final = image_block.get("source", {}).get("bytes") if image_block else None
         if image_format is None or not image_bytes:
             self._handle_unscannable_image(reason="attachment is not a png/jpeg image")
+            return None
+
+        # base64 decodes to roughly 3/4 of its length; estimate rather than decode the
+        # whole image a second time just to measure it.
+        decoded_size: Final = len(image_bytes) * 3 // 4
+        if decoded_size > _MAX_IMAGE_BYTES:
+            self._handle_unscannable_image(
+                reason=f"image is {decoded_size / 1024 / 1024:.1f} MB, over ApplyGuardrail's 4 MB limit"
+            )
             return None
 
         return BedrockContentItem(
@@ -1112,7 +1132,48 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrail block on any (sub-)chunk raises immediately
         -- callers must not lose that signal by continuing to post the remaining
         chunks.
+
+        Images are the one case split up front rather than reactively. Chunking here
+        is a recovery path: the content goes out as a single call and is only
+        re-batched once AWS rejects it AND `_is_input_too_large_error` matches. Those
+        substrings ("text unit", "too long", ...) are all text-shaped, so a rejection
+        for exceeding 20 images per request may never reach this fallback at all, and
+        bisection cannot rescue it either -- `_split_bedrock_content` reads
+        `item["text"]` to halve a lone item, which is empty for an image, so it gives
+        up and re-raises the original error. Splitting before the first call keeps a
+        many-image request inside the documented limit instead.
         """
+        image_count: Final = sum(1 for item in content if "image" in item)
+        if allow_chunking and image_count > _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL:
+            preemptive_batches: Final = self._bin_pack_bedrock_content(content, budget=self.chunk_budget_chars)
+            if len(preemptive_batches) > 1:
+                verbose_proxy_logger.warning(
+                    "Bedrock Guardrail: %d image(s) exceeds ApplyGuardrail's limit of %d per request; "
+                    "splitting into %d calls before sending",
+                    image_count,
+                    _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL,
+                    len(preemptive_batches),
+                )
+                preemptive_results: Final = [  # mutable-ok: await needs a list comprehension; frozen to a tuple below
+                    await self._apply_guardrail_content_with_chunking(
+                        content=batch,
+                        base_request_data=base_request_data,
+                        credentials=credentials,
+                        aws_region_name=aws_region_name,
+                        api_key=api_key,
+                        request_data=request_data,
+                        event_type=event_type,
+                        start_time=start_time,
+                        # Safe to keep enabled: every batch _bin_pack_bedrock_content
+                        # returns holds at most 20 images, so the recursive call falls
+                        # straight through this branch and text chunking still applies.
+                        allow_chunking=allow_chunking,
+                        completed_chunk_usages=completed_chunk_usages,
+                    )
+                    for batch in preemptive_batches
+                ]
+                return tuple(result for results in preemptive_results for result in results)
+
         try:
             response: Final = await self._post_apply_guardrail_content_with_retry(
                 content=content,
@@ -1504,15 +1565,27 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not content:
             return (tuple(content),)
 
-        lengths: Final = tuple(len((item.get("text") or BedrockTextContent()).get("text") or "") for item in content)
+        # An image item has no `text`, so it measures 0 against `budget` and
+        # `used + 0 <= budget` always holds: without a second dimension every image
+        # lands in whichever batch is open, however many there are. That measurement
+        # was complete when a content item could only be text. Packing also has to
+        # respect ApplyGuardrail's limit of 20 images per request, which is a count
+        # rather than a character budget, so the two are carried separately: image
+        # bytes are deliberately not charged against `budget`, which is the text-unit
+        # quota.
+        measured: Final = tuple(
+            (len((item.get("text") or BedrockTextContent()).get("text") or ""), 1 if "image" in item else 0)
+            for item in content
+        )
 
-        def assign(carried: tuple[int, int], length: int) -> tuple[int, int]:
-            batch_index, used = carried
-            if used + length <= budget:
-                return batch_index, used + length
-            return batch_index + 1, length
+        def assign(carried: tuple[int, int, int], item: tuple[int, int]) -> tuple[int, int, int]:
+            batch_index, used, images = carried
+            length, is_image = item
+            if used + length <= budget and images + is_image <= _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL:
+                return batch_index, used + length, images + is_image
+            return batch_index + 1, length, is_image
 
-        batch_numbers: Final = (index for index, _ in tuple(accumulate(lengths, assign, initial=(0, 0)))[1:])
+        batch_numbers: Final = (index for index, _, _ in tuple(accumulate(measured, assign, initial=(0, 0, 0)))[1:])
         return tuple(
             tuple(item for _, item in group)
             for _, group in groupby(zip(batch_numbers, content), key=lambda pair: pair[0])
@@ -3294,8 +3367,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     image_message: Final = (
                         (ChatCompletionUserMessage(role="user", content=image_parts),) if image_parts else ()
                     )
+                    # `filtered_messages` is Optional; the guard above only proves one of
+                    # it and `image_urls` is truthy, so it can still be None here when the
+                    # request carries an image and no text.
                     scan_messages: Final = [  # mutable-ok: make_bedrock_api_request takes a list of messages
-                        *filtered_messages,
+                        *(filtered_messages or ()),
                         *image_message,
                     ]
                     bedrock_response = await self.make_bedrock_api_request(
