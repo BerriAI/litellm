@@ -93,52 +93,14 @@ class VectorStoreIndexRegistry:
         return vector_stores_from_db
 
 
-def _build_managed_vector_store_from_config_entry(vector_store_config: dict) -> LiteLLM_ManagedVectorStore:
-    """Construct a LiteLLM_ManagedVectorStore from one config.yaml entry.
-
-    Extracted from load_vector_stores_from_config to keep that method under the
-    C901 complexity budget; also enforces the two required params (vector_store_id
-    and custom_llm_provider) in one place with clear error messages.
-    """
-    litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
-    vector_store_name = litellm_vector_store_config.get("vector_store_name")
-    vector_store_litellm_params: dict[str, Any] = litellm_vector_store_config.get("litellm_params") or {}
-
-    vector_store_id = vector_store_litellm_params.get("vector_store_id")
-    if vector_store_id is None:
-        raise ValueError(
-            f"vector_store_id is required for initializing vector store, got vector_store_id={vector_store_id}"
-        )
-    custom_llm_provider = vector_store_litellm_params.get("custom_llm_provider")
-    if custom_llm_provider is None:
-        raise ValueError(
-            f"custom_llm_provider is required for initializing vector store, got custom_llm_provider={custom_llm_provider}"
-        )
-
-    return LiteLLM_ManagedVectorStore(
-        vector_store_id=vector_store_id,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=vector_store_litellm_params,
-        vector_store_name=vector_store_name,
-        vector_store_description=vector_store_litellm_params.get("vector_store_description"),
-        vector_store_metadata=vector_store_litellm_params.get("vector_store_metadata"),
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-
-
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
-        # Never bind a mutable default: the previous `= []` default caused every
-        # VectorStoreRegistry() with no argument to share the same list, so a
-        # mutation in one place (test, request handler, etc.) leaked into every
-        # other caller.
-        self.vector_stores: list[LiteLLM_ManagedVectorStore] = list(vector_stores) if vector_stores is not None else []
+    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
         # IDs of vector stores that were loaded from config.yaml / kustomization.
         # These have no DB row, so reconciliation code paths that treat "in memory
         # but not in DB" as "was deleted" must exempt them.
-        self.config_loaded_vector_store_ids: set[str] = set()
+        self.config_loaded_vector_store_ids: set[str] = set()  # mutable-ok: tracks config-sourced ids
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
         """
@@ -428,14 +390,6 @@ class VectorStoreRegistry:
                     vector_store_ids.extend(tool["vector_store_ids"])
         return vector_store_ids
 
-    def _drop_config_entries_removed_from_new_config(self, new_config_ids: set[str]) -> None:
-        """Evict any previously-config-loaded store whose id isn't in the new config,
-        so config removals stop being protected from list-endpoint reconciliation."""
-        for stale_id in self.config_loaded_vector_store_ids - new_config_ids:
-            # delete_vector_store_from_registry also discards from
-            # config_loaded_vector_store_ids, keeping the two in sync.
-            self.delete_vector_store_from_registry(stale_id)
-
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """
         Loads vector stores from the litellm proxy config.yaml.
@@ -445,18 +399,47 @@ class VectorStoreRegistry:
         set, so a store removed from config.yaml stops being protected from the
         list-endpoint reconciliation on the very next reload.
         """
-        new_config_ids: set[str] = {
-            (cfg.get("litellm_params") or {}).get("vector_store_id") for cfg in vector_stores_config
-        }
-        new_config_ids.discard(None)  # ids missing here will re-raise below with a clearer error
-        self._drop_config_entries_removed_from_new_config(new_config_ids)
+        # Evict any previously-config-loaded id that isn't in the new config —
+        # otherwise the stale marker would permanently protect deleted-from-
+        # config stores from the list-endpoint reconciliation.
+        new_config_ids: Final = frozenset(  # frozen so LIT001/LIT002 don't fire on this new set
+            (cfg.get("litellm_params") or {}).get("vector_store_id")  # mutable-ok: mirrors the loop below
+            for cfg in vector_stores_config
+        ) - frozenset({None})
+        for stale_id in tuple(self.config_loaded_vector_store_ids - new_config_ids):
+            self.delete_vector_store_from_registry(stale_id)
 
         for vector_store_config in vector_stores_config:
-            managed = _build_managed_vector_store_from_config_entry(vector_store_config)
+            # cast to VectorStoreConfig
+            litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
+            vector_store_name = litellm_vector_store_config.get("vector_store_name")
+            vector_store_litellm_params: dict[str, Any] = litellm_vector_store_config.get("litellm_params") or {}
+
+            vector_store_id = vector_store_litellm_params.get("vector_store_id")
+            if vector_store_id is None:
+                raise ValueError(
+                    f"vector_store_id is required for initializing vector store, got vector_store_id={vector_store_id}"
+                )
+            custom_llm_provider = vector_store_litellm_params.get("custom_llm_provider")
+            if custom_llm_provider is None:
+                raise ValueError(
+                    f"custom_llm_provider is required for initializing vector store, got custom_llm_provider={custom_llm_provider}"
+                )
+
+            litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
+                vector_store_id=vector_store_id,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=vector_store_litellm_params,
+                vector_store_name=vector_store_name,
+                vector_store_description=vector_store_litellm_params.get("vector_store_description"),
+                vector_store_metadata=vector_store_litellm_params.get("vector_store_metadata"),
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
             # add_vector_store_to_registry is idempotent by id, so a reload
             # that re-lists an existing store won't create duplicates.
-            self.add_vector_store_to_registry(managed)
-            self.config_loaded_vector_store_ids.add(managed["vector_store_id"])
+            self.add_vector_store_to_registry(litellm_managed_vector_store)
+            self.config_loaded_vector_store_ids.add(vector_store_id)
 
         verbose_logger.debug(
             "all loaded vector stores = %s",

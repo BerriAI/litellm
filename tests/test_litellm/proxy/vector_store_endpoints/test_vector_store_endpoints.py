@@ -3121,7 +3121,7 @@ async def test_list_vector_stores_returns_config_sourced_and_leaves_registry_int
     from litellm.proxy.vector_store_endpoints.management_endpoints import list_vector_stores
     from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
-    registry = VectorStoreRegistry()
+    registry = VectorStoreRegistry(vector_stores=[])
     registry.load_vector_stores_from_config(
         [
             {

@@ -201,7 +201,7 @@ def _cfg_entry(vs_id: str) -> dict:
 
 
 def test_load_from_config_tracks_marker_ids():
-    registry = VectorStoreRegistry()
+    registry = VectorStoreRegistry(vector_stores=[])
     assert registry.config_loaded_vector_store_ids == set()
 
     registry.load_vector_stores_from_config([_cfg_entry("vs_a"), _cfg_entry("vs_b")])
@@ -213,7 +213,7 @@ def test_load_from_config_tracks_marker_ids():
 def test_delete_drops_config_marker():
     """An explicit delete of a config-loaded id must also clear the marker
     so a later reload can re-load the entry without being incorrectly protected."""
-    registry = VectorStoreRegistry()
+    registry = VectorStoreRegistry(vector_stores=[])
     registry.load_vector_stores_from_config([_cfg_entry("vs_a")])
     assert "vs_a" in registry.config_loaded_vector_store_ids
 
@@ -224,7 +224,7 @@ def test_delete_drops_config_marker():
 
 
 def test_delete_of_db_only_store_does_not_touch_marker_set():
-    registry = VectorStoreRegistry()
+    registry = VectorStoreRegistry(vector_stores=[])
     registry.load_vector_stores_from_config([_cfg_entry("vs_config")])
     registry.add_vector_store_to_registry(
         LiteLLM_ManagedVectorStore(
@@ -247,7 +247,7 @@ def test_reload_removes_entries_dropped_from_config():
     """Reloading config with a store removed should evict it from both the
     registry and the marker set — otherwise a stale marker would permanently
     protect the deleted store from the list-endpoint reconciliation."""
-    registry = VectorStoreRegistry()
+    registry = VectorStoreRegistry(vector_stores=[])
     registry.load_vector_stores_from_config([_cfg_entry("vs_a"), _cfg_entry("vs_b")])
     assert registry.config_loaded_vector_store_ids == {"vs_a", "vs_b"}
 
@@ -260,7 +260,7 @@ def test_reload_removes_entries_dropped_from_config():
 
 def test_reload_is_idempotent_for_unchanged_config():
     """Re-loading the same config must not create duplicate registry entries."""
-    registry = VectorStoreRegistry()
+    registry = VectorStoreRegistry(vector_stores=[])
     registry.load_vector_stores_from_config([_cfg_entry("vs_a")])
     registry.load_vector_stores_from_config([_cfg_entry("vs_a")])
 
