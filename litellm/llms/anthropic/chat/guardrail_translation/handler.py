@@ -677,12 +677,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract tool names from Anthropic messages request (tools[].name)."""
-        names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
-            if isinstance(tool, dict) and tool.get("name"):
-                names.append(str(tool["name"]))
-        return names
+        """Extract tool names from Anthropic messages request (tools[].name, or
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim)."""
+        return [name for tool in data.get("tools") or [] if (name := anthropic_tool_name(tool))]
 
     @classmethod
     def _extract_input_text_and_images(

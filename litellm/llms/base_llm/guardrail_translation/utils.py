@@ -210,8 +210,16 @@ def openai_tool_name(tool: object) -> str | None:
 
 
 def anthropic_tool_name(tool: object) -> str | None:
-    name: Final = tool.get("name") if isinstance(tool, dict) else None
-    return name if isinstance(name, str) else None
+    """Anthropic tools carry a flat ``name``; an OpenAI-format function tool, which the
+    non-Anthropic bridge forwards verbatim, carries it under ``function.name`` instead."""
+    if not isinstance(tool, dict):
+        return None
+    flat_name: Final = tool.get("name")
+    if isinstance(flat_name, str):
+        return flat_name
+    function: Final = tool.get("function") if tool.get("type") == "function" else None
+    function_name: Final = function.get("name") if isinstance(function, dict) else None
+    return function_name if isinstance(function_name, str) else None
 
 
 def merge_returned_tools_into_request_tools(
