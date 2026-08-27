@@ -210,16 +210,24 @@ def _deltas(result: StreamingResponse) -> list[_StreamDelta]:
     ]
 
 
-def _single_weather_call(message: OutMessage) -> ToolCall:
-    assert message.tool_calls, f"Together dropped the tool call: {message}"
-    assert len(message.tool_calls) == 1, f"expected one tool call, got {message.tool_calls}"
-    call = message.tool_calls[0]
+def _validated_weather_call_id(call: ToolCall) -> str:
     assert call.id, f"tool call carries no id, so a tool result cannot answer it: {call}"
     assert call.function.name == "get_weather", f"wrong tool called: {call}"
     assert call.function.arguments, f"tool call carries no arguments: {call}"
     args = _WeatherArgs.model_validate_json(call.function.arguments)
     assert "paris" in args.location.lower(), f"tool arguments lost the location: {args}"
-    return call
+    return call.id
+
+
+def _weather_call_ids(message: OutMessage) -> tuple[str, ...]:
+    """The id of every tool call the model made, each one checked for the fields a
+    caller needs to answer it. The backend is whichever together_ai row is cheapest
+    with tools and reasoning, and those rows carry supports_parallel_function_calling,
+    so one weather prompt can legitimately come back as several get_weather calls.
+    What the gateway owes us is that each call survives translation intact; how many
+    the model chose to make is the model's business."""
+    assert message.tool_calls, f"Together dropped the tool call: {message}"
+    return tuple(_validated_weather_call_id(call) for call in message.tool_calls)
 
 
 def _weather_call(client: PassthroughClient, key: str, model: str) -> OutMessage:
@@ -289,7 +297,7 @@ class TestTogetherChatCompletions:
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
         model, key = _register(client, resources, reasoning_tool_backend)
-        _single_weather_call(_weather_call(client, key, model))
+        _ = _weather_call_ids(_weather_call(client, key, model))
 
     @pytest.mark.covers("llm.chat_completions.together_ai.tool_use.stream.works")
     def test_tool_call_is_streamed(
@@ -328,8 +336,7 @@ class TestTogetherChatCompletions:
     ) -> None:
         model, key = _register(client, resources, reasoning_tool_backend)
         first = _weather_call(client, key, model)
-        call = _single_weather_call(first)
-        assert call.id is not None
+        call_ids = _weather_call_ids(first)
 
         answer = _message(
             unwrap(
@@ -344,7 +351,10 @@ class TestTogetherChatCompletions:
                                 reasoning_content=first.reasoning_content,
                                 tool_calls=first.tool_calls,
                             ),
-                            ChatToolResultTurn(tool_call_id=call.id, content=WEATHER_REPORT),
+                            *(
+                                ChatToolResultTurn(tool_call_id=call_id, content=WEATHER_REPORT)
+                                for call_id in call_ids
+                            ),
                         ],
                         tools=[WEATHER_TOOL],
                         max_tokens=512,
@@ -470,9 +480,18 @@ def _tool_use_blocks(content: list[AnthropicContentBlock] | None) -> list[Anthro
     return [block for block in content if block.type == "tool_use"]
 
 
+def _validated_tool_use_id(block: AnthropicContentBlock) -> str:
+    assert block.name == "get_weather", f"wrong tool called: {block}"
+    assert block.id, f"tool_use block carries no id, so a tool_result cannot answer it: {block}"
+    return block.id
+
+
 def _messages_weather_call(
     client: PassthroughClient, key: str, model: str
-) -> tuple[list[AnthropicContentBlock], AnthropicContentBlock]:
+) -> tuple[list[AnthropicContentBlock], tuple[str, ...]]:
+    """The blocks /v1/messages returned and the id of every tool_use among them. The
+    count is the model's choice (see _weather_call_ids); what this surface owes us is
+    that each tool_use arrives named and addressable."""
     response = unwrap(
         client.proxy.messages(
             key,
@@ -485,12 +504,9 @@ def _messages_weather_call(
         )
     )
     tool_uses = _tool_use_blocks(response.content)
-    assert len(tool_uses) == 1, f"expected one tool_use block, got {response.content}"
-    block = tool_uses[0]
-    assert block.name == "get_weather", f"wrong tool called: {block}"
-    assert block.id, f"tool_use block carries no id, so a tool_result cannot answer it: {block}"
+    assert tool_uses, f"/v1/messages carried no tool_use block: {response.content}"
     assert response.content is not None
-    return response.content, block
+    return response.content, tuple(_validated_tool_use_id(block) for block in tool_uses)
 
 
 class TestTogetherMessages:
@@ -506,8 +522,7 @@ class TestTogetherMessages:
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:
         model, key = _register(client, resources, reasoning_tool_backend)
-        first_content, block = _messages_weather_call(client, key, model)
-        assert block.id is not None
+        first_content, tool_use_ids = _messages_weather_call(client, key, model)
 
         response = unwrap(
             client.proxy.messages(
@@ -520,7 +535,10 @@ class TestTogetherMessages:
                         ChatMessage(role="user", content=WEATHER_PROMPT),
                         AnthropicAssistantTurn(content=first_content),
                         AnthropicToolResultTurn(
-                            content=[AnthropicToolResultBlock(tool_use_id=block.id, content=WEATHER_REPORT)]
+                            content=[
+                                AnthropicToolResultBlock(tool_use_id=tool_use_id, content=WEATHER_REPORT)
+                                for tool_use_id in tool_use_ids
+                            ]
                         ),
                     ],
                 ),
