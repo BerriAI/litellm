@@ -2510,6 +2510,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
+    model_list_healthy_only: bool | None = Field(
+        None,
+        description=(
+            "When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing "
+            "deployments are all unhealthy, for every caller, without needing `healthy_only=true` "
+            "per request. Requires `background_health_checks: true`, and keeps deployment health "
+            "state cached without turning on `enable_health_check_routing`, so routing is "
+            "unaffected. With no health state nothing is hidden. Hiding is presentation-only, a "
+            "hidden model can still be called."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",

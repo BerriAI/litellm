@@ -8152,6 +8152,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -8605,9 +8614,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -17935,6 +17948,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -17992,9 +18014,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -24263,6 +24289,11 @@ export interface components {
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
             mcp_xff_num_trusted_hops?: number | null;
+            /**
+             * Model List Healthy Only
+             * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
+             */
+            model_list_healthy_only?: boolean | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -47643,6 +47674,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -59623,6 +59655,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
