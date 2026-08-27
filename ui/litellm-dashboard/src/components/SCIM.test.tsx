@@ -4,11 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../tests/test-utils";
 import SCIMConfig from "./SCIM";
-import { keyCreateCall } from "./networking";
+import { getScimSettings, keyCreateCall, updateScimSettings } from "./networking";
 import { toast } from "@/lib/toast";
 
 vi.mock("./networking", () => ({
   keyCreateCall: vi.fn(),
+  getScimSettings: vi.fn(),
+  updateScimSettings: vi.fn(),
 }));
 
 vi.mock("@/lib/toast", () => ({
@@ -30,6 +32,7 @@ const renderSCIM = (props?: { accessToken?: string | null; userID?: string | nul
 describe("SCIMConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getScimSettings).mockResolvedValue({ values: { organization_mappings: [] } });
   });
 
   it("sends exactly the SCIM key payload when a token name is submitted", async () => {
@@ -133,5 +136,53 @@ describe("SCIMConfig", () => {
     renderSCIM();
 
     expect(screen.getByDisplayValue("https://proxy.example.com/scim/v2")).toBeInTheDocument();
+  });
+
+  it("loads saved organization mappings into the editor", async () => {
+    vi.mocked(getScimSettings).mockResolvedValue({
+      values: {
+        organization_mappings: [{ group_display_name_pattern: "Engineering-.*", organization_id: "org-eng" }],
+      },
+    });
+    renderSCIM();
+
+    expect(await screen.findByDisplayValue("Engineering-.*")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("org-eng")).toBeInTheDocument();
+  });
+
+  it("saves exactly the edited organization mappings", async () => {
+    vi.mocked(updateScimSettings).mockResolvedValue({});
+    const user = userEvent.setup();
+    renderSCIM();
+
+    await user.click(screen.getByRole("button", { name: /add mapping/i }));
+    fireEvent.change(screen.getByLabelText("Group display name pattern"), {
+      target: { value: "Engineering-.*" },
+    });
+    fireEvent.change(screen.getByLabelText("Organization ID"), { target: { value: "org-eng" } });
+    await user.click(screen.getByRole("button", { name: /save mappings/i }));
+
+    await waitFor(() => {
+      expect(updateScimSettings).toHaveBeenCalledWith(ACCESS_TOKEN, {
+        organization_mappings: [{ group_display_name_pattern: "Engineering-.*", organization_id: "org-eng" }],
+      });
+    });
+    expect(toast.success).toHaveBeenCalledWith("SCIM organization mappings saved");
+  });
+
+  it("blocks saving a mapping with an empty field", async () => {
+    const user = userEvent.setup();
+    renderSCIM();
+
+    await user.click(screen.getByRole("button", { name: /add mapping/i }));
+    fireEvent.change(screen.getByLabelText("Group display name pattern"), {
+      target: { value: "Engineering-.*" },
+    });
+    await user.click(screen.getByRole("button", { name: /save mappings/i }));
+
+    await waitFor(() => {
+      expect(toast.fromError).toHaveBeenCalledWith("Each mapping needs both a group name pattern and an organization ID");
+    });
+    expect(updateScimSettings).not.toHaveBeenCalled();
   });
 });
