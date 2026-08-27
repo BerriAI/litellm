@@ -29938,6 +29938,11 @@ export interface components {
              */
             presidio_ad_hoc_recognizers?: string | null;
             /**
+             * Presidio Analyze Chunk Size Bytes
+             * @description Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. Longer texts are split into overlapping chunks of at most this size and the merged results are remapped onto the original text. Defaults to 500000; set it below your analyzer deployment's request body limit, leaving headroom for the rest of the analyze payload.
+             */
+            presidio_analyze_chunk_size_bytes?: number | null;
+            /**
              * Presidio Analyzer Api Base
              * @description Base URL for the Presidio analyzer API
              */
