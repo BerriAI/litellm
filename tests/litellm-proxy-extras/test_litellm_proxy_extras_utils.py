@@ -625,3 +625,59 @@ class TestPartitionedSpendLogsPushGuard:
         with pytest.raises(RuntimeError) as err:
             ProxyExtrasDBManager._setup_database_v2(use_migrate=False)
         assert str(err.value) == PARTITIONED_SPEND_LOGS_PUSH_ERROR
+
+
+class _FakeCursor:
+    def fetchone(self):
+        return (1,)
+
+
+class _FakePsycopgConn:
+    def __init__(self, executed):
+        self._executed = executed
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, query, params):
+        self._executed.append((query, params))
+        return _FakeCursor()
+
+
+class TestSpendLogsPartitionDetectionSchemaScope:
+    """A same-named LiteLLM_SpendLogs in another schema must not trip the
+    detector: the catalog lookup has to be scoped to Prisma's target schema."""
+
+    def _detect(self, monkeypatch, database_url):
+        import sys
+        import types
+
+        executed = []
+        fake_psycopg = types.ModuleType("psycopg")
+        fake_psycopg.connect = lambda url, **kwargs: _FakePsycopgConn(executed)
+        fake_psycopg.OperationalError = type("OperationalError", (Exception,), {})
+        fake_psycopg.DatabaseError = type("DatabaseError", (Exception,), {})
+        monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        assert ProxyExtrasDBManager.spend_logs_is_partitioned() is True
+        return executed[0]
+
+    def test_lookup_is_scoped_to_the_schema_url_param(self, monkeypatch):
+        query, params = self._detect(
+            monkeypatch, "postgresql://u:p@localhost:5432/db?schema=tenant_a"
+        )
+        assert "pg_namespace" in query
+        assert 'n.nspname = COALESCE(%s, current_schema())' in query
+        assert params == ("tenant_a",)
+
+    def test_lookup_falls_back_to_current_schema_without_a_schema_param(self, monkeypatch):
+        query, params = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db")
+        assert "current_schema()" in query
+        assert params == (None,)
+
+    def test_only_partitioned_relations_match(self, monkeypatch):
+        query, _ = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db")
+        assert "pg_partitioned_table" in query

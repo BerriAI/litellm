@@ -500,8 +500,9 @@ class ProxyExtrasDBManager:
     @staticmethod
     def spend_logs_is_partitioned() -> bool:
         """True when the connected database's LiteLLM_SpendLogs is a
-        partitioned table (relkind 'p'), i.e. the operator ran
-        db_scripts/partition_spend_logs.sql. Returns False when psycopg is
+        partitioned table in Prisma's target schema (the `schema` URL param,
+        falling back to the connection's current_schema()), i.e. the operator
+        ran db_scripts/partition_spend_logs.sql. Returns False when psycopg is
         unavailable or the database cannot be reached, preserving the
         pre-existing behavior in those cases."""
         database_url = os.getenv("DATABASE_URL")
@@ -519,12 +520,28 @@ class ProxyExtrasDBManager:
                 cleaned_url, connect_timeout=10, autocommit=True
             ) as conn:
                 row = conn.execute(
-                    "SELECT 1 FROM pg_class "
-                    "WHERE relname = 'LiteLLM_SpendLogs' AND relkind = 'p'"
+                    "SELECT 1 "
+                    "FROM pg_partitioned_table pt "
+                    "JOIN pg_class c ON c.oid = pt.partrelid "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE c.relname = 'LiteLLM_SpendLogs' "
+                    "  AND n.nspname = COALESCE(%s, current_schema())",
+                    (ProxyExtrasDBManager._prisma_schema_param(database_url),),
                 ).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return False
         return row is not None
+
+    @staticmethod
+    def _prisma_schema_param(url: str) -> Optional[str]:
+        """The `schema` query param Prisma uses to pick its target schema,
+        or None when the URL does not set one."""
+        from urllib.parse import urlparse, parse_qsl
+
+        return next(
+            (v for k, v in parse_qsl(urlparse(url).query) if k == "schema"),
+            None,
+        )
 
     @staticmethod
     def _strip_prisma_query_params(url: str) -> str:
