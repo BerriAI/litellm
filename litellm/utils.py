@@ -8503,6 +8503,12 @@ class ProviderConfigManager:
             )
 
             return VertexAIAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.audio_transcription.transformation import (
+                GeminiAudioTranscriptionConfig,
+            )
+
+            return GeminiAudioTranscriptionConfig()
         return None
 
     @staticmethod
