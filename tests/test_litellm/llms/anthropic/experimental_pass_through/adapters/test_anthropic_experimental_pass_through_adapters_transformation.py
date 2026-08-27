@@ -1986,8 +1986,13 @@ def test_adaptive_thinking_output_config_effort_preserved_for_claude_model(model
     backend. On Bedrock Converse, adaptive thinking without effort streams zero reasoning
     blocks. The `format` subkey must still be excluded (it is translated to
     `response_format` separately).
+
+    Bedrock keeps taking the tier as `output_config`, which attaches it without disturbing
+    `thinking`. Driving the translated request through the provider's own param mapping is what
+    makes the second half a claim about the wire rather than about an intermediate key.
     """
     from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
 
     anthropic_request = AnthropicMessagesRequest(
         model=model,
@@ -2005,7 +2010,17 @@ def test_adaptive_thinking_output_config_effort_preserved_for_claude_model(model
 
     assert openai_request["thinking"] == {"type": "adaptive"}
     assert openai_request["output_config"] == {"effort": "max"}
+    assert "reasoning_effort" not in openai_request
     assert "response_format" in openai_request
+
+    on_the_wire = get_optional_params(
+        model=model,
+        custom_llm_provider="bedrock",
+        thinking=openai_request["thinking"],
+        output_config=openai_request["output_config"],
+    )
+
+    assert on_the_wire["output_config"] == {"effort": "max"}
 
 
 def test_adaptive_thinking_format_only_output_config_not_forwarded_for_claude_model():
@@ -2029,9 +2044,12 @@ def test_adaptive_thinking_format_only_output_config_not_forwarded_for_claude_mo
 
 
 def test_adaptive_thinking_output_config_not_forwarded_for_non_bedrock_claude_model():
-    """`output_config` is forwarded only for Bedrock-destined Claude models. Other
-    Claude-through-bridge providers (e.g. openrouter) accept `thinking` but reject a raw
-    `output_config` param with UnsupportedParamsError when drop_params is off."""
+    """`output_config` is never forwarded raw to a bridged provider: openrouter and friends accept
+    `thinking` but reject that param with UnsupportedParamsError when drop_params is off.
+
+    Regression: the tier used to be dropped along with it, so an openrouter Claude deployment got a
+    bare adaptive `thinking` block and the caller's effort did nothing, byte-identical for `max` and
+    `minimal`. It now travels as `reasoning_effort`, which that provider does accept."""
     from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
     anthropic_request = AnthropicMessagesRequest(
@@ -2047,6 +2065,68 @@ def test_adaptive_thinking_output_config_not_forwarded_for_non_bedrock_claude_mo
 
     assert openai_request["thinking"] == {"type": "adaptive"}
     assert "output_config" not in openai_request
+    assert openai_request["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh", "max"])
+def test_every_adaptive_effort_tier_reaches_a_bridged_claude_target(effort):
+    """The tier the caller asked for is the tier the bridge carries, for every level. The bug was
+    invisible per-request because each call returned 200; only comparing two tiers showed the
+    upstream body was the same either way."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="openrouter/anthropic/claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": effort},
+        )
+    )
+
+    assert openai_request["reasoning_effort"] == effort
+
+
+def test_adaptive_thinking_without_a_tier_leaves_a_claude_target_on_its_own_default():
+    """Adaptive with no `output_config.effort` must stay bare, so the provider's own adaptive
+    default still decides. Inventing a tier here would silently override it."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="openrouter/anthropic/claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+        )
+    )
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert "reasoning_effort" not in openai_request
+    assert "output_config" not in openai_request
+
+
+def test_budgeted_thinking_on_a_claude_target_keeps_its_budget_and_gains_no_tier():
+    """`enabled` + `budget_tokens` is more precise than any tier, so the bridge must forward it
+    untouched rather than coarsening it into a `reasoning_effort` bucket."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="openrouter/anthropic/claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "enabled", "budget_tokens": 8000},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+    assert "reasoning_effort" not in openai_request
 
 
 def test_stop_sequences_translated_to_stop_for_non_claude_model():
@@ -4092,3 +4172,161 @@ def test_completion_cost_on_translated_anthropic_response_includes_web_search():
     ]
     assert per_query_cost > 0
     assert cost_with_search - cost_without_search == pytest.approx(2 * per_query_cost)
+
+
+@pytest.mark.parametrize(
+    "model, provider, carried",
+    [
+        ("databricks/databricks-claude-opus-4-7", "databricks", "max"),
+        ("openrouter/anthropic/claude-opus-4-7", "openrouter", "xhigh"),
+    ],
+)
+def test_a_summary_bearing_adaptive_request_still_delivers_its_tier(model, provider, carried):
+    """The summary rides inside the forwarded `thinking` block for a Claude target, so the tier must
+    stay a plain string. Wrapping it into `{"effort": ..., "summary": ...}` made databricks raise
+    `Invalid reasoning_effort` and made bedrock drop `output_config` altogether, losing the tier on
+    exactly the path this translator exists to serve.
+
+    Each case names the exact tier that provider ends up sending, not merely that something arrived:
+    bedrock and databricks rebuild `output_config`, and openrouter applies its own max to xhigh
+    remap, so asserting presence alone would pass on a mapping that silently changed the tier."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "summary": "detailed"},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["reasoning_effort"] == "max"
+
+    on_the_wire = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        thinking=openai_request["thinking"],
+        reasoning_effort=openai_request["reasoning_effort"],
+    )
+    on_the_wire_tier = on_the_wire.get("output_config", {}).get("effort") or on_the_wire.get("reasoning_effort")
+
+    assert on_the_wire_tier == carried
+
+
+ARN_MODEL = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+
+
+def test_an_inference_profile_arn_keeps_taking_its_tier_as_output_config():
+    """Regression: an ARN contains neither `anthropic` nor `claude`, so it reaches this branch only
+    through `is_bedrock_arn_model`. Bedrock resolves no chat config for one, so `reasoning_effort`
+    is dropped there and the tier vanishes; `output_config` is what survives."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model=ARN_MODEL,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["output_config"] == {"effort": "max"}
+    assert "reasoning_effort" not in openai_request
+
+    on_the_wire = get_optional_params(
+        model=ARN_MODEL,
+        custom_llm_provider="bedrock",
+        thinking=openai_request["thinking"],
+        output_config=openai_request["output_config"],
+    )
+
+    assert on_the_wire["output_config"] == {"effort": "max"}
+
+
+def test_a_bedrock_target_keeps_a_caller_set_thinking_display():
+    """`output_config` attaches the tier without touching `thinking`, so a caller who asked for
+    `display: omitted` still gets it. Carrying the tier as `reasoning_effort` instead lets the
+    provider mapping rewrite that block."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    thinking = {"type": "adaptive", "display": "omitted"}
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking=thinking,
+            output_config={"effort": "max"},
+        )
+    )
+
+    on_the_wire = get_optional_params(
+        model="converse/us.anthropic.claude-opus-4-7",
+        custom_llm_provider="bedrock",
+        thinking=openai_request["thinking"],
+        output_config=openai_request["output_config"],
+    )
+
+    assert on_the_wire["thinking"] == thinking
+    assert on_the_wire["output_config"] == {"effort": "max"}
+
+
+def test_a_non_claude_target_keeps_its_summary_wrapping():
+    """The negative class: a target that gets no `thinking` block has nowhere else to put the
+    summary, so the wrapped dict is still the right shape there."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="gpt-5-mini",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "summary": "detailed"},
+            output_config={"effort": "max"},
+        )
+    )
+
+    assert openai_request["reasoning_effort"] == {"effort": "max", "summary": "detailed"}
+    assert "thinking" not in openai_request
+
+
+def test_a_databricks_target_trades_its_thinking_display_for_the_tier():
+    """The one accepted cost of carrying the tier as `reasoning_effort`: databricks rebuilds the
+    thinking block while mapping it, so a caller-set `display` is replaced. Pinned rather than left
+    silent. It only takes `output_config` when litellm sends one, which this bridge cannot do for a
+    provider whose own supported-params list omits it, so the tier is the thing worth keeping here.
+    Bedrock avoids this entirely by taking `output_config` directly."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+    from litellm.utils import get_optional_params
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=AnthropicMessagesRequest(
+            model="databricks/databricks-claude-opus-4-7",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "adaptive", "display": "omitted"},
+            output_config={"effort": "max"},
+        )
+    )
+
+    on_the_wire = get_optional_params(
+        model="databricks-claude-opus-4-7",
+        custom_llm_provider="databricks",
+        thinking=openai_request["thinking"],
+        reasoning_effort=openai_request["reasoning_effort"],
+    )
+
+    assert on_the_wire["output_config"] == {"effort": "max"}
+    assert on_the_wire["thinking"]["display"] == "summarized"
