@@ -4723,7 +4723,9 @@ class ProxyConfig:
         if not isinstance(raw_params, dict):
             raise ValueError("general_settings.coordination_redis must be a mapping of Redis connection params")
 
-        coordination_params: Final = CoordinationRedisParams.model_validate(_resolve_coordination_redis_env_refs(raw_params))
+        coordination_params: Final = CoordinationRedisParams.model_validate(
+            _resolve_coordination_redis_env_refs(raw_params)
+        )
         if not coordination_params.has_connection_target():
             raise ValueError(
                 "general_settings.coordination_redis needs a connection target: "
@@ -8974,7 +8976,9 @@ class ProxyStartupEvent:
         if persisted is None:
             return None
 
-        coordination_params: Final = CoordinationRedisParams.model_validate(_resolve_coordination_redis_env_refs(persisted))
+        coordination_params: Final = CoordinationRedisParams.model_validate(
+            _resolve_coordination_redis_env_refs(persisted)
+        )
         if not coordination_params.has_connection_target():
             verbose_proxy_logger.warning(
                 "coordination_redis saved in the database names no connection target; ignoring it."
