@@ -16,7 +16,6 @@ def test_friendli_glm_5_3_flash_model_info():
     ), f"{model} not found in model_prices_and_context_window.json"
     assert info["litellm_provider"] == "friendliai"
     assert info["mode"] == "chat"
-    # $0.15 / $0.50 per MTok, $0.03 cached input (per Friendli /v1/models)
     assert info["input_cost_per_token"] == 1.5e-07
     assert info["output_cost_per_token"] == 5e-07
     assert info["cache_read_input_token_cost"] == 3e-08
@@ -24,13 +23,13 @@ def test_friendli_glm_5_3_flash_model_info():
     assert info["max_output_tokens"] == 1048576
     assert info["supports_function_calling"] is True
     assert info["supports_reasoning"] is True
-    # chat_template.jinja accepts reasoning_effort in {"low", "high"} and defaults to "max"
     assert info["supports_low_reasoning_effort"] is True
     assert info["supports_max_reasoning_effort"] is True
     assert info["supports_tool_choice"] is True
-    # vision-capable checkpoint; Friendli serves image input
+    # Friendli serves image and video input
     assert info["supports_vision"] is True
     assert info["supports_image_input"] is True
+    assert info["supports_video_input"] is True
 
     routed_model, provider, _, _ = get_llm_provider(model=model)
     assert routed_model == "zai-org/GLM-5.3-Flash"
