@@ -668,6 +668,15 @@ class LakeraAIGuardrail(CustomGuardrail):
                 _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
                 verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
             elif self.on_flagged == "inject_system_message":
+                if _breakdown_has_pii_violation(lakera_guardrail_response) and is_multimodal_input:
+                    # Same as async_pre_call_hook: there's PII in the mix and
+                    # nothing here can be safely masked, so allowing it through
+                    # unprotected would be worse than blocking. Unlike mutating
+                    # data["messages"] below, raising still blocks the response
+                    # from reaching the caller even though during_call races with
+                    # the LLM dispatch -- same mechanism on_flagged="block" already
+                    # relies on for this hook.
+                    raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
                 if _breakdown_has_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
                     # A mixed violation (PII plus something else): mask whatever's
                     # maskable even though the advisory note below has no effect

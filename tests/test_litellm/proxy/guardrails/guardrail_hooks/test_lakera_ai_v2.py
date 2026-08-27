@@ -1370,6 +1370,46 @@ class TestAdvisoryModeWiring:
         assert result["messages"][0]["content"] != original_content
         assert len(result["messages"]) == 1, "no advisory note is appended during during_call"
 
+    @pytest.mark.asyncio
+    async def test_moderation_hook_blocks_instead_of_advisory_when_pii_is_not_maskable(self):
+        """
+        Greptile finding (P1, security) on BerriAI/litellm#34940: a PII violation
+        on input that can't be safely masked (combined messages+input) fell
+        through to the during_call no-op branch and let raw, unredacted PII reach
+        the model with no protection at all. async_pre_call_hook already degrades
+        to blocking for this exact case (see
+        test_pre_call_blocks_instead_of_advisory_when_pii_is_not_maskable) --
+        async_moderation_hook must too, since raising here still blocks the
+        response from reaching the caller (same mechanism on_flagged="block"
+        already relies on), unlike mutating data["messages"] which races with
+        the concurrent LLM dispatch.
+        """
+        lakera_guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        mock_response = {
+            "flagged": True,
+            "payload": [{"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 0}],
+            "breakdown": [{"detector_type": "pii/email", "detected": True}],
+        }
+
+        with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (mock_response, {})
+            data = {
+                "messages": [{"role": "user", "content": "My email is test@example.com"}],
+                "input": "responses-api content",
+                "model": "gpt-5-mini",
+                "metadata": {},
+            }
+            with pytest.raises(HTTPException):
+                await lakera_guardrail.async_moderation_hook(
+                    data=data,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    call_type="completion",
+                )
+
+        assert data["messages"][0]["content"] == "My email is test@example.com", (
+            "the raw content must be untouched, not partially rewritten before the block"
+        )
+
 
 class TestAdvisoryModePostCall:
     """
