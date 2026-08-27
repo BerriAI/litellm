@@ -17,7 +17,7 @@ from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
-from litellm.types.utils import ModelResponse, TextCompletionResponse
+from litellm.types.utils import ModelResponse, TextCompletionResponse, Usage
 
 
 @pytest.fixture
@@ -278,6 +278,54 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
         ), f"Expected {expected_cost}, got {cost}"
     finally:
         litellm.model_cost.pop(custom_model_id, None)
+
+
+def test_response_cost_calculator_unknown_anthropic_model_uses_litellm_params_rates():
+    """Native /v1/messages cost calc should apply deployment rates for an
+    unmapped anthropic model. Do not register_model — that is the
+    completions-only workaround and is not the /messages path.
+    Regression for #25204.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    unknown_model = "litellm-unmapped-custom-priced-qwen"
+    input_cost = 1.2e-05
+    output_cost = 3.6e-05
+
+    logging_obj = LiteLLMLoggingObj(
+        model=unknown_model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-messages-custom-pricing",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=unknown_model,
+        user="",
+        optional_params={},
+        litellm_params={
+            "custom_llm_provider": "anthropic",
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        },
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    response_obj = ModelResponse(
+        id="msg_test",
+        model=unknown_model,
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+    )
+
+    cost = logging_obj._response_cost_calculator(result=response_obj)
+
+    assert cost is not None
+    expected_cost = (100 * input_cost) + (20 * output_cost)
+    assert cost == pytest.approx(expected_cost)
+    assert cost > 0
 
 
 class TestGetRouterModelId:

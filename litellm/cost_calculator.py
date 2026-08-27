@@ -236,6 +236,70 @@ def _cost_per_token_custom_pricing_helper(
     return None
 
 
+def extract_custom_cost_per_token(
+    litellm_params: object | None,
+) -> CostPerToken | None:
+    """Return deployment token rates from litellm_params when both input and output are set.
+
+    Rates may sit on litellm_params itself (UI / model_list) or under
+    metadata.model_info / litellm_metadata.model_info (/v1/messages, /v1/responses).
+    Optional cache rates are copied when present so the custom-pricing helper can
+    apply them instead of falling back to the input rate.
+    """
+    if litellm_params is None:
+        return None
+    if not isinstance(litellm_params, dict):
+        dump = getattr(litellm_params, "model_dump", None)
+        if not callable(dump):
+            return None
+        dumped = dump()
+        if not isinstance(dumped, dict):
+            return None
+        litellm_params = dumped
+
+    def _from_mapping(source: object) -> CostPerToken | None:
+        if not isinstance(source, dict):
+            return None
+        input_cost = source.get("input_cost_per_token")
+        output_cost = source.get("output_cost_per_token")
+        if input_cost is None or output_cost is None:
+            return None
+        result: CostPerToken = {
+            "input_cost_per_token": float(input_cost),
+            "output_cost_per_token": float(output_cost),
+        }
+        cache_read = source.get("cache_read_input_token_cost")
+        if cache_read is not None:
+            result["cache_read_input_token_cost"] = float(cache_read)
+        cache_creation = source.get("cache_creation_input_token_cost")
+        if cache_creation is not None:
+            result["cache_creation_input_token_cost"] = float(cache_creation)
+        return result
+
+    from_top = _from_mapping(litellm_params)
+    if from_top is not None:
+        return from_top
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_key) or {}
+        from_info = _from_mapping(metadata.get("model_info") if isinstance(metadata, dict) else None)
+        if from_info is not None:
+            return from_info
+    return None
+
+
+def _custom_cost_per_token_from_logging_obj(
+    litellm_logging_obj: LitellmLoggingObject | None,
+) -> CostPerToken | None:
+    if litellm_logging_obj is None:
+        return None
+    extracted = extract_custom_cost_per_token(getattr(litellm_logging_obj, "litellm_params", None))
+    if extracted is not None:
+        return extracted
+    details = getattr(litellm_logging_obj, "model_call_details", None) or {}
+    nested = details.get("litellm_params") if isinstance(details, dict) else None
+    return extract_custom_cost_per_token(nested)
+
+
 def _get_additional_costs(
     model: str,
     custom_llm_provider: str | None,
@@ -1209,6 +1273,9 @@ def completion_cost(
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
+        if custom_cost_per_token is None:
+            custom_cost_per_token = _custom_cost_per_token_from_logging_obj(litellm_logging_obj)
+
         call_type = _infer_call_type(call_type, completion_response) or "completion"
 
         if (

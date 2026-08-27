@@ -13,6 +13,7 @@ from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
+    extract_custom_cost_per_token,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
@@ -951,6 +952,163 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
         router_model_id=custom_model_id,
     )
     assert custom_model_id not in (selected_model_no_custom or "")
+
+
+def test_extract_custom_cost_per_token_from_litellm_params_and_model_info():
+    assert extract_custom_cost_per_token(None) is None
+    assert extract_custom_cost_per_token({"input_cost_per_token": 1.2e-05}) is None
+    assert extract_custom_cost_per_token(
+        {
+            "input_cost_per_token": 1.2e-05,
+            "output_cost_per_token": 3.6e-05,
+            "cache_read_input_token_cost": 1.2e-06,
+        }
+    ) == {
+        "input_cost_per_token": 1.2e-05,
+        "output_cost_per_token": 3.6e-05,
+        "cache_read_input_token_cost": 1.2e-06,
+    }
+    assert extract_custom_cost_per_token(
+        {
+            "litellm_metadata": {
+                "model_info": {
+                    "id": "deploy-1",
+                    "input_cost_per_token": 0.0003,
+                    "output_cost_per_token": 0.0015,
+                },
+            },
+        }
+    ) == {
+        "input_cost_per_token": 0.0003,
+        "output_cost_per_token": 0.0015,
+    }
+
+
+def test_completion_cost_unknown_anthropic_model_uses_litellm_params_rates():
+    """Unknown anthropic models logged $0 on /v1/messages even when the
+    deployment set input/output rates in litellm_params.
+
+    The public price map has no entry, so provider dispatch must not run
+    before custom_cost_per_token is applied. Regression for #25204.
+    """
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    unknown_model = "litellm-unmapped-custom-priced-qwen"
+    input_cost = 1.2e-05
+    output_cost = 3.6e-05
+    prompt_tokens = 100
+    completion_tokens = 20
+
+    assert unknown_model not in litellm.model_cost
+    assert f"anthropic/{unknown_model}" not in litellm.model_cost
+
+    logging_obj = LiteLLMLoggingObj(
+        model=unknown_model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-unmapped-custom-pricing",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=unknown_model,
+        user="",
+        optional_params={},
+        litellm_params={
+            "custom_llm_provider": "anthropic",
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        },
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    response = ModelResponse(
+        id="test-id",
+        model=unknown_model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model=unknown_model,
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    expected = prompt_tokens * input_cost + completion_tokens * output_cost
+    assert cost == pytest.approx(expected)
+    assert cost > 0
+
+
+def test_anthropic_passthrough_unknown_model_spend_uses_litellm_params_rates():
+    """Passthrough /v1/messages must pass the logging object into
+    completion_cost so unmapped models pick up deployment rates.
+    Regression for #25204.
+    """
+    import time
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    unknown_model = "litellm-unmapped-custom-priced-qwen"
+    input_cost = 1.2e-05
+    output_cost = 3.6e-05
+
+    logging_obj = LiteLLMLoggingObj(
+        model=unknown_model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-passthrough-custom-pricing",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=unknown_model,
+        user="",
+        optional_params={},
+        litellm_params={
+            "custom_llm_provider": "anthropic",
+            "input_cost_per_token": input_cost,
+            "output_cost_per_token": output_cost,
+        },
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    response = ModelResponse(
+        id="msg_test",
+        model=unknown_model,
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+    )
+
+    kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+        litellm_model_response=response,
+        model=unknown_model,
+        kwargs={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+    )
+
+    expected = 100 * input_cost + 20 * output_cost
+    assert kwargs["response_cost"] == pytest.approx(expected)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(
+        expected
+    )
+    assert kwargs["response_cost"] > 0
 
 
 def test_per_request_custom_pricing_with_router():
