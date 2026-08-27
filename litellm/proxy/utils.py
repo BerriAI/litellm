@@ -5941,8 +5941,8 @@ async def send_email(
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
 
-    smtp_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
     try:
+        smtp_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
         await asyncio.to_thread(
             _send_smtp_message,
             email_message=email_message,
