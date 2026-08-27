@@ -250,10 +250,10 @@ async def test_skips_for_zero_cost_model_when_over_budget():
     handler = _PROXY_MaxBudgetLimiter()
     user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
 
-    with patch(
+    with patch(  # test-quality-ok: hook resolves both collaborators as module globals, no injection seam
         "litellm.proxy.auth.auth_checks._is_model_cost_zero",
         return_value=True,
-    ), patch(
+    ), patch(  # test-quality-ok: proxy module global, no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new=AsyncMock(return_value=10.0),
     ) as mock_get_spend:
@@ -274,10 +274,10 @@ async def test_still_rejects_priced_model_when_over_budget():
     handler = _PROXY_MaxBudgetLimiter()
     user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
 
-    with patch(
+    with patch(  # test-quality-ok: hook resolves both collaborators as module globals, no injection seam
         "litellm.proxy.auth.auth_checks._is_model_cost_zero",
         return_value=False,
-    ), patch(
+    ), patch(  # test-quality-ok: proxy module global, no injection seam
         "litellm.proxy.proxy_server.get_current_spend",
         new=AsyncMock(return_value=10.0),
     ), pytest.raises(HTTPException) as exc_info:
