@@ -11,6 +11,9 @@ import litellm
 from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
+    _complete_custom_cost_per_token,
+    _custom_cost_per_token_from_logging_obj,
+    _published_token_rate,
     completion_cost,
     cost_per_token,
     extract_custom_cost_per_token,
@@ -20,6 +23,7 @@ from litellm.cost_calculator import (
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import (
     CacheCreationTokenDetails,
+    CustomPricingLiteLLMParams,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -956,7 +960,13 @@ def test_custom_pricing_cost_calc_uses_router_model_id_from_litellm_metadata():
 
 def test_extract_custom_cost_per_token_from_litellm_params_and_model_info():
     assert extract_custom_cost_per_token(None) is None
-    assert extract_custom_cost_per_token({"input_cost_per_token": 1.2e-05}) is None
+    assert extract_custom_cost_per_token({"custom_llm_provider": "anthropic"}) is None
+    assert extract_custom_cost_per_token({"input_cost_per_token": 1.2e-05}) == {
+        "input_cost_per_token": 1.2e-05,
+    }
+    assert extract_custom_cost_per_token({"output_cost_per_token": 3.6e-05}) == {
+        "output_cost_per_token": 3.6e-05,
+    }
     assert extract_custom_cost_per_token(
         {
             "input_cost_per_token": 1.2e-05,
@@ -967,6 +977,20 @@ def test_extract_custom_cost_per_token_from_litellm_params_and_model_info():
         "input_cost_per_token": 1.2e-05,
         "output_cost_per_token": 3.6e-05,
         "cache_read_input_token_cost": 1.2e-06,
+    }
+    assert extract_custom_cost_per_token(
+        {
+            "metadata": {
+                "model_info": {
+                    "id": "deploy-meta",
+                    "input_cost_per_token": 0.0002,
+                    "output_cost_per_token": 0.0008,
+                },
+            },
+        }
+    ) == {
+        "input_cost_per_token": 0.0002,
+        "output_cost_per_token": 0.0008,
     }
     assert extract_custom_cost_per_token(
         {
@@ -982,6 +1006,48 @@ def test_extract_custom_cost_per_token_from_litellm_params_and_model_info():
         "input_cost_per_token": 0.0003,
         "output_cost_per_token": 0.0015,
     }
+
+
+def test_extract_custom_cost_per_token_from_pydantic_params():
+    both_sides = CustomPricingLiteLLMParams(
+        input_cost_per_token=1.2e-05,
+        output_cost_per_token=3.6e-05,
+    )
+    assert extract_custom_cost_per_token(both_sides) == {
+        "input_cost_per_token": 1.2e-05,
+        "output_cost_per_token": 3.6e-05,
+    }
+    input_only = CustomPricingLiteLLMParams(input_cost_per_token=1.2e-05)
+    assert extract_custom_cost_per_token(input_only) == {
+        "input_cost_per_token": 1.2e-05,
+    }
+
+
+def test_extract_custom_cost_per_token_rejects_non_mapping_sources():
+    assert extract_custom_cost_per_token("not-params") is None
+    assert extract_custom_cost_per_token([1, 2]) is None
+
+    class _UncallableDump:
+        model_dump = "not-callable"
+
+    assert extract_custom_cost_per_token(_UncallableDump()) is None
+
+    class _NonDictDump:
+        def model_dump(self):
+            return ["not", "a", "mapping"]
+
+    assert extract_custom_cost_per_token(_NonDictDump()) is None
+    assert extract_custom_cost_per_token({"metadata": "not-a-dict"}) is None
+    assert extract_custom_cost_per_token({"metadata": {"model_info": "x"}}) is None
+
+
+def test_complete_custom_cost_per_token_defensive_branches(_local_model_cost_map):
+    assert _complete_custom_cost_per_token(None, model="gpt-4o-mini", custom_llm_provider="openai") is None
+    assert _complete_custom_cost_per_token({}, model="gpt-4o-mini", custom_llm_provider="openai") is None
+    assert _custom_cost_per_token_from_logging_obj(None) is None
+    assert _published_token_rate(None, "openai", "input_cost_per_token") == 0.0
+    assert _published_token_rate("", "openai", "output_cost_per_token") == 0.0
+    assert _published_token_rate("gpt-4o-mini", "openai", "this_field_does_not_exist") == 0.0
 
 
 def test_completion_cost_unknown_anthropic_model_uses_litellm_params_rates():
@@ -1109,6 +1175,175 @@ def test_anthropic_passthrough_unknown_model_spend_uses_litellm_params_rates():
         expected
     )
     assert kwargs["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        {"input_cost_per_token": 1e-06},
+        {"output_cost_per_token": 5e-06},
+    ],
+    ids=["input-only", "output-only"],
+)
+def test_completion_cost_one_sided_custom_rate_keeps_published_other_side(
+    _local_model_cost_map, declared
+):
+    """A deployment may configure only one direction.
+
+    The missing side must keep the published price-map rate, not 0.
+    """
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    model = "gpt-4o-mini"
+    published = litellm.get_model_info(model=model)
+    prompt_tokens = 100
+    completion_tokens = 20
+    input_cost = declared.get(
+        "input_cost_per_token", published["input_cost_per_token"]
+    )
+    output_cost = declared.get(
+        "output_cost_per_token", published["output_cost_per_token"]
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="test-one-sided-custom-pricing",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", **declared},
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    response = ModelResponse(
+        id="test-id",
+        model=model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+    )
+    expected = prompt_tokens * input_cost + completion_tokens * output_cost
+    assert cost == pytest.approx(expected)
+
+
+def test_completion_cost_one_sided_unknown_model_uses_zero_for_missing_side():
+    """Unmapped models have no published other-side rate, so that side is 0."""
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    unknown_model = "litellm-unmapped-custom-priced-qwen-onesided"
+    input_cost = 1.2e-05
+    prompt_tokens = 100
+    completion_tokens = 20
+
+    logging_obj = LiteLLMLoggingObj(
+        model=unknown_model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-unmapped-one-sided",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=unknown_model,
+        user="",
+        optional_params={},
+        litellm_params={
+            "custom_llm_provider": "anthropic",
+            "input_cost_per_token": input_cost,
+        },
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    response = ModelResponse(
+        id="test-id",
+        model=unknown_model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+    cost = completion_cost(
+        completion_response=response,
+        model=unknown_model,
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(prompt_tokens * input_cost)
+
+
+def test_completion_cost_reads_nested_litellm_params_from_model_call_details():
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    unknown_model = "litellm-unmapped-nested-litellm-params"
+    input_cost = 1.2e-05
+    output_cost = 3.6e-05
+    prompt_tokens = 100
+    completion_tokens = 20
+
+    logging_obj = LiteLLMLoggingObj(
+        model=unknown_model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-nested-litellm-params",
+        function_id="test-fn",
+    )
+    logging_obj.litellm_params = None
+    logging_obj.model_call_details["litellm_params"] = {
+        "custom_llm_provider": "anthropic",
+        "input_cost_per_token": input_cost,
+        "output_cost_per_token": output_cost,
+    }
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    response = ModelResponse(
+        id="test-id",
+        model=unknown_model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+    cost = completion_cost(
+        completion_response=response,
+        model=unknown_model,
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    expected = prompt_tokens * input_cost + completion_tokens * output_cost
+    assert cost == pytest.approx(expected)
 
 
 def test_per_request_custom_pricing_with_router():
