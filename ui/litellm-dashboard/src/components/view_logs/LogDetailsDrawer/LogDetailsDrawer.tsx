@@ -385,14 +385,14 @@ export function LogDetailsDrawer({
                     <>
                       <span className="mx-1.5">·</span>
                       {sessionDurationSeconds}s
-                      <span className="mx-1.5">·</span>
-                      {" "}
-                      <span className="whitespace-nowrap">
-                        {cacheHitCount}/{logsForList.length} cached
-                      </span>
                     </>
                   )}
                 </div>
+                {isSessionMode && (
+                  <div className="text-[11px] text-muted-foreground font-mono whitespace-nowrap">
+                    {cacheHitCount}/{logsForList.length} cached
+                  </div>
+                )}
                 {isSessionMode && sessionTruncated && (
                   <div className="mt-1 text-[11px] text-warning font-mono">
                     Showing most recent {logsForList.length} of {sessionTotalCount}
