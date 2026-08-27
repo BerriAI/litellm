@@ -1727,6 +1727,73 @@ def test_azure_ai_cache_cost_calculation(_local_model_cost_map):
     ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
+
+AZURE_GPT_5_6_MAP_KEYS = (
+    "azure/gpt-5.6",
+    "azure/gpt-5.6-sol",
+    "azure/gpt-5.6-terra",
+    "azure/gpt-5.6-luna",
+    "azure/us/gpt-5.6",
+    "azure/us/gpt-5.6-sol",
+    "azure/us/gpt-5.6-terra",
+    "azure/us/gpt-5.6-luna",
+    "azure/eu/gpt-5.6",
+    "azure/eu/gpt-5.6-sol",
+    "azure/eu/gpt-5.6-terra",
+    "azure/eu/gpt-5.6-luna",
+)
+
+
+def test_azure_gpt_5_6_cache_write_tokens_are_billed(_local_model_cost_map):
+    """
+    Azure bills gpt-5.6 prompt cache writes at 1.25x the input rate on every
+    tier, but the azure entries carried no ``cache_creation_input_token_cost``,
+    so cache-write tokens were billed at the plain input rate instead.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    usage = Usage(
+        completion_tokens=100,
+        prompt_tokens=2000,
+        total_tokens=2100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0, text_tokens=687),
+        cache_creation_input_tokens=1313,
+    )
+
+    input_cost, output_cost = generic_cost_per_token(
+        model="azure/gpt-5.6-luna", usage=usage, custom_llm_provider="azure"
+    )
+
+    assert input_cost == pytest.approx(687 * 2e-07 + 1313 * 2.5e-07)
+    assert output_cost == pytest.approx(100 * 1.2e-06)
+
+
+@pytest.mark.parametrize("model", AZURE_GPT_5_6_MAP_KEYS)
+def test_azure_gpt_5_6_rates_match_azure_price_page(_local_model_cost_map, model):
+    """
+    Per the Azure OpenAI price page (rendered 2026-08-26): cache writes cost
+    1.25x input on every gpt-5.6 tier, and Data Zone costs 1.1x Global for
+    standard and priority alike (us/eu priority rates previously sat at 1.25x).
+    """
+    entry = litellm.model_cost[model]
+    input_keys = [key for key in entry if key.startswith("input_cost_per_token")]
+    assert input_keys
+    for key in input_keys:
+        suffix = key[len("input_cost_per_token") :]
+        assert entry["cache_creation_input_token_cost" + suffix] == pytest.approx(entry[key] * 1.25)
+
+    zone = model.split("/")[1]
+    if zone in ("us", "eu"):
+        global_entry = litellm.model_cost["azure/" + model.split("/", 2)[2]]
+        prefixes = ("input_cost_per_token", "output_cost_per_token", "cache_read", "cache_creation")
+        token_cost_keys = [key for key in entry if key.startswith(prefixes)]
+        global_token_cost_keys = [key for key in global_entry if key.startswith(prefixes)]
+        assert len(token_cost_keys) >= 9
+        assert sorted(token_cost_keys) == sorted(global_token_cost_keys)
+        for key in token_cost_keys:
+            assert entry[key] == pytest.approx(global_entry[key] * 1.1), key
+
 def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
     """
     Regression for https://github.com/BerriAI/litellm/issues/34393: two Vertex
@@ -2552,6 +2619,49 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate(_local_mo
     assert cost == pytest.approx(expected_priority)
 
 
+def test_completion_cost_vertex_ai_gemini_flex_traffic_type(_local_model_cost_map):
+    """
+    Vertex AI flex-tier billing regression for issue #37647.
+
+    Vertex Gemini 3.x models route through ``cost_per_character`` (the
+    ``cost_router`` token-path gate only matches "gemini-2"), and its token
+    fallbacks dropped ``service_tier``. A response served with
+    ``trafficType=ON_DEMAND_FLEX`` must be billed at the flex rate, not the
+    standard rate.
+    """
+    from litellm import completion_cost
+
+    model = "gemini-3-test-flex-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1.5e-6,
+                "output_cost_per_token": 9e-6,
+                "input_cost_per_token_flex": 7.5e-7,
+                "output_cost_per_token_flex": 4.5e-6,
+                "litellm_provider": "vertex_ai",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    def _cost_for_traffic_type(traffic_type):
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        response = ModelResponse(usage=usage, model=model)
+        response._hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type}
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="vertex_ai",
+        )
+
+    standard_cost = _cost_for_traffic_type("ON_DEMAND")
+    flex_cost = _cost_for_traffic_type("ON_DEMAND_FLEX")
+
+    assert standard_cost == pytest.approx(1000 * 1.5e-6 + 500 * 9e-6)
+    assert flex_cost == pytest.approx(1000 * 7.5e-7 + 500 * 4.5e-6)
+
+
 def test_completion_cost_non_string_service_tier_defers_to_served_tier(_local_model_cost_map):
     """
     Regression: a non-string request-level ``service_tier`` (reachable via
@@ -2701,12 +2811,10 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier(_l
     """
     Regression for the cache/tier interaction in the Anthropic geo/speed path.
 
-    When a request is served at "priority" and also carries a geo/speed
-    multiplier (here ``speed="fast"``), the cache portion is held out of the
-    multiplier so it is not scaled. That held-out cache cost must use the
-    served tier's cache rate; pricing it at the standard rate while the cache
-    embedded in ``prompt_cost`` is priced at the priority rate leaves a
-    ``(cache_priority - cache_standard)(multiplier - 1)`` billing error.
+    When a request is served at "priority" and also carries the ``fast`` speed
+    multiplier, the cache portion must be priced at the served tier's cache
+    rate and, per Anthropic's fast-mode pricing, scaled by the multiplier like
+    every other token type.
     """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
@@ -2743,10 +2851,7 @@ def test_anthropic_cost_per_token_prices_cache_at_served_tier_with_multiplier(_l
         model=model, usage=usage, service_tier="priority"
     )
 
-    # non-cache input priced at the priority rate and scaled by the fast
-    # multiplier; the 200 cache-hit tokens priced at the priority cache rate
-    # and held out of the multiplier
-    expected_prompt = (1000 - 200) * 6e-6 * 2 + 200 * 0.6e-6
+    expected_prompt = ((1000 - 200) * 6e-6 + 200 * 0.6e-6) * 2
     expected_completion = 500 * 30e-6 * 2
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
@@ -2814,10 +2919,9 @@ def test_anthropic_geo_multiplier_applies_to_cache_tokens(_local_model_cost_map,
 
 def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monkeypatch):
     """
-    The ``fast`` speed multiplier stays cache-exclusive (the old explicit
-    ``fast/`` entries kept base cache rates) while the geo multiplier scales the
-    whole cost, so a fast + regional row prices as
-    ``((non_cache * fast) + cache) * geo``.
+    Anthropic's fast-mode pricing doubles every token type, cache reads and
+    writes included, and the regional uplift stacks on top, so a fast +
+    regional row prices as ``(non_cache + cache) * fast * geo``.
     """
     from litellm.llms.anthropic.cost_calculation import (
         cost_per_token as anthropic_cost_per_token,
@@ -2845,8 +2949,30 @@ def test_anthropic_geo_and_fast_multipliers_compose(_local_model_cost_map, monke
 
     cache_cost = 2_000 * 0.5e-6 + 6_000 * 6.25e-6
     non_cache_cost = 2_000 * 5e-6
-    assert prompt_cost == pytest.approx((non_cache_cost * 2.0 + cache_cost) * 1.1)
+    assert prompt_cost == pytest.approx((non_cache_cost + cache_cost) * 2.0 * 1.1)
     assert completion_cost == pytest.approx(500 * 25e-6 * 2.0 * 1.1)
+
+
+@pytest.mark.parametrize(
+    "model,expected_fast",
+    [
+        ("claude-opus-5", 2.0),
+        ("claude-opus-4-8", 2.0),
+        ("claude-opus-4-6", None),
+        ("claude-opus-4-6-20260205", None),
+        ("claude-opus-4-7", None),
+        ("claude-opus-4-7-20260416", None),
+    ],
+)
+def test_anthropic_fast_multiplier_only_on_models_with_fast_mode(_local_model_cost_map, model, expected_fast):
+    """
+    Anthropic serves fast mode on Opus 5 and Opus 4.8 only, at 2x. Opus 4.6 and
+    4.7 accept the ``speed`` request param but are always served standard, so a
+    ``fast`` multiplier on their map entries overbills every request that asked
+    for fast and was served standard.
+    """
+    entry = litellm.model_cost[model]
+    assert entry["provider_specific_entry"].get("fast") == expected_fast
 
 
 @pytest.mark.parametrize(
@@ -3824,6 +3950,167 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     )
 
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
+    """A router-facing model_name alias containing "/" whose leading segment is NOT a
+    registered provider must not be double-prefixed into a non-existent cost key.
+
+    Regression test for #38069: alias "vertex/claude-opus-5" (real deployment
+    "vertex_ai/claude-opus-5") was re-prefixed into "vertex_ai/vertex/claude-opus-5",
+    silently pricing every streamed request at $0.
+    """
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/claude-opus-5"
+
+
+def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_map):
+    """A "region/model" alias whose leading segment repeats the request's region must
+    resolve to the region-priced cost key instead of keeping the region segment twice."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="us-east-1/anthropic.claude-v2:1",
+    )
+    response._hidden_params = {"region_name": "us-east-1"}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
+    """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {"custom_llm_provider": "vertex_ai"}
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert cost == pytest.approx(100 * 5e-6 + 50 * 2.5e-5, rel=1e-9)
+
+
+def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
+    """An alias that resolves to no known cost key keeps the legacy double-prefixed name."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="team/nonsense-model",
+    )
+    response._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/team/nonsense-model"
+
+
+def test_completion_cost_keeps_custom_priced_slash_router_id(_local_model_cost_map):
+    """A custom-priced router id containing "/" keeps its custom pricing instead of being
+    rewritten to the built-in key its suffix happens to match."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    litellm.register_model(
+        model_cost={
+            "vertex/claude-opus-5": {
+                "input_cost_per_token": 7e-6,
+                "output_cost_per_token": 8e-6,
+                "litellm_provider": "vertex_ai",
+            }
+        }
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="vertex_ai/claude-opus-5",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="vertex_ai",
+        router_model_id="vertex/claude-opus-5",
+    )
+    assert selected == "vertex_ai/vertex/claude-opus-5"
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {"custom_llm_provider": "vertex_ai"}
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+        custom_pricing=True,
+        router_model_id="vertex/claude-opus-5",
+    )
+    assert cost == pytest.approx(100 * 7e-6 + 50 * 8e-6, rel=1e-9)
 
 
 @pytest.mark.parametrize(

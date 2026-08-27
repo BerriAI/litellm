@@ -684,3 +684,326 @@ async def test_run_model_health_check_skips_complexity_router_deployment():
 
     fake_ahealth_check.assert_not_called()
     assert result == {}
+
+
+def _router_health_fixture():
+    """A real Router whose SIMPLE tier, default and classifier can each be pointed at a dead
+    group. That group has two replicas, so a verdict reached on only one of them is visible."""
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "live-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "live-1"},
+            },
+            {
+                "model_name": "dead-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "dead-1"},
+            },
+            {
+                "model_name": "dead-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "dead-2"},
+            },
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "dead-group", "MEDIUM": "live-group"}},
+                    "complexity_router_default_model": "live-group",
+                },
+                "model_info": {"id": "router-1"},
+            },
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+
+def _marker_deployment(router):
+    return next(d for d in router.model_list if d["model_info"]["id"] == "router-1")
+
+
+def test_strategy_router_reds_when_a_tier_group_has_no_healthy_deployment():
+    """LIT-6073: the marker is filed healthy by the {} placeholder; the verdict must override it."""
+    router = _router_health_fixture()
+    healthy = [{"model_id": "router-1"}, {"model_id": "live-1"}]
+    unhealthy = [{"model_id": "dead-1", "error": "boom"}, {"model_id": "dead-2", "error": "boom"}]
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        healthy, unhealthy, router.model_list, router, ()
+    )
+
+    assert [e["model_id"] for e in new_healthy] == ["live-1"]
+    moved = next(e for e in new_unhealthy if e["model_id"] == "router-1")
+    assert moved["error"] == "tier model 'dead-group' has no healthy deployment"
+
+
+def test_strategy_router_stays_green_when_every_dependency_has_a_healthy_deployment():
+    """The negative class: same router, same code path, nothing unhealthy behind it."""
+    router = _router_health_fixture()
+    healthy = [{"model_id": "router-1"}, {"model_id": "live-1"}, {"model_id": "dead-1"}, {"model_id": "dead-2"}]
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        healthy, [], router.model_list, router, ()
+    )
+
+    assert {e["model_id"] for e in new_healthy} == {"router-1", "live-1", "dead-1", "dead-2"}
+    assert new_unhealthy == ()
+
+
+def test_strategy_router_reds_when_a_dependency_name_matches_no_deployment():
+    """An unresolvable tier name is a different fault from an unhealthy one, and says so."""
+    router = _router_health_fixture()
+    marker = _marker_deployment(router)
+    marker["litellm_params"]["complexity_router_config"]["tiers"]["SIMPLE"] = "typo-group"
+
+    _, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        [{"model_id": "router-1"}], [], router.model_list, router, ()
+    )
+
+    assert new_unhealthy[0]["error"] == "tier model 'typo-group' matches no deployment on this proxy"
+
+
+@pytest.mark.parametrize("judged", [("router-1", "live-1"), ("router-1", "live-1", "dead-1")])
+def test_strategy_router_verdict_is_silent_when_part_of_a_group_went_unjudged(judged):
+    """Absent information never reds a router, whether the whole group went unjudged (hidden
+    from the caller) or only a replica did (opted out of health checks). The replica this run
+    never contacted can still serve every request the dead one drops."""
+    router = _router_health_fixture()
+    scope = [d for d in router.model_list if d["model_info"]["id"] in judged]
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        [{"model_id": "router-1"}], [{"model_id": "dead-1", "error": "boom"}], scope, router, ()
+    )
+
+    assert [e["model_id"] for e in new_healthy] == ["router-1"]
+    assert new_unhealthy == ({"model_id": "dead-1", "error": "boom"},)
+
+
+def test_dependency_probe_expansion_is_a_no_op_when_every_dependency_is_already_checked():
+    """The full-list run must gain no extra probe, or /health doubles its provider spend."""
+    router = _router_health_fixture()
+
+    assert hc_module._dependency_deployments_to_probe(router.model_list, router.model_list, router) == ()
+
+
+def test_dependency_probe_expansion_adds_dependencies_for_a_targeted_router_check():
+    """GET /health?model_id=<router> narrows to the marker, so the deps must be pulled back in."""
+    router = _router_health_fixture()
+    marker_only = [_marker_deployment(router)]
+
+    probes = hc_module._dependency_deployments_to_probe(marker_only, router.model_list, router)
+
+    assert {d["model_info"]["id"] for d in probes} == {"dead-1", "dead-2", "live-1"}
+
+
+def test_dependency_probes_carry_one_row_per_id():
+    """An alias can put the same deployment in the list twice, which is what
+    filter_deployments_by_id exists for. Probing it twice doubles the provider spend, and two
+    results for one id can disagree, reding the router on whichever landed in the loser."""
+    router = _router_health_fixture()
+    duplicated = tuple(router.model_list) + tuple(d for d in router.model_list if d["model_info"]["id"] == "dead-1")
+
+    probes = hc_module._dependency_deployments_to_probe([_marker_deployment(router)], duplicated, router)
+
+    assert [d["model_info"]["id"] for d in probes].count("dead-1") == 1
+
+
+def test_a_dependency_alias_whose_target_is_gone_reds_the_router():
+    """An alias resolving to nothing fails a request exactly like an unknown name, so the
+    health check must not read the empty resolution as "no information" and stay green."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "broken-alias"}},
+                    "complexity_router_default_model": "broken-alias",
+                },
+                "model_info": {"id": "router-1"},
+            },
+        ],
+        model_group_alias={"broken-alias": "target-that-no-longer-exists"},
+        ignore_invalid_deployments=True,
+    )
+
+    _, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        [{"model_id": "router-1"}], [], router.model_list, router, ()
+    )
+
+    assert new_unhealthy[0]["error"] == "tier model 'broken-alias' matches no deployment on this proxy"
+
+
+def test_a_dependency_that_opted_out_of_health_checks_is_never_probed():
+    """skip-disabled is an operator opt-out. A router depending on that deployment must not
+    pull it back in and spend the proxy's provider credentials probing it."""
+    disabled_dep = {
+        "model_name": "dead-group",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+        "model_info": {"id": "dead-1", "disable_background_health_check": True},
+    }
+    router = litellm.Router(
+        model_list=[
+            disabled_dep,
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "dead-group"}},
+                    "complexity_router_default_model": "dead-group",
+                },
+                "model_info": {"id": "router-1"},
+            },
+        ],
+        ignore_invalid_deployments=True,
+    )
+    marker = [d for d in router.model_list if d["model_info"]["id"] == "router-1"]
+
+    eligible = hc_module._health_check_eligible(router.model_list, skip_disabled=True)
+    probes = hc_module._dependency_deployments_to_probe(marker, eligible, router)
+
+    assert probes == ()
+    assert [d["model_info"]["id"] for d in eligible] == ["router-1"]
+
+
+def test_narrowing_by_an_id_that_matches_nothing_keeps_the_whole_list():
+    """Pinned because the disabled-dependency fix moved this filter into its own helper."""
+    deployments = [{"model_name": "a", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a-1"}}]
+
+    assert hc_module._narrow_to_target(deployments, None, "no-such-id") == tuple(deployments)
+    assert hc_module._narrow_to_target(deployments, None, "a-1") == tuple(deployments)
+    assert hc_module._narrow_to_target(deployments, "a", None) == tuple(deployments)
+
+
+def _nested_router_fixture(parent_tier: str):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "dead-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "dead-1"},
+            },
+            {
+                "model_name": "child",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "dead-group"}},
+                    "complexity_router_default_model": "dead-group",
+                },
+                "model_info": {"id": "child-1"},
+            },
+            {
+                "model_name": "parent",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": parent_tier}},
+                    "complexity_router_default_model": parent_tier,
+                },
+                "model_info": {"id": "parent-1"},
+            },
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+
+def test_a_router_routing_to_a_red_router_is_itself_red():
+    """A marker never fails a probe of its own, so a single pass sees only probe failures and
+    leaves the parent of a dead child green while every request through it fails."""
+    router = _nested_router_fixture("child")
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        [{"model_id": "parent-1"}, {"model_id": "child-1"}],
+        [{"model_id": "dead-1", "error": "boom"}],
+        router.model_list,
+        router,
+        (),
+    )
+
+    errors = {e["model_id"]: e["error"] for e in new_unhealthy if e["model_id"] != "dead-1"}
+    assert errors["child-1"] == "tier model 'dead-group' has no healthy deployment"
+    assert errors["parent-1"] == "tier model 'child' has no healthy deployment"
+    assert new_healthy == ()
+
+
+def test_a_router_routing_to_a_healthy_router_stays_green():
+    """The negative class for nested propagation: the child serves, so the parent must not
+    inherit a red merely for depending on another router."""
+    router = _nested_router_fixture("child")
+    child = next(d for d in router.model_list if d["model_info"]["id"] == "child-1")
+    child["litellm_params"]["complexity_router_config"]["tiers"]["SIMPLE"] = "dead-group"
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        [{"model_id": "parent-1"}, {"model_id": "child-1"}, {"model_id": "dead-1"}],
+        [],
+        router.model_list,
+        router,
+        (),
+    )
+
+    assert {e["model_id"] for e in new_healthy} == {"parent-1", "child-1", "dead-1"}
+    assert new_unhealthy == ()
+
+
+def test_two_routers_pointing_at_each_other_terminate_instead_of_recursing():
+    """The round bound is what makes a cycle finish. Neither has a failing dependency, so
+    neither reds, and the walk must not recurse forever proving it."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": other}},
+                    "complexity_router_default_model": other,
+                },
+                "model_info": {"id": f"{name}-1"},
+            }
+            for name, other in (("a", "b"), ("b", "a"))
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        [{"model_id": "a-1"}, {"model_id": "b-1"}], [], router.model_list, router, ()
+    )
+
+    assert {e["model_id"] for e in new_healthy} == {"a-1", "b-1"}
+    assert new_unhealthy == ()
+
+
+def test_a_targeted_check_on_a_nested_router_probes_the_grandchild_models():
+    """One hop is not enough. GET /health?model_id=<parent> narrows to the parent, and pulling
+    in only the child marker leaves the child's own models unprobed, so nothing ever fails and
+    both settle green on the exact path the Admin UI uses."""
+    router = _nested_router_fixture("child")
+    parent_only = [d for d in router.model_list if d["model_info"]["id"] == "parent-1"]
+
+    probes = hc_module._dependency_deployments_to_probe(parent_only, router.model_list, router)
+
+    assert {d["model_info"]["id"] for d in probes} == {"child-1", "dead-1"}
+
+
+def test_transitive_probe_expansion_terminates_on_a_router_cycle():
+    """Expansion follows routers through routers, so a cycle must stop rather than recurse."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": other}},
+                    "complexity_router_default_model": other,
+                },
+                "model_info": {"id": f"{name}-1"},
+            }
+            for name, other in (("a", "b"), ("b", "a"))
+        ],
+        ignore_invalid_deployments=True,
+    )
+    a_only = [d for d in router.model_list if d["model_info"]["id"] == "a-1"]
+
+    probes = hc_module._dependency_deployments_to_probe(a_only, router.model_list, router)
+
+    assert {d["model_info"]["id"] for d in probes} == {"b-1"}

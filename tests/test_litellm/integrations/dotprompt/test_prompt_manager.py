@@ -577,3 +577,83 @@ async def test_dotprompt_with_prompt_version():
     )
     assert "Version 2:" in v2_rendered
     assert "Test v2" in v2_rendered
+
+
+def test_keyed_prompt_data_with_prompt_id_keeps_real_content():
+    prompt_data = {
+        "json_prompt": {
+            "content": "You are a pirate. Begin every reply with AHOY.",
+            "metadata": {"model": "gpt-4o-mini"},
+        }
+    }
+
+    manager = PromptManager(prompt_data=prompt_data, prompt_id="agent-prompt")
+
+    template = manager.get_prompt("json_prompt")
+    assert template is not None
+    assert template.content == "You are a pirate. Begin every reply with AHOY."
+    assert template.model == "gpt-4o-mini"
+    assert "agent-prompt" not in manager.prompts
+
+
+def test_flat_prompt_data_with_prompt_id_registers_under_prompt_id():
+    manager = PromptManager(
+        prompt_data={"content": "Hello {{name}}", "metadata": {"model": "gpt-4o-mini"}},
+        prompt_id="flat-prompt",
+    )
+
+    template = manager.get_prompt("flat-prompt")
+    assert template is not None
+    assert template.content == "Hello {{name}}"
+    assert manager.render("flat-prompt", {"name": "world"}) == "Hello world"
+
+
+def test_get_prompt_falls_back_to_base_id_for_versioned_id():
+    manager = PromptManager(
+        prompt_data={"content": "Hi", "metadata": {}},
+        prompt_id="my-prompt",
+    )
+
+    assert manager.get_prompt("my-prompt.v1") is not None
+    assert manager.get_prompt("my-prompt.v12") is not None
+    assert manager.get_prompt("my-prompt.vx") is None
+    assert manager.get_prompt("other-prompt.v1") is None
+
+
+def test_should_run_prompt_management_accepts_versioned_id():
+    from litellm.integrations.dotprompt import DotpromptManager
+
+    dotprompt_manager = DotpromptManager(
+        prompt_data={"content": "Hi", "metadata": {}},
+        prompt_id="versioned-prompt",
+    )
+
+    assert dotprompt_manager.should_run_prompt_management("versioned-prompt", None, {}) is True
+    assert dotprompt_manager.should_run_prompt_management("versioned-prompt.v1", None, {}) is True
+    assert dotprompt_manager.should_run_prompt_management("missing-prompt", None, {}) is False
+
+
+def test_prompt_initializer_registers_flat_db_prompt_under_base_id():
+    from litellm.integrations.dotprompt import DotpromptManager, prompt_initializer
+    from litellm.types.prompts.init_prompts import (
+        PromptInfo,
+        PromptLiteLLMParams,
+        PromptSpec,
+    )
+
+    litellm_params = PromptLiteLLMParams(
+        prompt_integration="dotprompt",
+        prompt_data={"content": "AHOY {{name}}", "metadata": {"model": "gpt-4o-mini"}},
+    )
+    prompt_spec = PromptSpec(
+        prompt_id="agent-prompt.v1",
+        litellm_params=litellm_params,
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+
+    dotprompt_manager = prompt_initializer(litellm_params, prompt_spec)
+
+    assert isinstance(dotprompt_manager, DotpromptManager)
+    template = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
+    assert template is not None
+    assert template.content == "AHOY {{name}}"

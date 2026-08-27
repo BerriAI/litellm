@@ -66,7 +66,7 @@ const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <nav className="sticky top-0 z-10 border-b border-border bg-card">
+    <nav className="sticky top-0 z-chrome border-b border-border bg-card">
       <div className="w-full">
         <div className="flex h-14 items-center px-4">
           <div className="flex shrink-0 items-center">
@@ -111,7 +111,7 @@ const Navbar: React.FC<NavbarProps> = ({
                       🌑
                     </span>
                   )}
-                  <Badge variant="outline" className="relative z-10 cursor-pointer text-xs font-medium">
+                  <Badge variant="outline" className="relative z-raised cursor-pointer text-xs font-medium">
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"

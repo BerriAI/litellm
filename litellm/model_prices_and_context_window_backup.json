@@ -1428,7 +1428,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "global.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.25e-05,
@@ -1465,7 +1465,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "us.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.375e-05,
@@ -1502,7 +1502,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "eu.anthropic.claude-fable-5": {
         "cache_creation_input_token_cost": 1.375e-05,
@@ -1539,7 +1539,7 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "supports_parallel_tool_use_config": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 512
     },
     "anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -2933,7 +2933,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-5": {
         "deprecation_date": "2026-10-19",
@@ -2956,7 +2957,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-6": {
         "deprecation_date": "2027-02-02",
@@ -2987,7 +2989,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-7": {
         "deprecation_date": "2027-04-06",
@@ -3018,7 +3021,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 2048
     },
     "azure_ai/claude-fable-5": {
         "supports_mid_conversation_system": true,
@@ -3050,7 +3054,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-opus-5": {
         "supports_mid_conversation_system": true,
@@ -3113,7 +3118,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-opus-4-1": {
         "deprecation_date": "2026-08-05",
@@ -3135,7 +3141,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-5": {
         "deprecation_date": "2026-10-19",
@@ -3157,7 +3164,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-5": {
         "supports_mid_conversation_system": true,
@@ -3188,7 +3196,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-6": {
         "deprecation_date": "2027-02-10",
@@ -3214,7 +3223,8 @@
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 1024
     },
     "azure/computer-use-preview": {
         "input_cost_per_token": 3e-06,
@@ -6592,6 +6602,10 @@
         "supports_web_search": true
     },
     "azure/gpt-5.6": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
+        "cache_creation_input_token_cost_priority": 1.25e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 2.5e-05,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_priority": 1e-06,
@@ -6642,6 +6656,10 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-sol": {
+        "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
+        "cache_creation_input_token_cost_priority": 1.25e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 2.5e-05,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_priority": 1e-06,
@@ -6693,6 +6711,10 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-terra": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_creation_input_token_cost_priority": 5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1e-05,
         "cache_read_input_token_cost": 2e-07,
         "cache_read_input_token_cost_above_272k_tokens": 4e-07,
         "cache_read_input_token_cost_priority": 4e-07,
@@ -6744,6 +6766,10 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-luna": {
+        "cache_creation_input_token_cost": 2.5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
+        "cache_creation_input_token_cost_priority": 5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1e-06,
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4e-08,
         "cache_read_input_token_cost_priority": 4e-08,
@@ -6795,12 +6821,18 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 2.75e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 2.2e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 2.2e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6808,7 +6840,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 9.9e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6842,13 +6875,19 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-sol": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 2.75e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 2.2e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 2.2e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6856,7 +6895,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 9.9e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6890,13 +6930,19 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-terra": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-05,
+        "cache_creation_input_token_cost_priority": 5.5e-06,
         "cache_read_input_token_cost": 2.2e-07,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
-        "cache_read_input_token_cost_priority": 5.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-07,
+        "cache_read_input_token_cost_priority": 4.4e-07,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "input_cost_per_token_priority": 5.5e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 8.8e-06,
+        "input_cost_per_token_priority": 4.4e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6904,7 +6950,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
-        "output_cost_per_token_priority": 3.3e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 3.96e-05,
+        "output_cost_per_token_priority": 2.64e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6938,13 +6985,19 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-luna": {
+        "cache_creation_input_token_cost": 2.75e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-06,
+        "cache_creation_input_token_cost_priority": 5.5e-07,
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
-        "cache_read_input_token_cost_priority": 5.5e-08,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-08,
+        "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "input_cost_per_token_priority": 5.5e-07,
+        "input_cost_per_token_above_272k_tokens_priority": 8.8e-07,
+        "input_cost_per_token_priority": 4.4e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6952,7 +7005,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
-        "output_cost_per_token_priority": 3.3e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 3.96e-06,
+        "output_cost_per_token_priority": 2.64e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -6986,12 +7040,18 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 2.75e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 2.2e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 2.2e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -6999,7 +7059,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 9.9e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7033,13 +7094,19 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-sol": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 2.75e-05,
+        "cache_creation_input_token_cost_priority": 1.375e-05,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
-        "cache_read_input_token_cost_priority": 1.375e-06,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 2.2e-06,
+        "cache_read_input_token_cost_priority": 1.1e-06,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
-        "input_cost_per_token_priority": 1.375e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 2.2e-05,
+        "input_cost_per_token_priority": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -7047,7 +7114,8 @@
         "mode": "chat",
         "output_cost_per_token": 3.3e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
-        "output_cost_per_token_priority": 8.25e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 9.9e-05,
+        "output_cost_per_token_priority": 6.6e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7081,13 +7149,19 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-terra": {
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-05,
+        "cache_creation_input_token_cost_priority": 5.5e-06,
         "cache_read_input_token_cost": 2.2e-07,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-07,
-        "cache_read_input_token_cost_priority": 5.5e-07,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-07,
+        "cache_read_input_token_cost_priority": 4.4e-07,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
-        "input_cost_per_token_priority": 5.5e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 8.8e-06,
+        "input_cost_per_token_priority": 4.4e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -7095,7 +7169,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-05,
         "output_cost_per_token_above_272k_tokens": 1.98e-05,
-        "output_cost_per_token_priority": 3.3e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 3.96e-05,
+        "output_cost_per_token_priority": 2.64e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -7129,13 +7204,19 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-luna": {
+        "cache_creation_input_token_cost": 2.75e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-06,
+        "cache_creation_input_token_cost_priority": 5.5e-07,
         "cache_read_input_token_cost": 2.2e-08,
         "cache_read_input_token_cost_above_272k_tokens": 4.4e-08,
-        "cache_read_input_token_cost_priority": 5.5e-08,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 8.8e-08,
+        "cache_read_input_token_cost_priority": 4.4e-08,
         "deprecation_date": "2028-01-11",
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
-        "input_cost_per_token_priority": 5.5e-07,
+        "input_cost_per_token_above_272k_tokens_priority": 8.8e-07,
+        "input_cost_per_token_priority": 4.4e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 922000,
         "max_output_tokens": 128000,
@@ -7143,7 +7224,8 @@
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
         "output_cost_per_token_above_272k_tokens": 1.98e-06,
-        "output_cost_per_token_priority": 3.3e-06,
+        "output_cost_per_token_above_272k_tokens_priority": 3.96e-06,
+        "output_cost_per_token_priority": 2.64e-06,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -12727,8 +12809,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
@@ -12765,8 +12846,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
@@ -12805,8 +12885,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_output_config": true,
         "supports_speed": true,
@@ -12844,8 +12923,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "provider_specific_entry": {
-            "us": 1.1,
-            "fast": 6.0
+            "us": 1.1
         },
         "supports_output_config": true,
         "supports_speed": true,
@@ -14656,7 +14734,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 4096
     },
     "databricks/databricks-claude-opus-4": {
         "cache_creation_input_token_cost": 1.874999e-05,
@@ -14678,7 +14757,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-opus-4-1": {
         "cache_creation_input_token_cost": 1.874999e-05,
@@ -14700,7 +14780,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-opus-4-5": {
         "cache_creation_input_token_cost": 6.25002e-06,
@@ -14723,7 +14804,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "databricks/databricks-claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25002e-06,
@@ -14746,7 +14828,8 @@
         "supports_legacy_thinking": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 4096
     },
     "databricks/databricks-claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25002e-06,
@@ -14848,7 +14931,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-sonnet-4-1": {
         "cache_creation_input_token_cost": 3.74997e-06,
@@ -14892,7 +14976,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.74997e-06,
@@ -14915,7 +15000,8 @@
         "supports_legacy_thinking": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "prompt_cache_min_tokens": 1024
     },
     "databricks/databricks-claude-sonnet-5": {
         "cache_creation_input_token_cost": 3.74997e-06,
@@ -19710,6 +19796,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini-2.5-flash-image": {
@@ -19999,7 +20086,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.1-flash-lite": {
         "deprecation_date": "2027-05-07",
@@ -20056,7 +20144,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.5-flash-lite": {
         "deprecation_date": "2027-07-21",
@@ -20112,7 +20201,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -20192,6 +20282,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini-2.5-flash-lite-preview-09-2025": {
@@ -20237,6 +20328,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini-2.5-flash-preview-09-2025": {
@@ -20282,6 +20374,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
@@ -20418,6 +20511,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini-2.5-pro": {
@@ -20463,7 +20557,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini-3-pro-preview": {
         "deprecation_date": "2026-03-26",
@@ -20577,7 +20672,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
@@ -20629,7 +20725,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3-pro-preview": {
         "cache_read_input_token_cost": 2e-07,
@@ -20732,7 +20829,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -20787,6 +20885,7 @@
             "search_context_size_high": 0.014
         },
         "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
         "output_cost_per_token_batches": 4.5e-06,
         "input_cost_per_token_flex": 7.5e-07,
@@ -20847,7 +20946,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.7-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -20903,7 +21003,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.1-pro-preview": {
         "prompt_cache_min_tokens": 4096,
@@ -20961,7 +21062,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
@@ -21019,7 +21121,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -21558,6 +21661,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-image": {
@@ -21905,6 +22009,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-lite-preview-09-2025": {
@@ -21953,6 +22058,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-preview-09-2025": {
@@ -22001,6 +22107,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini/gemini-flash-latest": {
@@ -22047,7 +22154,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini/gemini-flash-lite-latest": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -22093,7 +22201,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini/gemini-2.5-flash-lite-preview-06-17": {
         "deprecation_date": "2025-11-18",
@@ -22141,6 +22250,7 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
+        "google_maps_grounding_cost_per_query": 0.025,
         "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-preview-tts": {
@@ -22202,7 +22312,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
         "input_cost_per_token": 1.25e-06,
@@ -22339,7 +22450,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
@@ -22398,7 +22510,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
@@ -22455,7 +22568,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -22507,7 +22621,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.5-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -22563,6 +22678,7 @@
             "search_context_size_high": 0.014
         },
         "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
         "output_cost_per_token_batches": 4.5e-06,
         "input_cost_per_token_flex": 7.5e-07,
@@ -22625,7 +22741,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.7-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -22683,7 +22800,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-omni-flash-preview": {
         "input_cost_per_audio_token": 1.5e-06,
@@ -22774,7 +22892,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.1-pro-preview-customtools": {
         "prompt_cache_min_tokens": 4096,
@@ -22832,7 +22951,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -22882,7 +23002,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-omni-flash-preview": {
         "input_cost_per_audio_token": 1.5e-06,
@@ -22968,6 +23089,7 @@
             "search_context_size_high": 0.014
         },
         "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014,
         "input_cost_per_token_batches": 7.5e-07,
         "output_cost_per_token_batches": 4.5e-06,
         "input_cost_per_token_flex": 7.5e-07,
@@ -23028,7 +23150,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.7-flash": {
         "prompt_cache_min_tokens": 4096,
@@ -23084,7 +23207,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -33793,7 +33917,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-opus-4.1": {
         "input_cost_per_image": 0.0048,
@@ -33813,7 +33938,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-sonnet-4": {
         "input_cost_per_image": 0.0048,
@@ -33836,7 +33962,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-sonnet-4.6": {
         "supports_adaptive_thinking": true,
@@ -33862,7 +33989,8 @@
         "supports_reasoning": true,
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-opus-4.5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -33881,7 +34009,8 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "openrouter/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
@@ -33902,7 +34031,8 @@
         "supports_reasoning": true,
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "openrouter/anthropic/claude-sonnet-4.5": {
         "input_cost_per_image": 0.0048,
@@ -33925,7 +34055,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "openrouter/anthropic/claude-haiku-4.5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -33943,7 +34074,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "openrouter/anthropic/claude-opus-4.7": {
         "supports_adaptive_thinking": true,
@@ -33966,7 +34098,8 @@
         "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "prompt_cache_min_tokens": 2048
     },
     "openrouter/anthropic/claude-opus-5": {
         "prompt_cache_min_tokens": 512,
@@ -36433,7 +36566,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 4096
     },
     "replicate/ibm-granite/granite-3.3-8b-instruct": {
         "input_cost_per_token": 3e-08,
@@ -36515,7 +36649,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 1024
     },
     "replicate/deepseek-ai/deepseek-v3": {
         "input_cost_per_token": 1.45e-06,
@@ -36590,7 +36725,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_response_schema": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 1024
     },
     "replicate/openai/gpt-4.1": {
         "input_cost_per_token": 2e-06,
@@ -39619,7 +39755,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 4096
     },
     "vercel_ai_gateway/anthropic/claude-opus-4": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -39638,7 +39775,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.1": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -39657,7 +39795,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.5": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -39677,7 +39816,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "vercel_ai_gateway/anthropic/claude-opus-4.6": {
         "supports_adaptive_thinking": true,
@@ -39699,7 +39839,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_output_config": true
+        "supports_output_config": true,
+        "prompt_cache_min_tokens": 4096
     },
     "vercel_ai_gateway/anthropic/claude-sonnet-4": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -39718,7 +39859,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/anthropic/claude-sonnet-4.5": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -39736,7 +39878,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "prompt_cache_min_tokens": 1024
     },
     "vercel_ai_gateway/cohere/command-a": {
         "input_cost_per_token": 2.5e-06,
@@ -41101,7 +41244,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 512
     },
     "vertex_ai/claude-fable-5@default": {
         "deprecation_date": "2027-06-08",
@@ -41135,7 +41279,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "prompt_cache_min_tokens": 512
     },
     "vertex_ai/claude-opus-5": {
         "deprecation_date": "2027-01-24",
@@ -41817,7 +41962,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.1-flash-lite": {
         "deprecation_date": "2027-05-07",
@@ -41875,7 +42021,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.5-flash-lite": {
         "deprecation_date": "2027-07-21",
@@ -41932,7 +42079,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -49028,7 +49176,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini-flash-lite-latest": {
         "cache_read_input_token_cost": 1e-08,
@@ -49074,7 +49223,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini-pro-latest": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -49119,7 +49269,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini/gemini-pro-latest": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -49164,7 +49315,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "google_maps_grounding_cost_per_query": 0.025
     },
     "gemini-exp-1206": {
         "cache_read_input_token_cost": 3e-08,
@@ -50039,7 +50191,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -50056,7 +50209,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-4-sonnet": {
         "max_tokens": 16384,
@@ -50071,7 +50225,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-4-opus": {
         "max_tokens": 16384,
@@ -50087,7 +50242,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_reasoning": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 1024
     },
     "snowflake/claude-haiku-4-5": {
         "max_tokens": 16384,
@@ -50102,7 +50258,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "prompt_cache_min_tokens": 4096
     },
     "snowflake/claude-3-7-sonnet": {
         "max_tokens": 16384,
@@ -50413,6 +50570,32 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "deepseek-v4-flash-vision-exp": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 4.4e-08,
@@ -50464,6 +50647,32 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
+    },
+    "deepseek/deepseek-v4-flash-vision-exp": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "deepseek/deepseek-v4-pro": {
         "cache_creation_input_token_cost": 0.0,

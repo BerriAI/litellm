@@ -157,6 +157,9 @@ COST_DESCRIPTIONS: dict[str, str] = {
     "input_cost_per_token": "USD per prompt token.",
     "output_cost_per_token": "USD per generated token.",
     "output_cost_per_reasoning_token": "USD per reasoning/thinking token, when billed separately.",
+    "google_maps_grounding_cost_per_query": (
+        "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+    ),
     "cache_creation_input_token_cost": "USD per token written to the provider's prompt cache.",
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
