@@ -1769,7 +1769,12 @@ async def _user_api_key_auth_builder(
 
             return valid_token
 
-        if valid_token is not None and isinstance(valid_token, UserAPIKeyAuth) and valid_token.team_id is not None:
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.team_id is not None
+            and valid_token.team_id != UI_TEAM_ID
+        ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
             try:
                 team_obj: Final[LiteLLM_TeamTableCachedObj] = await get_team_object(
@@ -2149,6 +2154,9 @@ async def _user_api_key_auth_builder(
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 try:
+                    # UI_TEAM_ID never has a LiteLLM_TeamTable row; skip the guaranteed-miss lookup
+                    if valid_token.team_id == UI_TEAM_ID:
+                        raise TeamNotFoundError(team_id=UI_TEAM_ID)
                     with tracer.trace("litellm.proxy.auth.get_team_object"):
                         _team_obj = await get_team_object(
                             team_id=valid_token.team_id,
@@ -2443,7 +2451,7 @@ async def _run_centralized_common_checks(
         )
 
     fetch_coros: Final = []
-    if user_api_key_auth_obj.team_id is not None:
+    if user_api_key_auth_obj.team_id is not None and user_api_key_auth_obj.team_id != UI_TEAM_ID:
         fetch_coros.append(
             _safe_fetch(
                 "team",
@@ -2567,7 +2575,11 @@ async def _run_centralized_common_checks(
         else:
             raise team_result
     else:
-        team_object = team_result
+        team_object = (
+            _team_obj_from_token(user_api_key_auth_obj)
+            if user_api_key_auth_obj.team_id == UI_TEAM_ID
+            else team_result
+        )
 
     user_object: LiteLLM_UserTable | None = None if isinstance(user_result, BaseException) else user_result
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
