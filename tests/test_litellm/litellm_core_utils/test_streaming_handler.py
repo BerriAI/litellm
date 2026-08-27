@@ -4460,3 +4460,62 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chunk():
+    """
+    Vertex/Gemini chunk_parser stores usageMetadata.trafficType in the parsed
+    chunk's _hidden_params["provider_specific_fields"], but chunk_creator builds
+    a fresh ModelResponseStream per outgoing chunk. Before the fix those hidden
+    provider fields were dropped, so streaming flex traffic was billed at
+    standard rates (LIT-6292).
+    """
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3.5-flash",
+        logging_obj=MagicMock(),
+        custom_llm_provider="vertex_ai",
+    )
+    parsed_chunk = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello", role="assistant"), finish_reason=None)],
+    )
+    parsed_chunk._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND_FLEX"}
+
+    result = wrapper.chunk_creator(chunk=parsed_chunk)
+
+    assert result is not None
+    assert result._hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND_FLEX"}
+
+
+@pytest.mark.asyncio
+async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging_obj: Logging):
+    """
+    End-to-end through the async wrapper: the assembled response handed to cost
+    tracking must carry traffic_type so flex/priority tiers price correctly.
+    """
+    content_chunk = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello", role="assistant"), finish_reason=None)],
+    )
+    final_chunk = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    setattr(final_chunk, "usage", Usage(prompt_tokens=7, completion_tokens=5, total_tokens=12))
+    final_chunk._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND_FLEX"}
+
+    async def _stream():
+        yield content_chunk
+        yield final_chunk
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=_stream(),
+        model="gemini-3.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+    )
+
+    received = [chunk async for chunk in wrapper]
+
+    assembled = litellm.stream_chunk_builder(chunks=received, messages=[{"role": "user", "content": "hi"}])
+    assert assembled is not None
+    assert assembled._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND_FLEX"
