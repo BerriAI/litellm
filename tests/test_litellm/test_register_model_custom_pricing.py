@@ -465,6 +465,42 @@ def test_register_model_no_warning_without_custom_pricing(caplog):
         litellm.model_cost.pop(registered_key, None)
 
 
+def test_register_model_no_warning_for_tiered_pricing_without_cache_costs(caplog):
+    """LIT-6318: tiered pricing bills cache reads at the tier's input rate when
+    cache costs are omitted, so a tiered entry must not trigger the
+    cache-defaults-to-0 warning.
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "bedrock/lit6318-tiered-priced-model"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "litellm_provider": "bedrock",
+                        "tiered_pricing": [
+                            {
+                                "range": [0, 200000],
+                                "input_cost_per_token": 1e-06,
+                                "output_cost_per_token": 5e-06,
+                            }
+                        ],
+                    }
+                }
+            )
+
+        assert not any("register_model" in record.message for record in caplog.records), (
+            "tiered pricing entry must register silently"
+        )
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
 def test_router_deployment_without_custom_pricing_registers_silently(caplog):
     """LIT-6318: the router registers every deployment under its hashed id and
     its backend key. Deployments without custom pricing are costed at request
