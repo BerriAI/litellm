@@ -53,6 +53,7 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.realtime import (
     ALL_DELTA_TYPES,
+    RealtimeInputAudioTranscriptionUsage,
     RealtimeModalityResponseTransformOutput,
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
@@ -95,6 +96,18 @@ def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
     return VertexGeminiConfig()._map_audio_params({"voice": voice})
 
 
+# Google bills Live transcription at an estimated 25 audio tokens/sec of input and
+# 175 text tokens/min of output (ai.google.dev/gemini-api/docs/pricing).
+GEMINI_LIVE_TRANSCRIBE_AUDIO_TOKENS_PER_SECOND: Final = 25
+GEMINI_LIVE_TRANSCRIBE_OUTPUT_TEXT_TOKENS_PER_MINUTE: Final = 175
+PCM16_INPUT_AUDIO_BYTES_PER_SECOND: Final = 48000
+
+
+def _base64_decoded_byte_count(data: str) -> int:
+    padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
+    return max(len(data) * 3 // 4 - padding, 0)
+
+
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
 
@@ -104,6 +117,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: dict | None = None
+        self._unbilled_input_audio_bytes: int = 0
 
     def is_setup_message(self, msg_obj: dict) -> bool:
         return "setup" in msg_obj
@@ -566,9 +580,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             return self._handle_conversation_item(json_message)
 
         if msg_type == "input_audio_buffer.append":
-            realtime_input_dict["audio"] = HttpxBlobType(
-                mimeType=self.get_audio_mime_type(), data=json_message["audio"]
-            )
+            audio_b64: Final = json_message["audio"]
+            if isinstance(audio_b64, str):
+                self._unbilled_input_audio_bytes += _base64_decoded_byte_count(audio_b64)
+            realtime_input_dict["audio"] = HttpxBlobType(mimeType=self.get_audio_mime_type(), data=audio_b64)
 
             realtime_input_dict = cast(
                 BidiGenerateContentRealtimeInput,
@@ -1159,6 +1174,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError(f"Unknown openai event: {key}, value: {value}")
         return openai_event
 
+    def _consume_input_transcription_usage_estimate(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        """Gemini Live sends no usageMetadata for transcribe sessions; estimate billing from streamed audio duration."""
+        if self._unbilled_input_audio_bytes <= 0 or not self._is_text_only_live_model(model):
+            return None
+        audio_seconds: Final = self._unbilled_input_audio_bytes / PCM16_INPUT_AUDIO_BYTES_PER_SECOND
+        self._unbilled_input_audio_bytes = 0
+        audio_tokens: Final = round(audio_seconds * GEMINI_LIVE_TRANSCRIBE_AUDIO_TOKENS_PER_SECOND)
+        output_tokens: Final = round(audio_seconds * GEMINI_LIVE_TRANSCRIBE_OUTPUT_TEXT_TOKENS_PER_MINUTE / 60)
+        usage: Final[RealtimeInputAudioTranscriptionUsage] = {
+            "type": "tokens",
+            "input_tokens": audio_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": audio_tokens + output_tokens,
+            "input_token_details": {"text_tokens": 0, "audio_tokens": audio_tokens},
+        }
+        return usage
+
     def transform_realtime_response(
         self,
         message: str | bytes,
@@ -1198,6 +1230,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if isinstance(server_content, dict):
             input_tx: Final = server_content.get("inputTranscription")
             if isinstance(input_tx, dict) and input_tx.get("text"):
+                transcription_usage: Final = self._consume_input_transcription_usage_estimate(model)
                 returned_message.append(
                     cast(
                         OpenAIRealtimeEvents,
@@ -1207,6 +1240,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             "transcript": input_tx["text"],
                             "item_id": f"item_{uuid.uuid4()}",
                             "content_index": 0,
+                            **({} if transcription_usage is None else {"usage": transcription_usage}),
                         },
                     )
                 )
