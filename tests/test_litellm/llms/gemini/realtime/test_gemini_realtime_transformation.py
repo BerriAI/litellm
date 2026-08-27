@@ -1864,3 +1864,80 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
 
     passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+@pytest.fixture(autouse=False)
+def patch_gemini_transcribe_live_cost_map_entry(monkeypatch):
+    """Inject the gemini-3.5-transcribe-live registry entry locally.
+
+    litellm.model_cost is fetched from main branch at import time, so in CI
+    the entry may not exist yet. Also stamp supported_output_modalities on a
+    chat model to prove mode, not output modalities, drives the discriminator.
+    """
+    for m in ["gemini-3.5-transcribe-live", "gemini/gemini-3.5-transcribe-live"]:
+        entry = dict(litellm.model_cost.get(m, {}))
+        entry["mode"] = "audio_transcription"
+        monkeypatch.setitem(litellm.model_cost, m, entry)
+    chat_entry = dict(litellm.model_cost.get("gemini-2.5-flash", {}))
+    chat_entry["supported_output_modalities"] = ["text"]
+    monkeypatch.setitem(litellm.model_cost, "gemini-2.5-flash", chat_entry)
+
+
+@pytest.mark.parametrize("model", ["gemini-3.5-transcribe-live", "gemini/gemini-3.5-transcribe-live"])
+def test_gemini_transcribe_live_eager_setup_uses_text_modality(model, patch_gemini_transcribe_live_cost_map_entry):
+    """Regression: the hardcoded AUDIO eager setup closes transcribe-live sessions with 1007."""
+    config = GeminiRealtimeConfig()
+
+    setup = json.loads(config.session_configuration_request(model))["setup"]
+
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+def test_gemini_transcribe_live_session_update_defaults_to_text_modality(
+    patch_gemini_transcribe_live_cost_map_entry,
+):
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"instructions": "Transcribe the audio."},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-3.5-transcribe-live",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+@pytest.mark.parametrize("modalities", [["audio"], ["audio", "text"]])
+def test_gemini_transcribe_live_coerces_audio_modality_to_text(
+    modalities, patch_gemini_transcribe_live_cost_map_entry
+):
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {"modalities": modalities},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-3.5-transcribe-live",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+
+
+def test_gemini_chat_model_with_text_output_modalities_keeps_audio_eager_setup(
+    patch_gemini_transcribe_live_cost_map_entry,
+):
+    """Chat entries also declare supported_output_modalities ["text"]; they must keep AUDIO."""
+    config = GeminiRealtimeConfig()
+
+    setup = json.loads(config.session_configuration_request("gemini-2.5-flash"))["setup"]
+
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
