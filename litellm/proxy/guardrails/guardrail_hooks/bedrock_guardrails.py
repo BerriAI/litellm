@@ -187,10 +187,19 @@ class _ImageFetchBudget:
         self._gate = asyncio.Semaphore(_MAX_CONCURRENT_IMAGE_FETCHES)
 
     def claim(self) -> int:
-        """Reserve up to one image's worth of budget. 0 means exhausted."""
-        granted: Final = min(_MAX_IMAGE_BYTES, self._remaining)
-        self._remaining -= granted
-        return granted
+        """Reserve one image's worth of budget. 0 means exhausted.
+
+        All or nothing rather than handing out whatever is left. A partial grant
+        would cap the fetch below the per-image limit, and the rejection then
+        surfaces as "over ApplyGuardrail's 4 MB limit" while naming a few hundred
+        bytes -- blaming AWS for this request having spent its own budget. The two
+        failures stay separately legible at the cost of up to one image's worth of
+        headroom going unused at the tail.
+        """
+        if self._remaining < _MAX_IMAGE_BYTES:
+            return 0
+        self._remaining -= _MAX_IMAGE_BYTES
+        return _MAX_IMAGE_BYTES
 
     def give_back(self, unused: int) -> None:
         self._remaining += unused

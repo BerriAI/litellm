@@ -5623,6 +5623,24 @@ class TestBedrockGuardrailImageInput:
         assert len(request["content"]) < 200, "every url was kept despite the budget"
         assert request["content"], "the budget swallowed the whole request"
 
+    def test_the_budget_grants_a_whole_image_or_nothing(self):
+        """A partial grant would cap a fetch below the per-image limit.
+
+        The rejection then reads "over ApplyGuardrail's 4 MB limit" while naming a
+        few hundred bytes, blaming AWS for this request having spent its own budget.
+        Keeping the two failures separately legible is worth leaving one image's
+        worth of headroom unused at the tail.
+        """
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+            _MAX_IMAGE_BYTES,
+            _ImageFetchBudget,
+        )
+
+        budget = _ImageFetchBudget(total=_MAX_IMAGE_BYTES + 100)
+
+        assert budget.claim() == _MAX_IMAGE_BYTES
+        assert budget.claim() == 0, "100 bytes left must read as exhausted, not as a 100 byte cap"
+
     @pytest.mark.asyncio
     async def test_inline_images_do_not_draw_on_the_download_budget(self):
         """Base64 arrives in the request body the proxy already accepted.
