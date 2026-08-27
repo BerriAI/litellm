@@ -662,6 +662,21 @@ def _decode_reservations(raw: object) -> tuple[tuple[str, "_PartitionKey"], ...]
 # request, so its own most recent admission timestamp is the right one.
 _ADMISSION_TIME_FIELD: Final[str] = "_model_based_tag_rate_limits_admission_time"
 
+# The routing-group membership (candidate_model_names) admission actually
+# resolved against, stashed the same way _ADMISSION_TIME_FIELD is. resolve_any
+# dedupes divergent per-deployment entries by picking the alphabetically first
+# member model_name sharing a signature (resolved_group) -- a pure function of
+# this exact candidate set. Router's live routing-group membership can change
+# between admission and success (a deployment added or removed mid-request via
+# /model/new or a config hot-reload), and success independently re-deriving
+# candidate_model_names from *live* membership at that later point can pick a
+# different resolved_group than admission did, hashing to a different Redis
+# key -- so success accounting silently misses the bucket admission actually
+# checked, letting real usage escape the enforced cap. Reusing admission's own
+# snapshot keeps resolve_any's output identical at both points regardless of
+# what changed in between.
+_ROUTING_GROUP_CANDIDATES_FIELD: Final[str] = "_model_based_tag_rate_limits_routing_group_candidates"
+
 
 class _TagRateLimitIndex:
     """Rebuilds the limits index when `llm_router.model_list` changes, or at
@@ -876,6 +891,25 @@ def _record_admission_time(request_kwargs: Mapping[str, object], now: float) -> 
 def _admission_time_or(kwargs: Mapping[str, object], fallback: float) -> float:
     recorded: Final = kwargs.get(_ADMISSION_TIME_FIELD)
     return recorded if isinstance(recorded, float) else fallback
+
+
+def _record_routing_group_candidates(
+    request_kwargs: Mapping[str, object], candidate_model_names: tuple[str, ...]
+) -> None:
+    """Stash the routing-group membership admission resolved against -- see
+    `_ROUTING_GROUP_CANDIDATES_FIELD`'s docstring for why. Silently a no-op
+    without a real logging object (defensive only; every real request has
+    one): success accounting falls back to its own live reconstruction, same
+    as before this fix existed."""
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+    if isinstance(model_call_details, dict):
+        model_call_details[_ROUTING_GROUP_CANDIDATES_FIELD] = candidate_model_names
+
+
+def _routing_group_candidates_or(kwargs: Mapping[str, object], fallback: tuple[str, ...]) -> tuple[str, ...]:
+    recorded: Final = kwargs.get(_ROUTING_GROUP_CANDIDATES_FIELD)
+    return recorded if isinstance(recorded, tuple) else fallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -1106,9 +1140,11 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # the purpose of deciding resolved_group, and success accounting has no
         # way to know which members were healthy at admission time -- it can
         # only reconstruct the full, static membership (see its own comment
-        # below). Deriving both sides from the same full-membership source is
-        # the only way they're guaranteed to dedup to the identical bucket
-        # regardless of cooldown state at either point in time.
+        # below). Deriving both sides from the same full-membership source
+        # handles cooldown-state drift between the two points in time; actual
+        # membership drift (a deployment added or removed mid-request) still
+        # needs admission's own snapshot stashed and reused -- see
+        # _ROUTING_GROUP_CANDIDATES_FIELD's docstring.
         routing_group_deployments: Final = self.llm_router._get_routing_group_deployments(  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching resolve_any's own reliance on this method
             model=model, team_id=team_id
         )
@@ -1117,6 +1153,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             if routing_group_deployments is not None
             else tuple(name for d in healthy_deployments if isinstance(name := d.get("model_name"), str))
         )
+        _record_routing_group_candidates(resolved_request_kwargs, candidate_model_names)
         configured: Final = self._index.get(self.llm_router).resolve_any(model, team_id, candidate_model_names)
         if not configured:
             return healthy_deployments
@@ -1621,6 +1658,13 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # only when `model_group` isn't a routing group at all (a plain
         # single-model_name chain, where resolve() already matches directly
         # and this candidate set is never actually consulted).
+        #
+        # Reconstructing live membership here is itself only a fallback: it
+        # can still disagree with admission's own candidate set if the
+        # routing group's actual membership changed between the two points
+        # in time (not just cooldown/health state) -- _routing_group_candidates_or
+        # below prefers admission's own stashed snapshot whenever one exists.
+        # See _ROUTING_GROUP_CANDIDATES_FIELD's docstring.
         deployment_id: Final = standard_logging_object.get("model_id")
         serving_deployment: Final = (
             self.llm_router.get_deployment(deployment_id) if isinstance(deployment_id, str) else None
@@ -1628,11 +1672,12 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         routing_group_deployments: Final = self.llm_router._get_routing_group_deployments(  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching resolve_any's own reliance on this method
             model=model_group, team_id=team_id
         )
-        candidate_model_names: Final = (
+        live_candidate_model_names: Final = (
             tuple(dep["model_name"] for dep in routing_group_deployments)
             if routing_group_deployments is not None
             else ((serving_deployment.model_name,) if serving_deployment is not None else ())
         )
+        candidate_model_names: Final = _routing_group_candidates_or(kwargs, fallback=live_candidate_model_names)
         configured: Final = self._index.get(self.llm_router).resolve_any(model_group, team_id, candidate_model_names)
         if not configured:
             return

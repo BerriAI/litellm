@@ -33,7 +33,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     BACKGROUND_TASKS as _BACKGROUND_TASKS,
     CONCURRENCY_MIN_SAFETY_TTL_SECONDS as _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
 )
-from litellm.types.router import RoutingGroup, TagRateLimitEntry, TagRateLimitScope
+from litellm.types.router import Deployment, RoutingGroup, TagRateLimitEntry, TagRateLimitScope
 
 
 class TimeController:
@@ -1594,6 +1594,77 @@ async def test_log_success_event_accounts_against_the_same_bucket_admission_chec
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     )
+
+
+@pytest.mark.asyncio
+async def test_log_success_event_uses_admissions_own_candidate_set_when_group_membership_drifts(time_controller):
+    """
+    Bugbot finding: resolve_any's dedup picks the alphabetically first member
+    model_name sharing a signature as resolved_group, a pure function of
+    candidate_model_names. Both admission and success independently rebuild
+    that set from the router's *live* routing-group membership, so a
+    deployment added mid-request (a hot-reload) whose name sorts earlier can
+    make success pick a different resolved_group than admission did,
+    accounting real usage into a bucket admission never checked.
+    """
+    token_limits = {
+        "token_limits": {
+            "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+        }
+    }
+    router = litellm.Router(
+        model_list=[
+            _deployment("backend-a", "dep-a", token_limits),
+            _deployment("backend-b", "dep-b", token_limits),
+        ],
+        routing_groups=[
+            RoutingGroup(group_name="my-group", models=["backend-a", "backend-b"], routing_strategy="simple-shuffle")
+        ],
+    )
+    limiter = _make_limiter(time_controller)
+    limiter.update_variables(llm_router=router)
+    request_kwargs, model_call_details = _call_context(["end_user_id:u1"])
+
+    healthy = router._get_routing_group_deployments(model="my-group", team_id=None)
+    admitted = await limiter.async_filter_deployments(
+        model="my-group", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert admitted == healthy
+    admission_bucket_group = limiter._index.get(router).resolve_any(
+        "my-group", team_id=None, candidate_model_names=("backend-a", "backend-b")
+    )[0].resolved_group
+
+    router.get_routing_group("my-group").models.append("backend-0")
+    router.add_deployment(
+        Deployment(
+            model_name="backend-0",
+            litellm_params={"model": "gpt-4o", "mock_response": "ok"},  # type: ignore
+            model_info={"id": "dep-0", "tag_rate_limits": token_limits},
+        )
+    )
+    serving_deployment_id = "dep-b" if admission_bucket_group == "backend-a" else "dep-a"
+
+    model_call_details["standard_logging_object"] = {
+        "model_group": "my-group",
+        "model_id": serving_deployment_id,
+        "total_tokens": 42,
+        "response_cost": 0.01,
+    }
+    await limiter.async_log_success_event(kwargs=model_call_details, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    admission_key = _expected_bucket_key(
+        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group=admission_bucket_group, limit=500000
+    )
+    drifted_key = _expected_bucket_key(
+        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group="backend-0", limit=500000
+    )
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=admission_key, litellm_parent_otel_span=None))
+        == 42.0
+    )
+    assert await limiter.internal_usage_cache.async_get_cache(key=drifted_key, litellm_parent_otel_span=None) is None
 
 
 @pytest.mark.asyncio
