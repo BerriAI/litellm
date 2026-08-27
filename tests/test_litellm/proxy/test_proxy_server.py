@@ -11600,6 +11600,42 @@ async def test_init_prompts_in_db_keeps_the_in_memory_copy_when_a_row_fails_to_p
         IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_broken")
 
 
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_keeps_a_prompt_created_while_the_sync_was_reading(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    prisma_client = MagicMock()
+    try:
+
+        async def create_prompt_behind_the_select() -> list:
+            IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
+                prompt=PromptSpec(
+                    prompt_id="greeting_race.v1",
+                    litellm_params=PromptLiteLLMParams(
+                        prompt_id="greeting_race",
+                        prompt_integration="dotprompt",
+                        prompt_data={"content": "Begin every reply with AHOY", "metadata": {}},
+                    ),
+                    prompt_info=PromptInfo(prompt_type="db"),
+                )
+            )
+            return []
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(side_effect=create_prompt_behind_the_select)
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        surviving_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_race.v1")
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id("greeting_race.v1") is not None
+        assert surviving_callback is not None
+        assert litellm.callbacks == [surviving_callback]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_race")
+
+
 class TestEmbeddingsFailureHookRequestData:
     @pytest.mark.asyncio
     async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):

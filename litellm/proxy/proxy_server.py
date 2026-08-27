@@ -7269,6 +7269,7 @@ class ProxyConfig:
                 return None
 
         try:
+            prompt_ids_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
@@ -7296,8 +7297,10 @@ class ProxyConfig:
             if every_row_parsed:
                 deleted_db_prompt_ids: Final = tuple(
                     prompt_id
-                    for prompt_id, spec in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.items()
-                    if spec.prompt_info.prompt_type == "db" and prompt_id not in newest_spec_per_id
+                    for prompt_id in prompt_ids_loaded_before_db_read
+                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(prompt_id)) is not None
+                    and loaded_spec.prompt_info.prompt_type == "db"
+                    and prompt_id not in newest_spec_per_id
                 )
                 for deleted_prompt_id in deleted_db_prompt_ids:
                     IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id=deleted_prompt_id)
