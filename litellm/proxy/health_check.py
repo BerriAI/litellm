@@ -7,8 +7,11 @@ import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 
@@ -16,6 +19,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 logger: Final = logging.getLogger(__name__)
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING,
@@ -165,6 +169,38 @@ def health_check_filter_kwargs_from_general_settings(
             g.get("health_check_skip_disabled_background_models", False)
         ),
     }
+
+
+def parse_background_health_check_model_groups(
+    general_settings: Mapping[str, object] | None,
+) -> frozenset[str] | None:
+    """
+    Read ``general_settings.background_health_check_model_groups``.
+
+    ``None`` means the allowlist is unset and every deployment participates
+    (legacy behavior). A list scopes background health checks and health-check
+    routing to deployments whose ``model_name`` is listed. A malformed value
+    raises so the proxy fails at startup instead of silently probing everything.
+    """
+    raw: Final = (general_settings or {}).get("background_health_check_model_groups")
+    if raw is None:
+        return None
+    try:
+        return frozenset(TypeAdapter(list[str]).validate_python(raw))
+    except ValidationError as e:
+        raise ValueError(
+            "general_settings.background_health_check_model_groups must be a list of model group names"
+        ) from e
+
+
+def filter_deployments_to_model_groups(
+    model_list: Sequence[_DeploymentT],
+    model_groups: AbstractSet[str] | None,
+) -> tuple[_DeploymentT, ...]:
+    """Deployments whose ``model_name`` is in ``model_groups``; all of them when unset."""
+    if model_groups is None:
+        return tuple(model_list)
+    return tuple(x for x in model_list if x.get("model_name") in model_groups)
 
 
 def filter_deployments_by_id(
