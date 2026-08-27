@@ -2222,10 +2222,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "content" not in candidate:
                 if isinstance(model_response, ModelResponse):
                     finish_reason = candidate.get("finishReason")
-                    mapped_finish_reason = (
-                        VertexGeminiConfig._check_finish_reason(None, finish_reason)
-                        if finish_reason is not None
-                        else "length"
+                    mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
+                        None, finish_reason
                     )
                     empty_message: ChatCompletionResponseMessage = {
                         "role": "assistant",

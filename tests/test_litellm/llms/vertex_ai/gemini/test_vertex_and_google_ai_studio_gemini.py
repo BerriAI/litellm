@@ -5604,7 +5604,7 @@ def test_vertex_ai_content_less_candidate_rescued_as_length():
     assert choice.message.role == "assistant"
 
 
-def test_vertex_ai_content_less_candidate_without_finish_reason_not_stop():
+def test_vertex_ai_content_less_candidate_without_finish_reason_uses_default():
     v = VertexGeminiConfig()
     model_response = ModelResponse()
     model_response.choices = []
@@ -5616,8 +5616,7 @@ def test_vertex_ai_content_less_candidate_without_finish_reason_not_stop():
     )
 
     assert len(model_response.choices) == 1
-    assert model_response.choices[0].finish_reason == "length"
-    assert model_response.choices[0].finish_reason != "stop"
+    assert model_response.choices[0].finish_reason == "stop"
     assert model_response.choices[0].message.content == ""
 
 
