@@ -181,7 +181,9 @@ describe("SCIMConfig", () => {
     await user.click(screen.getByRole("button", { name: /save mappings/i }));
 
     await waitFor(() => {
-      expect(toast.fromError).toHaveBeenCalledWith("Each mapping needs both a group name pattern and an organization ID");
+      expect(toast.fromError).toHaveBeenCalledWith(
+        "Each mapping needs both a group name pattern and an organization ID",
+      );
     });
     expect(updateScimSettings).not.toHaveBeenCalled();
   });
