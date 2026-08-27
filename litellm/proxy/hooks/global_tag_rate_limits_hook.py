@@ -120,7 +120,6 @@ from litellm.router_strategy.tag_based_routing import (
 )
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.router import TagRateLimitEntry, TagRateLimits
-from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -327,10 +326,12 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             return built
 
     async def _check_and_increment_one(
-        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int
+        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
     ) -> tuple[bool, float]:
         if self._check_and_incr_script is not None:
-            raw: Final = await self._check_and_incr_script(keys=(key,), args=(limit, increment, ttl))
+            raw: Final = await self._check_and_incr_script(
+                keys=(key,), args=(limit, increment, ttl, 1 if refresh_ttl else 0)
+            )
             return bool(raw[0]), float(raw[1])
         async with self._lock:
             current_value: Final = await cache.async_get_cache(key=key, litellm_parent_otel_span=None)
@@ -338,7 +339,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if current + increment > limit:
                 return False, current
             new_value: Final = current + increment
-            await cache.async_set_cache(key=key, value=new_value, ttl=ttl, litellm_parent_otel_span=None)
+            await cache.async_set_cache(
+                key=key, value=new_value, ttl=ttl, refresh_ttl=refresh_ttl, litellm_parent_otel_span=None
+            )
             return True, new_value
 
     async def _decrement_floor_zero(self, cache: InternalUsageCache, key: str, delta: float) -> None:
@@ -352,17 +355,17 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
     async def _atomic_check_and_increment(
         self,
-        checks: Sequence[tuple[InternalUsageCache, str, float, float, int]],
+        checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]],
     ) -> tuple[int | None, tuple[float, ...]]:
         """All-or-nothing atomic admission across `checks`: on a rejection,
         refunds every check admitted earlier in this batch."""
         if not checks:
             return None, ()
         admitted_values: Final = []  # mutable-ok: sequential async accumulator, discardable on early rejection
-        for index, (cache, key, limit, increment, ttl) in enumerate(checks):
+        for index, (cache, key, limit, increment, ttl, refresh_ttl) in enumerate(checks):
             admitted = False
             try:
-                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl)
+                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
             finally:
                 if not admitted:
                     await self._refund_admitted(checks, up_to_index=index)
@@ -373,10 +376,10 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         return None, tuple(admitted_values)
 
     async def _refund_admitted(
-        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int]], up_to_index: int
+        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]], up_to_index: int
     ) -> None:
         for refund_index in range(up_to_index):
-            refund_cache, refund_key, _limit, refund_increment, _ttl = checks[refund_index]
+            refund_cache, refund_key, _limit, refund_increment, _ttl, _refresh_ttl = checks[refund_index]
             try:
                 await self._decrement_floor_zero(refund_cache, refund_key, -refund_increment)
             except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
@@ -597,6 +600,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                         )
                         else 1.0,
                         self._ttl_for(check.unit, check.entry),
+                        check.unit == "concurrency",
                     )
                     for partition, check in zip(atomic_partitions, atomic_checks)
                 )
@@ -667,7 +671,13 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         """
         await self._release_pending_for_call_id(request_data)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> None:
         # Always release regardless of which hook raised: this hook's own
         # rejection never reserves a slot, so pending_concurrency_keys is
         # already empty in that case and the check below no-ops; a rejection
@@ -675,7 +685,13 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # land after this hook already reserved its own slot.
         await self._release_pending_for_call_id(kwargs)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> None:
         stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
         if stash is not None and stash.pending_concurrency_keys:
             release_keys: Final = tuple(stash.pending_concurrency_keys)
@@ -688,15 +704,18 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         if config is None:
             return
 
-        standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-        if standard_logging_object is None:
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if not isinstance(standard_logging_object, dict):
             return
 
         # kwargs here is Logging.model_call_details, not the router's flat
         # request kwargs admission sees: metadata/litellm_metadata are never
         # top-level here, only nested under kwargs["litellm_params"] (see
         # Logging.update_environment_variables).
-        litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
+        litellm_params_raw: Final = kwargs.get("litellm_params")
+        litellm_params_for_metadata: Final[Mapping[str, object]] = (
+            litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
+        )
         metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
@@ -761,7 +780,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             partition = await self._partition_for(partition_key)  # not Final: rebound each loop iteration
             accounting_task = asyncio.create_task(  # not Final: rebound each loop iteration
                 partition.v3.async_increment_tokens_with_ttl_preservation(
-                    pipeline_operations=tuple(group_operations), parent_otel_span=None
+                    pipeline_operations=group_operations, parent_otel_span=None
                 )
             )
             _BACKGROUND_TASKS.add(accounting_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
