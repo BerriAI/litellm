@@ -160,6 +160,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return fn_name, None
 
     def _is_reasoning_end(self, chunk):
+        if not chunk.choices:
+            return False
         delta: Final = chunk.choices[0].delta
 
         # if this indicates reasoning content, don't consider reasoning ended
@@ -818,6 +820,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Change: Never return a value, just enqueue output item events
         if self.sent_output_item_added_event:
             return
+        if not chunk.choices:
+            return
         delta: Final = chunk.choices[0].delta
 
         self._sequence_number += 1
@@ -1145,6 +1149,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         It's unclear how users expect litellm to translate multiple-choices-per-chunk to the responses API output.
         """
+        if not choices:
+            return ""
         choice: Final = choices[0]
         chat_completion_delta: Final[ChatCompletionDelta] = choice.delta
         return chat_completion_delta.content or ""
