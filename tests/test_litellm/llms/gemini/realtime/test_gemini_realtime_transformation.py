@@ -2007,3 +2007,115 @@ def test_bare_generation_complete_without_prior_delta_is_dropped(patch_gemini_au
     )
 
     assert result["response"] == []
+
+
+def _input_audio_append_message(raw_byte_count: int) -> str:
+    import base64
+
+    return json.dumps(
+        {"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\x00" * raw_byte_count).decode()}
+    )
+
+
+def test_transcribe_live_completed_event_carries_estimated_usage(patch_gemini_transcribe_live_cost_map_entry):
+    """Gemini Live sends no usageMetadata for transcribe sessions, so LiteLLM bills
+    from streamed audio duration at Google's published estimate (25 audio tok/sec in,
+    175 text tok/min out): 96000 pcm16 bytes = 2s at 24kHz -> 50 in / 6 out."""
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage, RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(96000), "gemini-3.5-transcribe-live")
+
+    transcript_frame: Final[BidiGenerateContentServerMessage] = {
+        "serverContent": {"inputTranscription": {"text": "ahoy there"}}
+    }
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(transcript_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    completed: Final = tuple(
+        event
+        for event in result["response"]
+        if event["type"] == "conversation.item.input_audio_transcription.completed"
+    )
+    assert len(completed) == 1
+    assert completed[0]["transcript"] == "ahoy there"
+    expected_usage: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 50,
+        "output_tokens": 6,
+        "total_tokens": 56,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 50},
+    }
+    assert completed[0]["usage"] == expected_usage
+
+    second: Final = config.transform_realtime_response(
+        json.dumps(transcript_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+    second_completed: Final = tuple(
+        event
+        for event in second["response"]
+        if event["type"] == "conversation.item.input_audio_transcription.completed"
+    )
+    assert len(second_completed) == 1
+    assert "usage" not in second_completed[0]
+
+
+def test_non_transcription_live_model_completed_event_has_no_usage(patch_gemini_audio_cost_map_entries):
+    """Conversational Live models get their audio tokens from usageMetadata via
+    response.done; attaching estimated usage to their transcription events would
+    double-bill, so the estimate is gated to audio_transcription-mode models."""
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(96000), "gemini-3.1-flash-live-preview")
+
+    transcript_frame: Final[BidiGenerateContentServerMessage] = {
+        "serverContent": {"inputTranscription": {"text": "ahoy there"}}
+    }
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(transcript_frame),
+        "gemini-3.1-flash-live-preview",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    completed: Final = tuple(
+        event
+        for event in result["response"]
+        if event["type"] == "conversation.item.input_audio_transcription.completed"
+    )
+    assert len(completed) == 1
+    assert "usage" not in completed[0]
