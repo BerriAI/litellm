@@ -100,6 +100,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
             presidio_language=litellm_params.presidio_language,
             presidio_entities_deny_list=litellm_params.presidio_entities_deny_list,
+            presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
             apply_to_output=False,
         )
         params.update(overrides)

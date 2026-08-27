@@ -2893,3 +2893,442 @@ async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key
         chunks.append(chunk)
 
     assert chunks == [raw_chunk]
+
+
+# ---------------------------------------------------------------------------
+# Chunked /analyze tests (LIT-4785)
+# Oversized texts must be split into overlapping chunks before /analyze, with
+# per-chunk offsets remapped onto the original text.
+# ---------------------------------------------------------------------------
+
+CHUNK_MARKER_ONE = "4111-0001"
+CHUNK_MARKER_TWO = "4111-0002"
+
+
+def _make_marker_session_iterator(
+    recorded_analyze_payloads,
+    analyzer_body_limit_bytes=None,
+    recorded_anonymize_payloads=None,
+):
+    """Mock session behaving like a real Presidio pair.
+
+    /analyze returns a CREDIT_CARD detection for every ``4111-NNNN`` marker in
+    the posted text (chunk-local offsets, like the real analyzer). When
+    ``analyzer_body_limit_bytes`` is set, oversized /analyze bodies get the
+    HTTP 413 from LIT-4785. /anonymize replaces the given spans in the posted
+    text.
+    """
+    import json as json_module
+    import re as re_module
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            def __init__(self, status, body):
+                self.status = status
+                self.content_type = "application/json"
+                self.headers = {"Content-Type": "application/json"}
+                self._body = body
+
+            async def text(self):
+                return json_module.dumps(self._body)
+
+            async def json(self):
+                return self._body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None):
+                payload = json
+                if url.endswith("analyze"):
+                    recorded_analyze_payloads.append(payload)
+                    text = payload["text"]
+                    if (
+                        analyzer_body_limit_bytes is not None
+                        and len(text.encode("utf-8")) > analyzer_body_limit_bytes
+                    ):
+                        return MockResponse(
+                            413,
+                            {
+                                "error": "Request body too large. /analyze accepts at most "
+                                f"{analyzer_body_limit_bytes} bytes; larger documents must be "
+                                "chunked by the caller."
+                            },
+                        )
+                    results = [
+                        {
+                            "entity_type": "CREDIT_CARD",
+                            "start": m.start(),
+                            "end": m.end(),
+                            "score": 1.0,
+                        }
+                        for m in re_module.finditer(r"4111-\d{4}", text)
+                    ]
+                    return MockResponse(200, results)
+                if recorded_anonymize_payloads is not None:
+                    recorded_anonymize_payloads.append(payload)
+                text = payload["text"]
+                items = sorted(
+                    payload["analyzer_results"], key=lambda r: r["start"], reverse=True
+                )
+                for r in items:
+                    text = text[: r["start"]] + "<" + r["entity_type"] + ">" + text[r["end"] :]
+                return MockResponse(
+                    200,
+                    {
+                        "text": text,
+                        "items": [{"entity_type": r["entity_type"]} for r in items],
+                    },
+                )
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        yield MockSession()
+
+    return mock_iterator
+
+
+def _chunking_guardrail(chunk_size_bytes=100, **kwargs):
+    return _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        presidio_analyze_chunk_size_bytes=chunk_size_bytes,
+        mock_testing=False,
+        **kwargs,
+    )
+
+
+def _oversized_marker_text():
+    """~258-char text with markers in the 1st and 3rd 100-byte chunk."""
+    filler = "x" * 60
+    return filler + CHUNK_MARKER_ONE + filler + filler + CHUNK_MARKER_TWO + filler
+
+
+def test_split_text_for_analysis_offsets_and_byte_budget():
+    text = " ".join(f"word{i}" for i in range(200))
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(
+        text=text, chunk_size_bytes=100, overlap_chars=20
+    )
+    assert len(chunks) > 1
+    for offset, chunk in chunks:
+        assert len(chunk.encode("utf-8")) <= 100
+        assert text[offset : offset + len(chunk)] == chunk
+    assert chunks[0][0] == 0
+    assert chunks[-1][0] + len(chunks[-1][1]) == len(text)
+    for (prev_off, prev_chunk), (next_off, _) in zip(chunks, chunks[1:]):
+        # consecutive chunks overlap (or at least touch) and make progress
+        assert next_off <= prev_off + len(prev_chunk)
+        assert next_off > prev_off
+
+
+def test_split_text_for_analysis_multibyte_characters():
+    text = "émoji🙂 çafé " * 120
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(
+        text=text, chunk_size_bytes=64, overlap_chars=8
+    )
+    assert len(chunks) > 1
+    for offset, chunk in chunks:
+        assert len(chunk.encode("utf-8")) <= 64
+        assert text[offset : offset + len(chunk)] == chunk
+    assert chunks[-1][0] + len(chunks[-1][1]) == len(text)
+
+
+def test_split_text_for_analysis_under_budget_returns_single_chunk():
+    text = "short text"
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(
+        text=text, chunk_size_bytes=100, overlap_chars=20
+    )
+    assert chunks == [(0, text)]
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_single_call_when_under_limit():
+    guardrail = _chunking_guardrail(chunk_size_bytes=10_000)
+    payloads = []
+    text = f"my card is {CHUNK_MARKER_ONE} thanks"
+    with patch.object(
+        guardrail, "_get_session_iterator", _make_marker_session_iterator(payloads)
+    ):
+        results = await guardrail.analyze_text(
+            text=text, presidio_config=None, request_data={}
+        )
+    assert len(payloads) == 1
+    assert payloads[0]["text"] == text
+    assert len(results) == 1
+    assert text[results[0]["start"] : results[0]["end"]] == CHUNK_MARKER_ONE
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_chunks_oversized_text_and_remaps_offsets():
+    """Regression test for LIT-4785.
+
+    The mock analyzer rejects bodies over 100 bytes with HTTP 413 (like the
+    reporter's deployment): on unfixed code the single oversized /analyze call
+    fails closed; with chunking every call stays under the limit and the
+    detections come back with offsets remapped onto the original text.
+    The duplicate detection from the overlap region must be deduplicated.
+    """
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+    )
+    payloads = []
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        _make_marker_session_iterator(payloads, analyzer_body_limit_bytes=100),
+    ):
+        results = await guardrail.analyze_text(
+            text=text, presidio_config=None, request_data={}
+        )
+    assert len(payloads) > 1
+    for payload in payloads:
+        assert len(payload["text"].encode("utf-8")) <= 100
+    assert [text[r["start"] : r["end"]] for r in results] == [
+        CHUNK_MARKER_ONE,
+        CHUNK_MARKER_TWO,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_check_pii_masks_oversized_text_with_chunking():
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+    )
+    analyze_payloads = []
+    anonymize_payloads = []
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        _make_marker_session_iterator(
+            analyze_payloads,
+            analyzer_body_limit_bytes=100,
+            recorded_anonymize_payloads=anonymize_payloads,
+        ),
+    ):
+        masked = await guardrail.check_pii(
+            text=text, output_parse_pii=False, presidio_config=None, request_data={}
+        )
+    assert CHUNK_MARKER_ONE not in masked
+    assert CHUNK_MARKER_TWO not in masked
+    assert masked.count("<CREDIT_CARD>") == 2
+    # anonymize still receives the full text with globally remapped offsets
+    assert len(anonymize_payloads) == 1
+    assert anonymize_payloads[0]["text"] == text
+
+
+@pytest.mark.asyncio
+async def test_output_parse_pii_numbered_tokens_across_chunks():
+    """Numbered tokens slice the ORIGINAL text at the remapped offsets; a
+    chunk-local offset would store the wrong substring in pii_tokens and
+    corrupt the later unmask."""
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+        output_parse_pii=True,
+    )
+    payloads = []
+    request_data = {}
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        _make_marker_session_iterator(payloads, analyzer_body_limit_bytes=100),
+    ):
+        masked = await guardrail.check_pii(
+            text=text,
+            output_parse_pii=True,
+            presidio_config=None,
+            request_data=request_data,
+        )
+    assert masked.count("<CREDIT_CARD_1>") == 1
+    assert masked.count("<CREDIT_CARD_2>") == 1
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<CREDIT_CARD_1>"] == CHUNK_MARKER_ONE
+    assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_chunked_failure_stays_fail_closed():
+    """If one chunk still fails, the chunked path raises exactly like a single
+    failing /analyze call (fail closed when PII protection is configured)."""
+    guardrail = _chunking_guardrail(
+        chunk_size_bytes=100,
+        pii_entities_config={"CREDIT_CARD": PiiAction.MASK},
+    )
+    payloads = []
+    text = _oversized_marker_text()
+    with patch.object(
+        guardrail,
+        "_get_session_iterator",
+        # every chunk is rejected: limit below the chunk size
+        _make_marker_session_iterator(payloads, analyzer_body_limit_bytes=10),
+    ):
+        with pytest.raises(GuardrailRaisedException, match="HTTP 413"):
+            await guardrail.analyze_text(
+                text=text, presidio_config=None, request_data={}
+            )
+
+
+def test_presidio_analyze_chunk_size_default_and_validation():
+    from litellm.constants import DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    assert guardrail.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    nonpositive = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, presidio_analyze_chunk_size_bytes=-5
+    )
+    assert nonpositive.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    custom = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, presidio_analyze_chunk_size_bytes=1234
+    )
+    assert custom.presidio_analyze_chunk_size_bytes == 1234
+
+
+def test_update_in_memory_applies_analyze_chunk_size():
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_analyze_chunk_size_bytes=99_000,
+    )
+    guardrail.update_in_memory_litellm_params(params)
+    assert guardrail.presidio_analyze_chunk_size_bytes == 99_000
+
+
+def test_merge_drops_truncated_same_type_fragment_from_overlap():
+    """A boundary entity seen truncated by chunk 1 and whole by chunk 2 must
+    merge to the single full span; keeping both overlapping spans corrupts the
+    numbered-token rewriter and double-counts entities."""
+    truncated = {"entity_type": "IP_ADDRESS", "start": 10, "end": 21, "score": 0.6}
+    full_local = {"entity_type": "IP_ADDRESS", "start": 5, "end": 18, "score": 0.95}
+    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+        text_chunks=[(0, "x" * 21), (5, "x" * 25)],
+        chunk_results=[[truncated], [full_local]],
+    )
+    assert len(merged) == 1
+    assert (merged[0]["start"], merged[0]["end"]) == (10, 23)
+    assert merged[0]["score"] == 0.95
+
+
+def test_merge_exact_duplicate_keeps_higher_score():
+    low = {"entity_type": "EMAIL_ADDRESS", "start": 3, "end": 9, "score": 0.4}
+    high = {"entity_type": "EMAIL_ADDRESS", "start": 0, "end": 6, "score": 0.9}
+    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+        text_chunks=[(0, "x" * 9), (3, "x" * 9)],
+        chunk_results=[[low], [high]],
+    )
+    assert len(merged) == 1
+    assert merged[0]["score"] == 0.9
+
+
+def test_merge_preserves_cross_type_overlap():
+    """Single-call Presidio returns overlapping detections of DIFFERENT types
+    (e.g. URL inside EMAIL_ADDRESS); the chunk merge must not drop those."""
+    email = {"entity_type": "EMAIL_ADDRESS", "start": 0, "end": 20, "score": 1.0}
+    url = {"entity_type": "URL", "start": 5, "end": 20, "score": 0.5}
+    merged = _OPTIONAL_PresidioPIIMasking._merge_chunked_analyze_results(
+        text_chunks=[(0, "x" * 25)],
+        chunk_results=[[email, url]],
+    )
+    assert len(merged) == 2
+
+
+def test_update_in_memory_coerces_invalid_chunk_size():
+    from litellm.constants import DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, presidio_analyze_chunk_size_bytes=99_000)
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_analyze_chunk_size_bytes=-1,
+    )
+    guardrail.update_in_memory_litellm_params(params)
+    assert guardrail.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+
+def test_split_text_handles_chunk_size_below_char_width():
+    chunks = _OPTIONAL_PresidioPIIMasking._split_text_for_analysis(
+        text="\U0001f642\U0001f642", chunk_size_bytes=3, overlap_chars=8
+    )
+    assert all(chunk for _, chunk in chunks)
+    assert chunks[-1][0] + len(chunks[-1][1]) == 2
+
+
+@pytest.mark.asyncio
+async def test_tiny_chunk_size_with_multibyte_text_terminates():
+    """chunk_size below one character's UTF-8 width must not recurse forever;
+    the constructor floors the value to the widest character width."""
+    guardrail = _chunking_guardrail(chunk_size_bytes=1)
+    assert guardrail.presidio_analyze_chunk_size_bytes == 4
+    payloads = []
+    with patch.object(
+        guardrail, "_get_session_iterator", _make_marker_session_iterator(payloads)
+    ):
+        results = await guardrail.analyze_text(
+            text="\U0001f642\U0001f642\U0001f642ab", presidio_config=None, request_data={}
+        )
+    assert results == []
+    assert len(payloads) >= 2
+
+
+@pytest.mark.asyncio
+async def test_chunked_analyze_concurrency_is_bounded():
+    from litellm.constants import PRESIDIO_ANALYZE_CHUNK_CONCURRENCY
+
+    guardrail = _chunking_guardrail(chunk_size_bytes=10)
+    state = {"active": 0, "peak": 0}
+
+    @asynccontextmanager
+    async def mock_iterator():
+        class MockResponse:
+            status = 200
+            content_type = "application/json"
+            headers = {"Content-Type": "application/json"}
+
+            async def text(self):
+                return "[]"
+
+            async def json(self):
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+                await asyncio.sleep(0.005)
+                state["active"] -= 1
+                return []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        class MockSession:
+            def post(self, url, json=None, headers=None):
+                return MockResponse()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+        yield MockSession()
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        await guardrail.analyze_text(text="a" * 400, presidio_config=None, request_data={})
+    assert state["peak"] >= 2
+    assert state["peak"] <= PRESIDIO_ANALYZE_CHUNK_CONCURRENCY

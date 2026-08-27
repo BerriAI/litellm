@@ -11,7 +11,7 @@
 import asyncio
 import json
 import threading
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
@@ -22,6 +22,11 @@ from typing_extensions import NotRequired, ReadOnly
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES,
+    PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
+    PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -93,6 +98,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_language: str | None = None,
         presidio_score_thresholds: dict[PiiEntityType | str, float] | None = None,
         presidio_entities_deny_list: list[PiiEntityType | str] | None = None,
+        presidio_analyze_chunk_size_bytes: int | None = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -121,6 +127,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.presidio_score_thresholds: dict[PiiEntityType | str, float] = presidio_score_thresholds or {}
         self.presidio_entities_deny_list: list[PiiEntityType | str] = presidio_entities_deny_list or []
         self.presidio_language = presidio_language or "en"
+        self.presidio_analyze_chunk_size_bytes: int = self._coerce_analyze_chunk_size(presidio_analyze_chunk_size_bytes)
         # Shared HTTP session to prevent memory leaks (issue #14540)
         self._http_session: aiohttp.ClientSession | None = None
         # Lock to prevent race conditions when creating session under concurrent load
@@ -280,7 +287,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     ) -> list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse:
         """
         Send text to the Presidio analyzer endpoint and get analysis results
+
+        Texts larger than ``presidio_analyze_chunk_size_bytes`` (UTF-8) are split
+        into overlapping chunks, analyzed per chunk, and the per-chunk results
+        are remapped onto the original text. Presidio analyzer deployments
+        commonly cap the /analyze request body size (e.g. at 1 MB), and analyzer
+        latency grows with payload size.
         """
+        # Chunk oversized texts before the try block so that a failing chunk
+        # keeps the same sanitized error message a single call would produce.
+        # A single-character text can never be split further, so it always
+        # takes the single-call path regardless of its encoded width.
+        if (
+            text
+            and len(text) > 1
+            and self.mock_redacted_text is None
+            and len(text.encode("utf-8")) > self.presidio_analyze_chunk_size_bytes
+        ):
+            return await self._analyze_text_chunked(
+                text=text,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
         try:
             # Skip empty or whitespace-only text to avoid Presidio errors
             # Common in tool/function calling where assistant content is empty
@@ -396,6 +424,167 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # Sanitize exception to avoid leaking the original text (which may
             # contain API keys or other secrets) in error responses.
             raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
+
+    async def _analyze_text_chunked(
+        self,
+        text: str,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: dict,  # mutable-ok: shared per-request state dict, matching analyze_text's parameter
+    ) -> list[PresidioAnalyzeResponseItem]:  # mutable-ok: analyze_text's declared return type requires list
+        """
+        Analyze an oversized text by splitting it into overlapping chunks.
+
+        Each chunk is at most ``presidio_analyze_chunk_size_bytes`` UTF-8 bytes,
+        so every /analyze call stays below the analyzer deployment's request
+        body limit; per-chunk results are remapped onto the original text and
+        merged. Raises exactly like a single ``analyze_text`` call if any chunk
+        fails.
+
+        Only the analyzer side is chunked: the later anonymize call still
+        receives the full original text, so texts above the anonymizer's own
+        body limit that contain detections keep failing there.
+        """
+        text_chunks: Final = self._split_text_for_analysis(
+            text=text,
+            chunk_size_bytes=self.presidio_analyze_chunk_size_bytes,
+            overlap_chars=PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
+        )
+        verbose_proxy_logger.debug(
+            "Presidio analyze: text exceeds %s bytes, analyzing in %s overlapping chunks",
+            self.presidio_analyze_chunk_size_bytes,
+            len(text_chunks),
+        )
+        # Bound the fan-out so a single oversized request cannot saturate the
+        # analyzer; excess chunks wait here instead of piling onto the pool.
+        analyze_semaphore: Final = asyncio.Semaphore(PRESIDIO_ANALYZE_CHUNK_CONCURRENCY)
+
+        async def _analyze_chunk_bounded(
+            chunk_text: str,
+        ) -> Sequence[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse:
+            async with analyze_semaphore:
+                return await self.analyze_text(
+                    text=chunk_text,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
+                )
+
+        gathered: Final = await asyncio.gather(
+            *(_analyze_chunk_bounded(chunk_text) for _, chunk_text in text_chunks),
+            return_exceptions=True,
+        )
+        chunk_results: Final = []
+        for result in gathered:
+            if isinstance(result, BaseException):
+                raise result
+            # analyze_text only returns a non-list shape when mock_redacted_text
+            # is set, and the chunked path is never entered in that case.
+            typed_result = cast("list[PresidioAnalyzeResponseItem]", result)  # cast-ok: gather() erases element type
+            chunk_results.append(typed_result)
+        return self._merge_chunked_analyze_results(text_chunks=text_chunks, chunk_results=chunk_results)
+
+    @staticmethod
+    def _coerce_analyze_chunk_size(value: int | None) -> int:
+        """
+        Validate a configured chunk size, falling back to the default.
+
+        Non-positive values would either bypass chunking entirely or degenerate
+        it into per-character splits (silently disabling detection), so they are
+        replaced by the default; values below 4 bytes (the widest UTF-8
+        character) are floored to 4 so a single character always fits in a
+        chunk and the chunked path can never re-enter itself.
+        """
+        if not value or value <= 0:
+            return DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+        return max(value, 4)
+
+    @staticmethod
+    def _split_text_for_analysis(
+        text: str,
+        chunk_size_bytes: int,
+        overlap_chars: int,
+    ) -> Sequence[tuple[int, str]]:
+        """
+        Split ``text`` into chunks of at most ``chunk_size_bytes`` UTF-8 bytes.
+
+        Consecutive chunks overlap by up to ``overlap_chars`` characters so a
+        PII entity up to that length lying across a chunk boundary is still
+        seen whole by one of the chunks (longer boundary-straddling entities
+        may be seen only truncated); ``_merge_chunked_analyze_results`` resolves
+        the duplicate and truncated detections this produces. Returns
+        ``(char_offset, chunk_text)`` pairs where ``char_offset`` is the
+        chunk's start position in the original text.
+        """
+        chunks: Final = []
+        text_len: Final = len(text)
+        start = 0  # rebind-ok: chunk cursor advances across the loop
+        while start < text_len:
+            # Byte-truncate a char-count-bounded slice, then drop the at most
+            # one trailing character the truncation split, so every chunk ends
+            # on a character boundary and holds at most chunk_size_bytes.
+            candidate = text[start : start + chunk_size_bytes]
+            chunk = candidate.encode("utf-8")[:chunk_size_bytes].decode("utf-8", errors="ignore")
+            if not chunk:
+                # chunk_size_bytes is below one character's UTF-8 width; emit a
+                # single character rather than an empty chunk.
+                chunk = candidate[:1]
+            end = start + len(chunk)
+            chunks.append((start, chunk))
+            if end >= text_len:
+                break
+            # Cap the overlap so the next chunk always makes forward progress.
+            effective_overlap = min(overlap_chars, len(chunk) // 2)
+            start = max(start + 1, end - effective_overlap)
+        return chunks
+
+    @staticmethod
+    def _merge_chunked_analyze_results(
+        text_chunks: Sequence[tuple[int, str]],
+        chunk_results: Sequence[Sequence[PresidioAnalyzeResponseItem]],
+    ) -> list[PresidioAnalyzeResponseItem]:  # mutable-ok: analyze_text's declared return type requires list
+        """
+        Remap per-chunk analyzer offsets onto the original text and merge.
+
+        A detection in an overlap region is reported by both neighbouring
+        chunks, and a boundary entity can additionally be reported truncated by
+        the chunk that saw only its head or tail. Same-entity-type detections
+        with overlapping remapped spans are therefore resolved by keeping the
+        longest span (highest score on ties) — mirroring the same-type conflict
+        removal Presidio's AnalyzerEngine applies within a single call, and
+        keeping overlapping spans from corrupting the numbered-token rewriter.
+        Detections of DIFFERENT entity types may still overlap, exactly as in a
+        single-call response. The merged list is sorted by position.
+        """
+        remapped: Final = []
+        for (char_offset, _), results in zip(text_chunks, chunk_results, strict=True):
+            for item in results:
+                item_start = item.get("start")
+                item_end = item.get("end")
+                if item_start is not None:
+                    item["start"] = item_start + char_offset
+                if item_end is not None:
+                    item["end"] = item_end + char_offset
+                remapped.append(item)
+
+        def _priority(item: PresidioAnalyzeResponseItem) -> tuple[int, float]:
+            span_start: Final = item.get("start") or 0
+            span_end: Final = item.get("end") or 0
+            return (-(span_end - span_start), -(item.get("score") or 0.0))
+
+        merged: Final = []
+        kept_spans_by_type: Final = {}
+        for item in sorted(remapped, key=_priority):
+            item_start = item.get("start")
+            item_end = item.get("end")
+            if item_start is None or item_end is None:
+                merged.append(item)
+                continue
+            kept_spans = kept_spans_by_type.setdefault(str(item.get("entity_type")), [])
+            if any(item_start < kept_end and kept_start < item_end for kept_start, kept_end in kept_spans):
+                continue
+            kept_spans.append((item_start, item_end))
+            merged.append(item)
+        merged.sort(key=lambda r: (r.get("start") or 0, r.get("end") or 0))
+        return merged
 
     async def _post_presidio_anonymize(
         self,
@@ -1392,3 +1581,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.presidio_score_thresholds = litellm_params.presidio_score_thresholds
         if litellm_params.presidio_entities_deny_list:
             self.presidio_entities_deny_list = litellm_params.presidio_entities_deny_list
+        if litellm_params.presidio_analyze_chunk_size_bytes is not None:
+            # Same validation as __init__: a non-positive value from a guardrail
+            # update must not silently disable detection via degenerate chunking.
+            self.presidio_analyze_chunk_size_bytes = self._coerce_analyze_chunk_size(
+                litellm_params.presidio_analyze_chunk_size_bytes
+            )

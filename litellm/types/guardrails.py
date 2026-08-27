@@ -392,6 +392,16 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
     )
+    presidio_analyze_chunk_size_bytes: int | None = Field(
+        default=None,
+        description=(
+            "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. "
+            "Longer texts are split into overlapping chunks of at most this size "
+            "and the merged results are remapped onto the original text. "
+            "Defaults to 500000; set it below your analyzer deployment's request "
+            "body limit, leaving headroom for the rest of the analyze payload."
+        ),
+    )
     mock_redacted_text: dict | None = Field(default=None, description="Mock redacted text for testing")
 
 
