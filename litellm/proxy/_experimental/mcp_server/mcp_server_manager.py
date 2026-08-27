@@ -5351,7 +5351,12 @@ class MCPServerManager:
                 extra_headers = {}
             hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
             existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
-            if hook_has_authorization and (existing_has_authorization or server_auth_header is not None):
+            server_auth_occupies_authorization: Final = (
+                any(k.lower() == "authorization" for k in server_auth_header)
+                if isinstance(server_auth_header, dict)
+                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+            )
+            if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
                 # Mirror the tools/list signer guard: an upstream credential (user OAuth,
                 # static header, or configured authentication_token) already occupies the
                 # Authorization slot, so the hook must not replace it.

@@ -618,7 +618,7 @@ class TestHookHeaderMergePriority:
         manager = MCPServerManager()
         server = self._make_server()
 
-        captured_extra_headers: Dict[str, Any] = {}
+        captured_extra_headers: Dict[str, Optional[Dict[str, str]]] = {}
 
         async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured_extra_headers["value"] = extra_headers
@@ -644,7 +644,7 @@ class TestHookHeaderMergePriority:
                 except Exception:
                     pass
 
-        headers = captured_extra_headers.get("value", {})
+        headers = captured_extra_headers.get("value") or {}
         assert headers["Authorization"] == "Bearer hook-jwt"
 
     @pytest.mark.asyncio
@@ -653,7 +653,7 @@ class TestHookHeaderMergePriority:
         manager = MCPServerManager()
         server = self._make_server()
 
-        captured: Dict[str, Any] = {}
+        captured: Dict[str, object] = {}
 
         async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured["extra_headers"] = extra_headers
@@ -684,6 +684,7 @@ class TestHookHeaderMergePriority:
                     pass
 
         headers = captured.get("extra_headers") or {}
+        assert isinstance(headers, dict)
         assert "Authorization" not in headers
         assert headers.get("X-Trace-Id") == "trace-123"
         assert captured.get("mcp_auth_header") == "server-static-token"
@@ -694,7 +695,7 @@ class TestHookHeaderMergePriority:
         manager = MCPServerManager()
         server = self._make_server(static_headers={"authorization": "Bearer static-token"})
 
-        captured_extra_headers: Dict[str, Any] = {}
+        captured_extra_headers: Dict[str, Optional[Dict[str, str]]] = {}
 
         async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
             captured_extra_headers["value"] = extra_headers
@@ -720,9 +721,131 @@ class TestHookHeaderMergePriority:
                 except Exception:
                     pass
 
-        headers = captured_extra_headers.get("value", {})
+        headers = captured_extra_headers.get("value") or {}
         assert headers.get("authorization") == "Bearer static-token"
         assert "Authorization" not in headers
+
+    @pytest.mark.asyncio
+    async def test_hook_authorization_kept_with_api_key_server_credential(self):
+        """An api_key credential maps to X-API-Key, so the hook Authorization is kept."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="Test Server",
+            server_name="test_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.api_key,
+        )
+
+        captured: Dict[str, object] = {}
+
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
+            captured["extra_headers"] = extra_headers
+            captured["mcp_auth_header"] = mcp_auth_header
+            mock_client = MagicMock()
+            mock_client.call_tool = AsyncMock(return_value=MagicMock())
+            return mock_client
+
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "_build_stdio_env", return_value=None):
+                try:
+                    await manager._call_regular_mcp_tool(
+                        mcp_server=server,
+                        original_tool_name="test_tool",
+                        arguments={"key": "val"},
+                        tasks=[],
+                        mcp_auth_header="server-api-key",
+                        mcp_server_auth_headers=None,
+                        oauth2_headers=None,
+                        raw_headers=None,
+                        proxy_logging_obj=None,
+                        hook_extra_headers={"Authorization": "Bearer hook-jwt"},
+                    )
+                except Exception:
+                    pass
+
+        headers = captured.get("extra_headers") or {}
+        assert isinstance(headers, dict)
+        assert headers.get("Authorization") == "Bearer hook-jwt"
+        assert captured.get("mcp_auth_header") == "server-api-key"
+
+    @pytest.mark.asyncio
+    async def test_hook_authorization_kept_with_non_authorization_server_header_dict(self):
+        """A per-server header dict without Authorization does not block the hook JWT."""
+        manager = MCPServerManager()
+        server = self._make_server()
+
+        captured: Dict[str, object] = {}
+
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
+            captured["extra_headers"] = extra_headers
+            captured["mcp_auth_header"] = mcp_auth_header
+            mock_client = MagicMock()
+            mock_client.call_tool = AsyncMock(return_value=MagicMock())
+            return mock_client
+
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "_build_stdio_env", return_value=None):
+                try:
+                    await manager._call_regular_mcp_tool(
+                        mcp_server=server,
+                        original_tool_name="test_tool",
+                        arguments={"key": "val"},
+                        tasks=[],
+                        mcp_auth_header=None,
+                        mcp_server_auth_headers={"test_server": {"X-API-Key": "per-server-key"}},
+                        oauth2_headers=None,
+                        raw_headers=None,
+                        proxy_logging_obj=None,
+                        hook_extra_headers={"Authorization": "Bearer hook-jwt"},
+                    )
+                except Exception:
+                    pass
+
+        headers = captured.get("extra_headers") or {}
+        assert isinstance(headers, dict)
+        assert headers.get("Authorization") == "Bearer hook-jwt"
+        assert captured.get("mcp_auth_header") == {"X-API-Key": "per-server-key"}
+
+    @pytest.mark.asyncio
+    async def test_hook_authorization_dropped_with_authorization_server_header_dict(self):
+        """A per-server header dict carrying Authorization blocks the hook JWT."""
+        manager = MCPServerManager()
+        server = self._make_server()
+
+        captured: Dict[str, object] = {}
+
+        async def fake_create_mcp_client(server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs):
+            captured["extra_headers"] = extra_headers
+            captured["mcp_auth_header"] = mcp_auth_header
+            mock_client = MagicMock()
+            mock_client.call_tool = AsyncMock(return_value=MagicMock())
+            return mock_client
+
+        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "_build_stdio_env", return_value=None):
+                try:
+                    await manager._call_regular_mcp_tool(
+                        mcp_server=server,
+                        original_tool_name="test_tool",
+                        arguments={"key": "val"},
+                        tasks=[],
+                        mcp_auth_header=None,
+                        mcp_server_auth_headers={"test_server": {"authorization": "Bearer per-server-token"}},
+                        oauth2_headers=None,
+                        raw_headers=None,
+                        proxy_logging_obj=None,
+                        hook_extra_headers={"Authorization": "Bearer hook-jwt", "X-Trace-Id": "trace-123"},
+                    )
+                except Exception:
+                    pass
+
+        headers = captured.get("extra_headers") or {}
+        assert isinstance(headers, dict)
+        assert "Authorization" not in headers
+        assert headers.get("X-Trace-Id") == "trace-123"
+        assert captured.get("mcp_auth_header") == {"authorization": "Bearer per-server-token"}
 
     @pytest.mark.asyncio
     async def test_m2m_oauth2_does_not_forward_litellm_caller_authorization(self):
