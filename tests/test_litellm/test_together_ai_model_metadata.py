@@ -15,6 +15,7 @@ COST_MAP_ADAPTER: Final = TypeAdapter(CostMap)
 SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/moonshotai/Kimi-K3",
     "together_ai/zai-org/GLM-5.2",
+    "together_ai/zai-org/GLM-5.3-Flash",
     "together_ai/deepseek-ai/DeepSeek-V4-Pro",
     "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813",
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731",
@@ -107,6 +108,21 @@ def test_together_glm_52_pricing(cost_map: CostMap):
     assert info["input_cost_per_token"] == 1.4e-06
     assert info["output_cost_per_token"] == 4.4e-06
     assert info["supports_function_calling"] is True
+    assert info["supports_reasoning"] is True
+
+
+def test_together_glm_53_flash_pricing_and_capabilities(cost_map: CostMap):
+    info = cost_map["together_ai/zai-org/GLM-5.3-Flash"]
+    assert info["input_cost_per_token"] == 1.5e-07
+    assert info["output_cost_per_token"] == 5e-07
+    assert info["cache_read_input_token_cost"] == 3e-08
+    assert info["max_input_tokens"] == 1048575
+    assert info["max_output_tokens"] == 1048575
+    assert info["supports_function_calling"] is True
+    assert info["supports_parallel_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_response_schema"] is True
+    assert info["supports_vision"] is True
     assert info["supports_reasoning"] is True
 
 
