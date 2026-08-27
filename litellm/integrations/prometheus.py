@@ -2628,7 +2628,7 @@ class PrometheusLogger(CustomLogger):
                 label_api_provider = (  # pyright: ignore[reportUnknownVariableType]  # bare-dict kwargs, same pattern as every label reader in this handler
                     llm_provider
                     or self._extract_api_provider_from_request_data(
-                        request_kwargs  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+                        request_kwargs  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # untyped request kwargs at this boundary
                     )
                     or ""
                 )
