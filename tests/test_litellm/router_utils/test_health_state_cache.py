@@ -144,8 +144,11 @@ class _SharedRedisFake:
 
     def __init__(self):
         self.store = {}
+        self.fail_get = False
 
     def get_cache(self, key, parent_otel_span=None, **kwargs):
+        if self.fail_get:
+            return None  # RedisCache.get_cache swallows connection errors and returns None
         return self.store.get(key)
 
     def set_cache(self, key, value, **kwargs):
@@ -168,3 +171,24 @@ def test_scoped_writers_on_shared_redis_preserve_each_other():
     )
     assert set(redis_fake.store[DeploymentHealthCache.CACHE_KEY]) == {"prod-bad", "internal-bad"}
     assert pod_a.get_unhealthy_deployment_ids() == {"prod-bad", "internal-bad"}
+
+
+def test_failed_redis_read_falls_back_to_local_copy():
+    """A swallowed Redis GET error must not make a writer erase peer scopes it already saw."""
+    redis_fake = _SharedRedisFake()
+    pod_a = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    pod_b = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    pod_a.set_deployment_health_states(
+        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+    )
+    pod_b.set_deployment_health_states(
+        {"internal-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "timeout"}}
+    )
+    pod_a.set_deployment_health_states(
+        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+    )
+    redis_fake.fail_get = True
+    pod_a.set_deployment_health_states(
+        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+    )
+    assert set(redis_fake.store[DeploymentHealthCache.CACHE_KEY]) == {"prod-bad", "internal-bad"}
