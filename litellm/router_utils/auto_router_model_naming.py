@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
+from litellm.router_strategy.complexity_router.config import LLM_CLASSIFIER_TYPES
+
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
@@ -144,7 +146,11 @@ def strategy_router_dependencies(
         dict.fromkeys(
             tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
             + _named(litellm_params.get("complexity_router_default_model"), "default")
-            + (_named(classifier.get("model"), "classifier") if complexity.get("classifier_type") == "llm" else ())
+            + (
+                _named(classifier.get("model"), "classifier")
+                if complexity.get("classifier_type") in LLM_CLASSIFIER_TYPES
+                else ()
+            )
             + (
                 _named(complexity.get("embedding_model"), "embedding")
                 if complexity.get("semantic_keyword_matching")

@@ -7,6 +7,7 @@ import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
 from datetime import timedelta
+from importlib import metadata
 from typing import Any, Final, TypeVar
 
 import httpx
@@ -21,6 +22,18 @@ try:
     streamable_http_client = getattr(streamable_http_module, "streamable_http_client", None)
 except ImportError:
     pass
+
+MCP_STREAMABLE_HTTP_REQUIREMENT: Final = "mcp>=1.28.1"
+
+
+def missing_streamable_http_client_error() -> ImportError:
+    return ImportError(
+        f"MCP streamable HTTP transport requires {MCP_STREAMABLE_HTTP_REQUIREMENT}, but the installed "
+        f"mcp {metadata.version('mcp')} does not provide streamable_http_client. "
+        "Fix with: pip install 'litellm[mcp]' (or upgrade mcp directly: pip install -U mcp)"
+    )
+
+
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
@@ -323,7 +336,7 @@ class MCPClient:
             )
         # HTTP transport (default)
         if streamable_http_client is None:
-            raise ImportError("streamable_http_client is not available. Please install mcp with HTTP support.")
+            raise missing_streamable_http_client_error()
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
         verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)

@@ -12,7 +12,9 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 
 import litellm
+from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
 from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptTemplate
+from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
 
 def test_prompt_manager_initialization():
@@ -657,3 +659,90 @@ def test_prompt_initializer_registers_flat_db_prompt_under_base_id():
     template = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
     assert template is not None
     assert template.content == "AHOY {{name}}"
+
+
+def _swap_prompt_manager_and_spec(ignore_prompt_manager_model: bool) -> tuple[DotpromptManager, PromptSpec]:
+    manager = DotpromptManager(
+        prompt_data={"content": "You are a pirate assistant.", "metadata": {"model": "gpt-4o-mini"}},
+        prompt_id="swap-prompt",
+    )
+    spec = PromptSpec(
+        prompt_id="swap-prompt",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="swap-prompt",
+            prompt_integration="dotprompt",
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+        ),
+    )
+    return manager, spec
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_spec_ignore_prompt_manager_model_keeps_requested_model():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, spec = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=True)
+    model, messages, _ = await manager.async_get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        litellm_logging_obj=MagicMock(),
+        prompt_spec=spec,
+    )
+    assert model == "anthropic/claude-haiku-4-5"
+    assert len(messages) == 2
+    assert "pirate" in str(messages[0]["content"])
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_spec_without_ignore_flag_swaps_model():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, spec = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=False)
+    model, _, _ = await manager.async_get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        litellm_logging_obj=MagicMock(),
+        prompt_spec=spec,
+    )
+    assert model == "gpt-4o-mini"
+
+
+def test_sync_prompt_spec_ignore_prompt_manager_model_keeps_requested_model():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, spec = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=True)
+    model, _, _ = manager.get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        prompt_spec=spec,
+    )
+    assert model == "anthropic/claude-haiku-4-5"
+
+
+def test_sync_caller_ignore_flag_survives_missing_prompt_spec():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, _ = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=False)
+    model, _, _ = manager.get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        prompt_spec=None,
+        ignore_prompt_manager_model=True,
+    )
+    assert model == "anthropic/claude-haiku-4-5"
