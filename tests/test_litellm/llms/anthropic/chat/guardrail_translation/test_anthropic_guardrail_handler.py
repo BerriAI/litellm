@@ -1490,6 +1490,92 @@ class MockCanaryMaskingGuardrail(CustomGuardrail):
         return inputs
 
 
+class TestAnthropicMessagesImageSources:
+    """An Anthropic image block has three source shapes (types/llms/anthropic.py:259).
+
+    Only the base64 one carries "data", so reading that key alone drops url images
+    entirely -- for every guardrail consuming GenericGuardrailAPIInputs["images"],
+    not just Bedrock.
+    """
+
+    def _data(self, messages):
+        return {"model": "claude-sonnet-4-5", "messages": messages}
+
+    async def _images_seen(self, content) -> list[str]:
+        handler = AnthropicMessagesHandler()
+
+        class ImageRecordingGuardrail(MockCanaryMaskingGuardrail):
+            def __init__(self):
+                super().__init__()
+                self.seen_images: list[str] = []  # mutable-ok: accumulator for the assertion
+
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.seen_images.extend(inputs.get("images") or [])
+                return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+        guardrail = ImageRecordingGuardrail()
+        # The text block is what gets the guardrail invoked at all: a message with
+        # no text gives the handler nothing to scan, so it never reaches the
+        # guardrail and every source shape would look equally "dropped".
+        await handler.process_input_messages(
+            data=self._data([{"role": "user", "content": [{"type": "text", "text": "describe it"}, *content]}]),
+            guardrail_to_apply=guardrail,
+        )
+        return guardrail.seen_images
+
+    @pytest.mark.asyncio
+    async def test_url_source_reaches_the_guardrail(self):
+        """A url source has no "data" key, so it used to yield nothing at all."""
+        seen = await self._images_seen(
+            [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}]
+        )
+
+        assert seen == ["https://example.com/a.png"]
+
+    @pytest.mark.asyncio
+    async def test_base64_source_carries_its_media_type(self):
+        """Bare base64 leaves the consumer no way to recover the format.
+
+        An API like Bedrock's ApplyGuardrail needs it to build the request, so the
+        media_type travels with the payload as a data URI.
+        """
+        seen = await self._images_seen(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}]
+        )
+
+        assert seen == ["data:image/png;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_base64_source_without_a_media_type_is_passed_through(self):
+        """There is no format to attach, so the payload goes through unchanged."""
+        seen = await self._images_seen([{"type": "image", "source": {"type": "base64", "data": "AAAA"}}])
+
+        assert seen == ["AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_file_source_yields_nothing(self):
+        """The bytes live behind the Files API and this extractor has no client.
+
+        Documented as a known gap rather than silently handed on as a file_id string,
+        which a consumer would try to decode as an image.
+        """
+        seen = await self._images_seen([{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}])
+
+        assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_source_is_dropped_rather_than_passed_on(self):
+        seen = await self._images_seen(
+            [
+                {"type": "image", "source": {"type": "base64"}},
+                {"type": "image", "source": {"type": "url"}},
+                {"type": "image", "source": {"type": "base64", "data": ""}},
+            ]
+        )
+
+        assert seen == []
+
+
 class TestAnthropicMessagesToolResultScanning:
     """LIT-5251: tool_result blocks carry whatever a client's local tool fetched, so
     they are the request-path payload an indirect prompt injection actually arrives in.
