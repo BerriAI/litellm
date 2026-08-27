@@ -9518,6 +9518,37 @@ class TestDeleteDeploymentSync:
 
         assert result is None, f"Expected None on DB failure to signal fetch error, got {result!r}"
 
+    @pytest.mark.asyncio
+    async def test_get_models_from_db_reads_from_writer_not_replica(self):
+        """
+        Regression for #38556: with DATABASE_URL_READ_REPLICA configured, the model
+        reconcile after /model/new used to read via the replica, so a lagging replica
+        made the reload miss the just-committed row and fail the request with a 500.
+        The reconcile read must be pinned to the writer.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.db.prisma_client import PrismaWrapper
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        writer_inner = MagicMock(name="writer_prisma")
+        reader_inner = MagicMock(name="reader_prisma")
+        committed_row = MagicMock(name="just_committed_model_row")
+        writer_inner.litellm_proxymodeltable.find_many = AsyncMock(return_value=[committed_row])
+        reader_inner.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = RoutingPrismaWrapper(
+            writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+            reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+        )
+
+        result = await ProxyConfig()._get_models_from_db(prisma_client=mock_prisma)
+
+        assert result == [committed_row], f"Expected the writer's just-committed row, got {result!r}"
+        reader_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
+
 
 def test_get_config_list_includes_cancel_on_disconnect(monkeypatch):
     """Follow-up to #30223: the flag must be discoverable via /config/list,
