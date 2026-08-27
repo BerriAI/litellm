@@ -1,11 +1,17 @@
+import contextlib
 import socket
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.url_utils import (
+    PayloadTooLargeError,
     SSRFError,
+    _underlying_httpx_client,
     _is_blocked_ip,
     assert_same_origin,
     encode_url_path_segment,
@@ -535,3 +541,91 @@ def test_assert_same_origin_error_message_does_not_leak_hostnames():
     detail = str(exc.value)
     assert "attacker.example.com" not in detail
     assert "api.internal-corp.example" not in detail
+
+
+class TestCappedFetch:
+    """`async_safe_get(max_bytes=...)` streams and aborts past the cap.
+
+    `client.get` buffers the whole body first, so a caller-supplied url serving an
+    arbitrarily large or indefinitely chunked response is an unbounded allocation.
+    """
+
+    def test_a_client_with_no_httpx_client_is_rejected(self):
+        """Streaming needs the wrapped httpx client.
+
+        AsyncHTTPHandler forwards get/post but not stream, so the wrapped `.client`
+        is what gets used. Something with neither is a programming error and says so,
+        rather than failing later inside httpx with nothing pointing back here.
+        """
+        with pytest.raises(TypeError) as exc:
+            _underlying_httpx_client(object())
+
+        assert "no httpx client" in str(exc.value)
+
+    def test_a_raw_httpx_client_is_used_as_is(self):
+        client = httpx.AsyncClient()
+
+        assert _underlying_httpx_client(client) is client
+
+    def test_a_wrapped_client_resolves_to_the_one_it_wraps(self):
+        inner = httpx.AsyncClient()
+        wrapper = SimpleNamespace(client=inner)
+
+        assert _underlying_httpx_client(wrapper) is inner
+
+    @pytest.mark.asyncio
+    async def test_the_body_is_cut_off_once_it_passes_the_cap(self, mock_dns_public):
+        """Asserting on how much was pulled is what separates a streamed abort from
+        buffering everything and rejecting afterwards."""
+        served: list[int] = []
+        chunks = [b"\0" * 1024 for _ in range(100)]
+
+        @contextlib.asynccontextmanager
+        async def fake_stream(self, method, url, **kwargs):
+            async def aiter_bytes():
+                for chunk in chunks:
+                    served.append(len(chunk))
+                    yield chunk
+
+            response = MagicMock()
+            response.status_code = 200
+            response.headers = httpx.Headers({"content-type": "image/png"})
+            response.request = httpx.Request("GET", str(url))
+            response.aiter_bytes = aiter_bytes
+            yield response
+
+        client = httpx.AsyncClient()
+        with patch.object(httpx.AsyncClient, "stream", new=fake_stream):
+            with pytest.raises(PayloadTooLargeError):
+                await url_utils.async_safe_get(client, "https://93.184.216.34/a.png", max_bytes=4096)
+
+        assert sum(served) <= 5 * 1024, f"pulled {sum(served)} bytes past a 4096 byte cap"
+        assert len(served) < len(chunks), "the whole body was read before rejecting it"
+
+    @pytest.mark.asyncio
+    async def test_a_body_inside_the_cap_comes_back_whole(self, mock_dns_public):
+        """The rebuilt response drops content-encoding and content-length: aiter_bytes
+        yields decoded bytes, so carrying those over would describe the body wrongly."""
+
+        @contextlib.asynccontextmanager
+        async def fake_stream(self, method, url, **kwargs):
+            async def aiter_bytes():
+                yield b"tiny-image"
+
+            response = MagicMock()
+            response.status_code = 200
+            response.headers = httpx.Headers(
+                {"content-type": "image/png", "content-length": "999", "content-encoding": "gzip"}
+            )
+            response.request = httpx.Request("GET", str(url))
+            response.aiter_bytes = aiter_bytes
+            yield response
+
+        client = httpx.AsyncClient()
+        with patch.object(httpx.AsyncClient, "stream", new=fake_stream):
+            result = await url_utils.async_safe_get(client, "https://93.184.216.34/a.png", max_bytes=4096)
+
+        assert result.content == b"tiny-image"
+        assert result.headers.get("content-type") == "image/png"
+        assert "content-encoding" not in result.headers
+        assert result.headers.get("content-length") == str(len(b"tiny-image"))

@@ -1,11 +1,15 @@
 import base64
 import json
 import os
+import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import httpx
+
 import litellm
+from litellm.litellm_core_utils.url_utils import PayloadTooLargeError
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
@@ -3516,3 +3520,71 @@ async def test_bedrock_converse_pdf_only_user_message_gets_text_block_async():
     assert len(result) == 1
     assert any("document" in block for block in result[0]["content"])
     assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+def _resolve_to_public(host, port, *args, **kwargs):
+    """Keep validate_url's DNS lookup off the network without faking the fetch."""
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443))]
+
+
+class TestBedrockImageProcessorMaxBytes:
+    """`max_bytes` is threaded from the caller down to the fetch.
+
+    The Bedrock guardrail is the only caller that sets it. Everything else, the
+    model-call image paths included, must keep the previous unbounded fetch, and the
+    keyword has to be absent from the call rather than merely defaulted -- an
+    override or stub written against the old signature would otherwise break.
+    """
+
+    _REMOTE_URL = "https://93.184.216.34/a.png"
+
+    @staticmethod
+    def _fake_stream(chunks):
+        import contextlib
+
+        @contextlib.asynccontextmanager
+        async def _stream(self, method, url, **kwargs):
+            async def aiter_bytes():
+                for chunk in chunks:
+                    yield chunk
+
+            response = MagicMock()
+            response.status_code = 200
+            response.headers = httpx.Headers({"content-type": "image/png"})
+            response.request = httpx.Request("GET", str(url))
+            response.aiter_bytes = aiter_bytes
+            yield response
+
+        return _stream
+
+    @pytest.mark.asyncio
+    async def test_a_remote_fetch_is_capped_when_max_bytes_is_given(self, monkeypatch):
+        monkeypatch.setattr(socket, "getaddrinfo", _resolve_to_public, raising=False)
+
+        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream([b"\0" * 8192])):
+            with pytest.raises(PayloadTooLargeError):
+                await BedrockImageProcessor.get_image_details_async(self._REMOTE_URL, max_bytes=1024)
+
+    @pytest.mark.asyncio
+    async def test_omitting_max_bytes_leaves_the_call_as_it_was(self, monkeypatch):
+        """A stub written against the previous one-parameter signature still works.
+
+        This is what test_url_with_format_param asserts through the model path; here
+        it is pinned on the helper itself so the plumbing cannot start passing the
+        keyword unconditionally again.
+        """
+        monkeypatch.setattr(socket, "getaddrinfo", _resolve_to_public, raising=False)
+        seen: list = []
+
+        async def one_parameter_stub(image_url):
+            seen.append(image_url)
+            return "ZmFrZQ==", "image/png"
+
+        monkeypatch.setattr(
+            BedrockImageProcessor, "get_image_details_async", staticmethod(one_parameter_stub)
+        )
+
+        block = await BedrockImageProcessor.process_image_async(image_url=self._REMOTE_URL, format=None)
+
+        assert seen == [self._REMOTE_URL]
+        assert block["image"]["source"]["bytes"] == "ZmFrZQ=="
