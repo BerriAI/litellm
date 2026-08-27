@@ -3,7 +3,7 @@
 import base64
 import io
 import struct
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Final, Literal, cast
 
 import tiktoken
@@ -28,12 +28,15 @@ from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
     AnthropicContentParamSourceUrl,
+    AnthropicMessagesDocumentParam,
     AnthropicMessagesImageParam,
+    AnthropicMessagesTextParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
@@ -350,7 +353,7 @@ def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: list[AllMessageValues | Message] | None = None,
+    messages: Sequence[AllMessageValues | Message] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -669,6 +672,38 @@ def _anthropic_image_source_data(
     return ""
 
 
+def _count_document_tokens(
+    document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+    default_token_count: int | None,
+) -> int:
+    """
+    Count an Anthropic `document` block: its title and context text, plus the source itself.
+
+    Text-bearing sources (`text`, `content`) count their text; opaque ones (`base64`, `url`,
+    `file`) are priced like an image, since their bytes cannot be tokenized locally.
+    """
+    source: Final = document["source"]
+    metadata_tokens: Final = sum(
+        count_function(text) for text in (document.get("title"), document.get("context")) if text
+    )
+    if source["type"] == "text":
+        return metadata_tokens + count_function(source["data"])
+    if source["type"] == "content":
+        content: Final = source["content"]
+        if isinstance(content, str):
+            return metadata_tokens + count_function(content)
+        return metadata_tokens + _count_content_list(
+            count_function, content, use_default_image_token_count, default_token_count
+        )
+    return metadata_tokens + calculate_img_tokens(
+        data=_anthropic_image_source_data(source),
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
 def _count_anthropic_content(
     content: Mapping[str, Any],
     count_function: TokenCounterFunction,
@@ -720,7 +755,13 @@ def _count_anthropic_content(
 
 def _count_content_list(
     count_function: TokenCounterFunction,
-    content_list: str | Iterable[OpenAIMessageContentListBlock | AnthropicMessagesImageParam],
+    content_list: str
+    | Iterable[
+        OpenAIMessageContentListBlock
+        | AnthropicMessagesTextParam
+        | AnthropicMessagesImageParam
+        | AnthropicMessagesDocumentParam
+    ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
 ) -> int:
@@ -746,6 +787,13 @@ def _count_content_list(
                     data=_anthropic_image_source_data(c["source"]),
                     mode="auto",
                     use_default_image_token_count=use_default_image_token_count,
+                )
+            elif c["type"] == "document":
+                num_tokens += _count_document_tokens(
+                    c,
+                    count_function,
+                    use_default_image_token_count,
+                    default_token_count,
                 )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
@@ -776,7 +824,7 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:
