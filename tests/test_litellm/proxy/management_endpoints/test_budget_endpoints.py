@@ -3,6 +3,7 @@
 import json
 import types
 from datetime import datetime, timedelta, timezone
+from typing import Final
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
@@ -398,9 +399,9 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
     monkeypatch.setattr(ps, "premium_user", True)
 
     client, _, mock_table = client_and_mocks
-    captured = _capture_update_data(mock_table)
+    captured: Final = _capture_update_data(mock_table)
 
-    resp = client.post(
+    resp: Final = client.post(
         "/budget/update",
         json={
             "budget_id": "budget_per_model",
@@ -412,7 +413,7 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
     )
     assert resp.status_code == 200, resp.text
 
-    stored = captured["model_max_budget"]
+    stored: Final = captured["model_max_budget"]
     assert isinstance(stored, str), (
         f"model_max_budget must reach prisma as a JSON string, got {type(stored).__name__}"
     )
