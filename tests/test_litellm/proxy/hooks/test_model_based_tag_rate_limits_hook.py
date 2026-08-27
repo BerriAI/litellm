@@ -24,6 +24,7 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _build_group_limits,
     _build_limits_index,
     _ConfiguredLimit,
+    _current_admission_token,
     _extract_team_id,
     _inflight_key,
     _pending_reservations_cache_key,
@@ -33,7 +34,14 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     BACKGROUND_TASKS as _BACKGROUND_TASKS,
     CONCURRENCY_MIN_SAFETY_TTL_SECONDS as _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
 )
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, RoutingGroup, TagRateLimitEntry, TagRateLimitScope
+from litellm.types.router import (
+    Deployment,
+    LiteLLM_Params,
+    ModelInfo,
+    RoutingGroup,
+    TagRateLimitEntry,
+    TagRateLimitScope,
+)
 
 
 class TimeController:
@@ -230,7 +238,11 @@ async def test_filter_deployments_ignores_a_forged_empty_litellm_metadata_key(ti
     deployment = _deployment(
         "grp",
         "dep-1",
-        {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}},
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
     )
     router = litellm.Router(model_list=[deployment])
     limiter.update_variables(llm_router=router)
@@ -258,7 +270,11 @@ async def test_filter_deployments_reads_metadata_when_litellm_metadata_is_presen
     deployment = _deployment(
         "grp",
         "dep-1",
-        {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}},
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
     )
     router = litellm.Router(model_list=[deployment])
     limiter.update_variables(llm_router=router)
@@ -288,7 +304,11 @@ async def test_filter_deployments_ignores_a_forged_populated_litellm_metadata_ke
     deployment = _deployment(
         "grp",
         "dep-1",
-        {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}},
+        {
+            "request_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]
+            }
+        },
     )
     router = litellm.Router(model_list=[deployment])
     limiter.update_variables(llm_router=router)
@@ -1730,7 +1750,15 @@ async def test_log_success_event_accounts_against_the_same_bucket_admission_chec
 
     now = time_controller.now().timestamp()
     token_key = _expected_bucket_key(
-        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group=admission_bucket_group, limit=500000
+        "my-group",
+        "tokens",
+        "daily",
+        "end_user_id",
+        "u1",
+        86400,
+        now,
+        resolved_group=admission_bucket_group,
+        limit=500000,
     )
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
@@ -1772,9 +1800,11 @@ async def test_log_success_event_uses_admissions_own_candidate_set_when_group_me
         model="my-group", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
     assert admitted == healthy
-    admission_bucket_group = limiter._index.get(router).resolve_any(
-        "my-group", team_id=None, candidate_model_names=("backend-a", "backend-b")
-    )[0].resolved_group
+    admission_bucket_group = (
+        limiter._index.get(router)
+        .resolve_any("my-group", team_id=None, candidate_model_names=("backend-a", "backend-b"))[0]
+        .resolved_group
+    )
 
     routing_group = router.get_routing_group("my-group")
     assert routing_group is not None
@@ -1799,7 +1829,15 @@ async def test_log_success_event_uses_admissions_own_candidate_set_when_group_me
 
     now = time_controller.now().timestamp()
     admission_key = _expected_bucket_key(
-        "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group=admission_bucket_group, limit=500000
+        "my-group",
+        "tokens",
+        "daily",
+        "end_user_id",
+        "u1",
+        86400,
+        now,
+        resolved_group=admission_bucket_group,
+        limit=500000,
     )
     drifted_key = _expected_bucket_key(
         "my-group", "tokens", "daily", "end_user_id", "u1", 86400, now, resolved_group="backend-0", limit=500000
@@ -1881,7 +1919,13 @@ async def test_log_success_event_accounts_against_the_key_hash_admission_checked
     token_limits = {
         "token_limits": {
             "limits": [
-                {"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400, "scope_by_key_hash": True}
+                {
+                    "name": "daily",
+                    "tag_id": "end_user_id",
+                    "limit": 500000,
+                    "period_seconds": 86400,
+                    "scope_by_key_hash": True,
+                }
             ]
         }
     }
@@ -1933,7 +1977,9 @@ async def test_log_success_event_charges_the_window_admission_checked_not_a_late
     current when the response finishes.
     """
     token_limits = {
-        "token_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 500, "period_seconds": 60}]}
+        "token_limits": {
+            "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 500, "period_seconds": 60}]
+        }
     }
     router = litellm.Router(model_list=[_deployment("grp", "dep-1", token_limits)])
     limiter = _make_limiter(time_controller)
@@ -1967,7 +2013,9 @@ async def test_log_success_event_charges_the_window_admission_checked_not_a_late
     )
     assert (
         float(
-            await limiter.internal_usage_cache.async_get_cache(key=admitted_window_bucket, litellm_parent_otel_span=None)
+            await limiter.internal_usage_cache.async_get_cache(
+                key=admitted_window_bucket, litellm_parent_otel_span=None
+            )
         )
         == 42.0
     )
@@ -1993,7 +2041,11 @@ async def test_log_success_event_accounts_against_the_team_id_admission_checked(
     deployment = _deployment(
         "real-model-name",
         "dep-1",
-        {"token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500, "period_seconds": 86400}]}},
+        {
+            "token_limits": {
+                "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500, "period_seconds": 86400}]
+            }
+        },
     )
     deployment["model_info"]["team_id"] = "team-1"
     deployment["model_info"]["team_public_model_name"] = "team-alias-name"
@@ -2958,6 +3010,63 @@ async def test_concurrent_batch_siblings_do_not_bypass_a_concurrency_limit(time_
     assert len(rejections) == 1
 
 
+@pytest.mark.asyncio
+async def test_concurrent_batch_siblings_terminal_event_does_not_release_a_live_siblings_slot(time_controller):
+    """
+    Bugbot finding: async_log_success_event/async_log_failure_event still
+    released every pending reservation unconditionally, so the first
+    finishing abatch_completion branch freed a still-live sibling branch's
+    own concurrency slot too, letting a third, unrelated caller admit past
+    a limit that branch was still genuinely occupying.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=2)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+    branch_two_admitted = asyncio.Event()
+
+    async def _branch_two() -> None:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+        branch_two_admitted.set()
+        # Still "in flight" while branch one below finishes and releases.
+        await asyncio.sleep(0.05)
+
+    task_two = asyncio.create_task(_branch_two())
+
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    await branch_two_admitted.wait()
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 0,
+        "response_cost": 0,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # Only branch one's own slot was freed; branch two's is still live, so
+    # exactly one more caller fits before the limit of 2 is hit again.
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+    await task_two
+
+
 def _request_limit_router(limit: int) -> "litellm.Router":
     return litellm.Router(
         model_list=[
@@ -2966,7 +3075,9 @@ def _request_limit_router(limit: int) -> "litellm.Router":
                 "dep-1",
                 {
                     "request_limits": {
-                        "limits": [{"name": "per_period", "tag_id": "end_user_id", "limit": limit, "period_seconds": 300}]
+                        "limits": [
+                            {"name": "per_period", "tag_id": "end_user_id", "limit": limit, "period_seconds": 300}
+                        ]
                     }
                 },
             )
@@ -3419,7 +3530,9 @@ def _redis_limiter(time_controller: TimeController):
         pytest.skip("Redis environment variables (REDIS_HOST, REDIS_PORT) not set")
     redis_cache = RedisCache(host=redis_host, port=int(redis_port), password=os.getenv("REDIS_PASSWORD"))
     dual_cache = DualCache(redis_cache=redis_cache)
-    return _PROXY_ModelBasedTagRateLimitsHook(internal_usage_cache=dual_cache, time_provider=time_controller.now), redis_cache
+    return _PROXY_ModelBasedTagRateLimitsHook(
+        internal_usage_cache=dual_cache, time_provider=time_controller.now
+    ), redis_cache
 
 
 @pytest.mark.asyncio
@@ -3545,7 +3658,11 @@ async def test_redis_backed_token_admission_sees_increments_the_in_memory_cache_
             _deployment(
                 "grp",
                 "dep-1",
-                {"token_limits": {"limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 100, "period_seconds": 60}]}},
+                {
+                    "token_limits": {
+                        "limits": [{"name": "per_minute", "tag_id": "end_user_id", "limit": 100, "period_seconds": 60}]
+                    }
+                },
             )
         ]
     )
@@ -3626,7 +3743,9 @@ async def test_redis_backed_concurrency_ttl_refreshes_on_every_admission(time_co
         # would make a real-time before/after comparison too slow to assert
         # on deterministically) with refresh_ttl=True, matching how a
         # concurrency check is actually admitted.
-        admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+        admitted, _ = await limiter._check_and_increment_one(
+            cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True
+        )
         assert admitted
         ttl_after_first_admission = await redis_cache.redis_async_client.ttl(key)
         assert ttl_after_first_admission > 0
@@ -3636,7 +3755,9 @@ async def test_redis_backed_concurrency_ttl_refreshes_on_every_admission(time_co
         # A second admission on the same still-live key, most of the way
         # through the first admission's ttl, must push the ttl back out to
         # the full window again, not leave it counting down toward zero.
-        admitted, _ = await limiter._check_and_increment_one(cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True)
+        admitted, _ = await limiter._check_and_increment_one(
+            cache, key, limit=100, increment=1.0, ttl=3, refresh_ttl=True
+        )
         assert admitted
         ttl_after_second_admission = await redis_cache.redis_async_client.ttl(key)
         assert ttl_after_second_admission >= 2
@@ -4112,9 +4233,9 @@ def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
 @pytest.mark.asyncio
 async def test_release_in_a_forked_task_is_visible_to_the_parent_context(time_controller):
     limiter = _make_limiter(time_controller)
-    # Entries are (key, partition_key, queueing_task) triples in production
-    # (see _queue_pending_reservations); the task is irrelevant to this
-    # specific release path (only_current_task defaults False here).
+    # Entries are (key, partition_key, admission_token) triples in production
+    # (see _queue_pending_reservations); the token is irrelevant to this
+    # specific release path (only_own_lineage defaults False here).
     model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("key1", None, None)]}
 
     async def detached_release():
@@ -4156,28 +4277,26 @@ async def test_release_is_not_repeated_for_the_same_snapshot(time_controller):
 
 
 @pytest.mark.asyncio
-async def test_release_only_current_task_leaves_a_concurrent_siblings_reservation_alone(time_controller):
+async def test_release_only_own_lineage_leaves_a_concurrent_siblings_reservation_alone(time_controller):
     """
-    Veria AI finding: Router.abatch_completion's comma-separated multi-model
-    dispatch runs each model concurrently as its own asyncio.Task, but every
-    branch shares one litellm_logging_obj (the proxy attaches it to the
-    request before the comma-split), so a new hop's admission could see a
-    still-live sibling branch's own reservation sitting in the same
-    model_call_details and wrongly sweep it up as "stale". only_current_task
-    must leave a differently-tasked entry untouched.
+    Bugbot/Veria AI finding: Router.abatch_completion's comma-separated
+    multi-model dispatch runs each model concurrently, each its own asyncio
+    Task, but every branch shares one litellm_logging_obj (the proxy attaches
+    it to the request before the comma-split), so a still-live sibling
+    branch's own reservation can sit in the same model_call_details.
+    only_own_lineage must release this context's own entry while leaving a
+    differently-lineaged (sibling branch's) entry untouched.
     """
     limiter = _make_limiter(time_controller)
+    own_token = _current_admission_token()
+    sibling_token = object()
+    model_call_details: dict = {
+        _PENDING_CONCURRENCY_KEYS_FIELD: [("own-key", None, own_token), ("sibling-key", None, sibling_token)]
+    }
 
-    async def _reserve_as_a_separate_task() -> None:
-        pass  # the task object itself is the fixture; body is irrelevant
-
-    sibling_task = asyncio.create_task(_reserve_as_a_separate_task())
-    await sibling_task
-    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("sibling-key", None, sibling_task)]}
-
-    released = await limiter._pop_pending_concurrency_keys(model_call_details, only_current_task=True)
-    assert released == ()
-    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [("sibling-key", None, sibling_task)]
+    released = await limiter._pop_pending_concurrency_keys(model_call_details, only_own_lineage=True)
+    assert released == (("own-key", None),)
+    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [("sibling-key", None, sibling_token)]
 
 
 # ---------------------------------------------------------------------------
@@ -4230,7 +4349,9 @@ async def test_cross_unit_refund_leaves_no_phantom_increment_in_memory(time_cont
         )
 
     now = time_controller.now().timestamp()
-    request_key = _expected_bucket_key("grp", "requests", "per_minute", "end_user_id", "refund-check", 60, now, limit=10)
+    request_key = _expected_bucket_key(
+        "grp", "requests", "per_minute", "end_user_id", "refund-check", 60, now, limit=10
+    )
     value = await limiter.internal_usage_cache.async_get_cache(key=request_key, litellm_parent_otel_span=None)
     assert (float(value) if value is not None else 0.0) == 1.0
 
@@ -4304,7 +4425,9 @@ async def test_exception_mid_batch_refunds_every_earlier_admission_before_propag
     raising_key = "{tag_rl:test:exception-refund:b}:requests"
 
     class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
-        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool):
+        async def _check_and_increment_one(
+            self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
+        ):
             if key == raising_key:
                 raise RuntimeError("simulated transient redis failure")
             return await super()._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
@@ -4342,7 +4465,9 @@ async def test_a_raising_keys_own_ambiguous_outcome_is_never_refunded(time_contr
     raising_key = "{tag_rl:test:ambiguous-no-refund:b}:requests"
 
     class _FlakyLimiter(_PROXY_ModelBasedTagRateLimitsHook):
-        async def _check_and_increment_one(self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool):
+        async def _check_and_increment_one(
+            self, cache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
+        ):
             if key == raising_key:
                 # Simulate Redis committing the increment before the
                 # response is lost: the write actually happens...

@@ -12,6 +12,7 @@ per-deployment dedup.
 """
 
 import asyncio
+import contextvars
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -558,14 +559,41 @@ _INDEX_TTL_SECONDS: Final = 5.0
 # can't be forged or guessed.
 #
 # "shared across that request's own fallback hops" is not the same as
-# "scoped to one asyncio Task": `Router.abatch_completion`'s comma-separated
-# multi-model dispatch runs several branches concurrently, each its own
-# Task, but hands every branch the identical `litellm_logging_obj` -- so
-# each entry also carries the Task that queued it (see
-# `_queue_pending_reservations`), letting `_release_stale_hop_reservations`
-# tell a genuinely stale same-task hop apart from a still-live sibling
-# branch's own reservation.
+# "shared across every task that happens to touch model_call_details":
+# `Router.abatch_completion`'s comma-separated multi-model dispatch runs
+# several branches concurrently, each its own Task, but hands every branch
+# the identical `litellm_logging_obj` -- so a still-live sibling branch's
+# own reservation can sit in this same list. Each entry also carries an
+# admission-scoped token (see `_current_admission_token`) so a release can
+# tell a genuinely stale same-lineage hop apart from a still-live sibling
+# branch's own reservation, without reintroducing the non-descendant-task
+# blind spot a bare `ContextVar` has for the data itself (see above): the
+# token is only ever compared for *identity*, never relied on to carry the
+# reservation across a task boundary the way `model_call_details` does.
 _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_concurrency_keys"
+
+# Identifies which admission call queued a given reservation, scoped by
+# asyncio Context rather than by Task identity: `asyncio.create_task`
+# snapshots the *current* Context into the new Task, so a task explicitly
+# forked from within one hop's own admission (e.g. litellm's own
+# `LoggingWorker.enqueue` dispatch, which explicitly propagates the calling
+# context) still reads back the same token, while `abatch_completion`'s
+# sibling branches -- forked *before* any of them ever called admission --
+# each start from an unset ContextVar and mint their own distinct token on
+# first use, never matching each other's.
+_ADMISSION_CONTEXT: Final[contextvars.ContextVar[object | None]] = contextvars.ContextVar(
+    "_model_based_tag_rate_limits_admission_context", default=None
+)
+
+
+def _current_admission_token() -> object:
+    token: Final = _ADMISSION_CONTEXT.get()
+    if token is not None:
+        return token
+    fresh_token: Final = object()
+    _ADMISSION_CONTEXT.set(fresh_token)
+    return fresh_token
+
 
 # Same `model_call_details`-stashing rationale as the field above, for a
 # different unit: "requests" is atomic and admitted once per hop (see
@@ -898,20 +926,20 @@ def _queue_pending_reservations(
 ) -> None:
     """Stash reservations on the request's own `model_call_details`, under
     `field` -- see `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring for why this,
-    not a ContextVar or `litellm_call_id`. Silently a no-op without a real
-    logging object (defensive only; every real request has one): a queued
-    concurrency reservation still self-heals via
-    `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS`, just later.
+    not a `litellm_call_id`. Silently a no-op without a real logging object
+    (defensive only; every real request has one): a queued concurrency
+    reservation still self-heals via `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS`,
+    just later.
 
-    Each entry is stamped with the queueing coroutine's own `asyncio.Task`:
-    `Router.abatch_completion`'s comma-separated multi-model dispatch runs
-    several `acompletion` calls concurrently as *separate* tasks that all
-    share one `model_call_details` (the proxy attaches one `litellm_logging_obj`
-    to the request before the comma-split, and every branch inherits that
-    same reference), so this field is no longer scoped to one logical
-    request's own serial fallback chain the way its docstring assumes.
-    `_release_stale_hop_reservations` uses the stamp to tell "an earlier hop
-    of *this* chain, safe to reclaim" apart from "a concurrent sibling
+    Each entry is stamped with `_current_admission_token()`: `Router.abatch_completion`'s
+    comma-separated multi-model dispatch runs several `acompletion` calls
+    concurrently as *separate* tasks that all share one `model_call_details`
+    (the proxy attaches one `litellm_logging_obj` to the request before the
+    comma-split, and every branch inherits that same reference), so this
+    field is no longer scoped to one logical request's own serial fallback
+    chain the way its docstring assumes. `_release_stale_hop_reservations`
+    and the terminal release hooks use the stamp to tell "this same
+    admission lineage, safe to reclaim" apart from "a concurrent sibling
     branch's own still-live reservation," which must never be touched here.
     """
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
@@ -922,9 +950,9 @@ def _queue_pending_reservations(
     if pending is None:
         pending = []  # mutable-ok: shared, request-scoped accumulator; see field's own docstring  # rebind-ok: lazily initialized only when absent
         model_call_details[field] = pending
-    current_task: Final = asyncio.current_task()
+    admission_token: Final = _current_admission_token()
     pending.extend(
-        (key, partition_key, current_task) for key, partition_key in reservations
+        (key, partition_key, admission_token) for key, partition_key in reservations
     )  # mutable-ok: see comment above
 
 
@@ -1483,24 +1511,24 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
     async def _release_stale_hop_reservations(self, request_kwargs: Mapping[str, object]) -> frozenset[str]:
         """
         A concurrency reservation still queued when a *new* hop's admission
-        runs, *within the same asyncio Task*, can only belong to an earlier
-        hop of this same request's own fallback chain that already concluded
-        and failed: Router awaits one hop's entire attempt (call plus its own
-        failure handling) before starting the next, and a hop that instead
-        succeeded ends the request there via async_log_success_event, which
-        already pops everything -- so admission is never re-entered, in that
-        same task, while an earlier hop's reservation is still legitimately
-        in flight.
+        runs, *within the same admission lineage*, can only belong to an
+        earlier hop of this same request's own fallback chain that already
+        concluded and failed: Router awaits one hop's entire attempt (call
+        plus its own failure handling) before starting the next, and a hop
+        that instead succeeded ends the request there via
+        async_log_success_event, which already pops its own lineage's
+        entries -- so admission is never re-entered, in that same lineage,
+        while an earlier hop's reservation is still legitimately in flight.
 
-        The task check matters because `model_call_details` is not always
+        The lineage check matters because `model_call_details` is not always
         scoped to one such chain: `Router.abatch_completion`'s comma-separated
         multi-model dispatch runs several branches concurrently, each its own
         Task, but every branch shares the identical `litellm_logging_obj` (see
         `_queue_pending_reservations`'s own docstring) -- so a reservation
         queued by a still-running sibling branch can be sitting here too, and
         releasing it out from under that branch would let more calls through
-        a concurrency limit than it allows. Only entries this exact Task
-        queued are safe to treat as stale; anything else is left for its own
+        a concurrency limit than it allows. Only entries `_current_admission_token()`
+        stamped are safe to treat as stale; anything else is left for its own
         branch to release.
 
         LiteLLM only invokes a request's CustomLogger.async_log_failure_event
@@ -1541,17 +1569,17 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         model_call_details: Final = getattr(logging_obj, "model_call_details", None)
         if not isinstance(model_call_details, dict):
             return frozenset()
-        release_keys: Final = await self._pop_pending_concurrency_keys(model_call_details, only_current_task=True)
+        release_keys: Final = await self._pop_pending_concurrency_keys(model_call_details, only_own_lineage=True)
         if release_keys:
             await self._release_keys(release_keys)
         pending_request_increments: Final = model_call_details.get(_PENDING_REQUEST_INCREMENTS_FIELD)
         if not isinstance(pending_request_increments, list):
             return frozenset()
-        current_task: Final = asyncio.current_task()
-        return frozenset(key for key, _partition_key, task in pending_request_increments if task is current_task)
+        admission_token: Final = _current_admission_token()
+        return frozenset(key for key, _partition_key, token in pending_request_increments if token is admission_token)
 
     async def _pop_pending_concurrency_keys(
-        self, kwargs: Mapping[str, object], *, only_current_task: bool = False
+        self, kwargs: Mapping[str, object], *, only_own_lineage: bool = False
     ) -> tuple[tuple[str, _PartitionKey], ...]:
         # Every caller of this method is itself a normal release path, so
         # also clear the async_post_call_failure_hook cache mirror for the
@@ -1585,15 +1613,20 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # model_call_details can still be live and appending concurrently
         # (see the field's own docstring), so wiping the whole list here
         # would silently strand that branch's reservation instead of
-        # releasing it later. `only_current_task` additionally excludes any
-        # entry a *different*, still-running Task queued -- see
+        # releasing it later. `only_own_lineage` additionally excludes any
+        # entry a *different* admission lineage queued -- see
         # `_release_stale_hop_reservations`'s own docstring for why that
-        # distinction, not just presence, decides what's actually stale.
+        # distinction, not just presence, decides what's actually stale;
+        # the same distinction applies to a terminal release (success/failure)
+        # racing a still-live sibling branch's own reservation.
         pending: Final = kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
         if not isinstance(pending, list) or not pending:
             return ()
-        current_task: Final = asyncio.current_task()
-        snapshot: Final = tuple(entry for entry in pending if not only_current_task or entry[2] is current_task)
+        snapshot: Final = (
+            tuple(entry for entry in pending if entry[2] is _current_admission_token())
+            if only_own_lineage
+            else tuple(pending)
+        )
         for entry in snapshot:
             try:
                 pending.remove(entry)
@@ -1610,6 +1643,12 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         Without this, the reservation would sit held until _CONCURRENCY_MIN_SAFETY_TTL_SECONDS
         expires, letting a caller who repeatedly opens and immediately drops
         streaming requests exhaust their own tag's concurrency limit for free.
+
+        Deliberately not `only_own_lineage=True`: `Router.abatch_completion`
+        returns every branch's response together rather than a single stream,
+        so its concurrent-sibling-branch race this hook otherwise guards
+        against (see `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring) cannot
+        co-occur with a mid-stream disconnect here.
         """
         logging_obj: Final = request_data.get("litellm_logging_obj")
         model_call_details: Final = getattr(logging_obj, "model_call_details", None)
@@ -1685,13 +1724,18 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # the exception's error marker alone would be wrong here, since
         # global_tag_rate_limits_hook raises the identical marker -- that
         # rejection can land after this hook already reserved a slot for the
-        # same request, and that slot must still be released.
-        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
+        # same request, and that slot must still be released. only_own_lineage
+        # keeps this from releasing a still-live sibling branch's own
+        # reservation when model_call_details is shared across an
+        # abatch_completion dispatch -- see _PENDING_CONCURRENCY_KEYS_FIELD's
+        # docstring.
+        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs, only_own_lineage=True)
         if release_keys:
             await self._release_keys(release_keys)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
+        # only_own_lineage: see async_log_failure_event's own comment above.
+        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs, only_own_lineage=True)
         if release_keys:
             release_task: Final = asyncio.create_task(self._release_keys(release_keys))
             _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
