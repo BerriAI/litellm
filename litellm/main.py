@@ -8588,12 +8588,12 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
 
 
 def _streaming_choice_index(choice: StreamingChoices | Mapping[str, Any]) -> int | None:
-    index = choice.get("index") if isinstance(choice, dict) else getattr(choice, "index", None)
+    index: Final = choice.get("index") if isinstance(choice, dict) else getattr(choice, "index", None)
     return index if isinstance(index, int) else None
 
 
 def _streaming_chunk_choices(chunk: ModelResponseStream | Mapping[str, Any]) -> Sequence[Any]:
-    choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
+    choices: Final = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
     return choices or []  # mutable-ok: the caller iterates it; an empty list is the natural absent value
 
 
@@ -8629,6 +8629,21 @@ def _chunks_for_streaming_choice_index(
     ]
 
 
+def _renumbered_first_choice(response: Any, index: int) -> Choices | None:
+    """The single choice a per-index build produced, renumbered to that index.
+
+    None when the build did not yield a usable non-streaming choice: `stream_chunk_builder`
+    is typed to admit a streaming response and a streaming choice, and either one leaves
+    nothing to merge.
+    """
+    if not isinstance(response, ModelResponse) or not response.choices:
+        return None
+    first: Final = response.choices[0]
+    if not isinstance(first, Choices):
+        return None
+    return first.model_copy(update={"index": index})  # mutable-ok: model_copy stores what it is given
+
+
 def _build_streaming_choices_per_index(
     chunks: Sequence[Any],
     indices: Sequence[int],
@@ -8636,21 +8651,23 @@ def _build_streaming_choices_per_index(
     start_time: datetime.datetime | None,
     end_time: datetime.datetime | None,
 ) -> list[Choices] | None:  # mutable-ok: assigned to ModelResponse.choices, which is a list
-    built: Final = [  # mutable-ok: one built response per choice index, zipped below
-        stream_chunk_builder(
-            chunks=_chunks_for_streaming_choice_index(chunks, index),
-            messages=messages,
-            start_time=start_time,
-            end_time=end_time,
+    built: Final = [  # mutable-ok: one choice per index, returned as ModelResponse.choices
+        _renumbered_first_choice(
+            stream_chunk_builder(
+                chunks=_chunks_for_streaming_choice_index(chunks, index),
+                messages=messages,
+                start_time=start_time,
+                end_time=end_time,
+            ),
+            index,
         )
         for index in indices
     ]
-    if any(not isinstance(response, ModelResponse) or not response.choices for response in built):
+    # One unusable build means there is nothing to merge, so the caller falls back to
+    # the single-response path rather than being handed a partial list.
+    if any(choice is None for choice in built):
         return None
-    return [  # mutable-ok: assigned to ModelResponse.choices, which is a list
-        cast(Choices, cast(ModelResponse, response).choices[0]).model_copy(update={"index": index})  # mutable-ok: model_copy stores what it is given
-        for index, response in zip(indices, built)
-    ]
+    return [choice for choice in built if choice is not None]  # mutable-ok: assigned to ModelResponse.choices, which is a list
 
 
 def stream_chunk_builder(
