@@ -1913,9 +1913,7 @@ def test_gemini_transcribe_live_session_update_defaults_to_text_modality(
 
 
 @pytest.mark.parametrize("modalities", [["audio"], ["audio", "text"]])
-def test_gemini_transcribe_live_coerces_audio_modality_to_text(
-    modalities, patch_gemini_transcribe_live_cost_map_entry
-):
+def test_gemini_transcribe_live_coerces_audio_modality_to_text(modalities, patch_gemini_transcribe_live_cost_map_entry):
     config = GeminiRealtimeConfig()
     session_update = {
         "type": "session.update",
@@ -1941,3 +1939,71 @@ def test_gemini_chat_model_with_text_output_modalities_keeps_audio_eager_setup(
     setup = json.loads(config.session_configuration_request("gemini-2.5-flash"))["setup"]
 
     assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_generation_complete_without_prior_delta_keeps_turn_usage(patch_gemini_audio_cost_map_entries):
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    turn_end_frame: Final[BidiGenerateContentServerMessage] = {
+        "serverContent": {"generationComplete": True, "turnComplete": True},
+        "usageMetadata": {
+            "promptTokenCount": 200,
+            "totalTokenCount": 200,
+            "promptTokensDetails": [
+                {"modality": "AUDIO", "tokenCount": 199},
+                {"modality": "TEXT", "tokenCount": 1},
+            ],
+        },
+    }
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(turn_end_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    done_events: Final = tuple(event for event in result["response"] if event["type"] == "response.done")
+    assert len(done_events) == 1
+    assert done_events[0]["response"]["usage"]["input_tokens"] == 200
+
+
+def test_bare_generation_complete_without_prior_delta_is_dropped(patch_gemini_audio_cost_map_entries):
+    from typing import Final
+
+    from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+    from litellm.types.realtime import RealtimeResponseTransformInput
+
+    config: Final = GeminiRealtimeConfig()
+    bare_frame: Final[BidiGenerateContentServerMessage] = {"serverContent": {"generationComplete": True}}
+    transform_input: Final[RealtimeResponseTransformInput] = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+    }
+
+    result: Final = config.transform_realtime_response(
+        json.dumps(bare_frame),
+        "gemini-3.5-transcribe-live",
+        MagicMock(),
+        realtime_response_transform_input=transform_input,
+    )
+
+    assert result["response"] == []

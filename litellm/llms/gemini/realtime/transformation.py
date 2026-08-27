@@ -1243,6 +1243,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     )
                 )
 
+            # Transcription-only models emit generationComplete with no prior
+            # modelTurn delta; there is no started OpenAI response to close, so
+            # drop it and let siblings (turnComplete, usageMetadata) process.
+            if current_delta_type is None and "modelTurn" not in server_content:
+                server_content.pop("generationComplete", None)
+
             # Mark transcription-only serverContent as handled so the main loop
             # skips it; sibling keys like toolCall are still processed below.
             _model_content_keys: Final = {
