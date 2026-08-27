@@ -591,6 +591,7 @@ def cost_per_token(
                 prompt_characters=prompt_characters,
                 completion_characters=completion_characters,
                 usage=usage_block,
+                service_tier=service_tier,
                 vertex_location=vertex_location,
             )
         elif cost_router == "cost_per_token":
@@ -845,9 +846,11 @@ def _get_response_model(completion_response: object) -> str | None:
 _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
     # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
     "ON_DEMAND_PRIORITY": "priority",
-    # FLEX / BATCH maps to "flex" — selects input_cost_per_token_flex, etc.
+    # FLEX / BATCH / ON_DEMAND_FLEX maps to "flex" — selects input_cost_per_token_flex, etc.
+    # Vertex AI reports flex/shared-capacity traffic as ON_DEMAND_FLEX, not FLEX.
     "FLEX": "flex",
     "BATCH": "flex",
+    "ON_DEMAND_FLEX": "flex",
     # ON_DEMAND is standard pricing — no service_tier suffix applied
     "ON_DEMAND": None,
 }
@@ -862,9 +865,9 @@ def _map_traffic_type_to_service_tier(traffic_type: str | None) -> str | None:
 
     trafficType values seen in practice
     ------------------------------------
-    ON_DEMAND          -> standard pricing  (service_tier = None)
-    ON_DEMAND_PRIORITY -> priority pricing  (service_tier = "priority")
-    FLEX / BATCH       -> batch/flex pricing (service_tier = "flex")
+    ON_DEMAND               -> standard pricing  (service_tier = None)
+    ON_DEMAND_PRIORITY      -> priority pricing  (service_tier = "priority")
+    FLEX / BATCH / ON_DEMAND_FLEX -> batch/flex pricing (service_tier = "flex")
     """
     if traffic_type is None:
         return None

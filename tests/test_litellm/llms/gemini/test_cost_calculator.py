@@ -364,6 +364,36 @@ def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "traffic_type, expected_service_tier",
+    [
+        ("ON_DEMAND", None),
+        ("ON_DEMAND_PRIORITY", "priority"),
+        ("FLEX", "flex"),
+        ("BATCH", "flex"),
+        # Vertex AI reports flex/shared-capacity traffic as ON_DEMAND_FLEX.
+        ("ON_DEMAND_FLEX", "flex"),
+        # trafficType is matched case-insensitively.
+        ("on_demand_flex", "flex"),
+        (None, None),
+        ("SOMETHING_UNKNOWN", None),
+    ],
+)
+def test_map_traffic_type_to_service_tier(
+    traffic_type: str | None, expected_service_tier: str | None
+):
+    """
+    Gemini/Vertex usageMetadata.trafficType maps to the LiteLLM service_tier
+    that selects flex/priority cost keys. ON_DEMAND_FLEX (Vertex's flex opt-in
+    value) must map to "flex" so flex-tier requests are not billed as standard.
+    """
+    from litellm.cost_calculator import _map_traffic_type_to_service_tier
+
+    assert (
+        _map_traffic_type_to_service_tier(traffic_type) == expected_service_tier
+    )
+
+
+@pytest.mark.parametrize(
     "model,custom_llm_provider,expected_cache_read_cost",
     [
         ("gemini/gemini-flash-latest", "gemini", 3e-08),
@@ -378,7 +408,7 @@ def test_flash_alias_cache_read_is_ten_percent_of_input(
     monkeypatch, model, custom_llm_provider, expected_cache_read_cost
 ):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     model_info = litellm.get_model_info(
         model=model, custom_llm_provider=custom_llm_provider
@@ -399,7 +429,7 @@ def test_flash_alias_cache_read_is_ten_percent_of_input(
 )
 def test_flash_latest_alias_spellings_price_identically(monkeypatch, prefixed, bare):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
     prefixed_entry = litellm.model_cost[prefixed]
     bare_entry = litellm.model_cost[bare]
