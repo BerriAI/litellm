@@ -1,3 +1,4 @@
+import copy
 import json
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -199,6 +200,52 @@ class TestOpenAIResponsesAPIConfig:
 
         assert "cache_control" not in result["tools"][0]
         assert result["tools"][0]["name"] == "get_weather"
+
+    def test_transform_does_not_strip_cache_control_from_the_callers_input(self):
+        """Stripping for OpenAI must not reach back into the caller's own objects.
+
+        `filter_value_from_dict` deletes the key in place and recurses, and
+        `_validate_input_param` passes plain dict items through by reference, so
+        the caller's input list used to lose its cache breakpoints. Reusing that
+        list on Anthropic or Bedrock afterwards then silently lost prompt caching.
+        Same defect as the Chat Completions path.
+        """
+        input_with_cache_control = [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "a long cached system prompt",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+        tools_with_cache_control = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object"},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        input_before = copy.deepcopy(input_with_cache_control)
+        tools_before = copy.deepcopy(tools_with_cache_control)
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_with_cache_control,
+            response_api_optional_request_params={"tools": tools_with_cache_control},
+            litellm_params={},
+            headers={},
+        )
+
+        # the outbound body is still stripped
+        assert "cache_control" not in json.dumps(result)
+        # and the caller's objects are untouched, nested content blocks included
+        assert input_with_cache_control == input_before
+        assert tools_with_cache_control == tools_before
 
     def test_transform_preserves_input_without_cache_control(self):
         """Inputs without cache_control must pass through unmodified."""
