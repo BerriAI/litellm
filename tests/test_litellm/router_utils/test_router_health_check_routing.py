@@ -47,7 +47,7 @@ class TestFilterHealthCheckUnhealthyDeployments:
         self,
         enable: bool,
         health_cache: DeploymentHealthCache,
-        model_groups: frozenset = None,
+        model_groups: frozenset[str] | None = None,
     ):
         """Create a minimal object that behaves like Router for filter testing."""
 
@@ -163,7 +163,7 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
         self,
         enable: bool,
         health_cache: DeploymentHealthCache,
-        model_groups: frozenset = None,
+        model_groups: frozenset[str] | None = None,
     ):
         from litellm.router import Router
 
