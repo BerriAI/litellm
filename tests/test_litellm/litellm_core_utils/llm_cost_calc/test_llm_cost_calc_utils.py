@@ -2764,6 +2764,46 @@ def test_token_type_cost_breakdown_matches_real_gemini_numbers(_local_model_cost
     assert breakdown.cache_creation_cost == 0.0
 
 
+def test_token_type_cost_breakdown_flex_tier_prices_reasoning_at_flex_rate(_local_model_cost_map):
+    """Regression for the flex-tier breakdown drift: gemini-3.5-flash defines a flat
+    output_cost_per_reasoning_token (9e-06, the standard output rate) but no _flex
+    variant, so the breakdown priced reasoning at the standard rate on flex requests
+    while the total billed it at the flex output rate (4.5e-06). The reasoning
+    sub-cost then exceeded the entire flex completion cost."""
+
+    usage = Usage(
+        prompt_tokens=7,
+        completion_tokens=320,
+        total_tokens=327,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=315, text_tokens=5),
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        service_tier="flex",
+    )
+
+    assert breakdown.reasoning_cost == pytest.approx(315 * 4.5e-06)
+
+    _, flex_completion_cost = generic_cost_per_token(
+        model="gemini-3.5-flash",
+        usage=usage,
+        custom_llm_provider="vertex_ai",
+        service_tier="flex",
+    )
+    assert breakdown.reasoning_cost <= flex_completion_cost
+
+    standard_breakdown = get_token_type_cost_breakdown(
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+        usage=usage,
+        service_tier=None,
+    )
+    assert standard_breakdown.reasoning_cost == pytest.approx(315 * 9e-06)
+
+
 def test_token_type_cost_breakdown_xai_at_exactly_200k_uses_higher_tier_rates(_local_model_cost_map):
 
     usage = Usage(

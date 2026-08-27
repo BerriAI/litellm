@@ -1063,15 +1063,17 @@ def get_token_type_cost_breakdown(
         reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
 
     # Reasoning is billed at the selected tier's reasoning rate for tiered models,
-    # else at the explicit per-reasoning-token rate when the model defines one,
-    # otherwise at the standard output-token rate - this mirrors how the total
-    # completion cost is computed, so the breakdown can never diverge from it.
+    # else at the service-tier-aware per-reasoning-token rate - this mirrors how the
+    # total completion cost is computed, so the breakdown can never diverge from it.
     tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-    flat_reasoning_rate: Final = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
     reasoning_rate: Final = (
         tiered_reasoning_rate
         if tiered_reasoning_rate is not None
-        else (flat_reasoning_rate if flat_reasoning_rate is not None else completion_base_cost)
+        else _resolve_reasoning_token_cost(
+            model_info=model_info,
+            service_tier=service_tier,
+            completion_base_cost=completion_base_cost,
+        )
     )
     reasoning_cost = float(reasoning_tokens) * reasoning_rate
 
