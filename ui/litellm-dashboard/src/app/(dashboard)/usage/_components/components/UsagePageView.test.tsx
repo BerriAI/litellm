@@ -754,6 +754,19 @@ describe("UsagePage", () => {
     });
   });
 
+  it("should withhold the customer list while it is still loading", async () => {
+    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "customer" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
+  });
+
   it("should show agent usage view for admins", async () => {
     mockUseAgents.mockReturnValue({
       data: { agents: mockAgents },

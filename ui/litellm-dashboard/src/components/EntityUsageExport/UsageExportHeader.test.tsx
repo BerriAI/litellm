@@ -104,6 +104,28 @@ describe("UsageExportHeader", () => {
     expect(screen.queryByPlaceholderText("Select tag to filter...")).not.toBeInTheDocument();
   });
 
+  it("should stay usable when a carried-over selection outlives its options", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="tag"
+        showFilters
+        filterLabel="Filter by tag"
+        filterPlaceholder="Select tag to filter..."
+        filterOptions={[]}
+        selectedFilters={["prod"]}
+        onFiltersChange={onFiltersChange}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("No tags with usage in this range")).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Clear Filter by tag" }));
+    expect(onFiltersChange).toHaveBeenCalledWith([]);
+  });
+
   it("should leave the filter enabled with its normal placeholder when options exist", () => {
     renderWithProviders(
       <UsageExportHeader
