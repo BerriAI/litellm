@@ -10,8 +10,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.exceptions import RejectedRequestError
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 
 
 def _load(module: str, name: str):
@@ -454,3 +456,123 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "Decide whether each judges the payload (mark it) or counts the request (leave it)."
     )
     assert CustomLogger.enforces_request_content is False
+
+
+# ---------------------------------------------------------------------------
+# scan_raw_request: a guardrail's block decision must not depend on YAML order
+# ---------------------------------------------------------------------------
+
+
+class _RedactingGuardrail(CustomGuardrail):
+    """Mirrors a real masking guardrail (e.g. Lakera's advisory mode): mutates
+    ``data`` in place and returns None, same as CustomGuardrail's documented
+    contract for in-place mutation."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("default_on", True)
+        kwargs.setdefault("event_hook", GuardrailEventHooks.pre_call)
+        super().__init__(guardrail_name="redactor", **kwargs)
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
+        for msg in data.get("messages", []):
+            if "SECRET" in msg.get("content", ""):
+                msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
+        return None
+
+
+class _BlockOnSecretGuardrail(CustomGuardrail):
+    """Blocks the request if any message contains the literal string SECRET."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("default_on", True)
+        kwargs.setdefault("event_hook", GuardrailEventHooks.pre_call)
+        super().__init__(guardrail_name="blocker", **kwargs)
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
+        if any("SECRET" in msg.get("content", "") for msg in data.get("messages", [])):
+            raise HTTPException(status_code=400, detail="blocked: SECRET detected")
+        return None
+
+
+def _secret_request() -> Dict[str, Any]:
+    return {"messages": [{"role": "user", "content": "here is my SECRET"}], "model": "m"}
+
+
+@pytest.mark.asyncio
+async def test_yaml_order_changes_enforcement_without_scan_raw_request(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """Baseline (the bug): declaring the redactor before the blocker lets a
+    request through that would have been blocked in the opposite order,
+    because the blocker only ever sees the already-redacted content."""
+    monkeypatch.setattr(litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail()])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_secret_request(),
+        call_type="completion",
+    )
+    assert "[REDACTED]" in out["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_reversed_yaml_order_blocks_the_same_request(proxy_logging, make_user_api_key_auth, monkeypatch):
+    """Same two guardrails, opposite declaration order: the blocker now runs
+    first against the still-raw content and correctly rejects the request.
+    Confirms the baseline test above is a real order-dependence, not a fluke."""
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(), _RedactingGuardrail()])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=_secret_request(),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_makes_blocking_order_independent(proxy_logging, make_user_api_key_auth, monkeypatch):
+    """Maintainer finding on BerriAI/litellm#34940: with scan_raw_request=True
+    on the blocker, declaring the redactor first no longer lets the request
+    through -- the blocker evaluates the pre-loop snapshot regardless of its
+    position in the guardrails list."""
+    monkeypatch.setattr(
+        litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)]
+    )
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=_secret_request(),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_guardrail_does_not_undo_later_masking(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A scan_raw_request guardrail that passes (its own snapshot has no
+    violation) must not affect what a later guardrail in the sequence does to
+    the live request -- its own discarded view of the data must not corrupt
+    or reset the shared ``data`` object for the rest of the loop. Uses a
+    request with no SECRET at all, so the blocker passes cleanly, and a
+    separate marker (PII_TOKEN) that only the redactor reacts to."""
+
+    class _PiiRedactor(_RedactingGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
+            for msg in data.get("messages", []):
+                if "PII_TOKEN" in msg.get("content", ""):
+                    msg["content"] = msg["content"].replace("PII_TOKEN", "[REDACTED]")
+            return None
+
+    monkeypatch.setattr(
+        litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True), _PiiRedactor()]
+    )
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "my PII_TOKEN is here"}], "model": "m"},
+        call_type="completion",
+    )
+    assert "[REDACTED]" in out["messages"][0]["content"]

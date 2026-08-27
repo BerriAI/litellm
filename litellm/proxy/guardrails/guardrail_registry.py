@@ -413,6 +413,16 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
 
+def _apply_configured_bool_override(instance: CustomGuardrail, litellm_params: LitellmParams, param_name: str) -> None:
+    """Override ``instance.<param_name>`` only when ``litellm_params`` explicitly
+    sets it, preserving whatever default the guardrail's own constructor chose
+    otherwise (its constructor default may be True, so blindly copying an
+    absent/None config value would silently clobber it back to False)."""
+    configured: Final = getattr(litellm_params, param_name, None)
+    if configured is not None:
+        setattr(instance, param_name, bool(configured))
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -534,9 +544,8 @@ class InMemoryGuardrailHandler:
                     "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
                     "scanning, so no request content would ever be scanned. Remove one of the two."
                 )
-            configured_run_in_parallel: Final[bool | None] = getattr(litellm_params, "run_in_parallel", None)
-            if configured_run_in_parallel is not None:
-                custom_guardrail_callback.run_in_parallel = bool(configured_run_in_parallel)
+            for override_param in ("run_in_parallel", "scan_raw_request"):
+                _apply_configured_bool_override(custom_guardrail_callback, litellm_params, override_param)
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),

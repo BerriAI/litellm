@@ -164,6 +164,7 @@ class CustomGuardrail(CustomLogger):
         sensitive_data_route_to_model: str | None = None,
         sticky_session_routing: bool = True,
         run_in_parallel: bool = False,
+        scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
         **kwargs,
     ):
@@ -186,6 +187,13 @@ class CustomGuardrail(CustomLogger):
             run_in_parallel: When True, this pre_call or post_call guardrail runs concurrently with
                 other opted-in guardrails of the same hook. Only safe for block-only guardrails that
                 do not mutate the request or response.
+            scan_raw_request: When True, this pre_call guardrail always evaluates the request as it
+                was before any guardrail in this hook ran, regardless of where it's declared in the
+                guardrails list -- so an earlier guardrail that masks/rewrites content (e.g. PII
+                redaction) can never hide a violation from this one. Only safe for block-only
+                guardrails: any data this guardrail returns is discarded, matching run_in_parallel's
+                contract, since applying its mutations on top of a stale snapshot would silently
+                undo whatever later guardrails already did to the live request.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -201,6 +209,7 @@ class CustomGuardrail(CustomLogger):
         self.sensitive_data_route_to_model: str | None = sensitive_data_route_to_model
         self.sticky_session_routing: bool = sticky_session_routing
         self.run_in_parallel: bool = run_in_parallel
+        self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
 
         if supported_event_hooks:

@@ -1387,6 +1387,43 @@ class ProxyLogging:
 
         return data
 
+    async def _run_sequential_guardrail_callback(
+        self,
+        callback: CustomGuardrail,
+        data: dict,  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
+        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
+        """
+        Run one guardrail from the sequential pre_call loop and return what the
+        rest of the loop should carry forward.
+
+        A guardrail opted into ``scan_raw_request`` always evaluates a fresh
+        copy of ``raw_request_snapshot`` (taken before any guardrail in this
+        hook ran) instead of ``data`` (the live, possibly already-mutated
+        payload), so its block/pass decision can never depend on where it's
+        declared relative to a guardrail that masks or rewrites content. It's
+        declared block-only, same contract as ``run_in_parallel``: any data it
+        returns is discarded, since applying its view on top of a stale
+        snapshot would silently undo whatever a later guardrail already did to
+        the live request.
+        """
+        scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+        input_data: Final = (
+            copy.deepcopy(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
+        )
+        result: Final = await self._process_guardrail_callback(
+            callback=callback,
+            data=input_data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=call_type,
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        if result is None or scans_raw_request:
+            return data
+        return result
+
     async def _process_prompt_template(
         self,
         data: dict,
@@ -1712,6 +1749,14 @@ class ProxyLogging:
                 and getattr(cb, "run_in_parallel", False)
                 and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
             )
+            # Snapshotted once, before any guardrail in this hook has run, so a
+            # scan_raw_request guardrail's block/pass decision never depends on
+            # its position in the guardrails list: an earlier guardrail that
+            # masks/rewrites content (e.g. PII redaction) can't hide a violation
+            # from a later one that opted into scanning the original request.
+            raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+                copy.deepcopy(data) if data is not None else None
+            )
 
             deferred_route_exc: SensitiveDataRouteException | None = None
             for _callback in caps.resolved_callbacks:
@@ -1725,16 +1770,13 @@ class ProxyLogging:
                         if getattr(_callback, "run_in_parallel", False):
                             continue
 
-                        result = await self._process_guardrail_callback(
+                        data = await self._run_sequential_guardrail_callback(
                             callback=_callback,
                             data=data,
+                            raw_request_snapshot=raw_request_snapshot,
                             user_api_key_dict=user_api_key_dict,
                             call_type=call_type,
-                            event_type=GuardrailEventHooks.pre_call,
                         )
-                        if result is None:
-                            continue
-                        data = result
 
                     elif (
                         _callback is not None
@@ -1786,6 +1828,7 @@ class ProxyLogging:
                 await self._run_parallel_pre_call_guardrails(
                     guardrails=parallel_guardrails,
                     data=data,
+                    raw_request_snapshot=raw_request_snapshot,
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                 )
@@ -1806,6 +1849,7 @@ class ProxyLogging:
         self,
         guardrails: tuple[CustomGuardrail, ...],
         data: dict,
+        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> None:
@@ -1822,12 +1866,22 @@ class ProxyLogging:
         the LLM, preserving the pre-call barrier that ``during_call`` guardrails
         cannot provide. Per-guardrail latency is recorded by
         ``_process_guardrail_callback``'s own metrics.
+
+        A guardrail that also opted into ``scan_raw_request`` evaluates
+        ``raw_request_snapshot`` (taken before the sequential loop ran) instead
+        of ``data`` (the sequential loop's output), for the same reason the
+        sequential branch does: its block decision must not depend on what a
+        sequential guardrail already masked or rewrote.
         """
         results: Final = await asyncio.gather(
             *(
                 self._process_guardrail_callback(
                     callback=callback,
-                    data=data,
+                    data=(
+                        copy.deepcopy(raw_request_snapshot)
+                        if getattr(callback, "scan_raw_request", False) and raw_request_snapshot is not None
+                        else data
+                    ),
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                     event_type=GuardrailEventHooks.pre_call,

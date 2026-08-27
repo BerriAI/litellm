@@ -156,6 +156,31 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
 
 
+@pytest.mark.parametrize(
+    "config_value, expected",
+    [(True, True), (False, False), (None, False)],
+)
+def test_initialize_guardrail_sets_scan_raw_request(config_value, expected):
+    """scan_raw_request from litellm_params must reach the built guardrail instance,
+    same wiring as run_in_parallel."""
+    litellm_params = {
+        "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+        "mode": "pre_call",
+        "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+        "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+    }
+    if config_value is not None:
+        litellm_params["scan_raw_request"] = config_value
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
+        guardrail={"guardrail_name": "test_scan_raw_request_flag", "litellm_params": litellm_params},
+    )
+
+    custom_guardrail = guardrail_handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+    assert custom_guardrail.scan_raw_request is expected
+
+
 def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     """
     Regression: one guardrail with an invalid litellm_params combination (Lakera's

@@ -957,6 +957,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_raw_request: bool | None = Field(
+        default=None,
+        description=(
+            "When True, this pre_call guardrail always evaluates the request as it was before any "
+            "guardrail in this hook ran, regardless of its position in the guardrails list -- so the "
+            "YAML order of guardrails can never change whether this one blocks. Use only for "
+            "block-only guardrails: any data this guardrail returns is discarded, same contract as "
+            "run_in_parallel, since an earlier guardrail's masking must not be undone by this one."
+        ),
+    )
+
     @field_validator(
         "mode",
         "default_action",
