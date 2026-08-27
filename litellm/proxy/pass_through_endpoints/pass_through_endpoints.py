@@ -3336,6 +3336,7 @@ async def update_pass_through_endpoints(
     found_endpoint: Final = _find_endpoint_by_id(pass_through_endpoint_data, endpoint_id)
 
     if found_endpoint is None:
+        _raise_if_config_defined_endpoint(endpoint_id=endpoint_id, action="updated")
         raise HTTPException(
             status_code=404,
             detail={"error": f"Endpoint with ID '{endpoint_id}' not found"},
@@ -3567,6 +3568,7 @@ async def delete_pass_through_endpoints(
     found_endpoint: Final = _find_endpoint_by_id(pass_through_endpoint_data, endpoint_id)
 
     if found_endpoint is None:
+        _raise_if_config_defined_endpoint(endpoint_id=endpoint_id, action="deleted")
         raise HTTPException(
             status_code=400,
             detail={"error": f"Endpoint with ID '{endpoint_id}' was not found in pass-through endpoint list."},
@@ -3602,6 +3604,29 @@ async def delete_pass_through_endpoints(
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
     return PassThroughEndpointResponse(endpoints=[response_obj])
+
+
+def _raise_if_config_defined_endpoint(
+    endpoint_id: str,
+    action: str,
+) -> None:
+    """
+    Raise a targeted error when the endpoint_id belongs to a config-file-defined
+    endpoint. The DB-backed CRUD handlers can only manage the DB copy, so a
+    config-file entry otherwise surfaces as a misleading "not found" while the
+    GET list keeps showing it (config entries are merged back in on every read).
+    """
+    config_endpoints: Final = _get_pass_through_endpoints_from_config()
+    if _find_endpoint_by_id(config_endpoints, endpoint_id) is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"Endpoint with ID '{endpoint_id}' is defined in your config file and cannot be {action} from the UI. "
+                    "Remove it from general_settings > pass_through_endpoints in your config.yaml and restart the proxy."
+                )
+            },
+        )
 
 
 def _find_endpoint_by_id(

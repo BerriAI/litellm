@@ -25,6 +25,7 @@ export interface passThroughItem {
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
   default_query_params?: Record<string, string>;
+  is_from_config?: boolean;
 }
 
 const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, userRole, userID, premiumUser }) => {

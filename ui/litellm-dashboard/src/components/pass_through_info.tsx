@@ -106,6 +106,7 @@ interface PassThroughEndpoint {
   auth?: boolean;
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
+  is_from_config?: boolean;
 }
 
 // Password field component for headers
@@ -244,6 +245,11 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
           </Button>
           <h2 className="text-xl font-semibold">Pass Through Endpoint: {endpointData.path}</h2>
           <p className="text-sm text-muted-foreground font-mono">{endpointData.id}</p>
+          {endpointData.is_from_config && (
+            <Badge variant="outline" className="mt-2">
+              Defined in config file — read-only, manage via config.yaml
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -252,7 +258,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
           </TabsTrigger>
-          {isAdmin && (
+          {isAdmin && !endpointData.is_from_config && (
             <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
               Settings
             </TabsTrigger>
@@ -363,8 +369,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             )}
           </TabsContent>
 
-          {/* Settings Panel (only for admins) */}
-          {isAdmin && (
+          {/* Settings Panel (only for admins; config-file endpoints are read-only) */}
+          {isAdmin && !endpointData.is_from_config && (
             <TabsContent value="settings" keepMounted>
               <Card className="block p-6">
                 <div className="flex justify-between items-center mb-4">
