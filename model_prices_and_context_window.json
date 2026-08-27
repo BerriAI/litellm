@@ -22884,6 +22884,7 @@
         "output_cost_per_reasoning_token": 9e-06,
         "output_cost_per_token": 9e-06,
         "output_cost_per_video_token": 1.75e-05,
+        "rpm": 2000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -22902,7 +22903,8 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_video_input": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "tpm": 800000
     },
     "gemini/gemini-3.1-pro-preview": {
         "prompt_cache_min_tokens": 4096,
@@ -51655,6 +51657,7 @@
         "litellm_provider": "gemini",
         "mode": "audio_transcription",
         "output_cost_per_token": 1.2e-05,
+        "rpm": 10,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
@@ -51667,8 +51670,7 @@
             "text"
         ],
         "supports_audio_input": true,
-        "tpm": 800000,
-        "rpm": 2000
+        "tpm": 250000
     },
     "gemini/gemini-3.5-transcribe-live": {
         "input_cost_per_audio_token": 3.5e-06,
@@ -51676,6 +51678,7 @@
         "litellm_provider": "gemini",
         "mode": "audio_transcription",
         "output_cost_per_token": 2.1e-05,
+        "rpm": 10,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/realtime"
@@ -51687,8 +51690,7 @@
             "text"
         ],
         "supports_audio_input": true,
-        "tpm": 250000,
-        "rpm": 10
+        "tpm": 250000
     },
     "perplexity/pplx-embed-context-v1-0.6b": {
         "input_cost_per_token": 8e-09,
