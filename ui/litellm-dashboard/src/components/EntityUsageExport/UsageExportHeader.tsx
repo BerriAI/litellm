@@ -59,6 +59,9 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
   const hasNoOptions = filterOptions.length === 0;
   const emptyPlaceholder = `No ${entityType}s with usage in this range`;
+  // A selection carried over from a range that did have options still scopes
+  // the data below, so the control has to stay usable long enough to clear it.
+  const isFilterDisabled = hasNoOptions && selectedFilters.length === 0;
 
   const filterList = (
     <ComboboxContent anchor={anchor}>
@@ -76,7 +79,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const builtInFilter = (
     <Combobox
       multiple
-      disabled={hasNoOptions}
+      disabled={isFilterDisabled}
       items={optionValues}
       value={selectedFilters}
       onValueChange={(next: string[]) => onFiltersChange?.(next)}

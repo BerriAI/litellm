@@ -97,7 +97,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   });
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
-  const { data: customers = [] } = useCustomers();
+  // No [] default: an unresolved query must stay undefined so the customer
+  // filter reads as loading rather than as a range with no customers.
+  const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
