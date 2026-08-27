@@ -104,97 +104,6 @@ class TestPromptVersioning:
         assert get_base_prompt_id(prompt_id="jack") == "jack"
         assert get_base_prompt_id(prompt_id="my_prompt.v10") == "my_prompt"
 
-    def test_get_latest_version_prompt_id(self):
-        """
-        Test that get_latest_version_prompt_id returns the highest version
-        """
-        from litellm.proxy.prompts.prompt_endpoints import get_latest_version_prompt_id
-
-        # Mock prompt IDs dictionary
-        all_prompt_ids = {
-            "jack.v1": {},
-            "jack.v2": {},
-            "jack.v3": {},
-            "jane.v1": {},
-            "simple_prompt": {},
-        }
-
-        # Test with base prompt ID - should return latest version
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="jack", all_prompt_ids=all_prompt_ids
-            )
-            == "jack.v3"
-        )
-
-        # Test with versioned prompt ID - should still return latest version
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="jack.v1", all_prompt_ids=all_prompt_ids
-            )
-            == "jack.v3"
-        )
-
-        # Test with single version
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="jane", all_prompt_ids=all_prompt_ids
-            )
-            == "jane.v1"
-        )
-
-        # Test with non-versioned prompt
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="simple_prompt", all_prompt_ids=all_prompt_ids
-            )
-            == "simple_prompt"
-        )
-
-        # Test with non-existent prompt
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="nonexistent", all_prompt_ids=all_prompt_ids
-            )
-            == "nonexistent"
-        )
-
-    def test_construct_versioned_prompt_id(self):
-        """
-        Test that construct_versioned_prompt_id correctly builds versioned IDs
-        """
-        from litellm.proxy.prompts.prompt_endpoints import construct_versioned_prompt_id
-
-        # Test with base prompt ID and version
-        assert (
-            construct_versioned_prompt_id(prompt_id="jack_success", version=4)
-            == "jack_success.v4"
-        )
-
-        # Test with None version - should return base ID unchanged
-        assert (
-            construct_versioned_prompt_id(prompt_id="jack_success", version=None)
-            == "jack_success"
-        )
-
-        # Test with existing versioned ID - should replace version
-        assert (
-            construct_versioned_prompt_id(prompt_id="jack_success.v2", version=4)
-            == "jack_success.v4"
-        )
-
-        # Test with hyphenated prompt ID
-        assert (
-            construct_versioned_prompt_id(prompt_id="my-prompt", version=1)
-            == "my-prompt.v1"
-        )
-
-        # Test with double-digit version
-        assert (
-            construct_versioned_prompt_id(prompt_id="test_prompt", version=10)
-            == "test_prompt.v10"
-        )
-
 
 class TestPromptVersionsEndpoint:
     """
@@ -444,7 +353,7 @@ class TestAdminViewerReadAccess:
                 "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
             ) as mock_registry,
         ):
-            mock_registry.get_prompt_by_id.return_value = PromptSpec(
+            mock_registry.resolve_prompt_spec.return_value = PromptSpec(
                 prompt_id="jack.v2",
                 litellm_params=PromptLiteLLMParams(
                     prompt_id="jack",
@@ -453,8 +362,7 @@ class TestAdminViewerReadAccess:
                 ),
                 prompt_info=PromptInfo(prompt_type="db"),
             )
-            mock_registry.IN_MEMORY_PROMPTS = {"jack.v1": {}, "jack.v2": {}}
-            mock_registry.get_prompt_callback_by_id.return_value = None
+            mock_registry.get_prompt_callback_for_prompt.return_value = None
 
             response = await get_prompt_info(prompt_id="jack", user_api_key_dict=viewer)
 

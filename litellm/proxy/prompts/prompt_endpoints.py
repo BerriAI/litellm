@@ -29,6 +29,12 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.path_utils import safe_filename
+from litellm.proxy.prompts.prompt_registry import (
+    DEFAULT_PROMPT_ENVIRONMENT,
+    get_base_prompt_id,
+    get_version_number,
+    prompt_environment_or_default,
+)
 from litellm.repositories.table_repositories import PromptRepository
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
@@ -102,165 +108,20 @@ def _prompt_table(prisma_client: "PrismaClient") -> _PromptTableActions:
     return PromptRepository(prisma_client).table
 
 
-def get_base_prompt_id(prompt_id: str) -> str:
-    """
-    Extract the base prompt ID by stripping the version suffix if present.
-
-    Args:
-        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v1" or "jack_success_v1")
-
-    Returns:
-        Base prompt ID without version suffix (e.g., "jack_success")
-
-    Examples:
-        >>> get_base_prompt_id("jack_success.v1")
-        "jack_success"
-        >>> get_base_prompt_id("jack_success_v1")
-        "jack_success"
-        >>> get_base_prompt_id("jack_success")
-        "jack_success"
-    """
-    # Try dot separator first (.v)
-    if ".v" in prompt_id:
-        return prompt_id.split(".v")[0]
-    # Try underscore separator (_v)
-    if "_v" in prompt_id:
-        return prompt_id.split("_v")[0]
-    return prompt_id
-
-
-def get_version_number(prompt_id: str) -> int:
-    """
-    Extract the version number from a versioned prompt ID.
-
-    Args:
-        prompt_id: Prompt ID that may include version suffix (e.g., "jack_success.v2" or "jack_success_v2")
-
-    Returns:
-        Version number (defaults to 1 if no version suffix or invalid format)
-
-    Examples:
-        >>> get_version_number("jack_success.v2")
-        2
-        >>> get_version_number("jack_success_v2")
-        2
-        >>> get_version_number("jack_success")
-        1
-    """
-    # Try dot separator first (.v)
-    if ".v" in prompt_id:
-        version_str = prompt_id.split(".v")[1]
-        try:
-            return int(version_str)
-        except ValueError:
-            pass
-
-    # Try underscore separator (_v)
-    if "_v" in prompt_id:
-        version_str = prompt_id.split("_v")[1]
-        try:
-            return int(version_str)
-        except ValueError:
-            pass
-
-    return 1
-
-
-def construct_versioned_prompt_id(prompt_id: str, version: int | None = None) -> str:
-    """
-    Construct a versioned prompt ID from a base prompt_id and version number.
-
-    Args:
-        prompt_id: Base prompt ID (e.g., "jack_success")
-        version: Version number (if None, returns the base prompt_id unchanged)
-
-    Returns:
-        Versioned prompt ID (e.g., "jack_success.v4")
-
-    Examples:
-        >>> construct_versioned_prompt_id("jack_success", 4)
-        "jack_success.v4"
-        >>> construct_versioned_prompt_id("jack_success", None)
-        "jack_success"
-        >>> construct_versioned_prompt_id("jack_success.v2", 4)
-        "jack_success.v4"
-    """
-    if version is None:
-        return prompt_id
-
-    # Strip any existing version suffix first
-    base_id: Final = get_base_prompt_id(prompt_id)
-    return f"{base_id}.v{version}"
-
-
-def get_latest_version_prompt_id(prompt_id: str, all_prompt_ids: Mapping[str, object]) -> str:
-    """
-    Find the latest version of a prompt from available prompt IDs.
-
-    Args:
-        prompt_id: Base prompt ID or versioned prompt ID (e.g., "jack_success" or "jack_success.v2")
-        all_prompt_ids: Dictionary of all available prompt IDs (keys are prompt IDs)
-
-    Returns:
-        The prompt ID with the highest version number, or the original prompt_id if no versions exist
-
-    Examples:
-        >>> all_ids = {"jack.v1": {}, "jack.v2": {}, "jack.v3": {}}
-        >>> get_latest_version_prompt_id("jack", all_ids)
-        "jack.v3"
-        >>> get_latest_version_prompt_id("jack.v1", all_ids)
-        "jack.v3"
-        >>> all_ids = {"simple": {}}
-        >>> get_latest_version_prompt_id("simple", all_ids)
-        "simple"
-    """
-    base_id: Final = get_base_prompt_id(prompt_id=prompt_id)
-
-    # Find all versions of this prompt
-    matching_versions: Final = []
-    for stored_prompt_id in all_prompt_ids:
-        if get_base_prompt_id(prompt_id=stored_prompt_id) == base_id:
-            version_num = get_version_number(prompt_id=stored_prompt_id)
-            matching_versions.append((version_num, stored_prompt_id))
-
-    # Use the highest version number
-    if matching_versions:
-        matching_versions.sort(reverse=True)
-        return matching_versions[0][1]
-    else:
-        # No versioned prompts found, use the base ID as-is
-        return prompt_id
-
-
 def get_latest_prompt_versions(prompts: list[PromptSpec]) -> list[PromptSpec]:
     """
-    Filter a list of prompts to return only the latest version of each unique prompt.
-
-    Args:
-        prompts: List of PromptSpec objects
-
-    Returns:
-        List of PromptSpec objects with only the latest version of each prompt
+    Filter prompts down to the latest version per (base prompt id, environment).
     """
-    latest_prompts: Final[dict[str, PromptSpec]] = {}
-
-    for prompt in prompts:
-        base_id = get_base_prompt_id(prompt_id=prompt.prompt_id)
-        version = get_version_number(prompt_id=prompt.prompt_id)
-
-        # Keep the prompt with the highest version number
-        if base_id not in latest_prompts:
-            latest_prompts[base_id] = prompt
-        else:
-            existing_version = get_version_number(prompt_id=latest_prompts[base_id].prompt_id)
-            if version > existing_version:
-                latest_prompts[base_id] = prompt
-
+    sorted_prompts: Final = sorted(prompts, key=lambda prompt: get_version_number(prompt_id=prompt.prompt_id))
+    latest_prompts: Final = {
+        (get_base_prompt_id(prompt_id=prompt.prompt_id), prompt_environment_or_default(prompt.environment)): prompt
+        for prompt in sorted_prompts
+    }
     return list(latest_prompts.values())
 
 
 async def get_next_version_for_prompt(
-    prisma_client: "PrismaClient", prompt_id: str, environment: str = "development"
+    prisma_client: "PrismaClient", prompt_id: str, environment: str = DEFAULT_PROMPT_ENVIRONMENT
 ) -> int:
     """
     Get the next version number for a prompt in a specific environment.
@@ -403,11 +264,14 @@ async def list_prompts(
     if key_metadata is not None:
         prompts: Final = cast(list[str] | None, key_metadata.get("prompts", None))
         if prompts is not None:
-            all_prompts = [
-                IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
-                for prompt_id in prompts
-                if prompt_id in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS
+            allowed_prompt_ids: Final = frozenset(prompts)
+            allowed_prompts: Final = [
+                spec
+                for spec in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values()
+                if spec.prompt_id in allowed_prompt_ids
+                or get_base_prompt_id(prompt_id=spec.prompt_id) in allowed_prompt_ids
             ]
+            all_prompts = get_latest_prompt_versions(prompts=allowed_prompts)
             if environment:
                 all_prompts = [p for p in all_prompts if p.environment == environment]
             prompt_list: Final = []
@@ -576,7 +440,7 @@ def _get_prompt_template(prompt_spec: PromptSpec, base_prompt_id: str) -> Prompt
                     metadata=parsed.get("metadata"),
                 )
         else:
-            prompt_callback: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(prompt_spec.prompt_id)
+            prompt_callback: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=prompt_spec)
             if prompt_callback is not None:
                 integration_name: Final = prompt_callback.integration_name
                 if integration_name == "dotprompt":
@@ -690,15 +554,8 @@ async def get_prompt_info(
         if env_prompts:
             prompt_spec = create_versioned_prompt_spec(db_prompt=env_prompts[0])
 
-    # Fallback: use in-memory registry (no environment filter)
     if prompt_spec is None and environment is None:
-        prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
-        if prompt_spec is None:
-            latest_prompt_id: Final = get_latest_version_prompt_id(
-                prompt_id=prompt_id,
-                all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
-            )
-            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(latest_prompt_id)
+        prompt_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(prompt_id, version=requested_version)
 
     if prompt_spec is None:
         raise HTTPException(
@@ -785,7 +642,7 @@ async def create_prompt(
         environment: Final = (
             request.prompt_info.environment
             if request.prompt_info and request.prompt_info.environment
-            else "development"
+            else DEFAULT_PROMPT_ENVIRONMENT
         )
 
         # Get next version number
@@ -885,7 +742,7 @@ async def update_prompt(
         environment: Final = (
             request.prompt_info.environment
             if request.prompt_info and request.prompt_info.environment
-            else "development"
+            else DEFAULT_PROMPT_ENVIRONMENT
         )
 
         # Check if any version of this prompt exists (in any environment)
@@ -897,9 +754,7 @@ async def update_prompt(
                 detail=f"Prompt with ID {base_prompt_id} not found",
             )
 
-        # Check if it's a config prompt
-        existing_in_memory: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
-        if existing_in_memory and existing_in_memory.prompt_info.prompt_type == "config":
+        if IN_MEMORY_PROMPT_REGISTRY.has_config_prompt(base_prompt_id=base_prompt_id):
             raise HTTPException(
                 status_code=400,
                 detail="Cannot update config prompts.",
@@ -988,52 +843,24 @@ async def delete_prompt(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
-        # Try to get prompt directly first
-        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
-
-        # If not found, try to find the latest version
-        if existing_prompt is None:
-            latest_prompt_id: Final = get_latest_version_prompt_id(
-                prompt_id=prompt_id,
-                all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
-            )
-            existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(latest_prompt_id)
-            # Use the resolved prompt_id for deletion
-            prompt_id = latest_prompt_id
+        base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
+        existing_prompt: Final = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(prompt_id, environment=environment)
 
         if existing_prompt is None:
             raise HTTPException(status_code=404, detail=f"Prompt with ID {prompt_id} not found")
 
-        if existing_prompt.prompt_info.prompt_type == "config":
+        if IN_MEMORY_PROMPT_REGISTRY.has_config_prompt(base_prompt_id=base_prompt_id):
             raise HTTPException(
                 status_code=400,
                 detail="Cannot delete config prompts.",
             )
 
-        # Get the base prompt ID (without version suffix) for database deletion
-        base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
-
-        # Build delete filter; scope to environment if provided
-        delete_where: Final[dict[str, str]] = {"prompt_id": base_prompt_id}
-        if environment:
-            delete_where["environment"] = environment
-
-        # Delete versions from the database (scoped to environment if provided)
+        delete_where: Final[dict[str, str]] = {
+            "prompt_id": base_prompt_id,
+            **({"environment": environment} if environment else {}),
+        }
         await _prompt_table(prisma_client).delete_many(where=delete_where)
-
-        # Remove matching prompts from memory — scope to environment if provided
-        if environment:
-            prompts_to_delete: Final = [
-                pid
-                for pid, prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.items()
-                if get_base_prompt_id(prompt_id=pid) == base_prompt_id and prompt.environment == environment
-            ]
-            for pid in prompts_to_delete:
-                del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[pid]
-                if pid in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
-                    del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[pid]
-        else:
-            IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id)
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id=base_prompt_id, environment=environment)
 
         env_msg: Final = f" from {environment}" if environment else ""
         return {"message": f"Prompt {base_prompt_id} deleted successfully{env_msg}"}
@@ -1105,7 +932,7 @@ async def patch_prompt(
     try:
         # Resolve the target row: find the latest version in the given environment
         base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
-        env: Final = environment or "development"
+        env: Final = prompt_environment_or_default(environment)
         requested_version: Final = get_version_number(prompt_id=prompt_id) if prompt_id != base_prompt_id else None
 
         # Build query to find the exact row by composite unique key
@@ -1129,11 +956,7 @@ async def patch_prompt(
 
         target_row: Final = db_rows[0]
 
-        # Check if prompt exists in memory
-        versioned_id: Final = f"{base_prompt_id}.v{target_row.version}"
-        existing_prompt: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(versioned_id)
-
-        if existing_prompt and existing_prompt.prompt_info.prompt_type == "config":
+        if IN_MEMORY_PROMPT_REGISTRY.has_config_prompt(base_prompt_id=base_prompt_id):
             raise HTTPException(
                 status_code=400,
                 detail="Cannot update config prompts.",

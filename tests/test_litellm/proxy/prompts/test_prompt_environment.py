@@ -191,11 +191,7 @@ async def test_update_prompt_stores_environment_and_created_by():
         with patch(
             "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
         ) as mock_registry:
-            mock_registry.get_prompt_by_id.return_value = PromptSpec(
-                prompt_id="my_prompt.v1",
-                litellm_params=request.litellm_params,
-                prompt_info=PromptInfo(prompt_type="db"),
-            )
+            mock_registry.has_config_prompt.return_value = False
             mock_registry.initialize_prompt.return_value = PromptSpec(
                 prompt_id="my_prompt.v2",
                 litellm_params=request.litellm_params,
@@ -239,7 +235,8 @@ async def test_delete_prompt_scoped_to_environment():
             prompt_info=PromptInfo(prompt_type="db"),
             environment="staging",
         )
-        mock_registry.get_prompt_by_id.return_value = prompt_spec
+        mock_registry.resolve_prompt_spec.return_value = prompt_spec
+        mock_registry.has_config_prompt.return_value = False
 
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
             await delete_prompt(
@@ -250,4 +247,7 @@ async def test_delete_prompt_scoped_to_environment():
 
             mock_prisma_client.db.litellm_prompttable.delete_many.assert_called_once_with(
                 where={"prompt_id": "test_prompt", "environment": "staging"}
+            )
+            mock_registry.delete_prompts_by_base_id.assert_called_once_with(
+                base_prompt_id="test_prompt", environment="staging"
             )

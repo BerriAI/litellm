@@ -7273,16 +7273,7 @@ class ProxyConfig:
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
             )
-            newest_spec_per_id: Final[Mapping[str, PromptSpec]] = MappingProxyType(
-                {
-                    spec.prompt_id: spec
-                    for spec in sorted(
-                        parsed_specs,
-                        key=lambda s: s.updated_at.timestamp() if s.updated_at else float("-inf"),
-                    )
-                }
-            )
-            for prompt_spec in newest_spec_per_id.values():
+            for prompt_spec in parsed_specs:
                 try:
                     IN_MEMORY_PROMPT_REGISTRY.sync_prompt_from_db(prompt=prompt_spec)
                 except Exception as prompt_sync_error:  # noqa: BLE001  # one poisoned row must not block syncing the remaining prompts

@@ -726,10 +726,7 @@ async def test_process_prompt_template_no_op_when_no_prompt_spec(proxy_logging, 
     from litellm.proxy.prompts import prompt_registry
 
     monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_callback_by_id", lambda *a, **kw: None
-    )
-    monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: None
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "resolve_prompt_spec", lambda *a, **kw: None
     )
     data: Dict[str, Any] = {"messages": [{"role": "user"}], "model": "m", "temperature": 0.1}
     await proxy_logging._process_prompt_template(
@@ -752,11 +749,11 @@ async def test_process_prompt_template_applies_when_spec_resolves(proxy_logging,
 
     monkeypatch.setattr(
         prompt_registry.IN_MEMORY_PROMPT_REGISTRY,
-        "get_prompt_callback_by_id",
+        "get_prompt_callback_for_prompt",
         lambda *a, **kw: custom_logger,
     )
     monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "resolve_prompt_spec", lambda *a, **kw: prompt_spec
     )
 
     logging_obj = MagicMock()
@@ -802,11 +799,11 @@ async def test_process_prompt_template_async_get_prompt_error_raises(proxy_loggi
     prompt_spec.litellm_params = MagicMock(prompt_id="x")
     monkeypatch.setattr(
         prompt_registry.IN_MEMORY_PROMPT_REGISTRY,
-        "get_prompt_callback_by_id",
+        "get_prompt_callback_for_prompt",
         lambda *a, **kw: custom_logger,
     )
     monkeypatch.setattr(
-        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_by_id", lambda *a, **kw: prompt_spec
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "resolve_prompt_spec", lambda *a, **kw: prompt_spec
     )
     logging_obj = MagicMock()
     logging_obj.async_get_chat_completion_prompt = AsyncMock(side_effect=RuntimeError("bad prompt"))
@@ -818,3 +815,44 @@ async def test_process_prompt_template_async_get_prompt_error_raises(proxy_loggi
             prompt_version=None,
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_process_prompt_template_resolves_the_requested_environment(proxy_logging, monkeypatch):
+    from litellm.proxy.prompts import prompt_registry
+
+    prompt_spec = MagicMock()
+    prompt_spec.litellm_params = MagicMock(prompt_id="greeting")
+    resolve_calls: list[dict] = []
+
+    def fake_resolve(prompt_id, version=None, environment=None):
+        resolve_calls.append({"prompt_id": prompt_id, "version": version, "environment": environment})
+        return prompt_spec
+
+    monkeypatch.setattr(prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "resolve_prompt_spec", fake_resolve)
+    monkeypatch.setattr(
+        prompt_registry.IN_MEMORY_PROMPT_REGISTRY, "get_prompt_callback_for_prompt", lambda *a, **kw: MagicMock()
+    )
+    logging_obj = MagicMock()
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(
+        return_value=("m", [{"role": "user", "content": "rendered"}], {})
+    )
+    data: Dict[str, Any] = {
+        "messages": [{"role": "user", "content": "orig"}],
+        "model": "m",
+        "prompt_id": "greeting",
+        "prompt_version": 1,
+        "prompt_environment": "development",
+    }
+    await proxy_logging._process_prompt_template(
+        data=data,
+        litellm_logging_obj=logging_obj,
+        prompt_id="greeting",
+        prompt_version=1,
+        call_type="completion",
+    )
+
+    assert resolve_calls == [{"prompt_id": "greeting", "version": 1, "environment": "development"}]
+    assert "prompt_environment" not in data
+    assert "prompt_id" not in data
+    assert data["messages"] == [{"role": "user", "content": "rendered"}]

@@ -1397,27 +1397,26 @@ class ProxyLogging:
     ) -> None:
         """Process prompt template if applicable."""
 
-        from litellm.proxy.prompts.prompt_endpoints import (
-            construct_versioned_prompt_id,
-            get_latest_version_prompt_id,
-        )
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
         from litellm.utils import get_non_default_completion_params
 
-        if prompt_version is None:
-            lookup_prompt_id = get_latest_version_prompt_id(
-                prompt_id=prompt_id,
-                all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
-            )
-        else:
-            lookup_prompt_id = construct_versioned_prompt_id(prompt_id=prompt_id, version=prompt_version)
-
-        custom_logger: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(lookup_prompt_id)
-        prompt_spec: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
+        raw_prompt_environment: Final = data.get("prompt_environment", None)
+        prompt_environment: Final = raw_prompt_environment if isinstance(raw_prompt_environment, str) else None
+        prompt_spec: Final = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(
+            prompt_id,
+            version=prompt_version,
+            environment=prompt_environment,
+        )
+        custom_logger: Final = (
+            IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=prompt_spec)
+            if prompt_spec is not None
+            else None
+        )
         litellm_prompt_id: str | None = None
         if prompt_spec is not None:
             litellm_prompt_id = prompt_spec.litellm_params.prompt_id
             data.pop("prompt_id", None)
+            data.pop("prompt_environment", None)
 
         if custom_logger and prompt_spec is not None:
             (
@@ -1444,6 +1443,7 @@ class ProxyLogging:
             data.pop("prompt_variables", None)
             data.pop("prompt_label", None)
             data.pop("prompt_version", None)
+            data.pop("prompt_environment", None)
 
     def _process_guardrail_metadata(self, data: dict) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
