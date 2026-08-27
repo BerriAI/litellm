@@ -4,6 +4,7 @@
 This is an enterprise feature and requires a premium license.
 """
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -50,6 +51,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    fetch_and_validate_organization,
     new_team,
     team_member_add,
     team_member_delete,
@@ -426,7 +428,7 @@ async def _get_scim_settings() -> SCIMSettings:
         from litellm.proxy.proxy_server import proxy_config
 
         config: Final = await proxy_config.get_config()
-        litellm_settings: Final = config.get("litellm_settings", {}) or {}
+        litellm_settings: Final = config.get("litellm_settings") or {}
         raw_settings: Final = litellm_settings.get("scim_settings")
         if not raw_settings:
             return SCIMSettings()
@@ -439,8 +441,10 @@ async def _get_scim_settings() -> SCIMSettings:
         return SCIMSettings()
 
 
-def _resolve_scim_group_organization_id(display_name: str, settings: SCIMSettings) -> str | None:
-    """First organization mapping whose pattern fully matches the group displayName, or None."""
+SCIM_ORG_MAPPING_MATCH_TIMEOUT_SECONDS: Final = 1.0
+
+
+def _first_matching_organization_id(display_name: str, settings: SCIMSettings) -> str | None:
     return next(
         (
             mapping.organization_id
@@ -451,8 +455,38 @@ def _resolve_scim_group_organization_id(display_name: str, settings: SCIMSetting
     )
 
 
-async def _validate_mapped_organization_exists(prisma_client: PrismaClient, organization_id: str) -> None:
-    """An unknown mapped organization is an admin config error; name it instead of writing a dangling id."""
+async def _resolve_scim_group_organization_id(display_name: str, settings: SCIMSettings) -> str | None:
+    """First organization mapping whose pattern fully matches the group displayName, or None.
+
+    Matching runs off the event loop with a timeout so a backtracking-heavy
+    pattern cannot stall SCIM and unrelated proxy requests.
+    """
+    if not settings.organization_mappings:
+        return None
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_first_matching_organization_id, display_name, settings),
+            timeout=SCIM_ORG_MAPPING_MATCH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Evaluating litellm_settings.scim_settings.organization_mappings against group displayName '{display_name}' timed out. "
+                "Simplify the regex patterns to avoid catastrophic backtracking."
+            },
+        ) from e
+
+
+async def _validate_mapped_organization_exists(
+    prisma_client: PrismaClient, organization_id: str, existing_team: LiteLLM_TeamTable
+) -> None:
+    """An unknown mapped organization is an admin config error; name it instead of writing a dangling id.
+    A known organization must also pass the same destination policy checks as /team/update
+    (budget, models, tpm/rpm limits).
+    """
+    from litellm.proxy.proxy_server import llm_router
+
     organization_exists: Final = await OrganizationRepository(prisma_client).exists(
         organization_id, id_field="organization_id"
     )
@@ -464,6 +498,13 @@ async def _validate_mapped_organization_exists(prisma_client: PrismaClient, orga
                 "Create the organization or fix litellm_settings.scim_settings.organization_mappings."
             },
         )
+    await fetch_and_validate_organization(
+        organization_id=organization_id,
+        existing_team_row=existing_team,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
 
 
 def _resolve_scim_user_role(
@@ -2462,7 +2503,7 @@ async def create_group(
         member_result: Final = await _extract_group_member_ids(group)
         members_with_roles = [Member(user_id=member_id, role="user") for member_id in member_result.all_member_ids]
 
-        mapped_organization_id: Final = _resolve_scim_group_organization_id(
+        mapped_organization_id: Final = await _resolve_scim_group_organization_id(
             group.displayName, await _get_scim_settings()
         )
 
@@ -2522,14 +2563,14 @@ async def update_group(
             SCIM_MANAGED_TEAM_METADATA_KEY: True,
         }
 
-        mapped_organization_id: Final = _resolve_scim_group_organization_id(
+        mapped_organization_id: Final = await _resolve_scim_group_organization_id(
             group.displayName, await _get_scim_settings()
         )
         organization_changed: Final = (
             mapped_organization_id is not None and mapped_organization_id != existing_team.organization_id
         )
         if organization_changed and mapped_organization_id is not None:
-            await _validate_mapped_organization_exists(prisma_client, mapped_organization_id)
+            await _validate_mapped_organization_exists(prisma_client, mapped_organization_id, existing_team)
 
         update_data: Final = {
             "team_alias": group.displayName,
@@ -2802,14 +2843,14 @@ async def patch_group(
 
         effective_alias: Final = update_data.get("team_alias", existing_team.team_alias)
         if isinstance(effective_alias, str):
-            patch_mapped_organization_id: Final = _resolve_scim_group_organization_id(
+            patch_mapped_organization_id: Final = await _resolve_scim_group_organization_id(
                 effective_alias, await _get_scim_settings()
             )
             if (
                 patch_mapped_organization_id is not None
                 and patch_mapped_organization_id != existing_team.organization_id
             ):
-                await _validate_mapped_organization_exists(prisma_client, patch_mapped_organization_id)
+                await _validate_mapped_organization_exists(prisma_client, patch_mapped_organization_id, existing_team)
                 update_data["organization_id"] = patch_mapped_organization_id
 
         # Apply the metadata/displayName updates to the database

@@ -5719,7 +5719,7 @@ async def test_update_group_rename_assigns_mapped_organization(mocker: MockerFix
 
     await update_group(group_id=group_id, group=scim_group_update)
 
-    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng")
+    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng", existing_team)
     update_call_data = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
     assert update_call_data["organization_id"] == "org-eng"
 
@@ -5805,7 +5805,7 @@ async def test_patch_group_rename_assigns_mapped_organization(mocker: MockerFixt
 
     await patch_group(group_id=group_id, patch_ops=patch_ops)
 
-    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng")
+    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng", existing_team)
     update_call_data = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
     assert update_call_data["organization_id"] == "org-eng"
 
