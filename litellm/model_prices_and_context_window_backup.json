@@ -50139,6 +50139,36 @@
             }
         ]
     },
+    "volcengine/doubao-seed-2-1-pro-260628": {
+        "cache_read_input_token_cost": 1.78120508023e-07,
+        "input_cost_per_token": 8.90602540117e-07,
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 4.45301270059e-06,
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
+    "volcengine/doubao-seed-2-1-turbo-260628": {
+        "cache_read_input_token_cost": 8.90602540117e-08,
+        "input_cost_per_token": 4.45301270059e-07,
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 2.22650635029e-06,
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
