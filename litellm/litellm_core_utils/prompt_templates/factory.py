@@ -3608,7 +3608,12 @@ class BedrockImageProcessor:
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
-            img_bytes, mime_type = await BedrockImageProcessor.get_image_details_async(image_url, max_bytes=max_bytes)
+            # Forward max_bytes only when the caller set one. Passing it
+            # unconditionally would reach every override and test stub written
+            # against the previous signature, so an additive parameter would
+            # break them; omitting it keeps the call byte-for-byte as it was.
+            capped: Final = {} if max_bytes is None else {"max_bytes": max_bytes}  # mutable-ok: kwargs for one call
+            img_bytes, mime_type = await BedrockImageProcessor.get_image_details_async(image_url, **capped)
             image_format = mime_type.split("/")[1]
         else:
             raise ValueError("Unsupported image type. Expected either image url or base64 encoded string")
