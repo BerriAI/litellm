@@ -15775,6 +15775,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -18268,6 +18279,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -21364,6 +21386,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",
@@ -24758,6 +24791,17 @@
                 }
               ],
               "title": "Upstream Resource"
+            },
+            "upstream_token_header": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Upstream Token Header"
             }
           },
           "title": "MCPCredentials",

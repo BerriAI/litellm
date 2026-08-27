@@ -24834,7 +24834,7 @@ export interface components {
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
             /** Content */
-            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"])[];
+            content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
             /**
              * Role
              * @constant
@@ -24864,6 +24864,19 @@ export interface components {
             };
             /** Strict */
             strict?: boolean;
+        };
+        /**
+         * ChatCompletionToolReferenceObject
+         * @description Anthropic tool-search result block, carried through untouched so it survives a round trip.
+         */
+        ChatCompletionToolReferenceObject: {
+            /** Tool Name */
+            tool_name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_reference";
         };
         /** ChatCompletionUserMessage */
         ChatCompletionUserMessage: {
@@ -25359,6 +25372,11 @@ export interface components {
              * @description If True, a user's personal max_budget is enforced on every request they make, including requests made with a team-scoped key. Defaults to False, where a team-scoped key is governed only by the team and team-member budgets and the key owner's personal max_budget does not apply (see GitHub issue #12905).
              */
             apply_user_budget_to_team_keys?: boolean | null;
+            /**
+             * Background Health Check Model Groups
+             * @description Opt-in allowlist of model group names for background health checks and health-check routing. When set, the background loop probes only deployments whose model_name is listed, and enable_health_check_routing filters unhealthy deployments only within the listed groups; every other group, including newly added deployments, is skipped and keeps its configured routing strategy. When unset, all deployments participate (opt out per deployment via model_info.disable_background_health_check).
+             */
+            background_health_check_model_groups?: string[] | null;
             /**
              * Background Health Checks
              * @description run health checks in background
@@ -30846,6 +30864,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Upstream Resource */
             upstream_resource?: string | null;
+            /** Upstream Token Header */
+            upstream_token_header?: string | null;
         };
         /**
          * MCPEnvVar
@@ -56366,6 +56386,8 @@ export interface operations {
                 page_size?: number;
                 /** @description Filter logs by status (e.g., success, failure) */
                 status_filter?: string | null;
+                /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
+                cache_hit_filter?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -56384,6 +56406,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Exclude LiteLLM internal health check requests from results */
+                exclude_internal_health_checks?: boolean;
             };
             header?: never;
             path?: never;
@@ -56474,6 +56498,8 @@ export interface operations {
                 page_size?: number;
                 /** @description Filter logs by status (e.g., success, failure) */
                 status_filter?: string | null;
+                /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
+                cache_hit_filter?: string | null;
                 /** @description Filter logs by model */
                 model?: string | null;
                 /** @description Filter logs by model ID (litellm model deployment id) */
@@ -56492,6 +56518,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Exclude LiteLLM internal health check requests from results */
+                exclude_internal_health_checks?: boolean;
             };
             header?: never;
             path?: never;
