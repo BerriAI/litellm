@@ -10,6 +10,6 @@ from litellm.interactions.litellm_responses_transformation.transformation import
 )
 
 __all__ = [
-    "LiteLLMResponsesInteractionsHandler",
     "LiteLLMResponsesInteractionsConfig",  # Transformation config class (not BaseInteractionsAPIConfig)
+    "LiteLLMResponsesInteractionsHandler",
 ]

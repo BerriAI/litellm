@@ -3,6 +3,7 @@
 import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
+import { useEntityLinkClick } from "@/components/shared/EntityLink";
 import { cn } from "@/lib/cva.config";
 
 interface IdentityCellProps {
@@ -10,11 +11,19 @@ interface IdentityCellProps {
   subtitle?: React.ReactNode;
   badge?: React.ReactNode;
   onClick?: () => void;
+  href?: string;
   className?: string;
   titleClassName?: string;
 }
 
-export function IdentityCell({ title, subtitle, badge, onClick, className, titleClassName }: IdentityCellProps) {
+const INTERACTIVE_CELL_CLASSES =
+  "group -mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted";
+
+const HoverChevron = () => (
+  <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+);
+
+export function IdentityCell({ title, subtitle, badge, onClick, href, className, titleClassName }: IdentityCellProps) {
   const hasSubtitleRow = (subtitle != null && subtitle !== "") || badge != null;
 
   const body = (
@@ -31,21 +40,29 @@ export function IdentityCell({ title, subtitle, badge, onClick, className, title
     </div>
   );
 
+  if (href != null) {
+    return <IdentityCellLink href={href} className={className} body={body} />;
+  }
+
   if (onClick != null) {
     return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          "group -mx-2 flex w-[calc(100%+1rem)] cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted",
-          className,
-        )}
-      >
+      <button type="button" onClick={onClick} className={cn(INTERACTIVE_CELL_CLASSES, className)}>
         {body}
-        <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        <HoverChevron />
       </button>
     );
   }
 
   return <div className={cn("min-w-0", className)}>{body}</div>;
+}
+
+function IdentityCellLink({ href, className, body }: { href: string; className?: string; body: React.ReactNode }) {
+  const handleClick = useEntityLinkClick(href);
+
+  return (
+    <a href={href} onClick={handleClick} className={cn(INTERACTIVE_CELL_CLASSES, className)}>
+      {body}
+      <HoverChevron />
+    </a>
+  );
 }

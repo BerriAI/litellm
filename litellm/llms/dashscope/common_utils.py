@@ -2,8 +2,6 @@
 Common utilities for the DashScope LLM provider.
 """
 
-from typing import Optional
-
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -16,7 +14,7 @@ class DashScopeError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[httpx.Headers] = None,
+        headers: httpx.Headers | None = None,
     ):
         self.status_code = status_code
         self.message = message

@@ -28,10 +28,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from expression import case, tag, tagged_union
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
@@ -39,7 +39,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
-from litellm.types.mcp import DEFAULT_SUBJECT_TOKEN_TYPE
+from litellm.types.mcp import (
+    DEFAULT_CREDENTIAL_HEADER,
+    DEFAULT_SUBJECT_TOKEN_TYPE,
+    normalize_upstream_header_name,
+)
 
 
 class AuthSpecKind(str, Enum):
@@ -161,7 +165,52 @@ class CredError:
         assert_never(self.tag)
 
 
-class AuthorizationCodeConfig(BaseModel):
+def validate_header_name(raw: str) -> Result[str, CredError]:
+    """``normalize_upstream_header_name`` with this package's error-as-value policy.
+
+    The grammar itself lives in ``litellm.types.mcp`` so the v1 model, the management endpoint and
+    this vocabulary all judge a header name the same way while each keeps its own failure shape.
+    """
+    normalized: Final = normalize_upstream_header_name(raw)
+    if normalized is None:
+        return Error(CredError.of_misconfigured(f"invalid upstream header name: {raw!r}"))
+    return Ok(normalized)
+
+
+class HeaderCarrier(BaseModel):
+    """Where a resolved credential is written upstream, and how its value is formatted.
+
+    ``Authorization: Bearer`` is only OAuth's *default* conveyance (RFC 6750 section 2.1), not its
+    only one: an ESB or API gateway commonly terminates its own credential in a private header while
+    a second credential passes through to the origin, so a credential has to be able to say which
+    slot it owns. Modeled like OpenAPI's apiKey scheme, so any upstream convention is expressible
+    (Authorization + Bearer, a raw value on X-API-Key, Ocp-Apim-Subscription-Key, esb-oauth, ...).
+
+    Every config whose credential the gateway mints or holds inherits this, so no resolver arm names
+    a header itself and the conflict rule in ``_resolve_v2_auth`` can always ask the auth object
+    which slot it is about to occupy. ``passthrough`` deliberately does not: it forwards the
+    caller's own credential into the slot the caller used, and mints nothing to place.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    header_name: str = DEFAULT_CREDENTIAL_HEADER
+    value_prefix: str = "Bearer"
+
+    @field_validator("header_name")
+    @classmethod
+    def _check_header_name(cls, value: str) -> str:
+        match validate_header_name(value):
+            case Ok(name):
+                return name
+            case Error(err):
+                raise ValueError(err.summary)
+
+    def header(self, value: str) -> tuple[str, str]:
+        formatted: Final = f"{self.value_prefix} {value}" if self.value_prefix else value
+        return self.header_name, formatted
+
+
+class AuthorizationCodeConfig(HeaderCarrier):
     """Per-user 3LO; the gateway is the OAuth client and stores the user's token.
 
     Endpoints are discovered (RFC 9728 -> RFC 8414) and the client is registered via DCR
@@ -179,7 +228,7 @@ class AuthorizationCodeConfig(BaseModel):
     token_url: str | None = None
 
 
-class ClientCredentialsConfig(BaseModel):
+class ClientCredentialsConfig(HeaderCarrier):
     """M2M service account; one upstream identity for every user.
 
     Fields are optional so the config can be built incomplete: a value may be supplied at
@@ -203,7 +252,7 @@ class ClientCredentialsConfig(BaseModel):
     token_endpoint_auth_method: Literal["client_secret_post", "client_secret_basic"] | None = None
 
 
-class TokenExchangeConfig(BaseModel):
+class TokenExchangeConfig(HeaderCarrier):
     """OBO: swap the caller's live inbound token for a token bound to the upstream's audience. The
     gateway authenticates to the exchange endpoint as an OAuth client (`client_id`/`client_secret`);
     the inbound token is sent only to that endpoint, never to the upstream.
@@ -255,7 +304,7 @@ class ClientSecretAuth(BaseModel):
 ClientAuth = Annotated[PrivateKeyJwtAuth | ClientSecretAuth, Field(discriminator="source")]
 
 
-class IdJagConfig(BaseModel):
+class IdJagConfig(HeaderCarrier):
     """draft-ietf-oauth-identity-assertion-authz-grant (Okta "AI agent token exchange").
 
     Two legs: leg 1 is an RFC 8693 token exchange at the IdP org AS (`org_token_endpoint`) that
@@ -297,22 +346,15 @@ class Byok(BaseModel):
 ApiKeySource = Annotated[SharedKey | Byok, Field(discriminator="source")]
 
 
-class ApiKeyConfig(BaseModel):
+class ApiKeyConfig(HeaderCarrier):
     """A fixed credential injected as a header. The value is shared (in config) or seeded
-    per-user (pulled from the store); `header_name` and `value_prefix` say where and how it is
-    written, modeled like OpenAPI's apiKey scheme so any upstream convention is expressible
-    (Authorization + Bearer, a raw value on X-API-Key, Ocp-Apim-Subscription-Key, etc.).
+    per-user (pulled from the store); the inherited `header_name` and `value_prefix` say where
+    and how it is written.
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.api_key] = AuthSpecKind.api_key
-    header_name: str = "Authorization"
-    value_prefix: str = "Bearer"
     key_source: ApiKeySource
-
-    def header(self, value: str) -> tuple[str, str]:
-        formatted = f"{self.value_prefix} {value}" if self.value_prefix else value
-        return self.header_name, formatted
 
 
 class PassthroughConfig(BaseModel):
@@ -391,7 +433,8 @@ class Subject(BaseModel):
 
     tenant_id: str
     subject_id: str
-    # Opaque, already-validated inbound identity. Only `token_exchange` / `passthrough` read it.
+    # Opaque, already-validated inbound identity. Read by `token_exchange`, `passthrough`, and
+    # `id_jag` (which falls back to the user's stored SSO assertion when it is absent).
     inbound_token: SecretStr | None = None
 
 

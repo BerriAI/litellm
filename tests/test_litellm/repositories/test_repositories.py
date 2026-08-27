@@ -203,23 +203,32 @@ class TestBaseRepository:
         assert len(budgets) == 1
 
     def test_record_to_dict_branches(self):
-        from litellm.repositories.base_repository import _record_to_dict
+        from litellm.repositories.base_repository import record_to_dict
 
-        assert _record_to_dict({"a": 1}) == {"a": 1}
+        assert record_to_dict({"a": 1}) == {"a": 1}
 
         class WithModelDump:
             def model_dump(self):
                 return {"src": "model_dump"}
 
-        assert _record_to_dict(WithModelDump()) == {"src": "model_dump"}
+        assert record_to_dict(WithModelDump()) == {"src": "model_dump"}
 
         class WithDict:
             def dict(self):
                 return {"src": "dict"}
 
-        assert _record_to_dict(WithDict()) == {"src": "dict"}
+        assert record_to_dict(WithDict()) == {"src": "dict"}
 
-        assert _record_to_dict([("k", "v")]) == {"k": "v"}
+        assert record_to_dict([("k", "v")]) == {"k": "v"}
+
+        class WithBoth:
+            def model_dump(self):
+                return {"src": "model_dump"}
+
+            def dict(self):
+                return {"src": "dict"}
+
+        assert record_to_dict(WithBoth()) == {"src": "model_dump"}
 
 
 class TestBudgetRepository:
@@ -297,6 +306,15 @@ class TestModelRepository:
     def repo(self):
         client = MockPrismaClient()
         return ModelRepository(client)
+
+    def test_table_is_wrapped_for_config_sync(self, repo):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
+
+        table = repo.table
+        assert isinstance(table, _PublishOnWriteActions)
+        assert table._actions is repo.prisma_client.db.litellm_proxymodeltable
 
     @pytest.mark.asyncio
     @patch(
@@ -523,17 +541,26 @@ class TestTeamRepository:
 
         assert [m.user_id for m in members] == expected_ids
         sql = tx.query_raw.call_args.args[0]
-        assert "FOR UPDATE" in sql
+        assert "FOR UPDATE" not in sql, (
+            "a row lock here can deadlock with the access-group endpoints; the caller must "
+            "already hold the team's advisory lock, so a plain read is all this needs"
+        )
         assert tx.query_raw.call_args.args[1] == "team-1"
 
     @pytest.mark.asyncio
     async def test_get_members_with_roles_locked_missing_row(self, repo):
+        """None, not [], so a caller can tell a deleted team from an empty one.
+
+        /team/member_add reconciles membership under the team's advisory lock and has to
+        fail, without writing anything, when a /team/delete committed underneath it. An
+        empty list would look like a live team with no members and it would carry on writing.
+        """
         tx = MagicMock()
         tx.query_raw = AsyncMock(return_value=[])
 
         members = await repo.get_members_with_roles_locked(tx, "missing")
 
-        assert members == []
+        assert members is None
 
     @pytest.mark.asyncio
     async def test_create_team_all_fields(self, repo):
@@ -1304,6 +1331,15 @@ class TestCredentialsRepository:
         client = MockPrismaClient()
         return CredentialsRepository(client)
 
+    def test_table_is_wrapped_for_config_sync(self, repo):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
+
+        table = repo.table
+        assert isinstance(table, _PublishOnWriteActions)
+        assert table._actions is repo.prisma_client.db.litellm_credentialstable
+
     @pytest.mark.asyncio
     async def test_create(self, repo):
         record = await repo.create(
@@ -1896,6 +1932,28 @@ class TestUserRepositoryExtended:
         )
         assert updated.user_email == "new@example.com"
 
+    @pytest.mark.asyncio
+    async def test_find_by_id_decodes_only_the_json_encoded_columns(self, repo):
+        repo._prisma_client.db.litellm_usertable._records["user-json"] = {
+            "user_id": "user-json",
+            "user_email": "json@example.com",
+            "user_role": '{"not": "json"}',
+            "teams": [],
+            "models": [],
+            "metadata": '{"department": "engineering"}',
+            "model_spend": '{"gpt-4": 10.5}',
+            "model_max_budget": '{"gpt-4": 100.0}',
+        }
+
+        user = await repo.find_by_id("user-json")
+
+        assert user is not None
+        assert user.metadata == {"department": "engineering"}
+        assert user.model_spend == {"gpt-4": 10.5}
+        assert user.model_max_budget == {"gpt-4": 100.0}
+        assert user.user_email == "json@example.com"
+        assert user.user_role == '{"not": "json"}'
+
 
 class TestProjectRepositoryExtended:
     @pytest.fixture
@@ -2179,6 +2237,9 @@ class TestConfigRepositoryDeepCopy:
 
 class TestPrismaTableRepository:
     def test_table_property_returns_named_delegate(self):
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
         from litellm.repositories.table_repositories import (
             AgentsRepository,
             PolicyRepository,
@@ -2188,9 +2249,11 @@ class TestPrismaTableRepository:
         agents = AgentsRepository(prisma_client)
         policy = PolicyRepository(prisma_client)
 
-        assert agents.table is prisma_client.db.litellm_agentstable
-        assert policy.table is prisma_client.db.litellm_policytable
-        assert agents.table is not policy.table
+        assert isinstance(agents.table, _PublishOnWriteActions)
+        assert isinstance(policy.table, _PublishOnWriteActions)
+        assert agents.table._actions is prisma_client.db.litellm_agentstable
+        assert policy.table._actions is prisma_client.db.litellm_policytable
+        assert agents.table._actions is not policy.table._actions
 
     def test_table_access_raises_without_db(self):
         from litellm.repositories.table_repositories import SpendLogsRepository
@@ -2199,8 +2262,28 @@ class TestPrismaTableRepository:
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = repo.table
 
+    CONFIG_SYNCED_TABLE_NAMES = frozenset(
+        {
+            "litellm_agentstable",
+            "litellm_cacheconfig",
+            "litellm_configoverrides",
+            "litellm_guardrailstable",
+            "litellm_managedvectorstoreindextable",
+            "litellm_managedvectorstorestable",
+            "litellm_mcpservertable",
+            "litellm_policyattachmenttable",
+            "litellm_policytable",
+            "litellm_prompttable",
+            "litellm_searchtoolstable",
+            "litellm_ssoconfig",
+        }
+    )
+
     def test_each_repository_binds_its_own_table_name(self):
         import litellm.repositories.table_repositories as tr
+        from litellm.proxy.common_utils.config_sync_pubsub import (
+            _PublishOnWriteActions,
+        )
 
         prisma_client = MagicMock()
         repos = [
@@ -2217,7 +2300,14 @@ class TestPrismaTableRepository:
             assert name.startswith("litellm_")
             assert name not in seen, f"duplicate table_name {name}"
             seen.add(name)
-            assert repo_cls(prisma_client).table is getattr(prisma_client.db, name)
+            table = repo_cls(prisma_client).table
+            raw_actions = getattr(prisma_client.db, name)
+            if name in self.CONFIG_SYNCED_TABLE_NAMES:
+                assert isinstance(table, _PublishOnWriteActions), name
+                assert table._actions is raw_actions
+            else:
+                assert table is raw_actions, name
+        assert self.CONFIG_SYNCED_TABLE_NAMES <= seen
 
 
 def _json_path_equals(

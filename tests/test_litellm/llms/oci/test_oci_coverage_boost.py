@@ -11,10 +11,15 @@ All tests are self-contained and require no real OCI credentials or network acce
 """
 
 import json
+from typing import TYPE_CHECKING
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import httpx
+
+if TYPE_CHECKING:
+    from litellm.llms.oci.chat.transformation import OCIStreamWrapper
 
 from litellm import ModelResponse
 from litellm.llms.oci.chat.cohere import (

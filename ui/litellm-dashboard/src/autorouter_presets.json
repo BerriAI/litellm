@@ -1,0 +1,75 @@
+{
+  "anthropic_family": {
+    "label": "Anthropic Family",
+    "description": "Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus for complex, Opus at high thinking for reasoning.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["claude-haiku-4-5"],
+        "MEDIUM": ["claude-sonnet-5"],
+        "COMPLEX": ["claude-opus-5"],
+        "REASONING": ["claude-opus-5"]
+      },
+      "tier_model_configs": {
+        "REASONING": [{ "model_name": "claude-opus-5", "litellm_params": { "reasoning_effort": "high" } }]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
+  },
+  "gemini_family": {
+    "label": "Gemini Family",
+    "description": "Routes across the Gemini model family: Flash Lite 2.5 for simple queries, Flash Lite 3.1 for medium, Flash 3.7 for complex, Pro 3.1 for reasoning-heavy requests.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["gemini-2.5-flash-lite"],
+        "MEDIUM": ["gemini-3.1-flash-lite"],
+        "COMPLEX": ["gemini-3.7-flash"],
+        "REASONING": ["gemini-3.1-pro-preview"]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
+  },
+  "lite": {
+    "label": "Lite",
+    "description": "Cost-optimized routing across providers: DeepSeek V4 Flash for simple queries, Muse Spark 1.2 for medium, Kimi K3 for complex, Claude Opus 5 for reasoning-heavy requests. An LLM classifier with the agentic rubric assigns tiers.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["deepseek-v4-flash"],
+        "MEDIUM": ["muse-spark-1.2"],
+        "COMPLEX": ["kimi-k3"],
+        "REASONING": ["claude-opus-5"]
+      },
+      "classifier_type": "llm",
+      "classifier_llm_config": {
+        "model": "deepseek-v4-flash",
+        "timeout_ms": 3000,
+        "classification_rubric": "agentic"
+      },
+      "classifier_context_window_size": 0,
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
+  },
+  "openai_family": {
+    "label": "OpenAI Family",
+    "description": "Routes across the GPT model family: gpt-5.4-nano for simple queries, gpt-5.4-mini for medium, gpt-5.4 for complex, o3 for reasoning-heavy requests.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["gpt-5.4-nano"],
+        "MEDIUM": ["gpt-5.4-mini"],
+        "COMPLEX": ["gpt-5.4"],
+        "REASONING": ["o3"]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
+  }
+}
