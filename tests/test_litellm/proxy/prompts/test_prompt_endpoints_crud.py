@@ -52,8 +52,6 @@ async def test_delete_prompt_success():
     with patch(
         "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
     ) as mock_registry:
-        # User passes "test_prompt.v2"
-        # We simulate that get_prompt_by_id returns the prompt spec for v2
         prompt_spec = PromptSpec(
             prompt_id="test_prompt.v2",
             litellm_params=PromptLiteLLMParams(
@@ -61,7 +59,8 @@ async def test_delete_prompt_success():
             ),
             prompt_info=PromptInfo(prompt_type="db"),
         )
-        mock_registry.get_prompt_by_id.return_value = prompt_spec
+        mock_registry.resolve_prompt_spec.return_value = prompt_spec
+        mock_registry.has_config_prompt.return_value = False
 
         # Patch the prisma client in the endpoint module
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
@@ -79,7 +78,7 @@ async def test_delete_prompt_success():
 
             # 2. Memory deletion should use base ID
             mock_registry.delete_prompts_by_base_id.assert_called_once_with(
-                expected_base_id
+                base_prompt_id=expected_base_id, environment=None
             )
 
             assert response == {
@@ -108,31 +107,14 @@ async def test_delete_prompt_by_base_id_success():
     with patch(
         "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
     ) as mock_registry:
-        # User passes "test_prompt" (base ID)
-        # 1. get_prompt_by_id("test_prompt") -> None (if it's not registered as base)
-        # 2. It calls get_latest_version_prompt_id -> returns "test_prompt.v3"
-        # 3. get_prompt_by_id("test_prompt.v3") -> returns Spec
-
-        # Setup mocks behavior
-        def get_prompt_side_effect(prompt_id):
-            if prompt_id == "test_prompt":
-                return None
-            if prompt_id == "test_prompt.v3":
-                return PromptSpec(
-                    prompt_id="test_prompt.v3",
-                    litellm_params=PromptLiteLLMParams(
-                        prompt_id="test_prompt", prompt_integration="dotprompt"
-                    ),
-                    prompt_info=PromptInfo(prompt_type="db"),
-                )
-            return None
-
-        mock_registry.get_prompt_by_id.side_effect = get_prompt_side_effect
-        mock_registry.IN_MEMORY_PROMPTS = {
-            "test_prompt.v1": {},
-            "test_prompt.v2": {},
-            "test_prompt.v3": {},
-        }
+        mock_registry.resolve_prompt_spec.return_value = PromptSpec(
+            prompt_id="test_prompt.v3",
+            litellm_params=PromptLiteLLMParams(
+                prompt_id="test_prompt", prompt_integration="dotprompt"
+            ),
+            prompt_info=PromptInfo(prompt_type="db"),
+        )
+        mock_registry.has_config_prompt.return_value = False
 
         # Patch the prisma client in the endpoint module
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
@@ -150,7 +132,7 @@ async def test_delete_prompt_by_base_id_success():
 
             # 2. Memory deletion should use base ID
             mock_registry.delete_prompts_by_base_id.assert_called_once_with(
-                expected_base_id
+                base_prompt_id=expected_base_id, environment=None
             )
 
             assert response == {
@@ -187,24 +169,8 @@ async def test_get_prompt_info_by_base_id():
             prompt_info=PromptInfo(prompt_type="db"),
         )
 
-        # When get_prompt_by_id is called with "test_prompt", return None (so it searches versions)
-        # When called with "test_prompt.v3", return the spec
-        def get_prompt_side_effect(prompt_id):
-            if prompt_id == "test_prompt":
-                return None
-            if prompt_id == "test_prompt.v3":
-                return prompt_spec_v3
-            return None
-
-        mock_registry.get_prompt_by_id.side_effect = get_prompt_side_effect
-        mock_registry.IN_MEMORY_PROMPTS = {
-            "test_prompt.v1": {},
-            "test_prompt.v2": {},
-            "test_prompt.v3": {},
-        }
-
-        # We also need to mock get_prompt_callback_by_id to avoid content extraction errors/logic
-        mock_registry.get_prompt_callback_by_id.return_value = None
+        mock_registry.resolve_prompt_spec.return_value = prompt_spec_v3
+        mock_registry.get_prompt_callback_for_prompt.return_value = None
 
         response = await get_prompt_info(
             prompt_id="test_prompt", user_api_key_dict=mock_user_auth
@@ -253,7 +219,7 @@ async def test_patch_prompt_row_deleted_mid_update_returns_404():
             "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
         ) as mock_registry,
     ):
-        mock_registry.get_prompt_by_id.return_value = existing_prompt
+        mock_registry.has_config_prompt.return_value = False
 
         with pytest.raises(HTTPException) as exc_info:
             await patch_prompt(
@@ -294,7 +260,7 @@ async def test_patch_prompt_merges_unsent_fields_from_db_row_not_stale_memory():
             "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
         ) as mock_registry,
     ):
-        mock_registry.get_prompt_by_id.return_value = stale_in_memory
+        mock_registry.has_config_prompt.return_value = False
         mock_registry.reload_prompt.side_effect = lambda prompt: prompt
 
         response = await patch_prompt(
@@ -456,7 +422,7 @@ async def test_patch_prompt_info_only_keeps_legacy_keyed_row_patchable():
             "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
         ) as mock_registry,
     ):
-        mock_registry.get_prompt_by_id.return_value = existing_prompt
+        mock_registry.has_config_prompt.return_value = False
 
         await patch_prompt(
             prompt_id="agent-prompt",

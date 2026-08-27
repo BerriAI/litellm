@@ -1,6 +1,6 @@
 import importlib
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -13,6 +13,77 @@ from litellm.types.prompts.init_prompts import (
 )
 
 prompt_initializer_registry = {}
+
+DEFAULT_PROMPT_ENVIRONMENT: Final = "development"
+PROMPT_ENVIRONMENT_SERVE_PRECEDENCE: Final = ("production", "staging", "development")
+
+
+def get_base_prompt_id(prompt_id: str) -> str:
+    """
+    Extract the base prompt ID by stripping the version suffix if present.
+
+    Examples:
+        >>> get_base_prompt_id("jack_success.v1")
+        "jack_success"
+        >>> get_base_prompt_id("jack_success_v1")
+        "jack_success"
+        >>> get_base_prompt_id("jack_success")
+        "jack_success"
+    """
+    if ".v" in prompt_id:
+        return prompt_id.split(".v")[0]
+    if "_v" in prompt_id:
+        return prompt_id.split("_v")[0]
+    return prompt_id
+
+
+def get_version_number(prompt_id: str) -> int:
+    """
+    Extract the version number from a versioned prompt ID (defaults to 1).
+
+    Examples:
+        >>> get_version_number("jack_success.v2")
+        2
+        >>> get_version_number("jack_success_v2")
+        2
+        >>> get_version_number("jack_success")
+        1
+    """
+    if ".v" in prompt_id:
+        version_str = prompt_id.split(".v")[1]
+        try:
+            return int(version_str)
+        except ValueError:
+            pass
+
+    if "_v" in prompt_id:
+        version_str = prompt_id.split("_v")[1]
+        try:
+            return int(version_str)
+        except ValueError:
+            pass
+
+    return 1
+
+
+def prompt_environment_or_default(environment: str | None) -> str:
+    return environment or DEFAULT_PROMPT_ENVIRONMENT
+
+
+def registry_key_for_prompt(prompt: PromptSpec) -> str:
+    return f"{prompt.prompt_id}::{prompt_environment_or_default(prompt.environment)}"
+
+
+def _spec_version(prompt: PromptSpec) -> int:
+    return prompt.version if prompt.version is not None else get_version_number(prompt_id=prompt.prompt_id)
+
+
+def _default_serve_environment(prompts: Sequence[PromptSpec]) -> str:
+    present: Final = frozenset(prompt_environment_or_default(prompt.environment) for prompt in prompts)
+    ladder_pick: Final = next((env for env in PROMPT_ENVIRONMENT_SERVE_PRECEDENCE if env in present), None)
+    if ladder_pick is not None:
+        return ladder_pick
+    return min(present) if present else DEFAULT_PROMPT_ENVIRONMENT
 
 
 def get_prompt_initializer_from_integrations():
@@ -113,17 +184,16 @@ class InMemoryPromptRegistry:
         """
         import litellm
 
-        prompt_id: Final = prompt.prompt_id
-        if prompt_id in self.IN_MEMORY_PROMPTS:
-            verbose_proxy_logger.debug("prompt_id already exists in IN_MEMORY_PROMPTS")
-            return self.IN_MEMORY_PROMPTS[prompt_id]
+        registry_key: Final = registry_key_for_prompt(prompt)
+        if registry_key in self.IN_MEMORY_PROMPTS:
+            verbose_proxy_logger.debug("prompt already exists in IN_MEMORY_PROMPTS")
+            return self.IN_MEMORY_PROMPTS[registry_key]
 
         parsed_prompt, custom_prompt_callback = self._build_prompt_callback(prompt=prompt)
         litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)
 
-        # store references to the prompt in memory
-        self.IN_MEMORY_PROMPTS[prompt_id] = parsed_prompt
-        self.prompt_id_to_custom_prompt[prompt_id] = custom_prompt_callback
+        self.IN_MEMORY_PROMPTS[registry_key] = parsed_prompt
+        self.prompt_id_to_custom_prompt[registry_key] = custom_prompt_callback
 
         return parsed_prompt
 
@@ -166,57 +236,85 @@ class InMemoryPromptRegistry:
         import litellm
 
         parsed_prompt, new_callback = self._build_prompt_callback(prompt=prompt)
-        stale_callback: Final = self.prompt_id_to_custom_prompt.pop(prompt.prompt_id, None)
-        self.IN_MEMORY_PROMPTS.pop(prompt.prompt_id, None)
+        registry_key: Final = registry_key_for_prompt(parsed_prompt)
+        stale_callback: Final = self.prompt_id_to_custom_prompt.pop(registry_key, None)
+        self.IN_MEMORY_PROMPTS.pop(registry_key, None)
         if stale_callback is not None:
             litellm.logging_callback_manager.remove_callback_from_all_lists(stale_callback)
         litellm.logging_callback_manager.add_litellm_callback(new_callback)
-        self.IN_MEMORY_PROMPTS[prompt.prompt_id] = parsed_prompt
-        self.prompt_id_to_custom_prompt[prompt.prompt_id] = new_callback
+        self.IN_MEMORY_PROMPTS[registry_key] = parsed_prompt
+        self.prompt_id_to_custom_prompt[registry_key] = new_callback
         return parsed_prompt
 
     def sync_prompt_from_db(self, prompt: PromptSpec) -> PromptSpec | None:
-        existing: Final = self.IN_MEMORY_PROMPTS.get(prompt.prompt_id)
+        existing: Final = self.IN_MEMORY_PROMPTS.get(registry_key_for_prompt(prompt))
         if existing is None:
             return self.initialize_prompt(prompt=prompt)
         if existing.litellm_params == prompt.litellm_params and existing.prompt_info == prompt.prompt_info:
             return existing
         return self.reload_prompt(prompt=prompt)
 
-    def get_prompt_by_id(self, prompt_id: str) -> PromptSpec | None:
+    def resolve_prompt_spec(
+        self,
+        prompt_id: str,
+        version: int | None = None,
+        environment: str | None = None,
+    ) -> PromptSpec | None:
         """
-        Get a prompt by its ID from memory
-        """
-        return self.IN_MEMORY_PROMPTS.get(prompt_id)
+        Resolve a prompt spec by base prompt id, optional version, and optional environment.
 
-    def get_prompt_callback_by_id(self, prompt_id: str) -> CustomPromptManagement | None:
+        With no environment, resolves within the default serve environment
+        (production > staging > development > alphabetical first present).
+        With no version, resolves to the highest version in the chosen environment.
         """
-        Get a prompt callback by its ID from memory
+        base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
+        base_matches: Final = tuple(
+            spec
+            for spec in self.IN_MEMORY_PROMPTS.values()
+            if get_base_prompt_id(prompt_id=spec.prompt_id) == base_prompt_id
+        )
+        if not base_matches:
+            return None
+        resolved_environment: Final = (
+            environment if environment is not None else _default_serve_environment(base_matches)
+        )
+        env_matches: Final = tuple(
+            spec for spec in base_matches if prompt_environment_or_default(spec.environment) == resolved_environment
+        )
+        if not env_matches:
+            return None
+        if version is not None:
+            return next((spec for spec in env_matches if _spec_version(spec) == version), None)
+        return max(env_matches, key=_spec_version)
+
+    def get_prompt_callback_for_prompt(self, prompt: PromptSpec) -> CustomPromptManagement | None:
+        return self.prompt_id_to_custom_prompt.get(registry_key_for_prompt(prompt))
+
+    def has_config_prompt(self, base_prompt_id: str) -> bool:
+        return any(
+            spec.prompt_info.prompt_type == "config"
+            for spec in self.IN_MEMORY_PROMPTS.values()
+            if get_base_prompt_id(prompt_id=spec.prompt_id) == base_prompt_id
+        )
+
+    def delete_prompts_by_base_id(self, base_prompt_id: str, environment: str | None = None) -> list[str]:
         """
-        return self.prompt_id_to_custom_prompt.get(prompt_id)
+        Delete matching prompts from memory, scoped to one environment when given.
 
-    def delete_prompts_by_base_id(self, base_prompt_id: str) -> list[str]:
+        Returns the registry keys that were deleted.
         """
-        Delete all prompts matching the given base prompt ID from memory.
-
-        Args:
-            base_prompt_id: The base prompt ID (without version suffix)
-
-        Returns:
-            List of prompt IDs that were deleted
-        """
-        from litellm.proxy.prompts.prompt_endpoints import get_base_prompt_id
-
-        prompts_to_delete: Final = [
-            pid for pid in self.IN_MEMORY_PROMPTS if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+        keys_to_delete: Final = [
+            key
+            for key, spec in self.IN_MEMORY_PROMPTS.items()
+            if get_base_prompt_id(prompt_id=spec.prompt_id) == base_prompt_id
+            and (environment is None or prompt_environment_or_default(spec.environment) == environment)
         ]
 
-        for pid in prompts_to_delete:
-            del self.IN_MEMORY_PROMPTS[pid]
-            if pid in self.prompt_id_to_custom_prompt:
-                del self.prompt_id_to_custom_prompt[pid]
+        for key in keys_to_delete:
+            del self.IN_MEMORY_PROMPTS[key]
+            self.prompt_id_to_custom_prompt.pop(key, None)
 
-        return prompts_to_delete
+        return keys_to_delete
 
 
 IN_MEMORY_PROMPT_REGISTRY: Final = InMemoryPromptRegistry()
