@@ -1390,7 +1390,7 @@ class ProxyLogging:
     async def _process_prompt_template(
         self,
         data: dict,
-        litellm_logging_obj: Any,
+        litellm_logging_obj: "LiteLLMLoggingObj",
         prompt_id: str,
         prompt_version: int | None,
         call_type: CallTypesLiteral,

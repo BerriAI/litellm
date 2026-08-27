@@ -1,7 +1,7 @@
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 
@@ -404,7 +404,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         model_id: str | None,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         headers: dict,
     ):
@@ -467,7 +467,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         model_id: str | None,
         headers: dict,
         litellm_params: dict,

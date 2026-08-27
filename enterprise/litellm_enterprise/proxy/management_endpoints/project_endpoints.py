@@ -12,9 +12,10 @@ Endpoints for /project operations
 
 import json
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -26,37 +27,48 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
+from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
-    from prisma.actions import (
-        LiteLLM_ProjectTableActions,
-        LiteLLM_TeamTableActions,
-        LiteLLM_VerificationTokenActions,
-    )
 
 router = APIRouter()
 
-
-def _team_table(prisma_client: PrismaClient) -> "LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable]":
-    team_table: LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable] = prisma_client.db.litellm_teamtable
-    return team_table
+_OBJECT_PERMISSION_PAYLOAD: Final = TypeAdapter(dict[str, object])
 
 
-def _project_table(prisma_client: PrismaClient) -> "LiteLLM_ProjectTableActions[prisma_models.LiteLLM_ProjectTable]":
-    project_table: LiteLLM_ProjectTableActions[prisma_models.LiteLLM_ProjectTable] = (
-        prisma_client.db.litellm_projecttable
-    )
-    return project_table
+def _team_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
+    return TeamRepository(prisma_client).table
+
+
+def _project_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
+    return ProjectRepository(prisma_client).table
 
 
 def _verification_token_table(
     prisma_client: PrismaClient,
-) -> "LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken]":
-    verification_token_table: LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken] = (
-        prisma_client.db.litellm_verificationtoken
-    )
-    return verification_token_table
+) -> TableActions["prisma_models.LiteLLM_VerificationToken"]:
+    return VerificationTokenRepository(prisma_client).table
+
+
+def _budget_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
+    return BudgetRepository(prisma_client).table
+
+
+def _object_permission_table(
+    prisma_client: PrismaClient,
+) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
+    return ObjectPermissionRepository(prisma_client).table
+
+
+def _user_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_UserTable"]:
+    return UserRepository(prisma_client).table
 
 
 def _jsonified(prisma_client: PrismaClient, payload: dict[str, object]) -> dict[str, object]:
@@ -219,7 +231,7 @@ async def _create_budget_for_project(
 
     new_budget = _jsonified(prisma_client, budget_row.model_dump(exclude_none=True))
 
-    _budget: prisma_models.LiteLLM_BudgetTable = await prisma_client.db.litellm_budgettable.create(
+    _budget: Final = await _budget_table(prisma_client).create(
         data={
             **new_budget,
             "created_by": user_id or litellm_proxy_admin_name,
@@ -242,10 +254,8 @@ async def _set_project_object_permission(
         return None
 
     if data.object_permission is not None:
-        created_object_permission: prisma_models.LiteLLM_ObjectPermissionTable = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data.object_permission.model_dump(exclude_none=True),
-            )
+        created_object_permission: Final = await _object_permission_table(prisma_client).create(
+            data=data.object_permission.model_dump(exclude_none=True),
         )
         del data.object_permission
         return created_object_permission.object_permission_id
@@ -470,10 +480,8 @@ async def new_project(
         new_project_row = _remove_budget_fields_from_project_data(new_project_row)
 
         verbose_proxy_logger.info(f"new_project_row: {json.dumps(new_project_row, indent=2)}")
-        response: prisma_models.LiteLLM_ProjectTable = await prisma_client.db.litellm_projecttable.create(
-            data={
-                **new_project_row,  # type: ignore
-            },
+        response: Final = await _project_table(prisma_client).create(
+            data={**new_project_row},
             include={"litellm_budget_table": True},
         )
 
@@ -652,7 +660,7 @@ async def update_project(
 
         if budget_updates and existing_project.budget_id:
             # Update existing budget
-            await prisma_client.db.litellm_budgettable.update(
+            await _budget_table(prisma_client).update(
                 where={"budget_id": existing_project.budget_id},
                 data={
                     **budget_updates,
@@ -667,18 +675,17 @@ async def update_project(
         if "object_permission" in update_data:
             object_permission_data = update_data.pop("object_permission")
             if object_permission_data:
+                object_permission_payload: Final = _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data)
                 if existing_project.object_permission_id:
                     # Update existing permission
-                    await prisma_client.db.litellm_objectpermissiontable.update(
+                    await _object_permission_table(prisma_client).update(
                         where={"object_permission_id": existing_project.object_permission_id},
-                        data=object_permission_data,
+                        data=object_permission_payload,
                     )
                 else:
                     # Create new permission
-                    created_permission: prisma_models.LiteLLM_ObjectPermissionTable = (
-                        await prisma_client.db.litellm_objectpermissiontable.create(
-                            data=object_permission_data,
-                        )
+                    created_permission: Final = await _object_permission_table(prisma_client).create(
+                        data=object_permission_payload,
                     )
                     update_data["object_permission_id"] = created_permission.object_permission_id
 
@@ -694,7 +701,7 @@ async def update_project(
         update_data = _remove_budget_fields_from_project_data(update_data)
 
         # Update project
-        updated_project: prisma_models.LiteLLM_ProjectTable | None = await prisma_client.db.litellm_projecttable.update(
+        updated_project: Final = await _project_table(prisma_client).update(
             where={"project_id": data.project_id},
             data=update_data,
             include={"litellm_budget_table": True, "object_permission": True},
@@ -934,7 +941,7 @@ async def list_projects(
             # Look up the user's team memberships via the reverse-index on
             # LiteLLM_UserTable.teams (maintained by team_member_add alongside
             # members_with_roles). This avoids a full scan of all team rows.
-            user_record: prisma_models.LiteLLM_UserTable | None = await prisma_client.db.litellm_usertable.find_unique(
+            user_record: Final = await _user_table(prisma_client).find_unique(
                 where={"user_id": user_api_key_dict.user_id},
             )
             user_team_ids: list[str] = user_record.teams if user_record is not None and user_record.teams else []

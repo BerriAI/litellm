@@ -6,7 +6,7 @@ import copy
 import json
 import urllib.parse
 from collections.abc import Callable
-from typing import Any, Final, get_args
+from typing import TYPE_CHECKING, Any, Final, get_args
 
 import httpx
 
@@ -36,6 +36,9 @@ from .amazon_titan_multimodal_transformation import (
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
 from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -233,7 +236,7 @@ class BedrockEmbedding(BaseAWSLLM):
         endpoint_url: str,
         aws_region_name: str,
         model: str,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
@@ -301,7 +304,7 @@ class BedrockEmbedding(BaseAWSLLM):
         endpoint_url: str,
         aws_region_name: str,
         model: str,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
