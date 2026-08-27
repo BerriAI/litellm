@@ -149,11 +149,12 @@ describe("PaginatedSearchSelect", () => {
     function ServerBacked() {
       const [search, setSearch] = useState("");
       const [value, setValue] = useState("alias-alpha");
-      // A refetch hands back structurally equal but freshly built option objects.
-      const options = OPTIONS.filter((option) => option.label.includes(search)).map((option) => ({ ...option }));
+      const freshlyBuiltOptions = OPTIONS.filter((option) => option.label.includes(search)).map((option) => ({
+        ...option,
+      }));
       return (
         <PaginatedSearchSelect
-          options={options}
+          options={freshlyBuiltOptions}
           value={value}
           onValueChange={setValue}
           onSearchChange={(query) => {

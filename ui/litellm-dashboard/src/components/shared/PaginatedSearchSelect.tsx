@@ -71,13 +71,13 @@ export function PaginatedSearchSelect({
   }, [options, selected]);
 
   const pagination = { onSearchChange, onLoadMore, hasNextPage, isFetchingNextPage };
-  const { query, handleInputValueChange, handleOpenChange, handleScroll } = usePaginatedCombobox(pagination);
+  const { typedQuery, handleInputValueChange, handleOpenChange, handleScroll } = usePaginatedCombobox(pagination);
 
   return (
     <Combobox
       items={items}
       value={selected}
-      inputValue={query ?? selected?.label ?? ""}
+      inputValue={typedQuery ?? selected?.label ?? ""}
       onValueChange={(item: SearchSelectOption | null) => {
         setPickedOption(item);
         onValueChange(item?.value ?? "");

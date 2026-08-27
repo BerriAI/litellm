@@ -23,26 +23,25 @@ export function usePaginatedCombobox({
   isFetchingNextPage,
 }: PaginatedComboboxCallbacks) {
   const debouncedSearch = useDebouncedCallback(onSearchChange, { wait: DEBOUNCE_WAIT_MS });
-  // null means "not searching": the input then shows the selected option's label instead.
-  const [query, setQuery] = useState<string | null>(null);
+  const [typedQuery, setTypedQuery] = useState<string | null>(null);
 
   const handleInputValueChange = (next: string, reason: string) => {
     if (!SEARCH_REASONS.has(reason)) {
-      setQuery(null);
+      setTypedQuery(null);
       return;
     }
-    setQuery(next);
+    setTypedQuery(next);
     debouncedSearch(next);
   };
 
   const handleOpenChange = (open: boolean, reason: string) => {
     if (!open) {
-      if (query) debouncedSearch("");
-      setQuery(null);
+      if (typedQuery) debouncedSearch("");
+      setTypedQuery(null);
       return;
     }
-    // Typing into a closed combobox opens it, and that keystroke is already the query.
-    if (!SEARCH_REASONS.has(reason)) setQuery("");
+    const openedByTyping = SEARCH_REASONS.has(reason);
+    if (!openedByTyping) setTypedQuery("");
   };
 
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
@@ -54,5 +53,5 @@ export function usePaginatedCombobox({
     }
   };
 
-  return { query, handleInputValueChange, handleOpenChange, handleScroll };
+  return { typedQuery, handleInputValueChange, handleOpenChange, handleScroll };
 }
