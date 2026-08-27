@@ -3025,8 +3025,7 @@ def register_model(
                     and value.get("cache_read_input_token_cost") is None
                     and value.get("tiered_pricing") is None
                     and (
-                        value.get("input_cost_per_token") is not None
-                        or value.get("output_cost_per_token") is not None
+                        value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None
                     )
                 ):
                     verbose_logger.warning(
