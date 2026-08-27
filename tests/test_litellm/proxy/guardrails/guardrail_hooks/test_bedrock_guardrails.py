@@ -5592,6 +5592,55 @@ class TestBedrockGuardrailImageInput:
         assert len(served) < len(chunks), "the whole body was pulled before rejecting it"
 
     @pytest.mark.asyncio
+    async def test_a_request_full_of_urls_is_bounded_in_total_not_just_per_image(self):
+        """A per-image cap does not bound a request.
+
+        Content items are gathered over every message and every part, so the urls
+        are fetched concurrently, and the 20-image limit is not applied until
+        _bin_pack_bedrock_content runs on items that are already resident. Without
+        a request-wide budget, 200 urls at 4 MB is 800 MB the caller chose.
+        """
+        # 200 parts, each serving a 1 MB image, against a 20 x 4 MB budget.
+        served: list[int] = []
+        one_mb: list[bytes] = [b"\0" * (1024 * 1024)]
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"{self._REMOTE_IMAGE_URL}?i={i}"}} for i in range(200)
+                ],
+            }
+        ]
+
+        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream(one_mb, served)):
+            request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
+                source="INPUT", messages=messages
+            )
+
+        fetched: int = sum(served)
+        assert fetched <= 20 * 4 * 1024 * 1024, f"fetched {fetched} bytes for one request"
+        assert len(request["content"]) < 200, "every url was kept despite the budget"
+        assert request["content"], "the budget swallowed the whole request"
+
+    @pytest.mark.asyncio
+    async def test_inline_images_do_not_draw_on_the_download_budget(self):
+        """Base64 arrives in the request body the proxy already accepted.
+
+        Nothing is fetched for it, so charging it against a download quota would
+        refuse inline images for no reason.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}} for _ in range(40)],
+            }
+        ]
+
+        request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert len(request["content"]) == 40
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_scans_images_from_inputs(self):
         """The proxy reaches BedrockGuardrail through `apply_guardrail`, not the native hook.
 

@@ -157,6 +157,63 @@ _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL: Final = 20
 
+# A per-image cap does not bound a request. Content items are built by gathering
+# over every message and then every part, so N urls are fetched concurrently, and
+# the image-count limit above is not reached until _bin_pack_bedrock_content runs
+# on items that are already resident. 500 urls is 500 fetches before anything says
+# stop. These two bound the request itself: how much may be fetched in total, and
+# how much of it may be in flight at once.
+#
+# The total is what a single ApplyGuardrail call would accept anyway (20 images at
+# 4 MB), so no request the API would take in one call is refused. A conversation
+# chunked across several calls can exceed it, and images past the budget are then
+# unscannable and left to on_unscannable_image -- blocked by default.
+_MAX_TOTAL_IMAGE_FETCH_BYTES: Final = _MAX_IMAGE_BYTES * _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL
+_MAX_CONCURRENT_IMAGE_FETCHES: Final = 4
+
+
+class _ImageFetchBudget:
+    """Bytes still fetchable for one guardrail request, and a concurrency gate.
+
+    Held for the lifetime of a single content-request build and passed down rather
+    than kept on the guardrail, which is a callback instance shared by every
+    request. Claims are optimistic: a fetch reserves the largest cap it could use
+    and hands back what it did not, so the worst-case resident size is the budget
+    plus the in-flight remainder, not the sum of every url a caller listed.
+    """
+
+    def __init__(self, total: int = _MAX_TOTAL_IMAGE_FETCH_BYTES) -> None:
+        self._remaining = total
+        self._gate = asyncio.Semaphore(_MAX_CONCURRENT_IMAGE_FETCHES)
+
+    def claim(self) -> int:
+        """Reserve up to one image's worth of budget. 0 means exhausted."""
+        granted: Final = min(_MAX_IMAGE_BYTES, self._remaining)
+        self._remaining -= granted
+        return granted
+
+    def give_back(self, unused: int) -> None:
+        self._remaining += unused
+
+    def gate(self) -> "asyncio.Semaphore":
+        return self._gate
+
+
+def _retained_image_bytes(item: "BedrockContentItem | None") -> int:
+    """Approximate what a built image item holds, for budget accounting.
+
+    Measured from the base64 payload rather than decoding it a second time; the
+    ratio is exact enough for a quota and costs nothing.
+    """
+    if item is None:
+        return 0
+    image: Final = item.get("image")
+    if not image:
+        return 0
+    encoded: Final = image.get("source", {}).get("bytes")  # mutable-ok: {} is a .get default, never mutated
+    return len(encoded) * 3 // 4 if isinstance(encoded, str) else 0
+
+
 _APPLY_GUARDRAIL_IMAGE_FORMATS: Final[
     dict[str, BedrockGuardrailImageFormat]
 ] = {  # mutable-ok: module-level lookup table, never mutated
@@ -359,12 +416,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if messages is None:
             return bedrock_request
 
-        per_message = await asyncio.gather(*(self._build_input_content_items(message=message) for message in messages))
+        budget: Final = _ImageFetchBudget()
+        per_message = await asyncio.gather(
+            *(self._build_input_content_items(message=message, budget=budget) for message in messages)
+        )
         # mutable-ok: BedrockRequest["content"] is a list in the AWS wire format
         bedrock_request["content"] = [item for items in per_message for item in items]
         return bedrock_request
 
-    async def _build_input_content_items(self, message: AllMessageValues) -> tuple[BedrockContentItem, ...]:
+    async def _build_input_content_items(
+        self, message: AllMessageValues, budget: "_ImageFetchBudget | None" = None
+    ) -> tuple[BedrockContentItem, ...]:
         """Flatten one request message into ApplyGuardrail INPUT content items.
 
         Grounding qualifiers are attached only when assembling the OUTPUT request, so a
@@ -380,10 +442,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         parts: Final = cast(  # cast-ok: AllMessageValues content is a union of part TypedDicts
             tuple[object, ...], tuple(content)
         )
-        items: Final = await asyncio.gather(*(self._build_input_content_item(item=item) for item in parts))
+        # A direct caller gets a fresh budget rather than an unbounded fetch.
+        request_budget: Final = budget if budget is not None else _ImageFetchBudget()
+        items: Final = await asyncio.gather(
+            *(self._build_input_content_item(item=item, budget=request_budget) for item in parts)
+        )
         return tuple(item for item in items if item is not None)
 
-    async def _build_input_content_item(self, item: object) -> BedrockContentItem | None:
+    async def _build_input_content_item(
+        self, item: object, budget: "_ImageFetchBudget | None" = None
+    ) -> BedrockContentItem | None:
         if isinstance(item, str):
             return BedrockContentItem(text=BedrockTextContent(text=item))
         if not isinstance(item, dict):
@@ -396,7 +464,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             image_url: Final = self._get_image_url(item=part)
             if image_url is None:
                 return None
-            return await self._build_image_content_item(image_url=image_url)
+            return await self._build_image_content_item(image_url=image_url, budget=budget)
         text: Final = part.get("text")
         if isinstance(text, str):
             return BedrockContentItem(text=BedrockTextContent(text=text))
@@ -471,26 +539,56 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # on_unscannable_image policy decides rather than this helper.
         return value
 
-    async def _build_image_content_item(self, image_url: str) -> BedrockContentItem | None:
+    async def _build_image_content_item(
+        self, image_url: str, budget: "_ImageFetchBudget | None" = None
+    ) -> BedrockContentItem | None:
         """Decode or fetch an image part into an ApplyGuardrail image block.
 
         With `user_url_validation` off, `async_safe_get` degrades to an unrestricted,
         redirect-following GET on a caller-supplied URL, so it is not fetched at all
         """
-        if not image_url.startswith("data:") and not getattr(litellm, "user_url_validation", True):
+        is_remote: Final = not image_url.startswith("data:")
+        if is_remote and not getattr(litellm, "user_url_validation", True):
             self._handle_unscannable_image(
                 reason=f"remote image url not fetched because litellm.user_url_validation is disabled: {image_url}"
             )
             return None
 
+        if not is_remote:
+            # Already in the request body the proxy accepted; nothing is fetched,
+            # so it draws on neither the byte budget nor the concurrency gate.
+            return await self._decode_image_content_item(image_url=image_url, max_bytes=None)
+
+        request_budget: Final = budget if budget is not None else _ImageFetchBudget()
+        granted: Final = request_budget.claim()
+        if granted <= 0:
+            self._handle_unscannable_image(
+                reason="remote image skipped: this request already used its image download budget"
+            )
+            return None
+        async with request_budget.gate():
+            item: Final = await self._decode_image_content_item(image_url=image_url, max_bytes=granted)
+
+        # Refund only what a usable image did not take. Returning the whole
+        # reservation would make the budget bound in-flight bytes alone, while
+        # decoded images stay resident in the request being assembled.
+        #
+        # A response that produced nothing is charged in full rather than refunded:
+        # the transfer still happened, and refunding it would let a url serving
+        # megabytes of unusable bytes be repeated down the whole list for free --
+        # the exact shape of the exhaustion this guards against.
+        #
+        # No try/finally: the only escape from the line above is the HTTPException
+        # _handle_unscannable_image raises under the block policy, which ends the
+        # request and takes this request-scoped budget with it.
+        request_budget.give_back(granted - _retained_image_bytes(item) if item is not None else 0)
+        return item
+
+    async def _decode_image_content_item(self, image_url: str, max_bytes: int | None) -> BedrockContentItem | None:
+        """Turn a data URI or a fetched url into an ApplyGuardrail image block."""
         try:
-            # Cap the fetch itself. The decoded-size check below runs after the
-            # bytes are already resident, so on its own it does not stop a caller
-            # from pointing the proxy at an arbitrarily large or chunked response
-            # -- and `_build_input_content_items` gathers these concurrently, so
-            # one request with several URLs multiplies the allocation.
             block: Final = await BedrockImageProcessor.process_image_async(
-                image_url=image_url, format=None, max_bytes=_MAX_IMAGE_BYTES
+                image_url=image_url, format=None, max_bytes=max_bytes
             )
         except PayloadTooLargeError as e:
             # Named before the ValueError arm it subclasses, so the operator sees
