@@ -27,6 +27,9 @@ import {
   CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
+  usesLlmClassifier,
+  DEFAULT_HEURISTIC_FIRST_MAX_TIER,
+  HEURISTIC_FIRST_MAX_TIER_KEYS,
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
@@ -49,7 +52,7 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
  */
 const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
   const usesCustomPrompt =
-    value.classifier_type === "llm" && Boolean(value.classifier_llm_config?.system_prompt?.trim());
+    usesLlmClassifier(value.classifier_type) && Boolean(value.classifier_llm_config?.system_prompt?.trim());
   if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
   return value.classifier_fallback === "default_model"
     ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
@@ -148,7 +151,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 }) => {
   const hasDefaultModel = Boolean(defaultModel);
   const classifierModelMissing =
-    showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
+    showValidationErrors && usesLlmClassifier(value.classifier_type) && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
   const contextBudget = value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS;
   const contextBudgetQuotesNothing = contextBudget > 0 && contextBudget < MIN_QUOTED_CONTEXT_TURN_CHARS;
@@ -158,27 +161,33 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     const nextValue: ComplexityRouterConfigValue = {
       ...value,
       classifier_type: classifierType,
-      classifier_llm_config:
-        classifierType === "llm"
-          ? value.classifier_llm_config ?? {
-              model: "",
-              timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-              classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
-            }
+      classifier_llm_config: usesLlmClassifier(classifierType)
+        ? value.classifier_llm_config ?? {
+            model: "",
+            timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
+            classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
+          }
+        : undefined,
+      classifier_context_window_size: usesLlmClassifier(classifierType)
+        ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
+        : undefined,
+      classifier_context_budget_chars: usesLlmClassifier(classifierType)
+        ? value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS
+        : undefined,
+      classifier_context_include_assistant_turns: usesLlmClassifier(classifierType)
+        ? value.classifier_context_include_assistant_turns
+        : undefined,
+      classifier_fallback: usesLlmClassifier(classifierType) ? value.classifier_fallback : undefined,
+      heuristic_first_max_tier:
+        classifierType === "heuristic_first"
+          ? value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER
           : undefined,
-      classifier_context_window_size:
-        classifierType === "llm"
-          ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
-          : undefined,
-      classifier_context_budget_chars:
-        classifierType === "llm"
-          ? value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS
-          : undefined,
-      classifier_context_include_assistant_turns:
-        classifierType === "llm" ? value.classifier_context_include_assistant_turns : undefined,
-      classifier_fallback: classifierType === "llm" ? value.classifier_fallback : undefined,
     };
     onChange(nextValue);
+  };
+
+  const handleHeuristicFirstMaxTierChange = (tier: string) => {
+    onChange({ ...value, heuristic_first_max_tier: tier });
   };
 
   const handleClassifierModelChange = (model: string) => {
@@ -276,10 +285,44 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               <span className="text-muted-foreground">— use a model to decide the tier (e.g. a small/fast model)</span>
             </span>
           </Label>
+          <Label className="items-start font-normal leading-normal">
+            <RadioGroupItem value="heuristic_first" className="mt-0.5" />
+            <span>
+              <strong className="font-semibold">Heuristic first</strong>{" "}
+              <span className="text-muted-foreground">
+                — score locally, and only pay for the classifier when the score does not confidently land a cheap tier
+              </span>
+            </span>
+          </Label>
         </div>
       </RadioGroup>
 
-      {value.classifier_type === "llm" && (
+      {value.classifier_type === "heuristic_first" && (
+        <div className="mt-4 space-y-2">
+          <strong className="block font-semibold">Decide locally up to</strong>
+          <Select
+            value={value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER}
+            onValueChange={(tier: unknown) => handleHeuristicFirstMaxTierChange(tier as string)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {HEURISTIC_FIRST_MAX_TIER_KEYS.map((tier) => (
+                <SelectItem key={tier} value={tier}>
+                  {effectiveTierLabel(tier, value.tier_labels)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-sm text-muted-foreground">
+            A request the scorer places at or below this tier routes there without a classifier call. Anything the
+            scorer places higher, and anything it found no signal for at all, goes to the classifier instead
+          </p>
+        </div>
+      )}
+
+      {usesLlmClassifier(value.classifier_type) && (
         <div className="mt-4 space-y-3">
           <div>
             <strong className="block mb-1 font-semibold">Classifier Model</strong>

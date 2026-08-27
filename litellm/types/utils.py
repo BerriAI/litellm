@@ -2808,6 +2808,12 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
+    # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never
+    # called. Distinct from "heuristic_scorer", which is a router whose only classifier IS the
+    # scorer, and from "classifier_fallback", which is the scorer running because a call failed:
+    # only this cause means an LLM classifier was configured, reachable, and deliberately skipped.
+    "heuristic_first_short_circuit",
     # The operator's classifier plugin (classifier_type 'custom') decided the tier.
     "classifier_plugin",
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
