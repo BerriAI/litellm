@@ -45,6 +45,39 @@ async def test_async_increment_delegates_to_locked_sync_path():
     assert cache.get_cache("counter") == 5
 
 
+async def test_async_increment_pipeline_applies_each_operations_own_ttl():
+    """
+    async_increment_pipeline dropped each operation's own "ttl" field, so a
+    counter created through it always got the cache's 600-second default_ttl
+    regardless of what the caller actually configured (e.g. an hourly or
+    daily rate-limit window) -- the counter (and whatever it was tracking
+    against a limit) silently reset mid-window.
+    """
+    cache = InMemoryCache(default_ttl=600)
+    await cache.async_increment_pipeline([{"key": "long-window-counter", "increment_value": 1, "ttl": 7200}])
+
+    ttl_remaining = await cache.async_get_ttl("long-window-counter")
+    assert ttl_remaining is not None
+    assert ttl_remaining > time.time() + 600
+
+
+async def test_async_increment_pipeline_preserves_an_existing_live_ttl_on_later_increments():
+    """
+    A second increment on the same still-live counter must not reset its
+    remaining ttl back up to the full window -- only the first increment
+    (the one that actually creates the counter) should set it.
+    """
+    cache = InMemoryCache(default_ttl=600)
+    await cache.async_increment_pipeline([{"key": "counter", "increment_value": 1, "ttl": 7200}])
+    ttl_after_first = cache.ttl_dict["counter"]
+
+    await cache.async_increment_pipeline([{"key": "counter", "increment_value": 1, "ttl": 7200}])
+    ttl_after_second = cache.ttl_dict["counter"]
+
+    assert ttl_after_second == ttl_after_first
+    assert cache.get_cache("counter") == 2
+
+
 def test_in_memory_openai_obj_cache():
     from openai import OpenAI
 
