@@ -18,8 +18,14 @@ from litellm.types.utils import LlmProviders, ModelResponse
 
 TOOL_CALLING_MODEL = "openai/gpt-oss-20b"
 REASONING_MODEL = "deepseek-ai/DeepSeek-V3.1"
+PLAIN_MODEL = "Qwen/Qwen3-235B-A22B-fp8-tput"
 UNMAPPED_MODEL = "example-org/brand-new-model"
 NO_TOOLS_MODEL = "example-org/no-tools-model"
+ADJUSTABLE_REASONING_MODEL = "openai/gpt-oss-120b"
+HYBRID_REASONING_MODEL = "Qwen/Qwen3.5-9B"
+HIGH_MAX_REASONING_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+REGISTRY_FLAGGED_REASONING_MODEL = "zai-org/GLM-4.6"
+NON_REASONING_MODEL = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
 NO_SCHEMA_MODEL = "example-org/no-schema-model"
 
 TOOL_PARAMS = ("tools", "tool_choice", "function_call")
@@ -37,6 +43,15 @@ JSON_SCHEMA_RESPONSE_FORMAT = {
     "json_schema": {"name": "voice_note", "schema": VOICE_NOTE_SCHEMA, "strict": True},
 }
 REGEX_RESPONSE_FORMAT = {"type": "regex", "pattern": "(positive|neutral|negative)"}
+
+
+def _map_reasoning_effort(model: str, effort: str) -> dict:
+    return TogetherAIChatConfig().map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -189,6 +204,116 @@ def test_map_openai_params_schema_model_passes_response_format_through(response_
     )
 
     assert mapped["response_format"] == response_format
+
+
+@pytest.mark.parametrize(
+    "model",
+    [ADJUSTABLE_REASONING_MODEL, HYBRID_REASONING_MODEL, HIGH_MAX_REASONING_MODEL, REGISTRY_FLAGGED_REASONING_MODEL],
+)
+def test_supported_params_includes_reasoning_effort_for_reasoning_models(model):
+    supported = TogetherAIChatConfig().get_supported_openai_params(model=model)
+
+    assert "reasoning_effort" in supported
+
+
+@pytest.mark.parametrize("model", [NON_REASONING_MODEL, PLAIN_MODEL])
+def test_supported_params_excludes_reasoning_effort_for_non_reasoning_models(model):
+    supported = TogetherAIChatConfig().get_supported_openai_params(model=model)
+
+    assert "reasoning_effort" not in supported
+
+
+@pytest.mark.parametrize(
+    "effort, expected",
+    [("low", "low"), ("medium", "medium"), ("high", "high"), ("minimal", "low"), ("xhigh", "high"), ("max", "high")],
+)
+def test_adjustable_model_translates_reasoning_effort(effort, expected):
+    mapped = _map_reasoning_effort(ADJUSTABLE_REASONING_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == expected
+    assert "reasoning" not in mapped
+
+
+def test_adjustable_model_cannot_disable_reasoning_so_none_becomes_low():
+    mapped = _map_reasoning_effort(ADJUSTABLE_REASONING_MODEL, "none")
+
+    assert mapped["reasoning_effort"] == "low"
+    assert "reasoning" not in mapped
+
+
+@pytest.mark.parametrize(
+    "effort, expected",
+    [("low", "low"), ("medium", "medium"), ("high", "high"), ("minimal", "low"), ("xhigh", "high"), ("max", "high")],
+)
+def test_hybrid_model_translates_reasoning_effort(effort, expected):
+    mapped = _map_reasoning_effort(HYBRID_REASONING_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == expected
+    assert "reasoning" not in mapped
+
+
+@pytest.mark.parametrize("model", [HYBRID_REASONING_MODEL, HIGH_MAX_REASONING_MODEL, REGISTRY_FLAGGED_REASONING_MODEL])
+def test_reasoning_effort_none_becomes_reasoning_toggle(model):
+    mapped = _map_reasoning_effort(model, "none")
+
+    assert mapped["reasoning"] == {"enabled": False}
+    assert "reasoning_effort" not in mapped
+
+
+def test_reasoning_effort_none_does_not_clobber_user_reasoning():
+    mapped = TogetherAIChatConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={"reasoning": {"enabled": True}},
+        model=HYBRID_REASONING_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped["reasoning"] == {"enabled": True}
+    assert "reasoning_effort" not in mapped
+
+
+@pytest.mark.parametrize(
+    "effort, expected",
+    [("minimal", "high"), ("low", "high"), ("medium", "high"), ("high", "high"), ("xhigh", "max"), ("max", "max")],
+)
+def test_deepseek_v4_pro_remaps_to_high_max(effort, expected):
+    mapped = _map_reasoning_effort(HIGH_MAX_REASONING_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == expected
+
+
+def test_deepseek_v4_pro_dated_variant_remaps_via_prefix():
+    mapped = _map_reasoning_effort(f"{HIGH_MAX_REASONING_MODEL}-0813", "low")
+
+    assert mapped["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize("model", [ADJUSTABLE_REASONING_MODEL, HYBRID_REASONING_MODEL, HIGH_MAX_REASONING_MODEL])
+def test_reasoning_effort_default_is_dropped(model):
+    mapped = _map_reasoning_effort(model, "default")
+
+    assert "reasoning_effort" not in mapped
+    assert "reasoning" not in mapped
+
+
+def test_get_optional_params_translates_reasoning_effort_for_together():
+    optional_params = litellm.get_optional_params(
+        model=ADJUSTABLE_REASONING_MODEL,
+        custom_llm_provider="together_ai",
+        reasoning_effort="max",
+    )
+
+    assert optional_params["reasoning_effort"] == "high"
+
+
+def test_get_optional_params_rejects_reasoning_effort_for_non_reasoning_together_model():
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model=NON_REASONING_MODEL,
+            custom_llm_provider="together_ai",
+            reasoning_effort="low",
+            drop_params=False,
+        )
 
 
 @pytest.mark.parametrize("drop_params", [False, True])
