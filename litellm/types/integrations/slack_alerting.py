@@ -93,26 +93,32 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
     )
     daily_spend_per_user_threshold: float | None = Field(
         default=None,
+        gt=0,
         description="Alert when a user's spend for the current day (UTC) crosses this USD amount. Off by default.",
     )
     monthly_spend_per_user_threshold: float | None = Field(
         default=None,
+        gt=0,
         description="Alert when a user's spend for the current calendar month (UTC) crosses this USD amount. Off by default.",
     )
     spend_anomaly_multiplier: float = Field(
         default=3.0,
+        gt=0,
         description="Flag a user's spend as anomalous when today's spend exceeds this multiple of their trailing daily average.",
     )
     spend_anomaly_baseline_days: int = Field(
         default=7,
+        ge=1,
         description="Number of trailing days used to compute a user's daily average spend for anomaly detection.",
     )
     spend_anomaly_min_spend: float = Field(
         default=10.0,
+        gt=0,
         description="Minimum spend (USD) a user must reach today before an anomaly alert can fire. Reduces false positives.",
     )
     user_spend_check_interval: int = Field(
         default=3600,
+        ge=60,
         description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
     )
 
@@ -209,7 +215,6 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     AlertType.spend_reports,
     AlertType.failed_tracking_spend,
     AlertType.user_spend_thresholds,
-    AlertType.user_spend_anomalies,
     # Database alerts
     AlertType.db_exceptions,
     # Report alerts

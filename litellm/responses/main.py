@@ -28,7 +28,6 @@ from litellm.responses.litellm_completion_transformation.handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
-    AllMessageValues,
     PromptObject,
     Reasoning,
     ResponseIncludable,
@@ -519,10 +518,7 @@ async def aresponses(
         if isinstance(
             litellm_logging_obj, LiteLLMLoggingObj
         ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
-            if isinstance(input, str):
-                client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
-            else:
-                client_input = [item for item in input if isinstance(item, dict) and "role" in item]
+            client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
                 bridged=_will_bridge_to_chat_completions(
@@ -551,7 +547,13 @@ async def aresponses(
                 ),
             )
             if model != original_model:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+                custom_llm_provider = _resolve_prompt_swapped_provider(
+                    original_model=original_model,
+                    swapped_model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                    prompt_id=prompt_id,
+                )
             kwargs.pop("prompt_id", None)
             kwargs["_async_prompt_merged_params"] = merged_optional_params
 
@@ -621,6 +623,35 @@ async def aresponses(
         )
 
 
+def _resolve_prompt_swapped_provider(
+    original_model: str,
+    swapped_model: str,
+    custom_llm_provider: str | None,
+    kwargs: Mapping[str, object],
+    prompt_id: str | None,
+) -> str:
+    swapped_provider: Final = litellm.get_llm_provider(model=swapped_model)[1]
+    if kwargs.get("api_key") is None and kwargs.get("api_base") is None:
+        return swapped_provider
+    try:
+        original_provider: Final = custom_llm_provider or litellm.get_llm_provider(model=original_model)[1]
+    except litellm.BadRequestError:
+        return swapped_provider
+    if swapped_provider == original_provider:
+        return swapped_provider
+    raise litellm.BadRequestError(
+        message=(
+            f"prompt_id '{prompt_id}' swaps model '{original_model}' -> '{swapped_model}', which changes the "
+            f"provider from '{original_provider}' to '{swapped_provider}' after credentials for "
+            f"'{original_provider}' were already resolved. Refusing to send them to '{swapped_provider}'. "
+            "Point the request at a model whose provider matches the prompt's metadata.model, or set "
+            "ignore_prompt_manager_model on the prompt to keep the requested model."
+        ),
+        model=swapped_model,
+        llm_provider=swapped_provider,
+    )
+
+
 def _apply_prompt_management_to_responses_call(
     input: str | ResponseInputParam,
     model: str,
@@ -640,10 +671,7 @@ def _apply_prompt_management_to_responses_call(
     prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
     original_model: Final = model
 
-    if isinstance(input, str):
-        client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
-    else:
-        client_input = [item for item in input if isinstance(item, dict) and "role" in item]
+    client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
         prompt_id=prompt_id, non_default_params=kwargs
@@ -676,7 +704,13 @@ def _apply_prompt_management_to_responses_call(
         local_vars["input"] = input
         local_vars["model"] = model
         if model != original_model:
-            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            custom_llm_provider = _resolve_prompt_swapped_provider(
+                original_model=original_model,
+                swapped_model=model,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+                prompt_id=prompt_id,
+            )
             local_vars["custom_llm_provider"] = custom_llm_provider
         for key, value in merged_optional_params.items():
             local_vars[key] = value
@@ -994,6 +1028,33 @@ def responses(
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
 
+        #########################################################
+        # PROMPT MANAGEMENT
+        # If aresponses() already ran the async hook, it pops prompt_id and
+        # passes the result via _async_prompt_merged_params — apply those
+        # directly and skip the sync hook to avoid double-merging.
+        #########################################################
+        _stripped_model, _from_chat_completions_prefix = _normalize_openai_chat_completions_responses_model(model)
+        model = _stripped_model
+        local_vars["model"] = model
+        use_chat_completions_api = use_chat_completions_api or _from_chat_completions_prefix
+
+        if custom_llm_provider is None:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, api_base=local_vars.get("base_url", None)
+            )
+            local_vars["custom_llm_provider"] = custom_llm_provider
+
+        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
+            input=input,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            litellm_logging_obj=litellm_logging_obj,
+            kwargs=kwargs,
+            local_vars=local_vars,
+            use_chat_completions_api=use_chat_completions_api,
+        )
+
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
@@ -1003,32 +1064,11 @@ def responses(
         if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
             return mock_responses_api_response(mock_response=litellm_params.mock_response)
 
-        _stripped_model, _from_chat_completions_prefix = _normalize_openai_chat_completions_responses_model(model)
-        model = _stripped_model
-        local_vars["model"] = model
-        use_chat_completions_api = use_chat_completions_api or _from_chat_completions_prefix
-
         model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             local_vars=local_vars,
-        )
-
-        #########################################################
-        # PROMPT MANAGEMENT
-        # If aresponses() already ran the async hook, it pops prompt_id and
-        # passes the result via _async_prompt_merged_params — apply those
-        # directly and skip the sync hook to avoid double-merging.
-        #########################################################
-        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
-            input=input,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            litellm_logging_obj=litellm_logging_obj,
-            kwargs=kwargs,
-            local_vars=local_vars,
-            use_chat_completions_api=use_chat_completions_api,
         )
 
         #########################################################

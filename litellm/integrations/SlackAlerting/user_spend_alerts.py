@@ -20,8 +20,7 @@ SELECT
     user_id,
     COALESCE(SUM(spend) FILTER (WHERE date = $1), 0)::float AS daily_spend,
     COALESCE(SUM(spend) FILTER (WHERE date >= $2), 0)::float AS monthly_spend,
-    COALESCE(SUM(spend) FILTER (WHERE date >= $3 AND date < $1), 0)::float AS baseline_spend,
-    COUNT(DISTINCT date) FILTER (WHERE date >= $3 AND date < $1 AND spend > 0)::int AS baseline_days
+    COALESCE(SUM(spend) FILTER (WHERE date >= $3 AND date < $1), 0)::float AS baseline_spend
 FROM "LiteLLM_DailyUserSpend"
 WHERE date >= LEAST($2, $3) AND user_id IS NOT NULL
 GROUP BY user_id
@@ -35,7 +34,6 @@ class UserSpendRow:
     daily_spend: float
     monthly_spend: float
     baseline_spend: float
-    baseline_days: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,8 +99,8 @@ def _monthly_threshold_event(row: UserSpendRow, args: SlackAlertingArgs, month_s
 def _anomaly_event(row: UserSpendRow, args: SlackAlertingArgs, today_str: str) -> UserSpendAlertEvent | None:
     if row.daily_spend < args.spend_anomaly_min_spend:
         return None
-    baseline_daily_avg: Final = row.baseline_spend / row.baseline_days if row.baseline_days > 0 else 0.0
-    if row.baseline_days > 0 and row.daily_spend <= args.spend_anomaly_multiplier * baseline_daily_avg:
+    baseline_daily_avg: Final = row.baseline_spend / args.spend_anomaly_baseline_days
+    if row.baseline_spend > 0 and row.daily_spend <= args.spend_anomaly_multiplier * baseline_daily_avg:
         return None
     return UserSpendAlertEvent(
         kind="anomaly",
