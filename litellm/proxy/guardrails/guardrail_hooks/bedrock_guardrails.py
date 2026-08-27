@@ -539,6 +539,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # on_unscannable_image policy decides rather than this helper.
         return value
 
+    def _refuse_file_backed_images(self, inputs: "GenericGuardrailAPIInputs", input_type: str) -> None:
+        """Hand a file-backed image to on_unscannable_image rather than ignoring it.
+
+        Images are a request-side concern; an OUTPUT scan takes generated text, so a
+        file reference sitting in the conversation history is not this scan's problem.
+        """
+        if input_type != "request":
+            return
+        found: Final = self._file_backed_image_count(inputs.get("structured_messages"))
+        if not found:
+            return
+        self._handle_unscannable_image(
+            reason=f"{found} image(s) reference a provider file id, whose bytes are not available here"
+        )
+
     @staticmethod
     def _file_backed_image_count(structured_messages: object) -> int:
         """Count image parts whose bytes live behind a provider Files API.
@@ -3436,13 +3451,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # from `image`/`source` blocks. Five other guardrails already consume this
         # field; Bedrock was the one that dropped it on the floor.
         image_urls: Final = tuple(inputs.get("images") or ()) if input_type == "request" else ()
-        if input_type == "request":
-            file_images: Final = self._file_backed_image_count(inputs.get("structured_messages"))
-            if file_images:
-                # Before the shortcuts below, so this cannot be skipped either.
-                self._handle_unscannable_image(
-                    reason=f"{file_images} image(s) reference a provider file id, whose bytes are not available here"
-                )
+        # Before the shortcuts below, so a file-backed image cannot be skipped either.
+        # Both conditions live in the callee: apply_guardrail sits one branch under
+        # ruff-strict's complexity ceiling, and two more here would cross it.
+        self._refuse_file_backed_images(inputs=inputs, input_type=input_type)
         try:
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Applying guardrail to %s text(s) and %s image(s)", len(texts), len(image_urls)
