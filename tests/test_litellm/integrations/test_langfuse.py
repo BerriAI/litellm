@@ -1527,6 +1527,11 @@ def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
     stripped_redundant_params: Final = StandardCallbackDynamicParams(langfuse_environment="production")
     assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(stripped_redundant_params) is False
 
+    # a dynamic value repeating the raw (even invalid) deployment value is redundant, not an override
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "Production")
+    raw_redundant_params: Final = StandardCallbackDynamicParams(langfuse_environment="Production")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(raw_redundant_params) is False
+
 
 @pytest.mark.parametrize(
     ("env_value", "expected"),
