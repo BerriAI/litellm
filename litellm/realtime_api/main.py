@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import ssl
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final, Literal, cast
@@ -596,6 +597,20 @@ def _realtime_health_check_auth_headers(
     )
 
 
+def _get_realtime_ssl_context(url: str | None) -> bool | str | ssl.SSLContext | None:
+    """SSL value for websockets.connect, matching OpenAIRealtime._get_ssl_config.
+
+    websockets rejects both an ssl= argument on a ws:// URI and ssl=False, so
+    ws:// gets None and a disabled-verification context becomes True.
+    """
+    if url and url.startswith("ws://"):
+        return None
+    ssl_config = get_shared_realtime_ssl_context()
+    if ssl_config is False:
+        return True
+    return ssl_config
+
+
 async def _realtime_health_check(
     model: str,
     custom_llm_provider: str,
@@ -672,7 +687,7 @@ async def _realtime_health_check(
             location=resolved_location,
         )
         url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
-        ssl_context = get_shared_realtime_ssl_context()
+        ssl_context = _get_realtime_ssl_context(url)
         headers: Final = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
         async with websockets.connect(
             url,
@@ -683,7 +698,7 @@ async def _realtime_health_check(
             return True
     else:
         raise ValueError(f"Unsupported model: {model}")
-    ssl_context = get_shared_realtime_ssl_context()
+    ssl_context = _get_realtime_ssl_context(url)
     async with websockets.connect(
         url,
         additional_headers=auth_headers,
