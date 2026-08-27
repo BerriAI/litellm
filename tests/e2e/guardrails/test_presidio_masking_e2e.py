@@ -43,6 +43,7 @@ GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS = 5.0
 # token because the model is echoing the masked prompt and may not preserve the
 # angle brackets; the logged payload keeps the placeholder verbatim.
 MASKED_EMAIL_TOKEN = "EMAIL_ADDRESS"
+MASKED_PHONE_TOKEN = "PHONE_NUMBER"
 
 # Fictional NANP 555 number; a standard format Presidio's phone recognizer detects.
 FAKE_PHONE = "+1 415-555-0134"
@@ -126,7 +127,8 @@ def _assert_eventually_masked[R: BaseModel](
             case Success(data=data):
                 content = extract(data)
                 last = content
-                if MASKED_EMAIL_TOKEN in content and email not in content:
+                masked = MASKED_EMAIL_TOKEN in content and MASKED_PHONE_TOKEN in content and email not in content
+                if masked:
                     assert FAKE_PHONE not in content, (
                         f"the raw phone number must be masked before the model sees it, but the "
                         f"response echoed it: {content[:300]!r}"
