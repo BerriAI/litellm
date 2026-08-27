@@ -19319,8 +19319,8 @@
         "mode": "chat",
         "comment": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
         "source": "https://api.friendli.ai/serverless/v1/models",
-        "supports_vision": false,
-        "supports_image_input": false
+        "supports_vision": true,
+        "supports_image_input": true
     },
     "ft:babbage-002": {
         "deprecation_date": "2026-10-23",

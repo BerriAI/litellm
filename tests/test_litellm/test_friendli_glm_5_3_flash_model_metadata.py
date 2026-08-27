@@ -28,6 +28,9 @@ def test_friendli_glm_5_3_flash_model_info():
     assert info["supports_low_reasoning_effort"] is True
     assert info["supports_max_reasoning_effort"] is True
     assert info["supports_tool_choice"] is True
+    # vision-capable checkpoint; Friendli serves image input
+    assert info["supports_vision"] is True
+    assert info["supports_image_input"] is True
 
     routed_model, provider, _, _ = get_llm_provider(model=model)
     assert routed_model == "zai-org/GLM-5.3-Flash"
