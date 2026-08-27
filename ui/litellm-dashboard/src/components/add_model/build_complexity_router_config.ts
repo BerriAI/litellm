@@ -124,6 +124,17 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
 }
 
+/**
+ * The message to surface when the dry-run rejects a save, or null to let it through.
+ *
+ * Gated on `valid` alone. The verdict's `valid` is derived from `error` server side today, but the
+ * two arrive as independent fields, so reading `error` as the gate would let a rejection whose
+ * message is missing or blank through to the write and back as a raw 400. A transport failure fails
+ * open as `{valid: true}`, which this passes, leaving the write gate authoritative.
+ */
+export const dryRunRejection = (verdict: { valid: boolean; error?: string | null }): string | null =>
+  verdict.valid ? null : verdict.error?.trim() || "The proxy rejected this auto-router configuration";
+
 export interface TierDefinitionPayload {
   name: string;
   description?: string;

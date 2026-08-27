@@ -36,6 +36,7 @@ import {
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
+  dryRunRejection,
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
@@ -562,9 +563,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         { keywordTierRules, escalationKeywords, semanticMatchingEnabled, embeddingModel, matchThreshold },
       );
       const serverVerdict = await validateAutoRouterConfig(accessToken, updatedConfig, modelData?.model_info?.team_id);
-      if (!serverVerdict.valid && serverVerdict.error) {
+      const dryRunError = dryRunRejection(serverVerdict);
+      if (dryRunError) {
         setShowValidationErrors(true);
-        toast.fromError(serverVerdict.error);
+        toast.fromError(dryRunError);
         return;
       }
 

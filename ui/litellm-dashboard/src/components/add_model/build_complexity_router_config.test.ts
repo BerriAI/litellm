@@ -10,6 +10,7 @@ import {
   getTierLabelsError,
   hydrateTierLabels,
   BuildComplexityRouterConfigParams,
+  dryRunRejection,
 } from "./build_complexity_router_config";
 import { CUSTOM_TIER_RESTRICTIONS, activeTierRows } from "./tier_rows";
 
@@ -956,5 +957,26 @@ describe("hydrateCustomTierSet", () => {
     });
     expect(hydrated?.tiers[0].models).toEqual(["m1"]);
     expect(hydrated?.fallback_tier_id).toBe(hydrated?.tiers[0].id);
+  });
+});
+
+describe("dryRunRejection", () => {
+  it("blocks the save on a rejection whose message is missing, which the write would return as a raw 400", () => {
+    // The verdict's two fields arrive independently, so a rejection carrying no message must still
+    // stop the save rather than fall through to the write endpoint.
+    expect(dryRunRejection({ valid: false })).toBe("The proxy rejected this auto-router configuration");
+    expect(dryRunRejection({ valid: false, error: null })).toBe("The proxy rejected this auto-router configuration");
+    expect(dryRunRejection({ valid: false, error: "   " })).toBe("The proxy rejected this auto-router configuration");
+  });
+
+  it("surfaces the backend's own message when it sent one", () => {
+    expect(dryRunRejection({ valid: false, error: "session_affinity cannot be combined with tier_definitions" })).toBe(
+      "session_affinity cannot be combined with tier_definitions",
+    );
+  });
+
+  it("lets a valid verdict through, including the fail-open one a transport failure returns", () => {
+    expect(dryRunRejection({ valid: true })).toBeNull();
+    expect(dryRunRejection({ valid: true, error: null })).toBeNull();
   });
 });

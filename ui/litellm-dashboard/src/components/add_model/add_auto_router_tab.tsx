@@ -41,6 +41,7 @@ import {
   getPlanModeTierError,
   getSemanticConfigError,
   getTierLabelsError,
+  dryRunRejection,
 } from "./build_complexity_router_config";
 import { activeTierName, activeTierRows, getCustomTierRowsError, resolveComplexityDefaultModel } from "./tier_rows";
 import { tierRowLabel } from "./complexity_router_tiers";
@@ -405,9 +406,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       complexityRouterConfigPayload as unknown as Record<string, unknown>,
       requiresTeamScope ? form.getValues("team_id") : undefined,
     );
-    if (!serverVerdict.valid && serverVerdict.error) {
+    const dryRunError = dryRunRejection(serverVerdict);
+    if (dryRunError) {
       setShowValidationErrors(true);
-      toast.fromError(serverVerdict.error);
+      toast.fromError(dryRunError);
       return;
     }
 
