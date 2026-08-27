@@ -96,7 +96,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     to: initialToDate,
   });
 
-  const [allTags, setAllTags] = useState<EntityList[]>([]);
+  const [allTags, setAllTags] = useState<EntityList[] | null>(null);
   const { data: customers = [] } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
