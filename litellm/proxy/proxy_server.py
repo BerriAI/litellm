@@ -7253,7 +7253,7 @@ class ProxyConfig:
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
-        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY, registry_key_for_prompt
         from litellm.types.prompts.init_prompts import PromptSpec
 
         def parse_row(db_prompt: object) -> PromptSpec | None:
@@ -7268,6 +7268,7 @@ class ProxyConfig:
                 return None
 
         try:
+            registry_keys_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
@@ -7281,6 +7282,19 @@ class ProxyConfig:
                         prompt_spec.prompt_id,
                         prompt_sync_error,
                     )
+            # An unparsable row still exists in the DB, so skip the sweep rather than unload its in-memory copy
+            every_row_parsed: Final = len(parsed_specs) == len(prompts_in_db)
+            if every_row_parsed:
+                db_registry_keys: Final = frozenset(registry_key_for_prompt(spec) for spec in parsed_specs)
+                deleted_db_registry_keys: Final = tuple(
+                    registry_key
+                    for registry_key in registry_keys_loaded_before_db_read
+                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(registry_key)) is not None
+                    and loaded_spec.prompt_info.prompt_type == "db"
+                    and registry_key not in db_registry_keys
+                )
+                for deleted_registry_key in deleted_db_registry_keys:
+                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(registry_key=deleted_registry_key)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 

@@ -32,6 +32,7 @@ class GenAIOperation(str, Enum):
     EXECUTE_TOOL = "execute_tool"  # MCP tool-call spans
     LITELLM_VECTOR_STORE_MANAGEMENT = "litellm.vector_store_management"
     LITELLM_VECTOR_STORE_FILE_MANAGEMENT = "litellm.vector_store_file_management"
+    LITELLM_RESPONSES_MANAGEMENT = "litellm.responses_management"
     LITELLM_MODERATION = "litellm.moderation"
 
 
@@ -383,6 +384,14 @@ _OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {
     "aembedding": GenAIOperation.EMBEDDINGS,
     "responses": GenAIOperation.CHAT,
     "aresponses": GenAIOperation.CHAT,
+    "get_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "aget_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "delete_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "adelete_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "cancel_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "acancel_responses": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "list_input_items": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
+    "alist_input_items": GenAIOperation.LITELLM_RESPONSES_MANAGEMENT,
     "image_generation": GenAIOperation.GENERATE_CONTENT,
     "aimage_generation": GenAIOperation.GENERATE_CONTENT,
     "moderation": GenAIOperation.LITELLM_MODERATION,

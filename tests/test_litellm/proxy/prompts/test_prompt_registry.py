@@ -160,11 +160,13 @@ def test_delete_prompts_by_base_id_scoped_to_one_environment(isolated_callbacks:
     registry = InMemoryPromptRegistry()
     registry.sync_prompt_from_db(prompt=_db_prompt_spec("begin every reply with AHOY", environment="development"))
     registry.sync_prompt_from_db(prompt=_db_prompt_spec("begin every reply with HOWDY", environment="production"))
+    production_callback = _resolved_callback(registry, environment="production")
 
     deleted = registry.delete_prompts_by_base_id(base_prompt_id="greeting", environment="development")
 
     assert deleted == ["greeting.v1::development"]
     assert registry.resolve_prompt_spec("greeting", environment="development") is None
+    assert _resolved_callback(registry, environment="production") is production_callback
     assert _served_content(registry, environment="production") == "begin every reply with HOWDY"
 
     deleted_rest = registry.delete_prompts_by_base_id(base_prompt_id="greeting")
@@ -189,3 +191,26 @@ def test_has_config_prompt_matches_any_version_of_the_base_id(isolated_callbacks
 
     assert registry.has_config_prompt(base_prompt_id="greeting") is True
     assert registry.has_config_prompt(base_prompt_id="other_prompt") is False
+
+
+def test_delete_prompts_by_base_id_removes_the_callbacks_from_litellm_callbacks(isolated_callbacks: list) -> None:
+    registry = InMemoryPromptRegistry()
+    registry.initialize_prompt(prompt=_db_prompt_spec("begin every reply with AHOY", version=1))
+    registry.initialize_prompt(prompt=_db_prompt_spec("begin every reply with YO", version=2))
+    assert len(isolated_callbacks) == 1
+
+    deleted = registry.delete_prompts_by_base_id(base_prompt_id="greeting")
+
+    assert sorted(deleted) == ["greeting.v1::development", "greeting.v2::development"]
+    assert registry.resolve_prompt_spec("greeting") is None
+    assert isolated_callbacks == []
+
+
+def test_remove_prompt_is_a_no_op_for_an_unknown_registry_key(isolated_callbacks: list) -> None:
+    registry = InMemoryPromptRegistry()
+    registry.initialize_prompt(prompt=_db_prompt_spec("begin every reply with AHOY"))
+
+    registry.remove_prompt(registry_key="not_there.v1::development")
+
+    assert registry.resolve_prompt_spec("greeting") is not None
+    assert len(isolated_callbacks) == 1

@@ -860,7 +860,9 @@ async def delete_prompt(
             **({"environment": environment} if environment else {}),
         }
         await _prompt_table(prisma_client).delete_many(where=delete_where)
-        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id=base_prompt_id, environment=environment)
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(
+            base_prompt_id=base_prompt_id, environment=environment or None
+        )
 
         env_msg: Final = f" from {environment}" if environment else ""
         return {"message": f"Prompt {base_prompt_id} deleted successfully{env_msg}"}
