@@ -291,6 +291,24 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
 
     @pytest.mark.asyncio
+    async def test_provider_native_tools_survive_guardrail_round_trip(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        data = {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "coffee shops near Union Square?"}],
+            "tools": [
+                {"googleMaps": {"enable_widget": True}},
+                {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert {"googleMaps": {"enable_widget": True}} in data["tools"]
+        assert [tool["name"] for tool in data["tools"] if "name" in tool] == ["get_weather"]
+
+    @pytest.mark.asyncio
     async def test_midturn_system_correction_is_guardrailed_when_top_level_system_is_skipped(
         self,
     ):

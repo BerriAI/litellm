@@ -24,10 +24,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
+    is_provider_native_tool_dict,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     anthropic_tool_name,
+    anthropic_tool_names,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -360,7 +362,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         structured_messages: Final = [full_structured_messages[index] for index in scoped_message_indices]
 
         tools_to_check: Final[list[ChatCompletionToolParam]] = (
-            [] if scan_only_tool_results else chat_completion_compatible_request.get("tools", [])
+            []
+            if scan_only_tool_results
+            else [
+                tool
+                for tool in chat_completion_compatible_request.get("tools", [])
+                if not is_provider_native_tool_dict(tool)
+            ]
         )
 
         # Step 1: Extract all text content and images
@@ -419,7 +427,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else anthropic_tools
+                    else [
+                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
+                        *anthropic_tools,
+                    ]
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
@@ -677,9 +688,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract tool names from Anthropic messages request (tools[].name, or
-        tools[].function.name for OpenAI-format tools the bridge forwards verbatim)."""
-        return [name for tool in data.get("tools") or [] if (name := anthropic_tool_name(tool))]
+        """Extract every tool name in an Anthropic messages request: tools[].name, plus
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
+        return [name for tool in data.get("tools") or [] for name in anthropic_tool_names(tool)]
 
     @classmethod
     def _extract_input_text_and_images(

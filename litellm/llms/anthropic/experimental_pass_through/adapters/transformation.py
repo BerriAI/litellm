@@ -27,7 +27,7 @@ def _is_openai_function_tool(tool: Mapping[str, object]) -> bool:
     return tool.get("type") == "function" and "function" in tool
 
 
-def _is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
+def is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
     if len(tool) != 1:
         return False
     key, value = next(iter(tool.items()))
@@ -786,7 +786,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_tools.append(tool)
                 continue
 
-            if _is_openai_function_tool(tool) or _is_provider_native_tool_dict(tool):
+            if _is_openai_function_tool(tool) or is_provider_native_tool_dict(tool):
                 new_tools.append(cast(ChatCompletionToolParam, tool))  # cast-ok: passed through verbatim to provider
                 continue
 
