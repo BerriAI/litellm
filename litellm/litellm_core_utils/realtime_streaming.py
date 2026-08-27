@@ -955,6 +955,7 @@ class RealTimeStreaming:
                 transcript = event.get("transcript", "")
                 self._collect_user_input_from_backend_event(cast(dict, event))
                 self.store_message(event_str)
+                self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
