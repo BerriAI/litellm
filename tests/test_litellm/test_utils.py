@@ -5635,3 +5635,21 @@ def test_snapshot_exception_for_hook_preserves_suppress_context_flag() -> None:
     snapshot = _snapshot_exception_for_hook(e)
     assert snapshot.__suppress_context__ is False
     assert snapshot.__context__ is e.__context__
+
+
+def test_shorten_message_to_fit_limit_never_grows_content():
+    """A zero half_length must not turn the trim into a two-character prefix.
+
+    `content[-0:]` is `content[0:]`, so with half_length == 0 the "right half" is the
+    whole string and each attempt returns `".." + content`. The loop then runs its full
+    attempt budget growing the message two characters at a time.
+    """
+    from litellm.utils import shorten_message_to_fit_limit
+
+    content = "hello world " * 40
+    message = {"role": "user", "content": content}
+
+    result = shorten_message_to_fit_limit(message, tokens_needed=1, model="claude-3-5-sonnet-20240620")
+
+    assert len(result["content"]) < len(content)
+    assert not result["content"].startswith("....")
