@@ -672,7 +672,12 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseUsageBlock,
 )
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolParam,
+    HttpxBinaryResponseContent,
+)
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -12126,6 +12131,13 @@ async def _try_provider_token_count(
     return result
 
 
+def _system_message(system: object) -> ChatCompletionSystemMessage | None:
+    if not isinstance(system, (str, list)) or not system:
+        return None
+    message: Final[ChatCompletionSystemMessage] = {"role": "system", "content": system}
+    return message
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -12224,10 +12236,21 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     _tokenizer_used: Final = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
 
     tokenizer_used: Final = str(_tokenizer_used["type"])
+    system_message: Final = _system_message(system)
+    typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
+        Sequence[AllMessageValues] | None, messages
+    )
+    counted_messages: Final = (
+        typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
+    )
+    counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
+        list[ChatCompletionToolParam] | None, tools
+    )
     total_tokens: Final = await asyncify(litellm.token_counter)(
         model=model_to_use,
         text=prompt,
-        messages=messages,
+        messages=counted_messages,
+        tools=counted_tools,
         custom_tokenizer=_tokenizer_used,
     )
     return TokenCountResponse(

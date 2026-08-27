@@ -1282,6 +1282,26 @@ def test_anthropic_image_block_nested_in_tool_result():
     assert tokens > 0
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ({"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ"}, "data:image/jpeg;base64,/9j/4AAQ"),
+        ({"type": "url", "url": "https://example.com/image.png"}, "https://example.com/image.png"),
+        ({"type": "file", "file_id": "file-abc123"}, ""),
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_anthropic_image_source_resolves_to_what_the_image_pricer_reads(source: dict[str, str], expected: str):
+    """
+    The image pricer reads either a data URI or a fetchable URL: a base64 source keeps its
+    media type inside the URI, a url source passes through untouched, and a file source has
+    no bytes the proxy can measure locally.
+    """
+    from litellm.litellm_core_utils.token_counter import _anthropic_image_source_data
+
+    assert _anthropic_image_source_data(source) == expected
+
+
 def test_anthropic_image_block_with_empty_base64_data():
     """
     A base64 source carrying no bytes must still price as an image rather than
@@ -1309,7 +1329,7 @@ def test_anthropic_image_block_without_source_raises():
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Error getting number of tokens from content list"):
         _count_content_list(
             count_function=len,
             content_list=[{"type": "image"}],
@@ -1326,4 +1346,66 @@ def test_anthropic_image_block_without_source_raises():
             default_token_count=7,
         )
         == 7
+    )
+
+
+def _count_user_content(content: list[dict]) -> int:
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    return token_counter(
+        model="anthropic/claude-fable-5",
+        messages=[{"role": "user", "content": content}],
+        use_default_image_token_count=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+        {"type": "url", "url": "https://example.com/report.pdf"},
+        {"type": "file", "file_id": "file-abc123"},
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_anthropic_document_block_with_opaque_source_is_priced_like_an_image(source: dict[str, str]):
+    """
+    A `document` whose bytes cannot be tokenized locally must not raise (it 500ed
+    /v1/messages/count_tokens before) and is priced exactly like an `image` block.
+    """
+    prompt = {"type": "text", "text": "Summarize this file."}
+
+    assert _count_user_content([prompt, {"type": "document", "source": source}]) == _count_user_content(
+        [prompt, {"type": "image", "source": source}]
+    )
+
+
+def test_anthropic_document_block_text_sources_count_their_text():
+    """`text` and `content` document sources count the text they carry, as inline text blocks would."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+    body = {"type": "text", "text": "Revenue grew eleven percent while churn fell to two percent."}
+    picture = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+    text_source = {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": body["text"]}}
+    assert _count_user_content([prompt, text_source]) == _count_user_content([prompt, body])
+
+    string_content = {"type": "document", "source": {"type": "content", "content": body["text"]}}
+    assert _count_user_content([prompt, string_content]) == _count_user_content([prompt, body])
+
+    block_content = {"type": "document", "source": {"type": "content", "content": [body, picture]}}
+    assert _count_user_content([prompt, block_content]) == _count_user_content([prompt, body, picture])
+
+
+def test_anthropic_document_title_and_context_add_their_tokens():
+    prompt = {"type": "text", "text": "Summarize this file."}
+    source = {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}
+    described = {"type": "document", "source": source, "title": "Q3 board packet", "context": "Shared by finance"}
+
+    assert _count_user_content([prompt, described]) == _count_user_content(
+        [
+            prompt,
+            {"type": "text", "text": "Q3 board packet"},
+            {"type": "text", "text": "Shared by finance"},
+            {"type": "document", "source": source},
+        ]
     )
