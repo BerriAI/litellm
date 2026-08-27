@@ -27,7 +27,6 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, matching dynamic_rate_limiter_v3's identical import
-    get_metadata_variable_name_from_kwargs,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -99,7 +98,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     policy_fingerprint as _policy_fingerprint,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
-    resolve_success_event_metadata_variable_name as _resolve_success_event_metadata_variable_name,
+    resolve_authoritative_metadata_variable_name as _resolve_authoritative_metadata_variable_name,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
     scope_signature as _scope_signature,
@@ -150,24 +149,33 @@ class _ConfiguredLimit:
     # bucket). Otherwise the sorted deployment ids that declared this exact
     # value -- the bucket is shared among only those deployments.
     deployment_scope: tuple[str, ...] | None
-    # The team_id this limit was resolved under via `by_team_alias`, or None
-    # when resolved via `by_model_name`. team_public_model_name is only
-    # unique per team, so two teams can publish the identical alias string;
-    # without the team_id folded into the bucket key too, both teams'
-    # identically-named, identically-configured limits would collide on the
-    # same Redis counter despite the index itself correctly scoping the
-    # lookup by (team_id, alias).
+    # The owning team_id, set whenever this limit belongs to a team-owned
+    # deployment -- via `by_team_alias`, or via `by_model_name` for a group
+    # any of whose deployments also declare a `team_public_model_name` (see
+    # `_build_limits_index`). team_public_model_name is only unique per team,
+    # so two teams can publish the identical alias string; without the
+    # team_id folded into the bucket key too, both teams' identically-named,
+    # identically-configured limits would collide on the same Redis counter
+    # despite the index itself correctly scoping the `by_team_alias` lookup
+    # by (team_id, alias).
     team_scope: str | None = None
-    # The real model_name this limit was found under when `resolve()`'s
-    # direct lookup by the caller-visible model string missed and
-    # `resolve_any()` fell back to resolving via a candidate deployment's
-    # own model_name instead (routing groups, and any other indirection
-    # where Router deliberately keeps the caller-visible name distinct from
-    # every deployment's own model_name). None when resolved directly, in
-    # which case the caller-visible name is already unambiguous and safe to
-    # hash by. Set, this overrides the caller-visible name in the bucket key
-    # so limits from two different underlying model_names sharing one
-    # routing group never collide on one counter.
+    # Overrides the caller-visible name in the bucket key whenever that name
+    # doesn't uniquely identify the bucket. Two independent cases set this:
+    # (1) `resolve()`'s direct lookup missed and `resolve_any()` fell back to
+    # resolving via a candidate deployment's own model_name instead (routing
+    # groups, and any other indirection where Router deliberately keeps the
+    # caller-visible name distinct from every deployment's own model_name) --
+    # here it's stamped with that deployment's own model_name, so limits from
+    # two different underlying model_names sharing one routing group never
+    # collide on one counter; (2) the limit belongs to a team-owned
+    # deployment (`team_scope` is set) -- here it's stamped with the team's
+    # own `team_public_model_name`, the same value regardless of whether this
+    # entry was found via `by_team_alias` (caller used the public alias) or
+    # via `by_model_name` (caller used the deployment's own internal,
+    # auto-generated model_name), so both call shapes land on one shared
+    # bucket instead of splitting a team's usage across two counters. None
+    # when resolved directly and not team-owned, in which case the
+    # caller-visible name is already unambiguous and safe to hash by.
     resolved_group: str | None = None
 
 
@@ -186,8 +194,8 @@ def _model_name_of(deployment: Mapping[str, object]) -> str:
 
 def _extract_team_id(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> str | None:
     """Reads `user_api_key_team_id` from only the one field
-    `get_metadata_variable_name_from_kwargs` names as authoritative for this
-    request -- never falling back to the other field, since
+    `_resolve_authoritative_metadata_variable_name` names as authoritative for
+    this request -- never falling back to the other field, since
     `litellm_pre_call_utils.py` writes the real, server-authenticated value
     into that one field alone and leaves the other exactly as the caller
     sent it. An OR-fallback across both would let a caller's own
@@ -462,12 +470,16 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
                 # model_name, not only its team_public_model_name alias
                 # (litellm auto-generates a name unique per (team_id, uuid),
                 # so every deployment in this group shares one team_id when
-                # any does) -- stamping the identical team_scope here as the
-                # alias entry below gets keeps both paths resolving to the
-                # same bucket, so a caller can't split its usage across two
+                # any does). Stamping team_scope alone is not enough to unify
+                # this with the alias entry below: `_hash_tag` still hashes
+                # the caller-visible name by default, and that name differs
+                # between the two paths (the internal model_name here vs. the
+                # public alias below). Also stamping `resolved_group` with the
+                # team's own alias forces both paths to hash under the
+                # identical name, so a caller can't split its usage across two
                 # independent counters just by alternating which name it calls.
-                tuple(replace(limit, team_scope=team_scope) for limit in configured)
-                if (team_scope := next((key[0] for dep in group if (key := _team_alias_key(dep))), None)) is not None
+                tuple(replace(limit, team_scope=team_key[0], resolved_group=team_key[1]) for limit in configured)
+                if (team_key := next((key for dep in group if (key := _team_alias_key(dep))), None)) is not None
                 else configured
             )
             for model_name, deployment_group in groupby(sorted_by_model_name, key=_model_name_of)
@@ -487,7 +499,13 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
             for aliased_group in (tuple(dep for _key, dep in alias_group),)
             if (
                 alias_configured := tuple(
-                    replace(limit, team_scope=alias_key[0])
+                    # resolved_group is already the caller-visible name on
+                    # this path (the caller reached this group by dialing the
+                    # alias directly), but stamping it explicitly keeps both
+                    # index branches symmetric and independent of whatever
+                    # value the caller happens to pass as `model_group` into
+                    # `_hash_tag`.
+                    replace(limit, team_scope=alias_key[0], resolved_group=alias_key[1])
                     for unit in _LIMIT_UNITS
                     for limit in _build_group_limits(aliased_group, unit)
                 )
@@ -711,12 +729,15 @@ def _scope_suffix(deployment_scope: tuple[str, ...] | None) -> str:
 
 
 def _hash_tag(model_group: str, configured: _ConfiguredLimit, tag_value: str, key_hash: str | None) -> str:
-    # resolved_group overrides the caller-visible model_group when this
-    # limit was found via resolve_any()'s per-deployment fallback (routing
-    # groups): the caller-visible name is ambiguous there (shared by every
-    # member model_name), so hashing by it would collide two different
-    # underlying model_names' identically-named limits onto one counter.
-    # See _ConfiguredLimit.resolved_group.
+    # resolved_group overrides the caller-visible model_group in two cases:
+    # resolve_any()'s per-deployment fallback (routing groups), where the
+    # caller-visible name is ambiguous (shared by every member model_name), so
+    # hashing by it would collide two different underlying model_names'
+    # identically-named limits onto one counter; and a team-owned deployment,
+    # where the caller-visible name differs depending on whether the caller
+    # dialed the team's public alias or the deployment's own internal
+    # model_name, so hashing by it would split one team's usage across two
+    # counters. See _ConfiguredLimit.resolved_group.
     effective_model_group: Final = configured.resolved_group if configured.resolved_group is not None else model_group
     scope: Final = _scope_suffix(configured.deployment_scope)
     # team_scope disambiguates two teams that publish the identical
@@ -1139,7 +1160,14 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
 
         resolved_request_kwargs: Final = request_kwargs or _EMPTY_MAPPING
         stale_request_keys: Final = await self._release_stale_hop_reservations(resolved_request_kwargs)
-        metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(resolved_request_kwargs)
+        # Not `get_metadata_variable_name_from_kwargs` (naive key-presence
+        # check): a caller can forge an empty (or `None`) `litellm_metadata`
+        # on an ordinary request to make that check pick it over the real,
+        # populated `metadata` the proxy wrote authenticated team/tag identity
+        # into, seeing no tags at all and admitting past every configured
+        # limit. See `_resolve_authoritative_metadata_variable_name`'s own
+        # docstring.
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(resolved_request_kwargs)
         team_id: Final = _extract_team_id(resolved_request_kwargs, metadata_variable_name)
         # Built from the full routing-group membership, not `healthy_deployments`
         # (Router's own cooldown-filtered list for this hop): a member that's
@@ -1499,12 +1527,12 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             # check): at this point `kwargs` is `model_call_details`, which
             # carries `litellm_metadata` present-but-`None` alongside the
             # real, populated `metadata` for a standard request -- see
-            # `_resolve_success_event_metadata_variable_name`'s own docstring.
+            # `_resolve_authoritative_metadata_variable_name`'s own docstring.
             litellm_params_raw: Final = kwargs.get("litellm_params")
             litellm_params_for_metadata: Final = (
                 litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
             )
-            metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
+            metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
             key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
             try:
                 await self.internal_usage_cache.dual_cache.async_delete_cache(
@@ -1644,7 +1672,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # top-level here, only nested under kwargs["litellm_params"] (see
         # Logging.update_environment_variables).
         litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
-        metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
         team_id: Final = _extract_team_id(litellm_params_for_metadata, metadata_variable_name)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)

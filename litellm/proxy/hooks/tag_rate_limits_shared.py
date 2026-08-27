@@ -221,15 +221,18 @@ def entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str 
     return key_alias in entry.apply_to_key_alias
 
 
-def resolve_success_event_metadata_variable_name(
-    litellm_params_for_metadata: Mapping[str, object],
+def resolve_authoritative_metadata_variable_name(
+    metadata_source: Mapping[str, object],
 ) -> Literal["metadata", "litellm_metadata"]:
     """`get_metadata_variable_name_from_kwargs` only checks key presence, which
-    misresolves at `async_log_success_event` time: `kwargs["litellm_params"]`
-    always carries a `litellm_metadata` key (typically `None`) alongside the
-    real, populated `metadata` dict for a standard (non
-    LITELLM_METADATA_ROUTES) request, so the key-presence check always picks
-    `litellm_metadata` there and silently reads no tags/identity at all.
+    misresolves both at admission time and at `async_log_success_event` time:
+    a caller can forge an empty (or merely present-but-`None`) `litellm_metadata`
+    on an ordinary request -- `kwargs["litellm_params"]` also always carries a
+    `litellm_metadata` key (typically `None`) alongside the real, populated
+    `metadata` dict for a standard (non LITELLM_METADATA_ROUTES) request -- and
+    the key-presence check always picks `litellm_metadata` in both cases,
+    silently reading no tags/identity at all and admitting the request against
+    every configured limit.
 
     A plain truthiness check on `litellm_metadata` isn't enough either: a
     caller can populate it with unrelated, non-empty content on a route where
@@ -241,7 +244,7 @@ def resolve_success_event_metadata_variable_name(
     there -- so requiring that marker's presence, not mere truthiness, only
     ever prefers `litellm_metadata` when it is genuinely the field the proxy
     wrote identity/tags into."""
-    litellm_metadata: Final = litellm_params_for_metadata.get("litellm_metadata")
+    litellm_metadata: Final = metadata_source.get("litellm_metadata")
     if isinstance(litellm_metadata, Mapping) and "user_api_key_auth" in litellm_metadata:
         return "litellm_metadata"
     return "metadata"
