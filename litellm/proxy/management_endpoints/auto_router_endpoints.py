@@ -195,7 +195,7 @@ def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[s
         model
         for model in (
             config.classifier_llm_config.model
-            if config.classifier_type == "llm" and config.classifier_llm_config is not None
+            if config.uses_llm_classifier and config.classifier_llm_config is not None
             else None,
             config.embedding_model if config.semantic_keyword_matching else None,
         )
