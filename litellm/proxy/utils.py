@@ -94,7 +94,6 @@ from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_a
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     is_expected_client_error,
-    safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -453,6 +452,48 @@ def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[s
         if managed
         else frozenset()
     )
+
+
+def _independent_snapshot(
+    data: dict,  # mutable-ok: same request-payload shape as every other guardrail snapshot in this file
+) -> dict | None:  # mutable-ok: same request-payload shape as every other guardrail snapshot in this file
+    """
+    A guaranteed-independent copy of ``data``, or None if one couldn't be
+    made -- never the original object or an aliased sub-value.
+
+    ``safe_deep_copy`` is allowed to return the original object outright
+    under ``litellm.safe_memory_mode``, and to fall back to the original
+    reference for any individual key that fails to deep-copy. Both are fine
+    for its usual callers, but scan_raw_request's isolation guarantee (a
+    guardrail's raw-request view must never be mutable-shared with the live
+    request or with another guardrail's view) depends on the copy actually
+    being independent, so it can't reuse that helper.
+    """
+    sanitized: Final = {
+        key: (
+            {
+                inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
+                for inner_key, inner_value in value.items()
+            }
+            if key in ("metadata", "litellm_metadata") and isinstance(value, dict)
+            else value
+        )
+        for key, value in data.items()
+    }
+    try:
+        copied: Final = copy.deepcopy(sanitized)
+    except Exception:  # noqa: BLE001  # any unpicklable value anywhere in the payload should degrade to None, not crash
+        return None
+    for meta_key in ("metadata", "litellm_metadata"):
+        original_meta = data.get(meta_key)
+        copied_meta = copied.get(meta_key)
+        if (
+            isinstance(original_meta, dict)
+            and isinstance(copied_meta, dict)
+            and "litellm_parent_otel_span" in original_meta
+        ):
+            copied_meta["litellm_parent_otel_span"] = original_meta["litellm_parent_otel_span"]
+    return copied
 
 
 def _prompt_block_text(block: object) -> str:
@@ -1417,17 +1458,23 @@ class ProxyLogging:
         is visible instead of silently forwarding unredacted content.
         """
         scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
-        input_data: Final = (
-            safe_deep_copy(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
+        should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
+        raw_input_copy: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+            _independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else None
         )
+        input_data: Final = raw_input_copy if raw_input_copy is not None else data
         # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
         # successful run, which unconditionally stamps bookkeeping metadata onto
         # the dict regardless of whether the guardrail's own hook mutated
         # anything -- so comparing `result` straight against `input_data` would
         # warn on every single scan_raw_request call. Apply that same stamp to a
-        # throwaway copy first so the comparison isolates the guardrail's own
-        # content mutation from this bookkeeping noise.
-        expected_if_unmutated: Final[dict | None] = safe_deep_copy(input_data) if scans_raw_request else None
+        # throwaway, guaranteed-independent copy first (never the live request or
+        # raw_request_snapshot itself) so the comparison isolates the guardrail's
+        # own content mutation from this bookkeeping noise without risking a
+        # premature marker write into shared state.
+        expected_if_unmutated: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+            _independent_snapshot(input_data) if scans_raw_request else None
+        )
         if expected_if_unmutated is not None:
             callback.mark_pre_call_hook_ran(expected_if_unmutated)
         result: Final = await self._process_guardrail_callback(
@@ -1752,14 +1799,16 @@ class ProxyLogging:
         # not) that masks/rewrites content can't hide a violation from a later
         # one that opted into scanning the original request. Only computed
         # when at least one registered guardrail actually opted in, and via
-        # safe_deep_copy (not a bare deepcopy) since the payload commonly
-        # carries unpicklable objects (e.g. an otel span in metadata) that
-        # would otherwise raise here on every guarded request.
+        # _independent_snapshot (not safe_deep_copy) since this isolation
+        # guarantee must hold even under litellm.safe_memory_mode, which
+        # otherwise makes deep copies return the original object.
         needs_raw_request_snapshot: Final = any(
             isinstance(cb, CustomGuardrail) and getattr(cb, "scan_raw_request", False)
             for cb in ProxyLogging._callback_capabilities().resolved_callbacks
         )
-        raw_request_snapshot: Final[dict | None] = safe_deep_copy(data) if needs_raw_request_snapshot else None
+        raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+            _independent_snapshot(data) if needs_raw_request_snapshot else None
+        )
 
         try:
             # Execute guardrail pipelines before the normal callback loop
@@ -1911,15 +1960,20 @@ class ProxyLogging:
         sequential branch does: its block decision must not depend on what a
         sequential guardrail already masked or rewrote.
         """
+
+        def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
+            if not getattr(callback, "scan_raw_request", False) or raw_request_snapshot is None:
+                return data
+            snapshot_copy: Final[dict | None] = _independent_snapshot(  # mutable-ok: same request-payload shape
+                raw_request_snapshot
+            )
+            return snapshot_copy if snapshot_copy is not None else data
+
         results: Final = await asyncio.gather(
             *(
                 self._process_guardrail_callback(
                     callback=callback,
-                    data=(
-                        safe_deep_copy(raw_request_snapshot)
-                        if getattr(callback, "scan_raw_request", False) and raw_request_snapshot is not None
-                        else data
-                    ),
+                    data=_input_for(callback),
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                     event_type=GuardrailEventHooks.pre_call,

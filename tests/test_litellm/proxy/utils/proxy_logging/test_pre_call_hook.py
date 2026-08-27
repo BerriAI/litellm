@@ -682,6 +682,38 @@ async def test_scan_raw_request_warns_when_guardrail_mutation_discarded(
 
 
 @pytest.mark.asyncio
+async def test_scan_raw_request_baseline_does_not_leak_marker_under_safe_memory_mode(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    veria-ai finding on BerriAI/litellm#34940: safe_deep_copy returns the
+    original object unchanged when litellm.safe_memory_mode is True, so
+    calling the mutating mark_pre_call_hook_ran on the "expected baseline"
+    copy actually mutates the shared raw_request_snapshot -- writing this
+    guardrail's execution marker into metadata even when should_run_guardrail
+    says the guardrail should be skipped for this event. A deployment-level
+    guardrail sharing the same guardrail_name would then see the marker via
+    _pre_call_hook_already_ran and skip real inspection, a security bypass.
+    """
+    monkeypatch.setattr(litellm, "safe_memory_mode", True)
+
+    class _SkippedScanner(_BlockOnSecretGuardrail):
+        def __init__(self, **kwargs):
+            kwargs["default_on"] = False
+            super().__init__(scan_raw_request=True, **kwargs)
+
+    callback = _SkippedScanner()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    out = await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_secret_request(),
+        call_type="completion",
+    )
+    assert callback._pre_call_hook_already_ran(out) is False
+
+
+@pytest.mark.asyncio
 async def test_scan_raw_request_does_not_warn_when_guardrail_only_blocks(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
