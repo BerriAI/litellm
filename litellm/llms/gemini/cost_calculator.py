@@ -39,7 +39,9 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     ``model_info`` when available, falling back to $0.035 for models not
     yet updated in the pricing JSON.
     """
-    from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests
+    from litellm.litellm_core_utils.llm_cost_calc.utils import (
+        get_web_search_requests_from_usage,
+    )
     from litellm.types.utils import PromptTokensDetailsWrapper
 
     _DEFAULT_COST: Final = 35e-3
@@ -57,7 +59,7 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         )
         else None
     )
-    requests_from_server_tool_use: Final = get_web_search_requests(getattr(usage, "server_tool_use", None))
+    requests_from_server_tool_use: Final = get_web_search_requests_from_usage(usage)
     number_of_web_search_requests: Final = requests_from_prompt_details or requests_from_server_tool_use or 0
 
     billing_mode: Final = model_info.get("web_search_billing_unit") or "per_prompt"
