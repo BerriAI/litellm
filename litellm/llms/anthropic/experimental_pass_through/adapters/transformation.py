@@ -890,6 +890,31 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         return "prompt_cache_key" in (supported_params or ())
 
+    @staticmethod
+    def _target_declares_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
+        """Whether the target declares ``reasoning_effort`` among its supported params.
+
+        A Claude-family target is recognized by name, which says nothing about the carrier the
+        provider serving it accepts: Snowflake serves Claude over the Anthropic dialect and
+        declares ``thinking`` alone, so storing the tier there raises before the request reaches
+        the wire.
+
+        Without a resolved provider the tier stays behind, which is what this bridge sent before
+        it carried one at all. Reading the declaration from the model's own prefix instead would
+        resolve the provider through a lookup that runs an OAuth device flow for two of them, and
+        this runs inside a logging callback as well as on the request path.
+
+        Unlike ``_supports_prompt_cache_key`` this does not exclude a provider that proxies an
+        unknown backend, because that provider declares this param and forwards it to a proxy
+        that resolves the real target itself, where a derived cache key has no such guarantee.
+        """
+        if not model or not custom_llm_provider:
+            return False
+        supported_params: Final = litellm.get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        return "reasoning_effort" in (supported_params or ())
+
     def _translate_metadata_to_openai(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
@@ -978,6 +1003,8 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        *,
+        custom_llm_provider: str | None = None,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -986,11 +1013,15 @@ class LiteLLMAnthropicMessagesAdapter:
         because the two are not interchangeable at the provider mapping below.
 
         Bedrock takes ``output_config`` directly, which attaches the tier and leaves ``thinking``
-        alone. Every other bridged Claude target takes ``reasoning_effort``, and used to be sent no
-        tier at all, so an adaptive request arrived byte-identical whichever effort the caller
-        asked for. That tier stays a plain string there, since the summary it would otherwise be
-        wrapped with already travels inside the forwarded ``thinking`` block, and the wrapped dict
-        is rejected outright by some of these providers.
+        alone. Another bridged Claude target takes ``reasoning_effort`` if it declares that param,
+        and used to be sent no tier at all, so an adaptive request arrived byte-identical whichever
+        effort the caller asked for. That tier stays a plain string there, since the summary it
+        would otherwise be wrapped with already travels inside the forwarded ``thinking`` block,
+        and the wrapped dict is rejected outright by some of these providers.
+
+        A target declaring neither carrier keeps its bare ``thinking`` block. Being Claude-family
+        is a fact about the model, not about the params the provider in front of it accepts, so
+        the tier is offered only where the target says it is taken.
 
         ``reasoning_effort`` is not a substitute for ``output_config`` on the Bedrock side: an
         application inference profile ARN resolves to neither, so the tier is dropped, and providers
@@ -1019,6 +1050,8 @@ class LiteLLMAnthropicMessagesAdapter:
                     effort_config: Final = {k: v for k, v in output_config.items() if k != "format"}
                     if effort_config:
                         new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like thinking above
+                return
+            if not self._target_declares_reasoning_effort(model, custom_llm_provider):
                 return
 
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
@@ -1133,6 +1166,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._translate_thinking_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            custom_llm_provider=custom_llm_provider,
         )
         ## CONVERT STOP_SEQUENCES
         self._translate_stop_sequences_to_openai(
