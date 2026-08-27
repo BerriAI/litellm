@@ -60,6 +60,28 @@ def test_get_provider_create_fields():
     ), "Expected at least one provider to have detailed credential fields"
 
 
+def test_zai_provider_fields():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    client = TestClient(app_instance)
+
+    response = client.get("/public/providers/fields")
+    assert response.status_code == 200
+
+    providers = response.json()
+    zai = next((provider for provider in providers if provider["provider"] == "ZAI"), None)
+
+    assert zai is not None
+    assert zai["provider_display_name"] == "Z.AI"
+    assert zai["litellm_provider"] == "zai"
+    assert zai["default_model_placeholder"] == "zai/glm-4.6"
+
+    credential_fields = {field["key"]: field for field in zai["credential_fields"]}
+    assert credential_fields["api_key"]["required"] is True
+    assert credential_fields["api_key"]["field_type"] == "password"
+    assert credential_fields["api_base"]["default_value"] == "https://api.z.ai/api/paas/v4"
+
+
 def test_get_litellm_model_cost_map_returns_cost_map():
     app = FastAPI()
     app.include_router(router)

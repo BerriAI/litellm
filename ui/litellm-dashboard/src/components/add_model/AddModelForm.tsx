@@ -123,6 +123,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     () =>
       sortedProviderMetadata.map((providerInfo) => ({
         label: providerInfo.provider_display_name,
+        sublabel: providerInfo.litellm_provider,
         value: providerInfo.provider,
         icon: <ProviderLogo provider={providerInfo.provider} className="w-5 h-5" />,
       })),
