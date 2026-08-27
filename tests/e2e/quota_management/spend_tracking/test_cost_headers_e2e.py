@@ -12,10 +12,15 @@ header is exercised with a real nonzero value instead of passing vacuously. The
 backend is gpt-5.5 because it reports cached tokens on the second call; the
 gpt-5.6 line reports cache writes and never a read, which would leave the
 cache-read header at zero forever. The raw-transport send is used because the
-typed chat client validates bodies and drops headers. OpenAI caching is
-best-effort, so the prime+measure round retries with a fresh prefix before
-failing.
+typed chat client validates bodies and drops headers.
+
+OpenAI publishes a primed prefix asynchronously and routes lookups by
+prompt_cache_key, so a measure fired the instant the prime returns can miss a
+prefix that is about to become readable. Each round pins a cache key and re-reads
+the prefix it already paid to prime before spending a fresh one.
 """
+
+import time
 
 import pytest
 
@@ -31,6 +36,8 @@ pytestmark = pytest.mark.e2e
 BACKEND = "openai/gpt-5.5"
 OPENAI_API_KEY = "os.environ/OPENAI_API_KEY"
 CACHE_ATTEMPTS = 3
+CACHE_REREADS = 3
+CACHE_SETTLE_SECONDS = 2.0
 
 INPUT_RATE = 4e-05
 OUTPUT_RATE = 8e-05
@@ -70,7 +77,7 @@ class TestCostHeaders:
             ),
         )
 
-        def priced_call(content: str) -> StreamingResponse:
+        def priced_call(content: str, cache_key: str) -> StreamingResponse:
             response = client.proxy.transport.send(
                 "/chat/completions",
                 headers=client.proxy.transport.bearer(scoped_key),
@@ -78,21 +85,33 @@ class TestCostHeaders:
                     model=model,
                     messages=[ChatMessage(role="user", content=content)],
                     max_completion_tokens=4000,
+                    prompt_cache_key=cache_key,
                 ),
             )
             assert response.ok, f"chat failed (status {response.status_code}): {response.body[:300]}"
             return response
 
+        def prime_then_reread() -> StreamingResponse | None:
+            marker = unique_marker()
+            prefix = cacheable_prefix(marker)
+            priced_call(f"{prefix}\nReply with the single word ready.", marker)
+            for _ in range(CACHE_REREADS):
+                time.sleep(CACHE_SETTLE_SECONDS)
+                response = priced_call(f"{prefix}\nReply with the single word measured.", marker)
+                if _header_cost(response, "x-litellm-response-cost-cache-read") > 0:
+                    return response
+            return None
+
+        measured: StreamingResponse | None = None
         for _ in range(CACHE_ATTEMPTS):
-            prefix = cacheable_prefix(unique_marker())
-            priced_call(f"{prefix}\nReply with the single word ready.")
-            measured = priced_call(f"{prefix}\nReply with the single word measured.")
-            if _header_cost(measured, "x-litellm-response-cost-cache-read") > 0:
+            measured = prime_then_reread()
+            if measured is not None:
                 break
-        else:
+        if measured is None:
             pytest.fail(
-                f"no cache read landed across {CACHE_ATTEMPTS} prime+measure rounds; "
-                "the cache-read cost header was never exercised with a nonzero value"
+                f"no cache read landed across {CACHE_ATTEMPTS} prime rounds of "
+                f"{CACHE_REREADS} re-reads each; the cache-read cost header was never "
+                "exercised with a nonzero value"
             )
 
         total = measured.response_cost
