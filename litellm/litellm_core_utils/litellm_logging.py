@@ -1590,7 +1590,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if transformed_result is not None:
             result = transformed_result
 
-        if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
+        if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
             hidden_params: Final = getattr(result, "_hidden_params", {})
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
