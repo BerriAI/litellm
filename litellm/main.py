@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Coroutine, Iterable, Iterator, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -122,6 +122,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
+    strip_deployment_scoped_model_info,
 )
 from litellm.utils import (
     Choices,
@@ -1009,6 +1010,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
+    deployment_mode: str | None = None,
 ) -> tuple[dict, str]:
     model_info: dict[str, object] = {}
 
@@ -1040,6 +1042,14 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    # The cost-map entry is keyed by provider model, so every deployment of that model
+    # reads the same mode. A deployment asking for the Responses API only speaks for
+    # itself, hence the request-scoped override. It can only turn the bridge on: a
+    # backend the catalog marks responses-only (e.g. `chatgpt/*`) has no chat route to
+    # fall back to, so a deployment claiming `mode: chat` there would just fail.
+    if deployment_mode == "responses":
+        model_info["mode"] = "responses"
 
     # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
@@ -1174,17 +1184,36 @@ def _build_custom_pricing_entry(
     return entry
 
 
-def _get_router_deployment_id(kwargs: dict) -> str | None:
+def _router_deployment_model_infos(kwargs: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    """The ``model_info`` the router stamped into this request's metadata, if any."""
     for metadata_key in ("litellm_metadata", "metadata"):
         metadata = kwargs.get(metadata_key) or {}
         if not isinstance(metadata, dict):
             continue
         deployment_model_info = metadata.get("model_info") or {}
-        if not isinstance(deployment_model_info, dict):
-            continue
+        if isinstance(deployment_model_info, dict):
+            yield deployment_model_info
+
+
+def _get_router_deployment_id(kwargs: Mapping[str, object]) -> str | None:
+    for deployment_model_info in _router_deployment_model_infos(kwargs):
         deployment_id = deployment_model_info.get("id")
         if deployment_id is not None:
             return str(deployment_id)
+    return None
+
+
+def _get_router_deployment_mode(kwargs: Mapping[str, object]) -> str | None:
+    """The API surface the routed deployment configured for itself.
+
+    Deployments of one provider model share a single ``litellm.model_cost`` entry, so
+    the mode a deployment sets has to travel with the request instead of being written
+    there, where it would answer for its siblings too.
+    """
+    for deployment_model_info in _router_deployment_model_infos(kwargs):
+        mode = deployment_model_info.get("mode")
+        if isinstance(mode, str):
+            return mode
     return None
 
 
@@ -1199,10 +1228,11 @@ def _register_custom_pricing_for_request(
     Router-originated requests (identified by the deployment id the router puts
     in metadata) get their full pricing registered under that unique id only;
     the shared ``{provider}/{model}`` key receives the entry with pricing fields
-    stripped, mirroring Router._create_deployment. This keeps one deployment's
-    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
-    pricing used by sibling deployments of the same backend model. Direct SDK
-    calls keep the legacy behavior of registering the shared key with pricing.
+    and ``mode`` stripped, mirroring Router._create_deployment. This keeps one
+    deployment's pricing overrides (e.g. a zero-cost wildcard) or its choice of
+    API surface from clobbering the built-in entry that sibling deployments of
+    the same backend model read. Direct SDK calls keep the legacy behavior of
+    registering the shared key with pricing.
     """
     entry: Final = _build_custom_pricing_entry(
         custom_llm_provider=custom_llm_provider,
@@ -1217,7 +1247,9 @@ def _register_custom_pricing_for_request(
     litellm.register_model(
         {
             deployment_id: entry,
-            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
+            shared_key: strip_deployment_scoped_model_info(
+                CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
+            ),
         },
         persist_across_reloads=False,
         warning_display_name=shared_key,
@@ -5302,11 +5334,13 @@ def completion(
         )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
+        deployment_mode: Final = _get_router_deployment_mode(kwargs)
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
+            deployment_mode=deployment_mode,
         )
 
         if not _should_allow_input_examples(custom_llm_provider=custom_llm_provider, model=model):
@@ -5552,6 +5586,7 @@ def completion(
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                deployment_mode=deployment_mode,
             )
 
         # Use base_model (the true underlying model) for Azure model-type

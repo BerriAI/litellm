@@ -13,6 +13,7 @@ import os
 import re
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 
@@ -399,6 +400,144 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         )
         assert bridge_model == "gpt-5.4"
         assert bridge_model_info["mode"] == "responses"
+
+        # A responses-only backend has no chat route, so the alias asking for chat
+        # still gets bridged rather than being taken at its word.
+        downgraded_info, _ = responses_api_bridge_check(
+            model="gpt-5.4",
+            custom_llm_provider="chatgpt",
+            deployment_mode="chat",
+        )
+        assert downgraded_info["mode"] == "responses"
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_responses_deployment_does_not_move_its_siblings_onto_the_bridge():
+    """
+    https://github.com/BerriAI/litellm/issues/38543 - deployments of one provider model
+    share a single litellm.model_cost entry, so registering a `mode: responses`
+    deployment used to switch every other deployment of that model onto the Responses
+    API, and deleting it again did not undo that.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    backend_model = "openai/gpt-5.1"
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (backend_model, "gpt-5.1", "chat-38543", "responses-probe-38543")
+    }
+
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-chat-model",
+                    "litellm_params": {"model": backend_model, "api_key": "sk-fake"},
+                    "model_info": {"id": "chat-38543"},
+                }
+            ]
+        )
+        catalog_mode = litellm.get_model_info(model="gpt-5.1", custom_llm_provider="openai").get("mode")
+        assert catalog_mode == "chat", "test needs a backend the catalog serves over chat completions"
+
+        router.add_deployment(
+            deployment=Deployment(
+                model_name="my-responses-probe",
+                litellm_params=LiteLLM_Params(model=backend_model, api_key="sk-fake"),
+                model_info=ModelInfo(id="responses-probe-38543", mode="responses"),
+            )
+        )
+
+        # The probe speaks for itself...
+        probe_info, _ = responses_api_bridge_check(
+            model="gpt-5.1",
+            custom_llm_provider="openai",
+            deployment_mode="responses",
+        )
+        assert probe_info["mode"] == "responses"
+
+        # ...and for nobody else, whether or not it is still registered.
+        for step in ("with the probe registered", "after deleting the probe"):
+            sibling_info, _ = responses_api_bridge_check(model="gpt-5.1", custom_llm_provider="openai")
+            assert sibling_info.get("mode") == "chat", f"sibling moved onto the responses bridge {step}"
+            assert litellm.model_cost["gpt-5.1"].get("mode") == "chat", f"shared key rewritten {step}"
+            router.delete_deployment(id="responses-probe-38543")
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+_OPENAI_CHAT_COMPLETION_BODY = {
+    "id": "chatcmpl-38543",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gpt-5.1",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+_OPENAI_RESPONSES_BODY = {
+    "id": "resp_38543",
+    "object": "response",
+    "created_at": 0,
+    "model": "gpt-5.1",
+    "status": "completed",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_38543",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "model_name, expected_endpoint",
+    [("my-chat-model", "chat"), ("my-responses-probe", "responses")],
+)
+def test_each_deployment_is_served_on_the_api_its_own_model_info_asks_for(model_name, expected_endpoint):
+    """End to end for https://github.com/BerriAI/litellm/issues/38543: the plain
+    deployment keeps hitting chat completions while its `mode: responses` sibling,
+    registered against the same provider model, goes to the Responses API.
+    """
+    import respx
+
+    model_keys = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("openai/gpt-5.1", "gpt-5.1", "chat-38543-routed", "responses-probe-38543-routed")
+    }
+
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-chat-model",
+                    "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-fake"},
+                    "model_info": {"id": "chat-38543-routed"},
+                },
+                {
+                    "model_name": "my-responses-probe",
+                    "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-fake"},
+                    "model_info": {"id": "responses-probe-38543-routed", "mode": "responses"},
+                },
+            ]
+        )
+
+        with respx.mock(assert_all_called=False) as openai_api:
+            chat = openai_api.post("https://api.openai.com/v1/chat/completions").mock(
+                return_value=httpx.Response(200, json=_OPENAI_CHAT_COMPLETION_BODY)
+            )
+            responses = openai_api.post("https://api.openai.com/v1/responses").mock(
+                return_value=httpx.Response(200, json=_OPENAI_RESPONSES_BODY)
+            )
+            router.completion(model=model_name, messages=[{"role": "user", "content": "hi"}])
+
+        called = {"chat": chat.called, "responses": responses.called}
+        assert called == {"chat": expected_endpoint == "chat", "responses": expected_endpoint == "responses"}
     finally:
         _restore_model_cost_entries(model_keys)
 
@@ -775,8 +914,8 @@ def test_add_deployment_does_not_leak_custom_metadata_to_shared_backend_key():
 
 
 def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
-    """Unit test of the whitelist helper: cost-map schema fields survive,
-    custom pricing overrides and per-deployment metadata do not.
+    """Unit test of the whitelist helper: cost-map schema fields survive, custom
+    pricing overrides, per-deployment metadata and `mode` do not.
     """
     from litellm.types.utils import shared_backend_model_info
 
@@ -799,7 +938,6 @@ def test_shared_backend_model_info_keeps_schema_fields_and_drops_the_rest():
     )
 
     assert filtered == {
-        "mode": "chat",
         "litellm_provider": "openai",
         "max_tokens": 128000,
         "supports_vision": True,
