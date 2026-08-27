@@ -670,13 +670,13 @@ class TestSpendLogsPartitionDetectionSchemaScope:
             monkeypatch, "postgresql://u:p@localhost:5432/db?schema=tenant_a"
         )
         assert "pg_namespace" in query
-        assert 'n.nspname = COALESCE(%s, current_schema())' in query
+        assert "n.nspname = %s" in query
         assert params == ("tenant_a",)
 
-    def test_lookup_falls_back_to_current_schema_without_a_schema_param(self, monkeypatch):
+    def test_lookup_falls_back_to_public_without_a_schema_param(self, monkeypatch):
         query, params = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db")
-        assert "current_schema()" in query
-        assert params == (None,)
+        assert "n.nspname = %s" in query
+        assert params == ("public",)
 
     def test_only_partitioned_relations_match(self, monkeypatch):
         query, _ = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db")

@@ -501,7 +501,7 @@ class ProxyExtrasDBManager:
     def spend_logs_is_partitioned() -> bool:
         """True when the connected database's LiteLLM_SpendLogs is a
         partitioned table in Prisma's target schema (the `schema` URL param,
-        falling back to the connection's current_schema()), i.e. the operator
+        falling back to Prisma's default target, public), i.e. the operator
         ran db_scripts/partition_spend_logs.sql. Returns False when psycopg is
         unavailable or the database cannot be reached, preserving the
         pre-existing behavior in those cases."""
@@ -525,8 +525,11 @@ class ProxyExtrasDBManager:
                     "JOIN pg_class c ON c.oid = pt.partrelid "
                     "JOIN pg_namespace n ON n.oid = c.relnamespace "
                     "WHERE c.relname = 'LiteLLM_SpendLogs' "
-                    "  AND n.nspname = COALESCE(%s, current_schema())",
-                    (ProxyExtrasDBManager._prisma_schema_param(database_url),),
+                    "  AND n.nspname = %s",
+                    (
+                        ProxyExtrasDBManager._prisma_schema_param(database_url)
+                        or "public",
+                    ),
                 ).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return False
