@@ -38,11 +38,6 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     Reads the per-request cost from ``search_context_cost_per_query`` in
     ``model_info`` when available, falling back to $0.035 for models not
     yet updated in the pricing JSON.
-
-    The request count comes from ``prompt_tokens_details.web_search_requests``
-    (the native Gemini field), falling back to ``server_tool_use.web_search_requests``
-    for usage reconstructed from an Anthropic-format response (the /v1/messages
-    adapter surface).
     """
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests
     from litellm.types.utils import PromptTokensDetailsWrapper
@@ -65,7 +60,6 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     requests_from_server_tool_use: Final = get_web_search_requests(getattr(usage, "server_tool_use", None))
     number_of_web_search_requests: Final = requests_from_prompt_details or requests_from_server_tool_use or 0
 
-    # per_prompt billing: clamp to 1 (flat fee per grounded API call)
     billing_mode: Final = model_info.get("web_search_billing_unit") or "per_prompt"
     billable_requests: Final = (
         1 if (number_of_web_search_requests > 0 and billing_mode == "per_prompt") else number_of_web_search_requests
