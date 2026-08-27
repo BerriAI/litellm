@@ -105,6 +105,20 @@ class ManagementClient:
     def llm_only_key(self) -> str:
         return self.proxy.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
 
+    def generate_key(self, body: KeyGenerateBody, *, caller_key: str | None = None) -> Result[KeyGenerateResponse]:
+        """POST /key/generate. `caller_key` is who is creating the key: the master
+        key by default, or a virtual key (an admin filling in Create New Key on the
+        dashboard creates it under the session key their sign-in minted). Returns
+        the outcome rather than unwrapping it, so a caller can poll a route that is
+        only transiently refusing."""
+        headers = self.proxy.transport.master if caller_key is None else self.proxy.transport.bearer(caller_key)
+        return self.proxy.transport.post(
+            "/key/generate",
+            headers=headers,
+            json=body,
+            response_type=KeyGenerateResponse,
+        )
+
     def update_key(self, body: KeyUpdateBody, *, caller_key: str | None = None) -> Result[NoBody]:
         """POST /key/update. `caller_key` is who is editing: the master key by
         default, or a virtual key (the dashboard edits under the session key its
