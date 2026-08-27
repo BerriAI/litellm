@@ -20,6 +20,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
     validate_no_callback_env_reference,
 )
 from litellm.types.integrations.compression_interception import (
@@ -2027,6 +2028,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
+            if key == "langfuse_environment":
+                validate_langfuse_environment_value(callback_vars[key])
         return values
 
 
@@ -2505,6 +2508,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "When true, deployments with model_info.disable_background_health_check "
             "are skipped for on-demand GET /health as well as the background health loop."
+        ),
+    )
+    model_list_healthy_only: bool | None = Field(
+        None,
+        description=(
+            "When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing "
+            "deployments are all unhealthy, for every caller, without needing `healthy_only=true` "
+            "per request. Requires `background_health_checks: true`, and keeps deployment health "
+            "state cached without turning on `enable_health_check_routing`, so routing is "
+            "unaffected. With no health state nothing is hidden. Hiding is presentation-only, a "
+            "hidden model can still be called."
         ),
     )
     alerting: list | None = Field(

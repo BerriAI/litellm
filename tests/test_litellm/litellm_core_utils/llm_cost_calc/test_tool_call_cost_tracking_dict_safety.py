@@ -8,10 +8,9 @@ See https://github.com/BerriAI/litellm/issues/26153.
 
 import pytest
 
-
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
-    _get_web_search_requests,
+    get_web_search_requests,
 )
 from litellm.types.utils import ModelResponse, ServerToolUse, Usage
 
@@ -28,25 +27,25 @@ class _UsageWithDictServerToolUse:
 
 
 def test_get_web_search_requests_handles_none():
-    assert _get_web_search_requests(None) is None
+    assert get_web_search_requests(None) is None
 
 
 def test_get_web_search_requests_handles_dict():
-    assert _get_web_search_requests({"web_search_requests": 5}) == 5
+    assert get_web_search_requests({"web_search_requests": 5}) == 5
 
 
 def test_get_web_search_requests_handles_dict_missing_key():
-    assert _get_web_search_requests({}) is None
+    assert get_web_search_requests({}) is None
 
 
 def test_get_web_search_requests_handles_pydantic():
     stu = ServerToolUse(web_search_requests=7)
-    assert _get_web_search_requests(stu) == 7
+    assert get_web_search_requests(stu) == 7
 
 
 def test_get_web_search_requests_handles_pydantic_with_none_value():
     stu = ServerToolUse()
-    assert _get_web_search_requests(stu) is None
+    assert get_web_search_requests(stu) is None
 
 
 def test_response_object_includes_web_search_call_with_dict_server_tool_use():

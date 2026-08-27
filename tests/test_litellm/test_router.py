@@ -8765,11 +8765,14 @@ def test_get_router_model_info_keeps_explicit_pricing_overrides():
     assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08
 
 
-class TestAutoRoutedRequestMarker:
-    """The proxy exposes the routed model group in the response body only when an
-    auto-routing strategy actually picked it. The marker is what separates that from
-    ordinary model-group routing, so it must clear on any re-entry (fallbacks reuse the
-    same request_kwargs) that routes plainly."""
+class TestModelGroupAliasReachesPreRoutingStrategies:
+    """A `model_group_alias` whose target is a strategy router must dispatch exactly like the
+    router's own model_name. The four strategy registries are keyed by the marker deployment's
+    model_name, so the alias has to be resolved before the pre-routing hook looks anything up,
+    and a group that resolves only to markers is not callable at all (LIT-4664)."""
+
+    MARKER_TIMEOUT = 42.0
+    REGISTRY_NAMES = ("auto_routers", "complexity_routers", "adaptive_routers", "quality_routers")
 
     class _RewriteStrategy:
         async def async_pre_routing_hook(
@@ -8779,80 +8782,97 @@ class TestAutoRoutedRequestMarker:
 
             return PreRoutingHookResponse(model="gemini-flash", messages=messages)
 
-    class _AbstainStrategy:
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            return None
-
     @classmethod
-    def _router(cls, strategy) -> "litellm.Router":
+    def _router(cls, registry_name: str | None) -> "litellm.Router":
         from litellm.types.router import TaggedPreRoutingStrategy
 
+        tiers = dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), "gemini-flash")
         router = litellm.Router(
             model_list=[
-                {"model_name": "smart-route", "litellm_params": {"model": "openai/gpt-4o"}},
-                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+                {
+                    "model_name": "smart-route",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {"tiers": tiers},
+                        "complexity_router_default_model": "gemini-flash",
+                        "timeout": cls.MARKER_TIMEOUT,
+                    },
+                },
+                {
+                    "model_name": "gemini-flash",
+                    "litellm_params": {"model": "gemini/gemini-3.6-flash", "mock_response": "routed by the tier"},
+                },
             ],
+            model_group_alias={"smart-alias": "smart-route"},
         )
-        router.auto_routers = {"smart-route": [TaggedPreRoutingStrategy(tags=(), strategy=strategy)]}
+        for name in cls.REGISTRY_NAMES:
+            setattr(router, name, {})
+        if registry_name is not None:
+            setattr(
+                router,
+                registry_name,
+                {"smart-route": [TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy())]},
+            )
         return router
 
-    @pytest.mark.asyncio
-    async def test_marks_the_request_when_an_auto_routing_strategy_picked_the_group(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+    @staticmethod
+    def _messages() -> list[dict[str, str]]:
+        return [{"role": "user", "content": "What is the capital of France?"}]
 
-        router = self._router(self._RewriteStrategy())
+    @pytest.mark.parametrize("registry_name", REGISTRY_NAMES)
+    @pytest.mark.asyncio
+    async def test_alias_dispatches_to_the_strategy_registered_under_the_target(self, registry_name):
+        router = self._router(registry_name)
         request_kwargs = {"metadata": {}}
 
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+        response = await router.async_pre_routing_hook(
+            model="smart-alias", request_kwargs=request_kwargs, messages=self._messages()
+        )
 
-        assert request_kwargs["metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
-
-    @pytest.mark.asyncio
-    async def test_marks_into_litellm_metadata_when_the_request_uses_that_bucket(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        router = self._router(self._RewriteStrategy())
-        request_kwargs = {"litellm_metadata": {}}
-
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
-
-        assert request_kwargs["litellm_metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+        assert response is not None
+        assert response.model == "gemini-flash"
 
     @pytest.mark.asyncio
-    async def test_no_marker_when_the_group_has_no_auto_routing_strategy(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        router = self._router(self._RewriteStrategy())
+    async def test_alias_call_still_forwards_the_marker_own_params_to_the_routed_tier(self):
+        router = self._router("auto_routers")
         request_kwargs = {"metadata": {}}
 
-        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(
+            model="smart-alias", request_kwargs=request_kwargs, messages=self._messages()
+        )
 
-        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
-
-    @pytest.mark.asyncio
-    async def test_no_marker_when_the_strategy_declined_to_route(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        router = self._router(self._AbstainStrategy())
-        request_kwargs = {"metadata": {}}
-
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
-
-        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+        assert request_kwargs["timeout"] == self.MARKER_TIMEOUT
 
     @pytest.mark.asyncio
-    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_marker(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+    async def test_alias_deployment_selection_lands_on_the_tier_never_the_marker(self):
+        router = self._router("auto_routers")
 
-        router = self._router(self._RewriteStrategy())
-        request_kwargs = {"metadata": {}}
+        deployment = await router.async_get_available_deployment(
+            model="smart-alias", request_kwargs={"metadata": {}}, messages=self._messages()
+        )
 
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
-        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+        assert deployment["litellm_params"]["model"] == "gemini/gemini-3.6-flash"
 
-        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+    @pytest.mark.asyncio
+    async def test_alias_call_completes_and_still_bills_the_name_the_caller_sent(self):
+        router = self._router("auto_routers")
+        metadata: dict = {}
+
+        response = await router.acompletion(
+            model="smart-alias", messages=self._messages(), metadata=metadata
+        )
+
+        assert response.choices[0].message.content == "routed by the tier"
+        assert metadata["model_group"] == "smart-alias"
+        assert metadata["model_group_alias"] == "smart-alias"
+
+    def test_a_group_of_only_markers_is_not_a_callable_model(self):
+        router = self._router(None)
+
+        with pytest.raises(litellm.BadRequestError, match="strategy router marker"):
+            router.get_available_deployment(
+                model="smart-route", messages=self._messages(), request_kwargs={"metadata": {}}
+            )
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

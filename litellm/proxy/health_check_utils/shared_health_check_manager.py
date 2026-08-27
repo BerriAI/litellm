@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
@@ -11,6 +11,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class SharedHealthCheckManager:
@@ -185,6 +188,7 @@ class SharedHealthCheckManager:
         details: bool = True,
         max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
+        router: "Router | None" = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """
         Perform health check with shared state coordination.
@@ -235,6 +239,7 @@ class SharedHealthCheckManager:
                     details=details,
                     max_concurrency=max_concurrency,
                     health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
+                    router=router,
                 )
 
                 # Cache the results
@@ -254,6 +259,7 @@ class SharedHealthCheckManager:
                     details=details,
                     max_concurrency=max_concurrency,
                     health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
+                    router=router,
                 )
 
             # Lock not acquired — poll for cached results until the lock
@@ -309,6 +315,7 @@ class SharedHealthCheckManager:
                 details=details,
                 max_concurrency=max_concurrency,
                 health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
+                router=router,
             )
 
     async def is_health_check_in_progress(self) -> bool:

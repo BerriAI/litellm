@@ -220,6 +220,12 @@
         "ui_name": "Host URL",
         "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
         "required": false
+      },
+      "langfuse_environment": {
+        "type": "text",
+        "ui_name": "Tracing Environment",
+        "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
+        "required": false
       }
     },
     "description": "Langfuse v2 Logging Integration"
@@ -246,6 +252,12 @@
         "type": "text",
         "ui_name": "Host URL",
         "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
+        "required": false
+      },
+      "langfuse_environment": {
+        "type": "text",
+        "ui_name": "Tracing Environment",
+        "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
         "required": false
       }
     },

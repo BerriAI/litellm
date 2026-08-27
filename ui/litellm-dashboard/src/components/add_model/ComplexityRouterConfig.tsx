@@ -17,15 +17,14 @@ import {
   ReasoningEffort,
   TierModelParamsByTier,
   pruneTierModelParams,
-  resolveComplexityDefaultModel,
   setTierModelReasoningEffort,
-  tierOptions,
 } from "./complexity_router_tiers";
 import TierModelEffortRows from "./TierModelEffortRows";
 import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import { type TierRow, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
@@ -37,12 +36,12 @@ export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
 
-export interface ComplexityTiers {
+export type ComplexityTiers = {
   SIMPLE: string[];
   MEDIUM: string[];
   COMPLEX: string[];
   REASONING: string[];
-}
+};
 
 export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
 
@@ -96,7 +95,15 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "llm";
+export type ClassifierType = "heuristic" | "llm" | "heuristic_first";
+
+/**
+ * Whether this router can call classifier_llm_config.model. Mirrors the backend's
+ * ComplexityRouterConfig.uses_llm_classifier, and is the single gate for every classifier-only
+ * control and payload key, so a new chaining type cannot strip knobs the operator set.
+ */
+export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
+  classifierType === "llm" || classifierType === "heuristic_first";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -114,13 +121,14 @@ export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
 /**
  * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
  * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
- * a plain classifier_type check.
+ * a plain classifier_type check. Under heuristic_first the scorer runs first on every request and
+ * decides outright whenever it lands at or below the threshold.
  */
 export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
-  if (classifierType === "heuristic") return "decides";
+  if (classifierType === "heuristic" || classifierType === "heuristic_first") return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
 };
 
@@ -143,6 +151,8 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
+  heuristic_first_max_tier?: string;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
   /** Tier floor for coding-agent plan-mode requests. Unset means detection is off, matching the backend. */
@@ -224,9 +234,13 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
-/** Tiers the plan-mode floor may name: the backend rejects a floor whose tier has no models. */
-export const planModeEligibleTiers = (tiers: ComplexityTiers): Array<keyof ComplexityTiers> =>
-  TIER_KEYS.filter((tier) => (tiers[tier] ?? []).length > 0);
+export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
+
+/**
+ * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short
+ * circuit every request and leave the classifier unreachable, which the backend rejects.
+ */
+export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
 
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
@@ -246,12 +260,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
 }) => {
-  const planModeTiers = planModeEligibleTiers(value.tiers);
-  const planModeTierOptions = tierOptions(value.tier_labels).filter((option) =>
-    (planModeTiers as string[]).includes(option.value),
-  );
-  const derivedDefaultModel = resolveComplexityDefaultModel(value.tiers);
-  const defaultModel = resolveComplexityDefaultModel(value.tiers, value.default_model);
+  const tierRows = activeTierRows(value);
+  const planModeTierOptions = tierRows
+    .filter((row) => row.models.length > 0)
+    .map((row) => ({ value: row.id, label: effectiveTierLabel(row.id as keyof ComplexityTiers, value.tier_labels) }));
+  const derivedDefaultModel = resolveComplexityDefaultModel(value);
+  const defaultModel = resolveComplexityDefaultModel(value, value.default_model);
 
   // An absent list means the proxy does not send the field yet, so every level is offered as before.
   // An empty list is the group's own answer that its deployments share no level, and is left empty.
@@ -319,18 +333,19 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <span className="block mb-4 text-xs text-muted-foreground">
         Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn&apos;t change how
         requests are classified, and callers never see these names.
-        {value.classifier_type === "llm" &&
+        {usesLlmClassifier(value.classifier_type) &&
           " Your classifier model reads these names, so clearer ones can sharpen its choices."}
       </span>
 
       <Card>
         <CardContent>
-          {TIER_KEYS.map((tier, index) => {
+          {tierRows.map((row: TierRow, index) => {
+            const tier = row.id as keyof ComplexityTiers;
             const tierInfo = TIER_DESCRIPTIONS[tier];
             const label = effectiveTierLabel(tier, value.tier_labels);
-            const tierMissing = showValidationErrors && value.tiers[tier].length === 0;
+            const tierMissing = showValidationErrors && row.models.length === 0;
             return (
-              <div key={tier}>
+              <div key={row.id}>
                 {index > 0 && <Separator className="my-4" />}
                 <div className="mb-4">
                   <div className="flex items-center gap-2 mb-2">
@@ -339,7 +354,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                       <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                     <span className="text-xs text-muted-foreground">
-                      Tier {index + 1} of {TIER_KEYS.length} &middot; {tier}
+                      Tier {index + 1} of {tierRows.length} &middot; {row.id}
                     </span>
                   </div>
                   <span className="block mb-2 text-xs text-muted-foreground">Examples: {tierInfo.examples}</span>
@@ -364,7 +379,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   </InputGroup>
                   <MultiSelect
                     options={modelOptions}
-                    value={value.tiers[tier]}
+                    value={row.models}
                     onValueChange={(models: string[]) => handleTierChange(tier, models)}
                     placeholder={`Select model(s) for ${label.toLowerCase()} queries`}
                     emptyText="No models found"
@@ -372,12 +387,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   />
                   <TierModelEffortRows
                     tierLabel={label}
-                    models={value.tiers[tier]}
+                    models={row.models}
                     effortOptionsByModel={effortOptionsByModel}
                     paramsByModel={value.tier_model_params?.[tier]}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(tier, model, effort)}
                   />
-                  {value.tiers[tier].length > 1 && (
+                  {row.models.length > 1 && (
                     <span className="text-xs text-muted-foreground">
                       Multiple models selected — the router randomly picks among them per request (or Thompson-samples
                       within the pool when adaptive routing is on).
@@ -483,9 +498,12 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 <div className="flex items-center gap-2 mb-2">
                   <Switch
                     checked={value.plan_mode_min_tier !== undefined}
-                    disabled={planModeTiers.length === 0}
+                    disabled={planModeTierOptions.length === 0}
                     onCheckedChange={(enabled) =>
-                      onChange({ ...value, plan_mode_min_tier: enabled ? planModeTiers.at(-1) : undefined })
+                      onChange({
+                        ...value,
+                        plan_mode_min_tier: enabled ? planModeTierOptions.at(-1)?.value : undefined,
+                      })
                     }
                     aria-label="Route plan-mode requests to a minimum tier"
                   />
@@ -494,7 +512,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 <span className="block text-xs mb-3 text-muted-foreground">
                   Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier.
                   The classifier still wins when it picks higher, and the override only lasts while plan mode is active.
-                  {planModeTiers.length === 0 && " Add models to a tier to enable this."}
+                  {planModeTierOptions.length === 0 && " Add models to a tier to enable this."}
                 </span>
                 {value.plan_mode_min_tier !== undefined && (
                   <div style={{ maxWidth: 320 }}>
