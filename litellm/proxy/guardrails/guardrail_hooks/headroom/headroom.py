@@ -728,7 +728,11 @@ class HeadroomGuardrail(CustomGuardrail):
             return None
         if not has_headroom_retrieve_tool(kwargs.get("tools")):
             return None
-        return {**kwargs, "stream": False, HEADROOM_CONVERTED_STREAM_KEY: True}
+        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
+            **kwargs,
+            "stream": False,
+            HEADROOM_CONVERTED_STREAM_KEY: True,
+        }
 
     async def async_should_run_agentic_loop(
         self,
