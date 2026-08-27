@@ -1412,3 +1412,80 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
     assert _count_user_content([prompt, named]) == _count_user_content(
         [prompt, {"type": "text", "text": "report.pdf"}]
     )
+
+
+def test_token_counter_with_input_audio_content_block():
+    """
+    Regression test for issue #38459: a message containing an OpenAI
+    `input_audio` content block (audio understanding) must NOT raise from
+    token_counter. Before the fix the raise poisoned the whole message and
+    every caller that swallows counter errors failed open (router
+    context-window pre-call check, prompt-caching deployment check), while
+    /utils/token_counter returned HTTP 500.
+
+    The estimate mirrors parallel_request_limiter_v3's audio reservation:
+    decoded-base64 byte count at AUDIO_BYTES_PER_TOKEN, floored at
+    DEFAULT_AUDIO_TOKEN_ESTIMATE per block.
+    """
+    from litellm.constants import AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE
+
+    small_b64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA="
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What does the audio say?"},
+                {"type": "input_audio", "input_audio": {"data": small_b64, "format": "wav"}},
+            ],
+        }
+    ]
+
+    tokens = token_counter_new(model="gpt-4o-audio-preview", messages=messages)
+    assert tokens >= DEFAULT_AUDIO_TOKEN_ESTIMATE, f"Expected at least the per-block floor, got {tokens}"
+
+    # a large payload must scale the estimate (decoded bytes / AUDIO_BYTES_PER_TOKEN)
+    big_b64 = "A" * (AUDIO_BYTES_PER_TOKEN * 4000)  # decoded ~3000 * AUDIO_BYTES_PER_TOKEN bytes
+    tokens_big = token_counter_new(
+        model="gpt-4o-audio-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "input_audio", "input_audio": {"data": big_b64, "format": "wav"}}],
+            }
+        ],
+    )
+    assert tokens_big >= 2900, f"large audio payload must scale the estimate, got {tokens_big}"
+    assert tokens_big > tokens
+
+    # a payload-less (reference-only) block must not raise and gets the floor
+    tokens_bare = token_counter_new(
+        model="gpt-4o-audio-preview",
+        messages=[{"role": "user", "content": [{"type": "input_audio", "input_audio": {"format": "wav"}}]}],
+    )
+    assert tokens_bare >= DEFAULT_AUDIO_TOKEN_ESTIMATE
+
+
+def test_trim_messages_with_input_audio_content_block():
+    """Companion to issue #38459, same shape as the `file`-block case
+    (#28409): trim_messages swallows the token_counter error and silently
+    returns an over-budget conversation UNTRIMMED. With the fix, trimming
+    must actually happen."""
+    small_b64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA="
+    messages = [
+        {"role": "user", "content": "filler message " * 200},
+        {"role": "user", "content": "filler message " * 200},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What does the audio say?"},
+                {"type": "input_audio", "input_audio": {"data": small_b64, "format": "wav"}},
+            ],
+        },
+    ]
+
+    trimmed = litellm.utils.trim_messages(messages, model="gpt-4o-audio-preview", max_tokens=500)
+
+    assert trimmed is not None
+    assert len(trimmed) < len(messages), (
+        "trim_messages must actually trim an over-budget conversation containing an input_audio block"
+    )

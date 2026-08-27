@@ -76,6 +76,15 @@ DEFAULT_REPLICATE_POLLING_RETRIES: Final = int(os.getenv("DEFAULT_REPLICATE_POLL
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
 DEFAULT_IMAGE_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
+# Token estimate for one `input_audio` content block (audio understanding).
+# The real cost is the provider's server-side audio tokenization and cannot be
+# derived exactly client-side. With a base64 payload the estimate comes from
+# the decoded byte count at a conservative low bitrate -- 8 kHz mono PCM-16
+# (16 000 bytes/s) at 10 tokens/s -- so equal-duration higher-quality audio is
+# never under-estimated; a payload-less (reference-only) block gets the flat
+# per-block floor. parallel_request_limiter_v3 reserves with the same numbers.
+DEFAULT_AUDIO_TOKEN_ESTIMATE: Final = 300
+AUDIO_BYTES_PER_TOKEN: Final = 1600
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
