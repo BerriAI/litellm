@@ -8,6 +8,7 @@ import {
   ClassifierLLMConfig,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
+  usesLlmClassifier,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
@@ -177,7 +178,7 @@ export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability:
 // Checks the config actually being built (whether it arrived via a preset prefill or was typed by
 // hand - the two are indistinguishable once the caller has started editing), not a preset's
 // original bundled model list. Only counts classifier_llm_config/embedding_model as referenced
-// when buildComplexityRouterConfig would actually emit them (classifierType === "llm",
+// when buildComplexityRouterConfig would actually emit them (usesLlmClassifier(classifierType),
 // semanticMatchingEnabled) - otherwise a dormant selection left over from a toggle no longer in
 // effect would block submit for a model that was never going to be submitted.
 export const getReferencedModelsError = (
@@ -195,7 +196,7 @@ export const getReferencedModelsError = (
     {
       tiers: params.tiers,
       default_model: params.defaultModel,
-      classifier_llm_config: params.classifierType === "llm" ? params.classifierLlmConfig : undefined,
+      classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
       embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
     },
     availability,

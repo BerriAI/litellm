@@ -95,7 +95,15 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "llm";
+export type ClassifierType = "heuristic" | "llm" | "heuristic_first";
+
+/**
+ * Whether this router can call classifier_llm_config.model. Mirrors the backend's
+ * ComplexityRouterConfig.uses_llm_classifier, and is the single gate for every classifier-only
+ * control and payload key, so a new chaining type cannot strip knobs the operator set.
+ */
+export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
+  classifierType === "llm" || classifierType === "heuristic_first";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -113,13 +121,14 @@ export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
 /**
  * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
  * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
- * a plain classifier_type check.
+ * a plain classifier_type check. Under heuristic_first the scorer runs first on every request and
+ * decides outright whenever it lands at or below the threshold.
  */
 export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
-  if (classifierType === "heuristic") return "decides";
+  if (classifierType === "heuristic" || classifierType === "heuristic_first") return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
 };
 
@@ -142,6 +151,8 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
+  heuristic_first_max_tier?: string;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
   /** Tier floor for coding-agent plan-mode requests. Unset means detection is off, matching the backend. */
@@ -222,6 +233,14 @@ export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof Complexit
 
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
+
+export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
+
+/**
+ * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short
+ * circuit every request and leave the classifier unreachable, which the backend rejects.
+ */
+export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
 
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
@@ -314,7 +333,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       <span className="block mb-4 text-xs text-muted-foreground">
         Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn&apos;t change how
         requests are classified, and callers never see these names.
-        {value.classifier_type === "llm" &&
+        {usesLlmClassifier(value.classifier_type) &&
           " Your classifier model reads these names, so clearer ones can sharpen its choices."}
       </span>
 

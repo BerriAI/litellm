@@ -46,6 +46,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (
+    _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,
     user_api_key_auth,
 )
@@ -429,7 +430,10 @@ class MCPRequestHandler:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
             # for a delegated server, so validate it: identity / spend / rate
             # limits resolve and any stored upstream token can be forwarded.
-            validated_user_api_key_auth = await user_api_key_auth(api_key=litellm_api_key, request=request)
+            validated_user_api_key_auth = await user_api_key_auth(
+                api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
+                request=request,
+            )
         elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
             path=request_route,
             mcp_servers=mcp_servers,

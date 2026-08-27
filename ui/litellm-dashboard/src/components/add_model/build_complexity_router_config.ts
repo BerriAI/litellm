@@ -9,6 +9,7 @@ import {
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTierLabels,
+  ComplexityRouterConfigValue,
   ComplexityTiers,
   DimensionWeights,
   TIER_KEYS,
@@ -17,6 +18,7 @@ import {
   TokenThresholds,
   effectiveTierLabel,
   heuristicScoringRoleFor,
+  usesLlmClassifier,
 } from "./ComplexityRouterConfig";
 
 /**
@@ -85,6 +87,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
+  heuristicFirstMaxTier: string | undefined;
   sessionAffinity: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
@@ -117,6 +120,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  heuristic_first_max_tier?: string;
   session_affinity: boolean;
   deployment_affinity: boolean;
   custom_technical_keywords?: string[];
@@ -187,11 +191,29 @@ export const getPlanModeTierError = (planModeMinTier: string | undefined, rows: 
   return `The plan-mode minimum tier (${floor ? activeTierName(floor) : planModeMinTier}) has no models. Add one or turn the override off.`;
 };
 
-export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
+// The tier is a free string since #37413, and _validate_keyword_rule_tiers matches it EXACTLY, so a
+// rule naming a tier this router does not have is a raw 400 unless the gate catches it first.
+export const getKeywordTierRulesError = (
+  keywordTierRules: KeywordTierRule[],
+  rows: readonly TierRow[],
+): string | null => {
   const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
-  if (emptyRows.length === 0) return null;
-  return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+  if (emptyRows.length > 0)
+    return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+  const names = rows.map(activeTierName);
+  const orphaned = keywordTierRules.flatMap((rule, index) => (names.includes(rule.tier) ? [] : [index + 1]));
+  if (orphaned.length === 0) return null;
+  return `Keyword rule(s) ${orphaned.join(", ")} route to a tier this router no longer has`;
 };
+
+// The submit gate and the submit handler both read this, so a disabled button and a refused submit
+// cannot disagree about why.
+export const getClassifierModelError = (
+  config: Pick<ComplexityRouterConfigValue, "classifier_type" | "classifier_llm_config">,
+): string | null =>
+  usesLlmClassifier(config.classifier_type) && !config.classifier_llm_config?.model
+    ? "Please select a classifier model, or switch back to Heuristic"
+    : null;
 
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
@@ -217,6 +239,7 @@ export const buildComplexityRouterConfig = ({
   classifierContextBudgetChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
+  heuristicFirstMaxTier,
   sessionAffinity,
   deploymentAffinity,
   customTechnicalKeywords,
@@ -257,18 +280,21 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-    ...(classifierType === "llm" && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
+      classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+    ...(classifierType === "heuristic_first" &&
+      heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+    ...(usesLlmClassifier(classifierType) &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
       }),
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
       classifierContextBudgetChars !== undefined && {
         classifier_context_budget_chars: classifierContextBudgetChars,
       }),
-    ...(classifierType === "llm" &&
+    ...(usesLlmClassifier(classifierType) &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
