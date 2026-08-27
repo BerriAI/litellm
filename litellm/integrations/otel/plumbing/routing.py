@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 
 from litellm._logging import verbose_logger
+from litellm.constants import OTEL_SERVICE_NAME_METADATA_KEYS
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
@@ -75,7 +76,7 @@ _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 #: the proxy resolved at auth), never from client-supplied request metadata:
 #: the service name picks the dataset/service traces land in (Honeycomb routes
 #: datasets by it), so a caller must not be able to choose one.
-_SERVICE_NAME_KEYS: Final = ("otel_service_name_override", "otel_service_name")
+_SERVICE_NAME_KEYS: Final = OTEL_SERVICE_NAME_METADATA_KEYS
 
 
 def tenant_service_name(auth_metadata: Mapping[str, str] | None) -> str | None:
