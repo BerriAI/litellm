@@ -258,16 +258,7 @@ async def test_list_keys_include_created_by_keys():
 
 
 def test_build_key_filter_conditions_exclude_team_id_preserves_null():
-    """
-    Regression test for #37292: _build_key_filter_conditions must emit an OR
-    clause that retains keys where team_id IS NULL when exclude_team_id is set.
-
-    In SQL, `team_id != 'x'` silently drops rows where team_id is NULL because
-    NULL comparisons evaluate to UNKNOWN (neither TRUE nor FALSE). The fix
-    wraps the condition as OR([{team_id: None}, {team_id: {not: exclude_team_id}}])
-    so that unassigned-team keys are always included.
-    """
-    # Case 1: no user_id (matches the Prometheus metrics caller path)
+    """Regression test for #37292: exclude_team_id must not drop keys where team_id IS NULL."""
     cond = _build_key_filter_conditions(
         user_id=None,
         team_id=None,
@@ -277,13 +268,11 @@ def test_build_key_filter_conditions_exclude_team_id_preserves_null():
         exclude_team_id="litellm-dashboard",
         admin_team_ids=None,
     )
-    assert "OR" in cond, "Expected OR key when exclude_team_id is set"
-    assert {"team_id": None} in cond["OR"], (
-        "NULL team_id branch must be present so unassigned keys are not silently dropped"
-    )
+    assert "OR" in cond
+    assert {"team_id": None} in cond["OR"]
     assert {"team_id": {"not": "litellm-dashboard"}} in cond["OR"]
 
-    # Case 2: user_id provided alongside exclude_team_id
+    # user_id alongside exclude_team_id
     cond2 = _build_key_filter_conditions(
         user_id="user-abc",
         team_id=None,
@@ -299,10 +288,7 @@ def test_build_key_filter_conditions_exclude_team_id_preserves_null():
         {"team_id": {"not": "excluded-team"}},
     ]
 
-    # Case 3: exclude_team_id absent — user_id is set directly, no exclude_team_id OR injected.
-    # The top-level OR from _get_condition_to_filter_out_ui_session_tokens is always present;
-    # we assert that user_id appears as a direct key and that no exclude_team_id NOT pattern
-    # exists inside any OR list.
+    # no exclude_team_id — user_id is a direct key, no extra team OR injected
     cond3 = _build_key_filter_conditions(
         user_id="user-abc",
         team_id=None,
@@ -312,16 +298,13 @@ def test_build_key_filter_conditions_exclude_team_id_preserves_null():
         exclude_team_id=None,
         admin_team_ids=None,
     )
-    assert cond3.get("user_id") == "user-abc", (
-        "user_id should be a direct top-level key when no exclude_team_id"
-    )
-    # Verify no exclude_team_id NOT pattern was injected (the only OR should be the
-    # session token filter, which doesn't have {team_id: {not: ...}} entries)
+    assert cond3.get("user_id") == "user-abc"
     top_or = cond3.get("OR", [])
     assert not any(
         isinstance(c, dict) and c.get("team_id", {}) == {"not": "any-value"}
         for c in top_or
-    ), "No {team_id: {not: ...}} pattern should appear when exclude_team_id is absent"
+    )
+
 
 
 @pytest.mark.asyncio
