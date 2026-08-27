@@ -45,7 +45,10 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+from litellm.proxy.auth.auth_checks import (
+    _delete_cache_key_object,
+    delete_cache_team_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
@@ -506,12 +509,17 @@ async def _refresh_scim_updated_team_cache(updated_team: _CacheableTeamRow | Non
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except Exception as e:  # noqa: BLE001  # best-effort refresh: the team row is committed; a stale cache entry expires at TTL
+    except Exception as e:  # noqa: BLE001  # the row is committed; evict instead of failing the SCIM response so auth re-reads the DB
         verbose_proxy_logger.warning(
-            "Failed to refresh cached team %s after SCIM update; "
-            "a stale team object may be served until its TTL expires: %s",
+            "Failed to refresh cached team %s after SCIM update; evicting the cache entry so the next auth check reads the DB: %s",
             updated_team.team_id,
             e,
+        )
+        await delete_cache_team_object(
+            team_id=updated_team.team_id,
+            team_alias=None,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
 
 

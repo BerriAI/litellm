@@ -5891,3 +5891,35 @@ async def test_update_group_refreshes_cached_team(mocker: MockerFixture):  # tes
 
     updated_team = mock_prisma_client.db.litellm_teamtable.update.return_value
     assert refresh_mock.await_args.kwargs["team_row"] is updated_team
+
+
+@pytest.mark.asyncio
+async def test_refresh_cache_failure_evicts_stale_team_entry(mocker: MockerFixture):  # test-quality-ok: the observable is the eviction the helper must trigger; the eviction's cache delete is covered by auth_checks tests
+    """If the cache refresh fails after a committed SCIM write, the stale cached
+    team entry must be evicted so the next auth check reads the DB, and the
+    SCIM response must still succeed."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_v2 import (
+        _refresh_scim_updated_team_cache,
+    )
+
+    updated_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Engineering-Platform",
+        organization_id="org-eng",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    mocker.patch(  # test-quality-ok: forces the refresh failure path under test
+        "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_team",
+        AsyncMock(side_effect=RuntimeError("cache backend unreachable")),
+    )
+    evict_mock = mocker.patch(  # test-quality-ok: asserts the eviction the helper must trigger
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_team_object",
+        AsyncMock(),
+    )
+
+    await _refresh_scim_updated_team_cache(updated_team)
+
+    assert evict_mock.await_args.kwargs["team_id"] == "team-1"
