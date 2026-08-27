@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   Combobox,
@@ -35,6 +35,19 @@ interface PaginatedSearchSelectProps {
   "aria-describedby"?: string;
 }
 
+const typedInsertion = (previous: string, next: string): string => {
+  let start = 0;
+  while (start < previous.length && start < next.length && previous[start] === next[start]) start++;
+  let end = 0;
+  while (
+    end < previous.length - start &&
+    end < next.length - start &&
+    previous[previous.length - 1 - end] === next[next.length - 1 - end]
+  )
+    end++;
+  return next.slice(start, next.length - end);
+};
+
 export function PaginatedSearchSelect({
   options,
   value,
@@ -54,10 +67,15 @@ export function PaginatedSearchSelect({
   "aria-invalid": ariaInvalid,
   "aria-describedby": ariaDescribedBy,
 }: PaginatedSearchSelectProps) {
+  const [pickedOption, setPickedOption] = useState<SearchSelectOption | null>(null);
+
   const selected = useMemo<SearchSelectOption | null>(() => {
     if (value === undefined || value === "") return null;
-    return options.find((option) => option.value === value) ?? { label: value, value };
-  }, [options, value]);
+    return (
+      options.find((option) => option.value === value) ??
+      (pickedOption?.value === value ? pickedOption : { label: value, value })
+    );
+  }, [options, value, pickedOption]);
 
   const items = useMemo<SearchSelectOption[]>(() => {
     if (selected === null) return options;
@@ -66,14 +84,24 @@ export function PaginatedSearchSelect({
   }, [options, selected]);
 
   const pagination = { onSearchChange, onLoadMore, hasNextPage, isFetchingNextPage };
-  const { handleInputValueChange, handleScroll } = usePaginatedCombobox(pagination);
+  const { typedQuery, handleInputValueChange, handleOpenChange, handleScroll } = usePaginatedCombobox(pagination);
 
   return (
     <Combobox
       items={items}
       value={selected}
-      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
-      onInputValueChange={(next, eventDetails) => handleInputValueChange(next, eventDetails.reason)}
+      inputValue={typedQuery ?? selected?.label ?? ""}
+      onValueChange={(item: SearchSelectOption | null) => {
+        setPickedOption(item);
+        onValueChange(item?.value ?? "");
+      }}
+      onInputValueChange={(next, eventDetails) =>
+        handleInputValueChange(
+          typedQuery === null ? typedInsertion(selected?.label ?? "", next) : next,
+          eventDetails.reason,
+        )
+      }
+      onOpenChange={(nextOpen, eventDetails) => handleOpenChange(nextOpen, eventDetails.reason)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={null}
