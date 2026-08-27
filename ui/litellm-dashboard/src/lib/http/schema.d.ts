@@ -4585,6 +4585,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/scim_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Scim Settings
+         * @description Get the SCIM settings (litellm_settings.scim_settings).
+         *     Returns a structured object with values and descriptions for UI display.
+         */
+        get: operations["get_scim_settings_get_scim_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -15269,6 +15290,27 @@ export interface paths {
          *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
          */
         patch: operations["update_mcp_semantic_filter_settings_update_mcp_semantic_filter_settings_patch"];
+        trace?: never;
+    };
+    "/update/scim_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Scim Settings
+         * @description Update the SCIM settings (litellm_settings.scim_settings).
+         *     Organization mappings assign SCIM-provisioned teams to organizations by group displayName.
+         */
+        patch: operations["update_scim_settings_update_scim_settings_patch"];
         trace?: never;
     };
     "/update/sso_settings": {
@@ -33015,6 +33057,22 @@ export interface components {
             /** Schemas */
             schemas: string[];
         };
+        /**
+         * SCIMGroupOrganizationMapping
+         * @description Maps SCIM groups to a LiteLLM organization by their directory display name.
+         */
+        SCIMGroupOrganizationMapping: {
+            /**
+             * Group Display Name Pattern
+             * @description Regex fully matched against the SCIM group displayName (a plain group name works as an exact match)
+             */
+            group_display_name_pattern: string;
+            /**
+             * Organization Id
+             * @description Organization assigned to teams whose SCIM group displayName matches the pattern
+             */
+            organization_id: string;
+        };
         /** SCIMListResponse */
         SCIMListResponse: {
             /** Resources */
@@ -33120,6 +33178,32 @@ export interface components {
              *     }
              */
             sort: components["schemas"]["SCIMFeature"];
+        };
+        /**
+         * SCIMSettings
+         * @description litellm_settings.scim_settings: proxy-level SCIM provisioning behavior.
+         */
+        SCIMSettings: {
+            /**
+             * Organization Mappings
+             * @description Ordered displayName-to-organization mappings for SCIM-provisioned teams; the first matching entry wins
+             * @default []
+             */
+            organization_mappings: components["schemas"]["SCIMGroupOrganizationMapping"][];
+        };
+        /**
+         * SCIMSettingsResponse
+         * @description Response model for SCIM settings
+         */
+        SCIMSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
         };
         /** SCIMUser */
         SCIMUser: {
@@ -43826,6 +43910,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPSemanticFilterSettingsResponse"];
+                };
+            };
+        };
+    };
+    get_scim_settings_get_scim_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMSettingsResponse"];
                 };
             };
         };
@@ -55673,6 +55777,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["MCPSemanticFilterSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_scim_settings_update_scim_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SCIMSettings"];
             };
         };
         responses: {

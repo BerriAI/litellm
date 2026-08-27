@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { z } from "zod/v4";
-import { keyCreateCall } from "./networking";
+import { getScimSettings, keyCreateCall, updateScimSettings } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { CircleAlert, CirclePlus, Copy, Info, KeyRound, Link } from "lucide-react";
+import { Building2, CircleAlert, CirclePlus, Copy, Info, KeyRound, Link, Trash2 } from "lucide-react";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -27,11 +27,30 @@ const scimTokenSchema = z.object({
 
 type SCIMTokenFormValues = z.infer<typeof scimTokenSchema>;
 
+interface SCIMOrganizationMapping {
+  group_display_name_pattern: string;
+  organization_id: string;
+}
+
 const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySettings }) => {
   const form = useZodForm(scimTokenSchema, { defaultValues: { key_alias: "" } });
   const [isCreatingToken, setIsCreatingToken] = useState(false);
   const [tokenData, setTokenData] = useState<any>(null);
   const [baseUrl, setBaseUrl] = useState("<your_proxy_base_url>");
+  const [orgMappings, setOrgMappings] = useState<SCIMOrganizationMapping[]>([]);
+  const [isSavingMappings, setIsSavingMappings] = useState(false);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    getScimSettings(accessToken)
+      .then((data) => {
+        const mappings = data?.values?.organization_mappings;
+        if (Array.isArray(mappings)) {
+          setOrgMappings(mappings);
+        }
+      })
+      .catch((error) => console.error("Failed to load SCIM settings:", error));
+  }, [accessToken]);
 
   useEffect(() => {
     let url = "<your_proxy_base_url>";
@@ -47,6 +66,28 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
   }, [proxySettings]);
 
   const scimBaseUrl = `${baseUrl}/scim/v2`;
+
+  const handleSaveOrgMappings = async () => {
+    if (!accessToken) {
+      toast.fromError("You need to be logged in to update SCIM settings");
+      return;
+    }
+    const incomplete = orgMappings.some((m) => !m.group_display_name_pattern.trim() || !m.organization_id.trim());
+    if (incomplete) {
+      toast.fromError("Each mapping needs both a group name pattern and an organization ID");
+      return;
+    }
+    try {
+      setIsSavingMappings(true);
+      await updateScimSettings(accessToken, { organization_mappings: orgMappings });
+      toast.success("SCIM organization mappings saved");
+    } catch (error: any) {
+      console.error("Error saving SCIM settings:", error);
+      toast.fromError("Failed to save SCIM settings: " + parseErrorMessage(error));
+    } finally {
+      setIsSavingMappings(false);
+    }
+  };
 
   const handleCreateSCIMToken = async (values: SCIMTokenFormValues) => {
     if (!accessToken || !userID) {
@@ -182,6 +223,79 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                   </Button>
                 </Card>
               )}
+            </div>
+
+            {/* Step 3: Organization Mappings */}
+            <div>
+              <div className="flex items-center mb-2">
+                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-info/15 text-info mr-2">3</div>
+                <h3 className="text-lg font-medium flex items-center">
+                  <Building2 className="h-5 w-5 mr-2" />
+                  Organization Mappings
+                </h3>
+              </div>
+              <p className="text-muted-foreground mb-3">
+                Automatically assign SCIM-provisioned teams to organizations based on their group display name. The
+                pattern is a regex fully matched against the SCIM group displayName; a plain group name works as an
+                exact match. The first matching entry wins.
+              </p>
+              <div className="space-y-2">
+                {orgMappings.map((mapping, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <Input
+                      value={mapping.group_display_name_pattern}
+                      placeholder="Group display name pattern (e.g. Engineering-.*)"
+                      aria-label="Group display name pattern"
+                      onChange={(e) =>
+                        setOrgMappings((prev) =>
+                          prev.map((m, i) => (i === index ? { ...m, group_display_name_pattern: e.target.value } : m)),
+                        )
+                      }
+                    />
+                    <Input
+                      value={mapping.organization_id}
+                      placeholder="Organization ID"
+                      aria-label="Organization ID"
+                      onChange={(e) =>
+                        setOrgMappings((prev) =>
+                          prev.map((m, i) => (i === index ? { ...m, organization_id: e.target.value } : m)),
+                        )
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      aria-label="Remove mapping"
+                      onClick={() => setOrgMappings((prev) => prev.filter((_, i) => i !== index))}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                ))}
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="flex items-center"
+                    onClick={() =>
+                      setOrgMappings((prev) => [...prev, { group_display_name_pattern: "", organization_id: "" }])
+                    }
+                  >
+                    <CirclePlus />
+                    Add Mapping
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={isSavingMappings}
+                    aria-busy={isSavingMappings}
+                    className="flex items-center"
+                    onClick={handleSaveOrgMappings}
+                  >
+                    {isSavingMappings ? <UiLoadingSpinner className="size-4" /> : null}
+                    Save Mappings
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         </CardContent>

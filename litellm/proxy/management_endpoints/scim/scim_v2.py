@@ -59,6 +59,7 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
+from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -412,6 +413,57 @@ async def _get_scim_admin_group() -> str | None:
     except Exception as e:
         verbose_proxy_logger.warning("Error reading scim_admin_group setting, defaulting to None: %s", e)
         return None
+
+
+async def _get_scim_settings() -> SCIMSettings:
+    """
+    Get the scim_settings from litellm_settings.
+
+    An invalid or missing block resolves to empty settings so a config typo
+    degrades to the pre-feature behavior instead of failing every group write.
+    """
+    try:
+        from litellm.proxy.proxy_server import proxy_config
+
+        config: Final = await proxy_config.get_config()
+        litellm_settings: Final = config.get("litellm_settings", {}) or {}
+        raw_settings: Final = litellm_settings.get("scim_settings")
+        if not raw_settings:
+            return SCIMSettings()
+        return SCIMSettings.model_validate(raw_settings)
+    except ValidationError as e:
+        verbose_proxy_logger.warning("Invalid litellm_settings.scim_settings, ignoring: %s", e)
+        return SCIMSettings()
+    except Exception as e:  # noqa: BLE001  # a config read failure degrades to no mappings instead of failing every group write
+        verbose_proxy_logger.warning("Error reading scim_settings, defaulting to empty: %s", e)
+        return SCIMSettings()
+
+
+def _resolve_scim_group_organization_id(display_name: str, settings: SCIMSettings) -> str | None:
+    """First organization mapping whose pattern fully matches the group displayName, or None."""
+    return next(
+        (
+            mapping.organization_id
+            for mapping in settings.organization_mappings
+            if re.fullmatch(mapping.group_display_name_pattern, display_name)
+        ),
+        None,
+    )
+
+
+async def _validate_mapped_organization_exists(prisma_client: PrismaClient, organization_id: str) -> None:
+    """An unknown mapped organization is an admin config error; name it instead of writing a dangling id."""
+    organization_exists: Final = await OrganizationRepository(prisma_client).exists(
+        organization_id, id_field="organization_id"
+    )
+    if not organization_exists:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Organization not found for organization_id={organization_id}. "
+                "Create the organization or fix litellm_settings.scim_settings.organization_mappings."
+            },
+        )
 
 
 def _resolve_scim_user_role(
@@ -2410,6 +2462,10 @@ async def create_group(
         member_result: Final = await _extract_group_member_ids(group)
         members_with_roles = [Member(user_id=member_id, role="user") for member_id in member_result.all_member_ids]
 
+        mapped_organization_id: Final = _resolve_scim_group_organization_id(
+            group.displayName, await _get_scim_settings()
+        )
+
         # Create team in database
         created_team: Final = await new_team(
             data=NewTeamRequest(
@@ -2417,6 +2473,7 @@ async def create_group(
                 team_alias=group.displayName,
                 members_with_roles=members_with_roles,
                 metadata={SCIM_MANAGED_TEAM_METADATA_KEY: True},
+                organization_id=mapped_organization_id,
             ),
             http_request=Request(scope={"type": "http", "path": "/scim/v2/Groups"}),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
@@ -2465,9 +2522,19 @@ async def update_group(
             SCIM_MANAGED_TEAM_METADATA_KEY: True,
         }
 
+        mapped_organization_id: Final = _resolve_scim_group_organization_id(
+            group.displayName, await _get_scim_settings()
+        )
+        organization_changed: Final = (
+            mapped_organization_id is not None and mapped_organization_id != existing_team.organization_id
+        )
+        if organization_changed and mapped_organization_id is not None:
+            await _validate_mapped_organization_exists(prisma_client, mapped_organization_id)
+
         update_data: Final = {
             "team_alias": group.displayName,
             "metadata": safe_dumps(updated_metadata),
+            **({"organization_id": mapped_organization_id} if organization_changed else {}),
         }
 
         # Update team in database
@@ -2732,6 +2799,18 @@ async def patch_group(
         snapshot_members: Final = set(await _get_team_member_user_ids_from_team(existing_team))
         intended_add: Final = final_members - snapshot_members
         intended_remove: Final = snapshot_members - final_members
+
+        effective_alias: Final = update_data.get("team_alias", existing_team.team_alias)
+        if isinstance(effective_alias, str):
+            patch_mapped_organization_id: Final = _resolve_scim_group_organization_id(
+                effective_alias, await _get_scim_settings()
+            )
+            if (
+                patch_mapped_organization_id is not None
+                and patch_mapped_organization_id != existing_team.organization_id
+            ):
+                await _validate_mapped_organization_exists(prisma_client, patch_mapped_organization_id)
+                update_data["organization_id"] = patch_mapped_organization_id
 
         # Apply the metadata/displayName updates to the database
         updated_team = await _apply_group_patch_updates(group_id, update_data, prisma_client)

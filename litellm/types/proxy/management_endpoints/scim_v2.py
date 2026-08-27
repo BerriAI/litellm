@@ -1,3 +1,4 @@
+import re
 from typing import Any, Final, Literal, Optional, Union
 
 from fastapi import HTTPException
@@ -29,6 +30,35 @@ class LiteLLM_UserScimMetadata(BaseModel):
 
     givenName: str | None = None
     familyName: str | None = None
+
+
+class SCIMGroupOrganizationMapping(BaseModel):
+    """Maps SCIM groups to a LiteLLM organization by their directory display name."""
+
+    group_display_name_pattern: str = Field(
+        description="Regex fully matched against the SCIM group displayName (a plain group name works as an exact match)",
+    )
+    organization_id: str = Field(
+        description="Organization assigned to teams whose SCIM group displayName matches the pattern",
+    )
+
+    @field_validator("group_display_name_pattern")
+    @classmethod
+    def _validate_pattern_compiles(cls, v: str) -> str:
+        try:
+            re.compile(v)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern '{v}': {e}") from e
+        return v
+
+
+class SCIMSettings(BaseModel):
+    """litellm_settings.scim_settings: proxy-level SCIM provisioning behavior."""
+
+    organization_mappings: tuple[SCIMGroupOrganizationMapping, ...] = Field(
+        default=(),
+        description="Ordered displayName-to-organization mappings for SCIM-provisioned teams; the first matching entry wins",
+    )
 
 
 # SCIM Resource Models

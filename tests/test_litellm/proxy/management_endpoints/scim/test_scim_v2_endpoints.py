@@ -49,10 +49,12 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_MANAGED_TEAM_METADATA_KEY,
     SCIM_TEAM_DATA_METADATA_KEY,
     SCIMGroup,
+    SCIMGroupOrganizationMapping,
     SCIMMember,
     SCIMPatchOp,
     SCIMPatchOperation,
     SCIMServiceProviderConfig,
+    SCIMSettings,
     SCIMUser,
     SCIMUserEmail,
     SCIMUserGroup,
@@ -5556,3 +5558,258 @@ async def test_patch_group_404s_when_team_deleted_mid_request(mocker):
 
     assert exc_info.value.code == "404"
     assert f"Group not found with ID: {group_id}" in exc_info.value.message
+
+
+def _org_mapping_settings() -> SCIMSettings:
+    return SCIMSettings(
+        organization_mappings=[
+            SCIMGroupOrganizationMapping(group_display_name_pattern="Engineering-.*", organization_id="org-eng"),
+            SCIMGroupOrganizationMapping(group_display_name_pattern=".*", organization_id="org-catchall"),
+        ]
+    )
+
+
+def _mock_group_prisma_client(mocker: MockerFixture, existing_team=None):
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=existing_team)
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_create_group_assigns_first_matching_organization_mapping(mocker: MockerFixture):  # test-quality-ok: asserts the NewTeamRequest payload new_team receives, the composed artifact
+    """POST /Groups with a matching scim_settings organization mapping must create
+    the team with the first matching organization_id."""
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id="team-eng-1",
+        displayName="Engineering-Platform",
+        members=[],
+    )
+
+    _mock_group_prisma_client(mocker)
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_settings",
+        AsyncMock(return_value=_org_mapping_settings()),
+    )
+    new_team_mock = mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=mocker.MagicMock()),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group),
+    )
+
+    await create_group(group=scim_group)
+
+    assert new_team_mock.call_args.kwargs["data"].organization_id == "org-eng"
+
+
+@pytest.mark.asyncio
+async def test_create_group_without_matching_mapping_leaves_organization_unset(mocker: MockerFixture):  # test-quality-ok: asserts the NewTeamRequest payload new_team receives, the composed artifact
+    """POST /Groups with no matching organization mapping must not set an organization."""
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id="team-sales-1",
+        displayName="Sales",
+        members=[],
+    )
+
+    _mock_group_prisma_client(mocker)
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_settings",
+        AsyncMock(
+            return_value=SCIMSettings(
+                organization_mappings=[
+                    SCIMGroupOrganizationMapping(
+                        group_display_name_pattern="Engineering-.*", organization_id="org-eng"
+                    )
+                ]
+            )
+        ),
+    )
+    new_team_mock = mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=mocker.MagicMock()),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group),
+    )
+
+    await create_group(group=scim_group)
+
+    assert new_team_mock.call_args.kwargs["data"].organization_id is None
+
+
+@pytest.mark.asyncio
+async def test_update_group_rename_assigns_mapped_organization(mocker: MockerFixture):
+    """A PUT rename into a mapped display name must move the team into the mapped
+    organization after validating the organization exists."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "team-1"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Sales",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Engineering-Platform",
+        members=[SCIMMember(value="user1")],
+    )
+
+    mock_prisma_client = _mock_group_prisma_client(mocker, existing_team=existing_team)
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_settings",
+        AsyncMock(return_value=_org_mapping_settings()),
+    )
+    validate_mock = mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._validate_mapped_organization_exists",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group_update),
+    )
+
+    await update_group(group_id=group_id, group=scim_group_update)
+
+    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng")
+    update_call_data = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert update_call_data["organization_id"] == "org-eng"
+
+
+@pytest.mark.asyncio
+async def test_update_group_mapped_to_unknown_organization_returns_400(mocker: MockerFixture):
+    """A mapping to a nonexistent organization must fail with an actionable 400
+    instead of writing a dangling organization id."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member, ProxyException
+    from litellm.repositories.organization_repository import OrganizationRepository
+
+    group_id = "team-1"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Sales",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Engineering-Platform",
+        members=[SCIMMember(value="user1")],
+    )
+
+    mock_prisma_client = _mock_group_prisma_client(mocker, existing_team=existing_team)
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_settings",
+        AsyncMock(return_value=_org_mapping_settings()),
+    )
+    exists_mock = AsyncMock(return_value=False)
+    mocker.patch.object(OrganizationRepository, "exists", exists_mock)  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_group(group_id=group_id, group=scim_group_update)
+
+    assert exc_info.value.code == "400"
+    assert "org-eng" in exc_info.value.message
+    mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_patch_group_rename_assigns_mapped_organization(mocker: MockerFixture):
+    """A PATCH displayName op into a mapped name must move the team into the
+    mapped organization, mirroring the PUT path."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "team-1"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Sales",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="replace", path="displayName", value="Engineering-Platform")],
+    )
+
+    mock_prisma_client = _mock_group_prisma_client(mocker, existing_team=existing_team)
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_settings",
+        AsyncMock(return_value=_org_mapping_settings()),
+    )
+    validate_mock = mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._validate_mapped_organization_exists",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=SCIMGroup(schemas=[], id=group_id, displayName="Engineering-Platform")),
+    )
+
+    await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    validate_mock.assert_awaited_once_with(mock_prisma_client, "org-eng")
+    update_call_data = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert update_call_data["organization_id"] == "org-eng"
+
+
+def test_scim_settings_rejects_invalid_regex_pattern():
+    with pytest.raises(ValueError, match="Invalid regex pattern"):
+        SCIMGroupOrganizationMapping(group_display_name_pattern="Engineering-[", organization_id="org-eng")

@@ -5495,6 +5495,26 @@ export const updateDefaultTeamSettings = async (accessToken: string, settings: R
   }
 };
 
+export const getScimSettings = async (accessToken: string) => {
+  try {
+    const data = await apiClient.get(`/get/scim_settings`, { accessToken });
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch SCIM settings:", error);
+    throw error;
+  }
+};
+
+export const updateScimSettings = async (accessToken: string, settings: Record<string, any>) => {
+  try {
+    const data = await apiClient.patch(`/update/scim_settings`, { accessToken, body: settings });
+    return data;
+  } catch (error) {
+    console.error("Failed to update SCIM settings:", error);
+    throw error;
+  }
+};
+
 export const getTeamPermissionsCall = async (accessToken: string, teamId: string) => {
   try {
     let url = proxyBaseUrl

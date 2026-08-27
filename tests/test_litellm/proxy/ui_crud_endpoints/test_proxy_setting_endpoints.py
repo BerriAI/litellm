@@ -2980,6 +2980,50 @@ def test_update_default_team_settings_without_organization_skips_lookup(
     assert mock_proxy_config["save_call_count"]() == 1
 
 
+def test_update_scim_settings_rejects_unknown_organization(mock_proxy_config, mock_auth, mock_organization_lookup):
+    """A SCIM organization mapping to a nonexistent org must fail at save time,
+    not later during group provisioning."""
+    mock_organization_lookup["existing_organization_ids"].add("real-org")
+
+    resp = client.patch(
+        "/update/scim_settings",
+        json={"organization_mappings": [{"group_display_name_pattern": "Eng-.*", "organization_id": "ghost-org"}]},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "ghost-org" in resp.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+
+
+def test_update_scim_settings_saves_when_organizations_exist(mock_proxy_config, mock_auth, mock_organization_lookup):
+    """Mappings to real organizations save and round-trip through the GET endpoint."""
+    mock_organization_lookup["existing_organization_ids"].add("real-org")
+
+    resp = client.patch(
+        "/update/scim_settings",
+        json={"organization_mappings": [{"group_display_name_pattern": "Eng-.*", "organization_id": "real-org"}]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["organization_mappings"][0]["organization_id"] == "real-org"
+    assert mock_proxy_config["save_call_count"]() == 1
+
+    get_resp = client.get("/get/scim_settings")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["values"]["organization_mappings"][0]["group_display_name_pattern"] == "Eng-.*"
+
+
+def test_update_scim_settings_rejects_invalid_regex_pattern(mock_proxy_config, mock_auth, mock_organization_lookup):
+    """An invalid regex must be rejected by validation before anything is saved."""
+    resp = client.patch(
+        "/update/scim_settings",
+        json={"organization_mappings": [{"group_display_name_pattern": "Eng-[", "organization_id": "real-org"}]},
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert mock_proxy_config["save_call_count"]() == 0
+
+
 def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
     """Non-admin callers must not mutate global MCP semantic filter settings."""
     from litellm.proxy._types import UserAPIKeyAuth

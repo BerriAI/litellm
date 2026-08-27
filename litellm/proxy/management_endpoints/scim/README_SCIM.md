@@ -60,6 +60,22 @@ https://your-litellm-proxy-url/scim/v2
 
 Most identity providers will require authentication. You should use a valid LiteLLM API key with administrative privileges.
 
+### Organization mappings
+
+SCIM-provisioned teams can be assigned to a LiteLLM organization based on the group's `displayName`. Configure `litellm_settings.scim_settings.organization_mappings` in the proxy config, or from the Admin UI under Settings -> SCIM:
+
+```yaml
+litellm_settings:
+  scim_settings:
+    organization_mappings:
+      - group_display_name_pattern: "Engineering-.*"
+        organization_id: org-engineering
+      - group_display_name_pattern: "Sales"
+        organization_id: org-sales
+```
+
+`group_display_name_pattern` is a regex fully matched against the group displayName, so a plain group name works as an exact match. Mappings are evaluated in order and the first match wins. Groups that match no mapping keep the current behavior (`default_team_params.organization_id` if set, otherwise no organization). Mappings also apply when a group is renamed through PUT or PATCH; a rename that matches a mapping moves the team to that organization, and a rename that matches nothing leaves the team's organization unchanged. A mapping that points at an organization that does not exist fails the group write with a 400 that names the missing organization id
+
 ## Features
 
 - Full CRUD operations for users and groups

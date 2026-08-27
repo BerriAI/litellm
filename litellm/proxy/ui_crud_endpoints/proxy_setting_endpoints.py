@@ -36,6 +36,7 @@ from litellm.repositories.table_repositories import (
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIMSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -177,6 +178,10 @@ class InternalUserSettingsResponse(SettingsResponse):
 
 class DefaultTeamSettingsResponse(SettingsResponse):
     """Response model for default team settings"""
+
+
+class SCIMSettingsResponse(SettingsResponse):
+    """Response model for SCIM settings"""
 
 
 class UIThemeSettingsResponse(SettingsResponse):
@@ -778,7 +783,7 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
 
 
 async def _update_litellm_setting(
-    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings,
+    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings | SCIMSettings,
     settings_key: str,
     success_message: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -896,6 +901,52 @@ async def update_default_team_settings(
         settings=settings,
         settings_key="default_team_params",
         success_message="Default team settings updated successfully",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
+@router.get(
+    "/get/scim_settings",
+    tags=["SCIM Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SCIMSettingsResponse,
+)
+async def get_scim_settings():
+    """
+    Get the SCIM settings (litellm_settings.scim_settings).
+    Returns a structured object with values and descriptions for UI display.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    config: Final = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="scim_settings",
+        settings_class=SCIMSettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/scim_settings",
+    tags=["SCIM Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_scim_settings(
+    settings: SCIMSettings,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+):
+    """
+    Update the SCIM settings (litellm_settings.scim_settings).
+    Organization mappings assign SCIM-provisioned teams to organizations by group displayName.
+    """
+    for mapping in settings.organization_mappings:
+        await _validate_default_organization_exists(mapping.organization_id)
+
+    return await _update_litellm_setting(
+        settings=settings,
+        settings_key="scim_settings",
+        success_message="SCIM settings updated successfully",
         user_api_key_dict=user_api_key_dict,
     )
 

@@ -1633,6 +1633,7 @@ SECRET_MANAGER_REFRESH_INTERVAL: Final = int(os.getenv("SECRET_MANAGER_REFRESH_I
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
     "default_team_params",
+    "scim_settings",
     "public_mcp_servers",
     "public_agent_groups",
     "public_model_groups",
