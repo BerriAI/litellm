@@ -71,7 +71,9 @@ def _is_internal_metadata_key(key: str) -> bool:
     return key in INTERNAL_METADATA_KEYS or key.startswith(INTERNAL_METADATA_KEY_PREFIXES)
 
 
-def _user_metadata(metadata: Mapping[str, object] | None) -> Mapping[str, object] | None:
+def _user_metadata(
+    metadata: Mapping[str, object] | None,
+) -> dict[str, object] | None:  # mutable-ok: stored as the request's metadata field, which the request types as a dict
     """Return only the caller's metadata keys, or None if nothing is left."""
     if metadata is None:
         return None
