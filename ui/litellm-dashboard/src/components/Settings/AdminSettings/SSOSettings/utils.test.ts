@@ -452,3 +452,69 @@ describe("processSSOSettingsPayload with SAML", () => {
     ).toBe("false");
   });
 });
+
+describe("processSSOSettingsPayload with masked client secrets", () => {
+  it("omits a masked client secret so the backend preserves the stored value", () => {
+    const formValues = {
+      sso_provider: "generic",
+      generic_client_id: "generic-client-id",
+      generic_client_secret: "ae7a****5fd4",
+      generic_authorization_endpoint: "https://idp.example.com/authorize",
+      proxy_base_url: "https://gateway.example.com",
+    };
+
+    const result = processSSOSettingsPayload(formValues);
+
+    expect(result.generic_client_secret).toBeUndefined();
+    expect(result.generic_client_id).toBe("generic-client-id");
+  });
+
+  it("omits masked secrets for every provider", () => {
+    const formValues = {
+      sso_provider: "google",
+      google_client_secret: "goog****cret",
+      microsoft_client_secret: "msft****cret",
+      generic_client_secret: "ae7a****5fd4",
+    };
+
+    const result = processSSOSettingsPayload(formValues);
+
+    expect(result.google_client_secret).toBeUndefined();
+    expect(result.microsoft_client_secret).toBeUndefined();
+    expect(result.generic_client_secret).toBeUndefined();
+  });
+
+  it("keeps a newly typed client secret", () => {
+    const formValues = {
+      sso_provider: "google",
+      google_client_id: "new-client-id",
+      google_client_secret: "brand-new-secret",
+    };
+
+    const result = processSSOSettingsPayload(formValues);
+
+    expect(result.google_client_secret).toBe("brand-new-secret");
+  });
+
+  it("keeps an empty client secret so an explicit clear is still sent", () => {
+    const formValues = {
+      sso_provider: "google",
+      google_client_secret: "",
+    };
+
+    const result = processSSOSettingsPayload(formValues);
+
+    expect(result.google_client_secret).toBe("");
+  });
+
+  it("does not treat a single asterisk as a mask", () => {
+    const formValues = {
+      sso_provider: "generic",
+      generic_client_secret: "foo*bar",
+    };
+
+    const result = processSSOSettingsPayload(formValues);
+
+    expect(result.generic_client_secret).toBe("foo*bar");
+  });
+});

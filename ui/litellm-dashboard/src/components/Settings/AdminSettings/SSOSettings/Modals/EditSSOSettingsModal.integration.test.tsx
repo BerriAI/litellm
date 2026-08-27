@@ -66,4 +66,44 @@ describe("EditSSOSettingsModal (real form tree)", () => {
       proxy_base_url: "https://gateway.example.com",
     });
   });
+
+  it("does not resubmit the masked placeholder when the secret is untouched", async () => {
+    seed({
+      google_client_id: "stored-client-id",
+      // GET /get/sso_settings masks secrets before responding
+      google_client_secret: "stor****cret",
+      user_email: "admin@example.com",
+      proxy_base_url: "https://gateway.example.com",
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
+
+    fireEvent.change(await screen.findByLabelText("Proxy Base URL"), {
+      target: { value: "https://other.example.com" },
+    });
+    await user.click(saveButton());
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mutateAsync.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.google_client_secret).toBeUndefined();
+    expect(payload.proxy_base_url).toBe("https://other.example.com");
+  });
+
+  it("sends the new value when the user replaces a masked secret", async () => {
+    seed({
+      google_client_id: "stored-client-id",
+      google_client_secret: "stor****cret",
+      user_email: "admin@example.com",
+      proxy_base_url: "https://gateway.example.com",
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderWithProviders(<EditSSOSettingsModal isVisible={true} onCancel={vi.fn()} onSuccess={vi.fn()} />);
+
+    const secretInput = await screen.findByLabelText("Google Client Secret");
+    fireEvent.change(secretInput, { target: { value: "rotated-secret" } });
+    await user.click(saveButton());
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0][0]).toMatchObject({ google_client_secret: "rotated-secret" });
+  });
 });

@@ -25,6 +25,7 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
     resolve_sso_config,
+    restore_unsubmitted_sso_secrets,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
@@ -1021,6 +1022,15 @@ async def update_sso_settings(
 
     # Update environment variables in config and in memory
     sso_data: Final = sso_config.model_dump()
+    # The read-back endpoint masks secrets, so a client that left a secret
+    # untouched can only echo the mask (or omit the field) here. Restore the
+    # previously stored value for those; never persist the asterisks.
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields=sso_config.model_fields_set,
+        stored_sso_data=before_sso_data,
+        env=os.environ,
+    )
     for field_name, value in sso_data.items():
         if field_name in SSO_FIELD_ENV_VARS:
             env_var_name = SSO_FIELD_ENV_VARS[field_name]

@@ -5,6 +5,7 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
     resolve_sso_config,
+    restore_unsubmitted_sso_secrets,
 )
 
 _D = (
@@ -124,3 +125,98 @@ def test_resolve_sso_config_does_not_mutate_os_environ(monkeypatch):
     resolve_sso_config({"generic_client_id": "id-from-db"}, os.environ)
     assert dict(os.environ) == before
     assert "GENERIC_CLIENT_ID" not in os.environ
+
+
+def test_restore_unsubmitted_sso_secrets_restores_masked_value_from_stored():
+    # A masked placeholder is "unchanged": the real secret must be restored.
+    sso_data = {"generic_client_secret": "ae7a****5fd4"}
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields={"generic_client_secret"},
+        stored_sso_data={"generic_client_secret": "real-secret"},
+        env={},
+    )
+    assert sso_data["generic_client_secret"] == "real-secret"
+
+
+def test_restore_unsubmitted_sso_secrets_restores_omitted_field():
+    # The UI only mounts the edited provider's fields, so another provider's
+    # secret arrives absent on a full-document save and must be kept.
+    sso_data = {"google_client_secret": None}
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields=set(),
+        stored_sso_data={"google_client_secret": "real-secret"},
+        env={},
+    )
+    assert sso_data["google_client_secret"] == "real-secret"
+
+
+def test_restore_unsubmitted_sso_secrets_falls_back_to_env():
+    sso_data = {"generic_client_secret": "geni****cret"}
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields={"generic_client_secret"},
+        stored_sso_data=None,
+        env={"GENERIC_CLIENT_SECRET": "env-secret"},
+    )
+    assert sso_data["generic_client_secret"] == "env-secret"
+
+
+def test_restore_unsubmitted_sso_secrets_leaves_nothing_to_restore():
+    sso_data = {"generic_client_secret": None}
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields=set(),
+        stored_sso_data=None,
+        env={},
+    )
+    assert sso_data["generic_client_secret"] is None
+
+
+def test_restore_unsubmitted_sso_secrets_honors_new_value():
+    sso_data = {"generic_client_secret": "brand-new-secret"}
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields={"generic_client_secret"},
+        stored_sso_data={"generic_client_secret": "old-secret"},
+        env={},
+    )
+    assert sso_data["generic_client_secret"] == "brand-new-secret"
+
+
+def test_restore_unsubmitted_sso_secrets_honors_explicit_clear():
+    # Explicit nulls and empty strings still clear; only masks/omissions restore.
+    sso_data = {"google_client_secret": None, "generic_client_secret": ""}
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields={"google_client_secret", "generic_client_secret"},
+        stored_sso_data={"google_client_secret": "real-secret", "generic_client_secret": "other-secret"},
+        env={},
+    )
+    assert sso_data["google_client_secret"] is None
+    assert sso_data["generic_client_secret"] == ""
+
+
+def test_restore_unsubmitted_sso_secrets_only_touches_secret_fields():
+    # Non-secret fields keep full-document overwrite semantics: an omitted
+    # endpoint stays a clear, since it is never masked in responses.
+    sso_data = {"generic_token_endpoint": None, "generic_client_secret": "mask****ed"}
+    restore_unsubmitted_sso_secrets(
+        sso_data=sso_data,
+        submitted_fields=set(),
+        stored_sso_data={
+            "generic_token_endpoint": "https://idp.example.com/token",
+            "generic_client_secret": "real-secret",
+        },
+        env={},
+    )
+    assert sso_data["generic_token_endpoint"] is None
+    assert sso_data["generic_client_secret"] == "real-secret"
+
+
+def test_restore_unsubmitted_sso_secrets_covers_all_secret_fields():
+    # Guard against a new secret field forgetting to mask or restore.
+    assert SSO_SECRET_FIELDS == frozenset(
+        {"google_client_secret", "microsoft_client_secret", "generic_client_secret"}
+    )

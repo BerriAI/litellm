@@ -613,6 +613,203 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
+    def test_update_sso_settings_preserves_secret_masked_as_placeholder(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """GET /get/sso_settings masks client secrets, so an admin editing only
+        unrelated fields echoes the mask back. The masked placeholder must never
+        be persisted as the secret (it would break SSO logins with
+        "invalid_client"); the previously stored value must survive."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        stored_row = MagicMock()
+        stored_row.sso_settings = json.dumps({"google_client_secret": "real_google_secret"})
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=stored_row)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        response = client.patch(
+            "/update/sso_settings",
+            json={
+                "google_client_id": "google_client_id",
+                "google_client_secret": "ae7a****5fd4",
+                "proxy_base_url": "https://newexample.com",
+                "user_email": "admin@example.com",
+            },
+        )
+
+        assert response.status_code == 200
+
+        stored = json.loads(
+            mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["create"]["sso_settings"]
+        )
+        assert stored["google_client_secret"] == "real_google_secret"
+        assert os.environ.get("GOOGLE_CLIENT_SECRET") == "real_google_secret"
+
+        os.environ.pop("GOOGLE_CLIENT_SECRET", None)
+
+    def test_update_sso_settings_masked_secret_without_stored_value_falls_back_to_env(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """A masked secret echoed back when nothing is stored in the SSO table
+        yet must preserve the process-env secret."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "env_generic_secret")
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        response = client.patch(
+            "/update/sso_settings",
+            json={
+                "generic_client_id": "generic_client_id",
+                "generic_client_secret": "geni****cret",
+                "proxy_base_url": "https://newexample.com",
+                "user_email": "admin@example.com",
+            },
+        )
+
+        assert response.status_code == 200
+
+        stored = json.loads(
+            mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["create"]["sso_settings"]
+        )
+        assert stored["generic_client_secret"] == "env_generic_secret"
+        assert os.environ.get("GENERIC_CLIENT_SECRET") == "env_generic_secret"
+
+        os.environ.pop("GENERIC_CLIENT_SECRET", None)
+
+    def test_update_sso_settings_preserves_secret_omitted_from_partial_payload(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Editing one provider must not clear another provider's secret: the UI
+        only mounts the edited provider's fields, so the omitted secret field
+        keeps its previously stored value."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        stored_row = MagicMock()
+        stored_row.sso_settings = json.dumps({"generic_client_secret": "real_generic_secret"})
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=stored_row)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        response = client.patch(
+            "/update/sso_settings",
+            json={
+                "google_client_id": "google_client_id",
+                "google_client_secret": "brand_new_google_secret",
+                "proxy_base_url": "https://newexample.com",
+                "user_email": "admin@example.com",
+            },
+        )
+
+        assert response.status_code == 200
+
+        stored = json.loads(
+            mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["create"]["sso_settings"]
+        )
+        assert stored["google_client_secret"] == "brand_new_google_secret"
+        assert stored["generic_client_secret"] == "real_generic_secret"
+
+        os.environ.pop("GOOGLE_CLIENT_SECRET", None)
+        os.environ.pop("GENERIC_CLIENT_SECRET", None)
+
+    def test_update_sso_settings_still_clears_secret_with_explicit_null(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        """Only masked placeholders and omitted fields are preserved; an
+        explicitly submitted null still clears the secret."""
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        stored_row = MagicMock()
+        stored_row.sso_settings = json.dumps({"google_client_secret": "real_google_secret"})
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=stored_row)
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        response = client.patch(
+            "/update/sso_settings",
+            json={
+                "google_client_id": "google_client_id",
+                "google_client_secret": None,
+                "proxy_base_url": "https://newexample.com",
+                "user_email": "admin@example.com",
+            },
+        )
+
+        assert response.status_code == 200
+
+        stored = json.loads(
+            mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"]["create"]["sso_settings"]
+        )
+        assert stored["google_client_secret"] is None
+        assert "GOOGLE_CLIENT_SECRET" not in os.environ
+
     def test_update_sso_settings_maps_saml_fields_to_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

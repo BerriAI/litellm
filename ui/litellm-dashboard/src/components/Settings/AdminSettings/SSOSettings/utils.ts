@@ -1,4 +1,14 @@
+import { isMaskedSecret } from "@/utils/maskedSecretUtils";
 import { SSOSettingsValues } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
+
+/**
+ * Secret fields the proxy masks in GET /get/sso_settings responses (e.g.
+ * "ae7a****5fd4"). A masked value is the placeholder for "unchanged", never a
+ * real secret: it must not be echoed back on save, or the backend would store
+ * the asterisks and break SSO logins. Omitting the field tells the backend to
+ * preserve the previously stored value.
+ */
+const SSO_SECRET_FIELD_NAMES = ["google_client_secret", "microsoft_client_secret", "generic_client_secret"];
 
 /**
  * Processes SSO settings form values and transforms them into the payload format expected by the API
@@ -21,6 +31,12 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
   const payload: any = {
     ...rest,
   };
+
+  for (const fieldName of SSO_SECRET_FIELD_NAMES) {
+    if (isMaskedSecret(payload[fieldName])) {
+      delete payload[fieldName];
+    }
+  }
 
   if (typeof payload.saml_allow_unsolicited === "boolean") {
     payload.saml_allow_unsolicited = payload.saml_allow_unsolicited ? "true" : "false";

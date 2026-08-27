@@ -7,7 +7,9 @@ the SSO field -> env-var mapping, used by both the read-back endpoint and the
 save endpoint so the two can never drift.
 """
 
+import re
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Final
 
@@ -76,6 +78,41 @@ def _parse_role_mappings(data: object) -> RoleMappings | None:
 
 def _parse_team_mappings(data: object) -> TeamMappings | None:
     return TeamMappings(**data) if isinstance(data, dict) else None
+
+
+# Two or more consecutive mask chars only appear in masker output (real config
+# values carry at most a single "*"), so this reliably identifies a redacted
+# secret echoed back by a client (e.g. "ae7a****5fd4").
+MASKED_SECRET_PATTERN: Final = re.compile(r"\*{2,}")
+
+
+def restore_unsubmitted_sso_secrets(
+    sso_data: dict[str, object],
+    submitted_fields: AbstractSet[str],
+    stored_sso_data: Mapping[str, object] | None,
+    env: Mapping[str, str],
+) -> None:
+    """Keep stored ``*_client_secret`` values that a save request could not have
+    intended to replace, in place.
+
+    The read-back endpoint masks secrets, so a client editing unrelated fields
+    can only echo the mask back (``ae7a****5fd4``) or omit the field entirely
+    from the full-document payload. Persisting either would destroy the real
+    secret and break SSO logins ("invalid_client"). For every secret field that
+    is either absent from the request or carries a masked value, restore the
+    previous stored value (process env as fallback, mirroring the read-back
+    precedence). Explicitly submitted non-masked values -- including null and
+    "" clears -- are honored untouched.
+    """
+    stored: Final = stored_sso_data or {}
+    for field_name in SSO_SECRET_FIELDS:
+        value = sso_data.get(field_name)
+        is_masked = isinstance(value, str) and MASKED_SECRET_PATTERN.search(value) is not None
+        if field_name in submitted_fields and not is_masked:
+            continue
+        previous: Final = stored.get(field_name) or env.get(SSO_FIELD_ENV_VARS[field_name])
+        if previous:
+            sso_data[field_name] = previous
 
 
 def resolve_sso_config(sso_db_settings: Mapping[str, object] | None, env: Mapping[str, str]) -> ResolvedSSOConfig:
