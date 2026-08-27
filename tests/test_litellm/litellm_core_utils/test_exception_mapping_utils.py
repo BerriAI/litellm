@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     extract_and_raise_litellm_exception,
 )
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.types.utils import LlmProviders
 
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
@@ -785,33 +786,24 @@ OPENAI_SHAPED = {
     503: (litellm.ServiceUnavailableError, 503),
 }
 
-UPSTREAM_STATUS_DISCARDED = (litellm.APIConnectionError, 500)
+PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
 
-PROVIDERS_THAT_DISCARD_THE_UPSTREAM_STATUS = ("cloudflare", "ollama", "vllm")
+STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
 
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
-    "anthropic": {403: UPSTREAM_STATUS_DISCARDED, 422: UPSTREAM_STATUS_DISCARDED},
+    "anthropic": {403: PERMISSION_DENIED},
     "azure": {500: (litellm.APIError, 500)},
     "bedrock": {
-        403: UPSTREAM_STATUS_DISCARDED,
+        403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
     },
-    "cohere": {
-        401: UPSTREAM_STATUS_DISCARDED,
-        403: UPSTREAM_STATUS_DISCARDED,
-        404: UPSTREAM_STATUS_DISCARDED,
-        422: UPSTREAM_STATUS_DISCARDED,
-        429: UPSTREAM_STATUS_DISCARDED,
-        503: UPSTREAM_STATUS_DISCARDED,
-    },
+    "cloudflare": {403: PERMISSION_DENIED},
+    "cohere": {403: PERMISSION_DENIED},
     "databricks": {
-        403: (litellm.AuthenticationError, 401),
+        403: PERMISSION_DENIED,
         422: (litellm.BadRequestError, 400),
     },
-    "gemini": {
-        403: (litellm.PermissionDeniedError, 403),
-        422: UPSTREAM_STATUS_DISCARDED,
-    },
+    "gemini": {403: PERMISSION_DENIED},
     "huggingface": {
         404: (litellm.APIError, 404),
         422: (litellm.APIError, 422),
@@ -824,6 +816,7 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         500: (litellm.APIError, 500),
         503: (litellm.APIError, 503),
     },
+    "ollama": {403: PERMISSION_DENIED},
     "openrouter": {500: (litellm.APIError, 500)},
     "replicate": {
         403: (litellm.APIError, 500),
@@ -833,17 +826,11 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         503: (litellm.APIError, 500),
     },
     "sagemaker": {
-        403: UPSTREAM_STATUS_DISCARDED,
+        403: PERMISSION_DENIED,
         500: (litellm.ServiceUnavailableError, 503),
     },
-    "vertex_ai": {
-        403: (litellm.PermissionDeniedError, 403),
-        422: UPSTREAM_STATUS_DISCARDED,
-    },
-    **{
-        provider: dict.fromkeys(UPSTREAM_STATUS_CODES, UPSTREAM_STATUS_DISCARDED)
-        for provider in PROVIDERS_THAT_DISCARD_THE_UPSTREAM_STATUS
-    },
+    "vertex_ai": {403: PERMISSION_DENIED},
+    "vllm": {403: PERMISSION_DENIED},
 }
 
 PROVIDERS_WITH_A_HANDLER = (
@@ -867,11 +854,44 @@ PROVIDERS_WITH_A_HANDLER = (
     "openrouter",
     "perplexity",
     "replicate",
+    "runwayml",
     "sagemaker",
     "together_ai",
     "vertex_ai",
     "vllm",
     "xai",
+)
+
+PROVIDER_ALIASES_WITH_A_HANDLER = (
+    "aleph_alpha",
+    "anthropic_text",
+    "azure_text",
+    "bedrock_mantle",
+    "cohere_chat",
+    "custom_openai",
+    "lemonade",
+    "litellm_proxy",
+    "ollama_chat",
+    "predibase",
+    "sagemaker_chat",
+    "text-completion-openai",
+    "vertex_ai_beta",
+    "watsonx",
+)
+
+PROVIDERS_WITHOUT_A_HANDLER = tuple(
+    sorted(
+        frozenset(provider.value for provider in LlmProviders)
+        - frozenset(PROVIDERS_WITH_A_HANDLER)
+        - frozenset(PROVIDER_ALIASES_WITH_A_HANDLER)
+        - frozenset(litellm.openai_compatible_providers)
+    )
+)
+
+MINIMAX_401_BODY = (
+    '{"type":"error","error":{"type":"authorized_error","message":"login fail: Please carry the API secret key '
+    "in the 'Authorization' field of the request header (1004)\",\"http_code\":\"401\"},"
+    '"request_id":"06ddc9ba97ee6340e38f10e09787f547"}'
 )
 
 
@@ -937,6 +957,51 @@ def test_an_already_mapped_litellm_exception_passes_through_untouched(
     assert returned is already_mapped
 
 
+@pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
+@pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
+def test_a_provider_without_a_handler_maps_by_the_upstream_status(
+    provider, status_code, quiet_exception_mapping
+):
+    expected_class, expected_status = STATUS_KEYED[status_code]
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+    assert raised.value.llm_provider == provider
+    assert raised.value.model == "test-model"
+
+
+def test_a_minimax_bad_key_is_an_authentication_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    with pytest.raises(litellm.AuthenticationError) as raised:
+        exception_type(
+            model="MiniMax-M2.5",
+            original_exception=BaseLLMException(status_code=401, message=MINIMAX_401_BODY),
+            custom_llm_provider="minimax",
+        )
+
+    assert raised.value.status_code == 401
+    assert raised.value.llm_provider == "minimax"
+    assert raised.value.message.startswith("litellm.AuthenticationError: MinimaxException - ")
+    assert "login fail" in raised.value.message
+
+
+def test_an_exception_without_a_status_is_still_a_connection_error(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model="MiniMax-M2.5",
+            original_exception=RuntimeError("socket hung up"),
+            custom_llm_provider="minimax",
+        )
+
+
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
 CONTENT_POLICY_MESSAGE = (
     '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
@@ -956,6 +1021,7 @@ PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
     "mistral",
     "openai",
     "perplexity",
+    "runwayml",
     "together_ai",
     "vertex_ai",
     "xai",
@@ -971,6 +1037,7 @@ PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK = (
     "mistral",
     "openai",
     "perplexity",
+    "runwayml",
     "together_ai",
     "xai",
 )
@@ -990,9 +1057,7 @@ class _UpstreamErrorWithMessage(_UpstreamHTTPError):
 def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
     provider, quiet_exception_mapping
 ):
-    if provider in PROVIDERS_THAT_DISCARD_THE_UPSTREAM_STATUS:
-        expected_class, expected_status = UPSTREAM_STATUS_DISCARDED
-    elif provider in PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW:
+    if provider in PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW:
         expected_class, expected_status = litellm.ContextWindowExceededError, 400
     else:
         expected_class, expected_status = litellm.BadRequestError, 400
@@ -1012,9 +1077,7 @@ def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
 def test_a_content_policy_block_reaches_the_caller_as_the_router_needs_it(
     provider, quiet_exception_mapping
 ):
-    if provider in PROVIDERS_THAT_DISCARD_THE_UPSTREAM_STATUS:
-        expected_class, expected_status = UPSTREAM_STATUS_DISCARDED
-    elif provider in PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK:
+    if provider in PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK:
         expected_class, expected_status = litellm.ContentPolicyViolationError, 400
     else:
         expected_class, expected_status = litellm.BadRequestError, 400

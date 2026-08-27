@@ -64,6 +64,7 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
+    reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -98,6 +99,7 @@ from litellm.types.llms.anthropic import (
     ContextManagementResponse,
     MessageBlockDelta,
     MessageDelta,
+    ServerToolUsage,
     StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
@@ -433,7 +435,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 content_items = list(content.get("content", []))
 
                                 # Single-item text keeps the backward-compatible string format; a single
-                                # image becomes a structured image_url part
+                                # image or document becomes a structured image_url part
                                 if len(content_items) == 1:
                                     c = content_items[0]
                                     if isinstance(c, str):
@@ -453,7 +455,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
-                                        elif c.get("type") == "image":
+                                        elif c.get("type") in ("image", "document"):
                                             image_part = self._tool_result_image_part(c.get("source"))
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
@@ -481,7 +483,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                                         text=c.get("text", ""),
                                                     )
                                                 )
-                                            elif c.get("type") == "image":
+                                            elif c.get("type") in ("image", "document"):
                                                 image_part = self._tool_result_image_part(c.get("source"))
                                                 if image_part:
                                                     combined_content_parts.append(image_part)
@@ -592,6 +594,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     assistant_message["tool_calls"] = tool_calls
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks
+                reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
                 new_messages.append(assistant_message)
 
         return new_messages
@@ -1351,9 +1356,23 @@ class LiteLLMAnthropicMessagesAdapter:
         return cls._first_positive_prompt_tokens_detail_value(usage, ("cache_creation_tokens", "cache_write_tokens"))
 
     @classmethod
+    def _get_web_search_request_count(cls, usage: Usage) -> int:
+        from litellm.litellm_core_utils.llm_cost_calc.utils import (
+            get_web_search_requests,
+        )
+
+        from_server_tool_use: Final = cls._positive_int(
+            get_web_search_requests(getattr(usage, "server_tool_use", None))
+        )
+        if from_server_tool_use > 0:
+            return from_server_tool_use
+        return cls._first_positive_prompt_tokens_detail_value(usage, ("web_search_requests",))
+
+    @classmethod
     def _translate_openai_usage_to_anthropic_usage_delta(cls, usage: Usage) -> UsageDelta:
         cache_read_input_tokens: Final = cls._get_cache_read_input_tokens(usage)
         cache_creation_input_tokens: Final = cls._get_cache_creation_input_tokens(usage)
+        web_search_requests: Final = cls._get_web_search_request_count(usage)
         input_tokens: Final = max(
             (usage.prompt_tokens or 0) - cache_read_input_tokens - cache_creation_input_tokens,
             0,
@@ -1367,6 +1386,11 @@ class LiteLLMAnthropicMessagesAdapter:
             usage_delta["cache_creation_input_tokens"] = cache_creation_input_tokens
         if cache_read_input_tokens > 0:
             usage_delta["cache_read_input_tokens"] = cache_read_input_tokens
+        if web_search_requests > 0:
+            return UsageDelta(
+                **usage_delta,
+                server_tool_use=ServerToolUsage(web_search_requests=web_search_requests),
+            )
         return usage_delta
 
     @classmethod

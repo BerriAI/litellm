@@ -1113,6 +1113,7 @@ async def health_endpoint(
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
+                router=llm_router,
                 **_hc_filter,
             )
             return _post_process(router_result)
@@ -1796,6 +1797,7 @@ async def test_model_connection(
         "audio_speech",
         "audio_transcription",
         "image_generation",
+        "image_edit",
         "video_generation",
         "batch",
         "rerank",
@@ -1888,6 +1890,8 @@ async def test_model_connection(
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
         _reject_os_environ_references(request_litellm_params)
+        if model_info:
+            _reject_os_environ_references(model_info)
         model_name: Final = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
@@ -1950,22 +1954,22 @@ async def test_model_connection(
             **request_litellm_params,
         }
 
-        ## Auth check
-        auth_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        litellm_params = _update_litellm_params_for_health_check(
+            model_info=resolved_model_info or {},
+            litellm_params=litellm_params,
+        )
+
+        ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
-                model_info=auth_model_info,
+                model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-        )
-        # Include health_check_params if provided
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
-            litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
 
