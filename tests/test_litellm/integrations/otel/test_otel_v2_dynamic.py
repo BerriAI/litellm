@@ -370,6 +370,17 @@ def test_tenant_service_name_precedence_and_blanks():
     assert tenant_service_name(None) is None
 
 
+def test_key_override_survives_team_metadata_merge():
+    from litellm.integrations.otel.plumbing.routing import tenant_service_name
+
+    # Request setup merges team metadata over key metadata (last writer wins),
+    # so a key keeps its own destination via ``otel_service_name_override``,
+    # which a team defining only ``otel_service_name`` never touches.
+    merged = {"otel_service_name_override": "key-svc"}
+    merged.update({"otel_service_name": "team-svc"})
+    assert tenant_service_name(merged) == "key-svc"
+
+
 def test_provider_cached_per_service_name():
     cache = _cache("otel")
     default = NoOpTracer()
