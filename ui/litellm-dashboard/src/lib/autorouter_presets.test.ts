@@ -544,5 +544,51 @@ describe("autorouter_presets", () => {
       const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
       expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);
     });
+
+    it("prefills the per-model litellm_params a preset carries in tier_model_configs", () => {
+      const config = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: ["o3"] },
+        tier_model_configs: {
+          REASONING: [{ model_name: "o3", litellm_params: { reasoning_effort: "high" } }],
+        },
+        classifier_type: "heuristic" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano", "o3"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { o3: { reasoning_effort: "high" } },
+      });
+    });
+
+    // The params key on the preset's own spelling while the tier entry gets rewritten to the
+    // caller's. Leaving the key alone names a model the tier no longer holds, and
+    // serializeTierModelConfigs then drops the params on submit without saying so.
+    it("rewrites a param key to the same registered spelling its tier entry was rewritten to", () => {
+      const config = {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: ["claude-sonnet-4-5"] },
+        tier_model_configs: {
+          REASONING: [{ model_name: "claude-sonnet-4-5", litellm_params: { reasoning_effort: "high" } }],
+        },
+        classifier_type: "heuristic" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { "claude-sonnet-4.5": { reasoning_effort: "high" } },
+      });
+    });
+
+    it("leaves tier_model_params undefined for a preset that carries no per-model params", () => {
+      const config = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toBeUndefined();
+    });
   });
 });

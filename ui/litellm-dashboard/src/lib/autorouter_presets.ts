@@ -12,6 +12,7 @@ import {
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
+import { TierModelParamsByTier, hydrateTierModelParams } from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import presetsRaw from "@/autorouter_presets.json";
@@ -244,6 +245,17 @@ export const buildPresetPrefill = (
 ): PresetPrefill => {
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
   const resolveTier = (models: string[]): string[] => models.map(resolve);
+  // Params key on the model name the preset spells while every tier entry is rewritten to the
+  // caller's registered spelling, so the keys have to be rewritten the same way. Otherwise
+  // serializeTierModelConfigs drops them for naming a model the tier no longer holds.
+  const resolveParamKeys = (params: TierModelParamsByTier | undefined): TierModelParamsByTier | undefined =>
+    params &&
+    Object.fromEntries(
+      Object.entries(params).map(([tier, byModel]) => [
+        tier,
+        Object.fromEntries(Object.entries(byModel).map(([model, litellmParams]) => [resolve(model), litellmParams])),
+      ]),
+    );
 
   return {
     complexityRouterConfig: {
@@ -253,6 +265,7 @@ export const buildPresetPrefill = (
         COMPLEX: resolveTier(config.tiers.COMPLEX),
         REASONING: resolveTier(config.tiers.REASONING),
       },
+      tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
       classifier_type: config.classifier_type,
       classifier_llm_config: config.classifier_llm_config && {
