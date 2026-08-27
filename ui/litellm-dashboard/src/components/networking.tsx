@@ -2002,7 +2002,6 @@ interface UiSpendLogsParams {
   user_id?: string;
   end_user?: string;
   status_filter?: string;
-  /** Filter by response cache result: "true" (cache hit) or "false" (cache miss) */
   cache_hit?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
