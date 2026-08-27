@@ -12,6 +12,7 @@ from typing import Final
 
 from pydantic import BaseModel, ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.router import Router
@@ -30,6 +31,9 @@ async def is_model_authorized_for_token(*, model: str, valid_token: UserAPIKeyAu
             llm_router=llm_router,
         )
     except ProxyException:
+        return False
+    except Exception as e:  # noqa: BLE001  # fail closed: a lookup failure must neither run the fallback nor replace the provider error
+        verbose_proxy_logger.warning("Skipping fallback to model=%s: authorization lookup failed: %s", model, e)
         return False
     return True
 
