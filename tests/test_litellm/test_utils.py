@@ -1014,6 +1014,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
+                "reasoning_effort_levels": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
+                },
                 "supports_adaptive_thinking": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
