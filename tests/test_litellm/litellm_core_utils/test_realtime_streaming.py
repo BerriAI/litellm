@@ -2957,3 +2957,65 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
         logging_obj.success_handler.assert_not_called()
         # the bare create_task path must no longer be used for success logging
         mock_create_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_provider_config_path_captures_transcription_usage():
+    """A transcription.completed event with usage from the provider transform must
+    land in the logged messages so realtime cost calculation can bill it."""
+    from typing import Final
+
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage, RealtimeResponseTypedDict
+
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = MagicMock()
+
+    usage: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 50,
+        "output_tokens": 6,
+        "total_tokens": 56,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 50},
+    }
+    transform_output: Final[RealtimeResponseTypedDict] = {
+        "response": {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "event_id": "event_1",
+            "transcript": "ahoy",
+            "item_id": "item_1",
+            "content_index": 0,
+            "usage": usage,
+        },
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    provider_config: Final = MagicMock()
+    provider_config.transform_realtime_request = MagicMock(return_value=())
+    provider_config.transform_realtime_response = MagicMock(return_value=transform_output)
+
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-3.5-transcribe-live",
+    )
+
+    await streaming._handle_provider_config_message("{}")
+
+    usage_events: Final = tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and message.get("usage") == usage
+    )
+    assert len(usage_events) == 1

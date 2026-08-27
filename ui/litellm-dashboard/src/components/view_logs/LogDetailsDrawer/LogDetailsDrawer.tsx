@@ -317,7 +317,7 @@ export function LogDetailsDrawer({
               variant="ghost"
               size="icon-sm"
               onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-20 bg-card! border! border-border! rounded-md!"
+              className="absolute top-2 left-2 z-raised bg-card! border! border-border! rounded-md!"
               aria-label="Collapse trace sidebar"
             >
               <ChevronLeft className="size-4" />
@@ -327,7 +327,7 @@ export function LogDetailsDrawer({
               variant="ghost"
               size="icon-sm"
               onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-20 bg-card! border! border-border! rounded-md!"
+              className="absolute top-2 left-2 z-raised bg-card! border! border-border! rounded-md!"
               aria-label="Expand trace sidebar"
             >
               <ChevronRight className="size-4" />

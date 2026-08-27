@@ -19,7 +19,7 @@ import asyncio
 import random
 import re
 from collections.abc import Iterator, Mapping, Sequence
-from itertools import accumulate, islice
+from itertools import accumulate, islice, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
@@ -275,6 +275,7 @@ _DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
+_MIN_QUOTED_TURN_CHARS: Final = 120
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
 
@@ -593,11 +594,40 @@ def _iter_context_turns_newest_first(
     )
 
 
+def _turns_within_budget(
+    turns: Sequence[tuple[str, str]],
+    budget_chars: int,
+) -> tuple[tuple[str, str], ...]:
+    """The newest-first turns that fit budget_chars, quoted whole wherever they fit.
+
+    Bounding the block rather than every turn in it is what lets an ordinary conversation reach the
+    classifier intact: a per-turn cap cuts a 785 character turn even when the whole block would have
+    been 353 characters, which is three orders of magnitude below anything the classifier call is
+    near. Once the budget does run out the older turns are dropped entire rather than shortened, so
+    at most one turn is ever cut and the rest read as themselves. A remainder too small to carry a
+    sentence buys less signal than the ellipses it would arrive wrapped in, so that turn is dropped.
+
+    The boundary turn is cut to leave room for the marker rather than to the remainder itself, so the
+    quoted block never exceeds budget_chars; the marker is part of what the budget buys, not an extra
+    charged on top of it.
+    """
+    spent: Final = accumulate(len(text) for _, text in turns)
+    fitting: Final = tuple(takewhile(lambda pair: pair[1] <= budget_chars, zip(turns, spent)))
+    remaining: Final = budget_chars - (fitting[-1][1] if fitting else 0)
+    whole: Final = tuple(turn for turn, _ in fitting)
+    cut_to: Final = remaining - len(_TRUNCATION_MARKER)
+    if len(whole) == len(turns) or cut_to < _MIN_QUOTED_TURN_CHARS:
+        return whole
+    boundary_role, boundary_text = turns[len(whole)]
+    return (*whole, (boundary_role, _truncate(boundary_text, cut_to)))
+
+
 def _extract_prior_turns(
     messages: Sequence[Mapping[str, object]],
     current_ask: str | None,
     window_size: int,
-    per_turn_chars: int,
+    budget_chars: int,
+    per_turn_chars: int | None,
     include_assistant: bool,
     marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
 ) -> tuple[tuple[str, str], ...]:
@@ -612,19 +642,29 @@ def _extract_prior_turns(
     window_size counts turns of every eligible role, so with assistant turns included it is the last N
     of the conversation rather than the last N asks. A turn carrying only tool calls or thinking
     blocks flattens to empty text and is skipped, so it never spends a slot.
+
+    Three bounds apply and the tightest wins: window_size caps how many turns, budget_chars caps the
+    block they form, and per_turn_chars optionally caps any single one of them before the block is
+    measured. They are separate because they answer separate questions, and only the block bound
+    tracks what the classifier call actually costs.
     """
     if window_size <= 0 or not messages:
         return ()
 
-    prior: Final = islice(
-        (
-            turn
-            for turn in _iter_context_turns_newest_first(messages, include_assistant, marker_pairs)
-            if turn[1] != current_ask
-        ),
-        window_size,
+    prior: Final = tuple(
+        islice(
+            (
+                turn
+                for turn in _iter_context_turns_newest_first(messages, include_assistant, marker_pairs)
+                if turn[1] != current_ask
+            ),
+            window_size,
+        )
     )
-    return tuple((role, _truncate(text, per_turn_chars)) for role, text in reversed(tuple(prior)))
+    clamped: Final = (
+        prior if per_turn_chars is None else tuple((role, _truncate(text, per_turn_chars)) for role, text in prior)
+    )
+    return tuple(reversed(_turns_within_budget(clamped, budget_chars)))
 
 
 def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bool:
@@ -679,6 +719,7 @@ class ClassificationOutcome(NamedTuple):
         "heuristic_scorer",
         "reasoning_override",
         "llm_classifier",
+        "heuristic_first_short_circuit",
         "classifier_plugin",
         "classifier_fallback",
         "default_model_fallback",
@@ -819,7 +860,7 @@ class ComplexityRouter(CustomLogger):
 
         # Both are pure functions of the config, so building them per classifier call would
         # re-run create_model and the schema conversion on every request for the same result.
-        llm_classifier_configured: Final = self.config.classifier_type == "llm" and (
+        llm_classifier_configured: Final = self.config.uses_llm_classifier and (
             self.config.classifier_llm_config is not None
         )
         self._classifier_system_prompt: str | None = (
@@ -1197,17 +1238,63 @@ class ComplexityRouter(CustomLogger):
         """
         Classify a prompt by complexity, using the LLM classifier when configured.
 
-        Falls back to the local heuristic scorer if classifier_type is "heuristic". If the LLM call
-        or the classifier plugin fails, times out, or produces no usable tier, the configured
-        fallback_tier wins on a custom tier set, and classifier_fallback otherwise decides between
-        the heuristic scorer and default_model. The outcome's `cause` reports which path actually ran.
+        Falls back to the local heuristic scorer if classifier_type is "heuristic". Under
+        "heuristic_first" the scorer runs first and the classifier is called only for requests it
+        could not place at or below heuristic_first_max_tier. If the LLM call or the classifier
+        plugin fails, times out, or produces no usable tier, the configured fallback_tier wins on a
+        custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
+        default_model. The outcome's `cause` reports which path actually ran.
         """
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
+        if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
+            return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
 
+    async def _classify_heuristic_first(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        """Score locally, and only pay for the classifier call when the scorer did not confidently
+        place the request at or below heuristic_first_max_tier.
+
+        Confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
+        which is below simple_medium and so lands SIMPLE by default rather than by evidence, and a
+        threshold check alone would hand that traffic to the cheapest model without ever consulting
+        the classifier. Scores also go negative when simple indicators fire, so a score threshold
+        would reject exactly the trivial prompts this path exists to serve.
+        """
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        threshold: Final = self.config.heuristic_first_max_tier
+        decided_cheaply: Final = (
+            threshold is not None
+            and bool(signals)
+            and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
+        )
+        if decided_cheaply:
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    async def _llm_classifier_outcome(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+        scored: ClassificationOutcome | None = None,
+    ) -> ClassificationOutcome:
+        """Call the LLM classifier and turn its verdict, or its failure, into an outcome.
+
+        `scored` is the heuristic outcome the caller already computed, which only "heuristic_first"
+        has. It is handed to the failure path so a classifier error does not re-run the scorer.
+        """
         try:
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
             return ClassificationOutcome(
@@ -1218,11 +1305,20 @@ class ComplexityRouter(CustomLogger):
                 classifier_cost=classifier_cost,
             )
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
-            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt)
+            return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
 
-    def _classifier_failure_outcome(self, reason: str, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+    def _classifier_failure_outcome(
+        self,
+        reason: str,
+        prompt: str,
+        system_prompt: str | None,
+        scored: ClassificationOutcome | None = None,
+    ) -> ClassificationOutcome:
         """The outcome when the LLM classifier or classifier plugin produced no usable tier:
-        fallback_tier on a custom tier set, classifier_fallback otherwise."""
+        fallback_tier on a custom tier set, classifier_fallback otherwise.
+
+        A caller that already scored the prompt passes `scored` so the heuristic arm returns that
+        verdict instead of running the same scan again on the request path."""
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
@@ -1237,6 +1333,8 @@ class ComplexityRouter(CustomLogger):
         )
         if self.config.classifier_fallback == "default_model":
             return self._default_model_fallback_outcome()
+        if scored is not None:
+            return scored
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
         return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
 
@@ -1363,6 +1461,7 @@ class ComplexityRouter(CustomLogger):
                 messages,
                 current_ask=prompt,
                 window_size=self.config.classifier_context_window_size,
+                budget_chars=self.config.classifier_context_budget_chars,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
                 include_assistant=include_assistant,
                 marker_pairs=self._reminder_markers,

@@ -1387,7 +1387,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
         )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 
@@ -2935,7 +2935,7 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)

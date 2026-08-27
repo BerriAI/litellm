@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, Type
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
 
 import litellm
@@ -1202,6 +1203,7 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=json.dumps(request_data),
                 timeout=timeout,
+                logging_obj=logging_obj,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
@@ -1846,6 +1848,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def async_search(
@@ -1944,6 +1947,7 @@ class BaseLLMHTTPHandler:
         return provider_config.transform_search_response(
             raw_response=response,
             logging_obj=logging_obj,
+            optional_params=optional_params,
         )
 
     async def _async_post_anthropic_messages_with_http_error_retry(
@@ -2264,6 +2268,10 @@ class BaseLLMHTTPHandler:
                 AgenticAnthropicStreamingIterator,
             )
 
+            held_back_tool_names: Final = self._server_fulfilled_tools_in_request(
+                logging_obj=logging_obj,
+                tools=anthropic_messages_optional_request_params.get("tools"),
+            )
             initial_response = AgenticAnthropicStreamingIterator(
                 completion_stream=completion_stream,
                 http_handler=self,
@@ -2274,6 +2282,8 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
+                hold_back=bool(held_back_tool_names),
+                server_fulfilled_tool_names=held_back_tool_names,
             )
             return AnthropicMessagesStreamingResponse(
                 completion_stream=initial_response,
@@ -5122,6 +5132,20 @@ class BaseLLMHTTPHandler:
         return False
 
     @staticmethod
+    def _server_fulfilled_tools_in_request(logging_obj: LiteLLMLoggingObj, tools: object) -> frozenset[str]:
+        """The request's tools that a registered callback fulfills server-side (e.g. ``headroom_retrieve``)."""
+        if not isinstance(tools, list) or not tools:
+            return frozenset()
+        from litellm.litellm_core_utils.prompt_templates.factory import has_tool_with_name
+
+        return frozenset(
+            name
+            for cb in _custom_logger_callbacks(logging_obj)
+            for name in getattr(cb, "server_fulfilled_tool_names", frozenset())
+            if has_tool_with_name(tools, name)
+        )
+
+    @staticmethod
     def _check_agentic_loop_safety(
         tool_calls: object,
         fingerprints: list[str],
@@ -5596,10 +5620,9 @@ class BaseLLMHTTPHandler:
                     kwargs=hook_kwargs,
                 )
             except Exception as e:
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
                     "LiteLLM.AgenticHookError: Exception in async_should_run_agentic_loop [call_id=%s model=%s]: %s",
-                    _call_id,
+                    logging_obj.litellm_call_id,
                     model,
                     str(e),
                 )
@@ -5621,10 +5644,9 @@ class BaseLLMHTTPHandler:
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
                     raise
-                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.warning(
                     "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
-                    _call_id,
+                    logging_obj.litellm_call_id,
                     model,
                     str(e),
                 )
@@ -7838,6 +7860,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
+        video_file: FileContent | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | None = None,
@@ -7849,6 +7872,7 @@ class BaseLLMHTTPHandler:
             return self.async_video_edit_handler(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 video_provider_config=video_provider_config,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -7902,9 +7926,10 @@ class BaseLLMHTTPHandler:
             prefetched_source_data = prefetch_resp.json()
 
         try:
-            url, data = video_provider_config.transform_video_edit_request(
+            url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 headers=headers,
@@ -7923,11 +7948,10 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            response: Final = sync_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
+            response: Final = (
+                sync_httpx_client.post(url=url, headers=headers, data=data, files=files, timeout=timeout)
+                if files
+                else sync_httpx_client.post(url=url, headers=headers, json=data, timeout=timeout)
             )
             response.raise_for_status()
             return video_provider_config.transform_video_edit_response(
@@ -7947,6 +7971,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params,
         logging_obj,
+        video_file: FileContent | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | None = None,
@@ -7998,9 +8023,10 @@ class BaseLLMHTTPHandler:
             prefetched_source_data = prefetch_resp.json()
 
         try:
-            url, data = video_provider_config.transform_video_edit_request(
+            url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
+                video_file=video_file,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 headers=headers,
@@ -8019,11 +8045,10 @@ class BaseLLMHTTPHandler:
                 },
             )
 
-            response: Final = await async_httpx_client.post(
-                url=url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
+            response: Final = await (
+                async_httpx_client.post(url=url, headers=headers, data=data, files=files, timeout=timeout)
+                if files
+                else async_httpx_client.post(url=url, headers=headers, json=data, timeout=timeout)
             )
             response.raise_for_status()
             return video_provider_config.transform_video_edit_response(

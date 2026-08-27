@@ -54,9 +54,9 @@ the envelope issuer so a token of one family can never validate in the other eve
 hypothetical shared signing key."""
 
 SESSION_TTL_SECONDS: Final = 3600
-"""Session ACCESS token lifetime (1h), matching the access-envelope and BYOK session bearer
-windows: a client-held credential never outlives a bounded window, and each refresh
-re-validates the live user before re-minting."""
+"""Session ACCESS token lifetime (1h), matching the BYOK session bearer window: a
+client-held credential never outlives a bounded window, and each refresh re-validates
+the live user before re-minting."""
 
 SESSION_REFRESH_TTL_SECONDS: Final = 1209600
 """Session REFRESH token lifetime (14 days), matching the refresh-envelope bound. Each
