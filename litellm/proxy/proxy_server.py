@@ -2973,9 +2973,7 @@ async def _seed_redis_spend_counter_nx(counter_key: str, base_spend: float) -> f
             value=base_spend,
             nx=True,
         )
-        cached: Final = (
-            base_spend if seeded else await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-        )
+        cached: Final = base_spend if seeded else await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
     except Exception:  # noqa: BLE001  # any Redis failure falls back to in-memory seeding
         verbose_proxy_logger.debug(
             "Unable to seed Redis spend counter %s, falling back to in-memory",
