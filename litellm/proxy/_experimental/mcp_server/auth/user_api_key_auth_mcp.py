@@ -429,10 +429,35 @@ class MCPRequestHandler:
         # Only OAuth metadata routes registered under /.well-known/ are public.
         if request_route.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
+        elif (
+            (
+                bridge_delegate_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                    path=request_route,
+                    mcp_servers=mcp_servers,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
+            is not None
+            and oauth2_headers
+            and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+        ):
+            # A DCR bridge envelope identifies the signed-in MCP user. The
+            # co-present x-litellm-api-key is needed during token exchange,
+            # but must not downgrade tool grants to the key's permissions.
+            validated_user_api_key_auth, mcp_server_auth_headers = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                server=bridge_delegate_target.server,
+                requested_name=bridge_delegate_target.requested_name,
+                authorization_value=oauth2_headers["Authorization"],
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                request=request,
+                route=request_route,
+            )
         elif has_explicit_litellm_key:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
             # for a delegated server, so validate it: identity / spend / rate
             # limits resolve and any stored upstream token can be forwarded.
+            # (Exception handled above: on a DCR-bridge target an envelope-shaped
+            # Authorization outranks the key.)
             validated_user_api_key_auth = await user_api_key_auth(
                 api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
                 request=request,
