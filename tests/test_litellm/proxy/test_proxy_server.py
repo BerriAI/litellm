@@ -11492,6 +11492,150 @@ async def test_init_prompts_in_db_serves_the_newest_row_when_environments_collid
         IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_env")
 
 
+def _prompt_db_row(prompt_id: str, litellm_params: str) -> MagicMock:
+    row = MagicMock()
+    row.model_dump.return_value = {
+        "prompt_id": prompt_id,
+        "version": 1,
+        "environment": "development",
+        "created_by": None,
+        "litellm_params": litellm_params,
+        "prompt_info": json.dumps({"prompt_type": "db"}),
+        "created_at": None,
+        "updated_at": None,
+    }
+    return row
+
+
+def _dotprompt_params(prompt_id: str) -> str:
+    return json.dumps(
+        {
+            "prompt_id": prompt_id,
+            "prompt_integration": "dotprompt",
+            "prompt_data": {"content": "Begin every reply with AHOY", "metadata": {}},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_unloads_rows_deleted_on_another_worker(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[_prompt_db_row("greeting_del", _dotprompt_params("greeting_del"))]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_del.v1") is not None
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id("greeting_del.v1") is None
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_del.v1") is None
+        assert litellm.callbacks == []
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_del")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_keeps_config_prompts_when_their_id_has_no_db_row(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    config_prompt = PromptSpec(
+        prompt_id="greeting_cfg",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="greeting_cfg",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "Begin every reply with AHOY", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="config"),
+    )
+
+    prisma_client = MagicMock()
+    try:
+        IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=config_prompt)
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
+
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_cfg") is not None
+        assert len(litellm.callbacks) == 1
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id="greeting_cfg")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_keeps_the_in_memory_copy_when_a_row_fails_to_parse(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[_prompt_db_row("greeting_broken", _dotprompt_params("greeting_broken"))]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+        loaded_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_broken.v1")
+        assert loaded_callback is not None
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[_prompt_db_row("greeting_broken", "this is not json")]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_broken.v1") is loaded_callback
+        assert litellm.callbacks == [loaded_callback]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_broken")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_keeps_a_prompt_created_while_the_sync_was_reading(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    prisma_client = MagicMock()
+    try:
+
+        async def create_prompt_behind_the_select() -> list:
+            IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
+                prompt=PromptSpec(
+                    prompt_id="greeting_race.v1",
+                    litellm_params=PromptLiteLLMParams(
+                        prompt_id="greeting_race",
+                        prompt_integration="dotprompt",
+                        prompt_data={"content": "Begin every reply with AHOY", "metadata": {}},
+                    ),
+                    prompt_info=PromptInfo(prompt_type="db"),
+                )
+            )
+            return []
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(side_effect=create_prompt_behind_the_select)
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        surviving_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_race.v1")
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id("greeting_race.v1") is not None
+        assert surviving_callback is not None
+        assert litellm.callbacks == [surviving_callback]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_race")
+
+
 class TestEmbeddingsFailureHookRequestData:
     @pytest.mark.asyncio
     async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
@@ -11533,157 +11677,6 @@ class TestEmbeddingsFailureHookRequestData:
         hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
         assert hook_request_data is captured["processor_data"]
         assert hook_request_data["litellm_logging_obj"] is logging_obj_sentinel
-
-
-class TestRouterModelNameOnStreamingChunks:
-    """
-    Streaming chunks get the body `model` restamped to the client-requested alias
-    just like non-streaming responses, so an auto-routed request had no way to
-    name the model group that served it without reading response headers. Every
-    emitted chunk now carries `router_model_name`.
-
-    These assert on the serialized SSE bytes, not on the chunk objects. The fast
-    path (`_fast_serialize_simple_model_response_stream`) hand-builds a
-    closed-set dict, so a chunk object can carry the field while the wire drops
-    it, and an object-level assertion would pass against that bug.
-    """
-
-    @staticmethod
-    def _chunk(*, with_usage=False):
-        from litellm.types.utils import ModelResponseStream
-
-        return ModelResponseStream(
-            model="smart-route",
-            choices=[{"index": 0, "delta": {"role": "assistant", "content": "hi"}}],
-            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2} if with_usage else None,
-        )
-
-    @staticmethod
-    def _request_data(*, auto_routed):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        logging_obj = MagicMock()
-        logging_obj.litellm_params = {
-            "metadata": {
-                **({AUTO_ROUTED_REQUEST_METADATA_KEY: True} if auto_routed else {}),
-                "deployment_model_name": "deep-model",
-            }
-        }
-        return {"model": "smart-route", "litellm_logging_obj": logging_obj}
-
-    async def _drive(self, *, chunks, request_data, on_yield=None):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.proxy_server import async_data_generator
-        from litellm.proxy.utils import ProxyLogging
-
-        class MockStream:
-            def __aiter__(self):
-                return self._stream()
-
-            async def _stream(self):
-                for index, chunk in enumerate(chunks):
-                    if on_yield is not None:
-                        on_yield(index)
-                    yield chunk
-
-        mock_response = MockStream()
-        mock_response.aclose = AsyncMock()
-
-        proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        proxy_logging_obj.has_streaming_callbacks.return_value = False
-        proxy_logging_obj.needs_iterator_wrap.return_value = False
-        proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
-        proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
-        proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-        proxy_logging_obj.post_call_failure_hook = AsyncMock()
-
-        with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj):
-            with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
-                return [
-                    data
-                    async for data in async_data_generator(mock_response, MagicMock(spec=UserAPIKeyAuth), request_data)
-                ]
-
-    @staticmethod
-    def _data_frames(emitted):
-        return [
-            frame.decode() if isinstance(frame, bytes) else frame
-            for frame in emitted
-            if b"[DONE]" not in (frame if isinstance(frame, bytes) else frame.encode())
-        ]
-
-    @pytest.mark.asyncio
-    async def test_fast_path_chunk_carries_router_model_name_on_the_wire(self):
-        emitted = await self._drive(chunks=[self._chunk()], request_data=self._request_data(auto_routed=True))
-
-        frames = self._data_frames(emitted)
-        assert frames
-        assert all('"router_model_name":"deep-model"' in frame for frame in frames)
-        assert all('"model":"smart-route"' in frame for frame in frames)
-
-    @pytest.mark.asyncio
-    async def test_slow_path_chunk_carries_router_model_name_on_the_wire(self):
-        emitted = await self._drive(
-            chunks=[self._chunk(with_usage=True)], request_data=self._request_data(auto_routed=True)
-        )
-
-        frames = self._data_frames(emitted)
-        assert frames
-        assert all('"router_model_name":"deep-model"' in frame for frame in frames)
-
-    @pytest.mark.asyncio
-    async def test_plain_model_group_stream_has_no_router_model_name(self):
-        emitted = await self._drive(
-            chunks=[self._chunk(), self._chunk(with_usage=True)],
-            request_data=self._request_data(auto_routed=False),
-        )
-
-        frames = self._data_frames(emitted)
-        assert frames
-        assert all("router_model_name" not in frame for frame in frames)
-
-    @pytest.mark.asyncio
-    async def test_fallback_out_of_the_routed_group_drops_the_field(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        request_data = self._request_data(auto_routed=True)
-        bucket = request_data["litellm_logging_obj"].litellm_params["metadata"]
-
-        def fall_back(index):
-            if index == 1:
-                bucket.pop(AUTO_ROUTED_REQUEST_METADATA_KEY)
-                bucket["deployment_model_name"] = "backup-model"
-
-        emitted = await self._drive(
-            chunks=[self._chunk(), self._chunk(), self._chunk()],
-            request_data=request_data,
-            on_yield=fall_back,
-        )
-
-        frames = self._data_frames(emitted)
-        assert len(frames) >= 3
-        assert '"router_model_name":"deep-model"' in frames[0]
-        assert all("router_model_name" not in frame for frame in frames[1:])
-
-    @pytest.mark.asyncio
-    async def test_fallback_to_another_auto_router_reports_the_new_tier(self):
-        request_data = self._request_data(auto_routed=True)
-        bucket = request_data["litellm_logging_obj"].litellm_params["metadata"]
-
-        def fall_back(index):
-            if index == 1:
-                bucket["deployment_model_name"] = "backup-tier"
-
-        emitted = await self._drive(
-            chunks=[self._chunk(), self._chunk(), self._chunk()],
-            request_data=request_data,
-            on_yield=fall_back,
-        )
-
-        frames = self._data_frames(emitted)
-        assert len(frames) >= 3
-        assert '"router_model_name":"deep-model"' in frames[0]
-        assert all('"router_model_name":"backup-tier"' in frame for frame in frames[1:])
 
 
 @pytest.mark.asyncio

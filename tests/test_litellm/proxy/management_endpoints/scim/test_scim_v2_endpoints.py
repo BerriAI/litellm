@@ -4416,6 +4416,69 @@ async def test_create_group_stamps_scim_provenance(mocker, scim_upsert_user_enab
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_pydantic", [False, True])
+async def test_create_group_applies_default_team_params(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    scim_upsert_user_enabled: None,
+    as_pydantic: bool,
+):
+    """SCIM-created teams must honor litellm_settings.default_team_params, including
+    models, the same way SSO auto-created teams do."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import DefaultTeamSSOParams
+
+    default_params = {
+        "models": ["no-default-models"],
+        "max_budget": 25.0,
+        "budget_duration": "30d",
+        "tpm_limit": 100,
+        "rpm_limit": 10,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "default_team_params",
+        DefaultTeamSSOParams(**default_params) if as_pydantic else default_params,
+    )
+
+    scim_group = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id="defaults-group",
+        displayName="Defaults.Apps",
+        members=[],
+    )
+
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_group
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=_member_resolution_prisma(mocker, users=set(), teams=set())),
+    )
+    new_team_mock = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_group
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_team",
+        AsyncMock(return_value=mocker.MagicMock()),
+    )
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_group
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group),
+    )
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_group
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+
+    await create_group(group=scim_group)
+
+    team_request = new_team_mock.call_args.kwargs["data"]
+    assert team_request.models == ["no-default-models"]
+    assert team_request.max_budget == 25.0
+    assert team_request.budget_duration == "30d"
+    assert team_request.tpm_limit == 100
+    assert team_request.rpm_limit == 10
+    assert team_request.team_id == "defaults-group"
+    assert team_request.team_alias == "Defaults.Apps"
+    assert team_request.metadata == {SCIM_MANAGED_TEAM_METADATA_KEY: True}
+
+
+@pytest.mark.asyncio
 async def test_update_group_stamps_scim_provenance(mocker, scim_upsert_user_enabled):
     """A PUT full sync adopts a team the identity provider now owns, and the stamp has
     to land alongside the existing metadata rather than replacing it."""

@@ -248,7 +248,6 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
-    ROUTER_MODEL_NAME_RESPONSE_FIELD,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
@@ -7269,6 +7268,7 @@ class ProxyConfig:
                 return None
 
         try:
+            prompt_ids_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
@@ -7291,6 +7291,18 @@ class ProxyConfig:
                         prompt_spec.prompt_id,
                         prompt_sync_error,
                     )
+            # An unparsable row still exists in the DB, so skip the sweep rather than unload its in-memory copy
+            every_row_parsed: Final = len(parsed_specs) == len(prompts_in_db)
+            if every_row_parsed:
+                deleted_db_prompt_ids: Final = tuple(
+                    prompt_id
+                    for prompt_id in prompt_ids_loaded_before_db_read
+                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(prompt_id)) is not None
+                    and loaded_spec.prompt_info.prompt_type == "db"
+                    and prompt_id not in newest_spec_per_id
+                )
+                for deleted_prompt_id in deleted_db_prompt_ids:
+                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id=deleted_prompt_id)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 
@@ -8044,10 +8056,6 @@ def _fast_serialize_simple_model_response_stream(
     for top_level_key in ("id", "object", "created"):
         if payload[top_level_key] is None:
             payload.pop(top_level_key)
-
-    router_model_name: Final = getattr(chunk, ROUTER_MODEL_NAME_RESPONSE_FIELD, None)
-    if router_model_name is not None:
-        payload[ROUTER_MODEL_NAME_RESPONSE_FIELD] = router_model_name
     return orjson.dumps(payload)
 
 
@@ -8345,9 +8353,6 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
-        # Fallbacks resolve on the first ``__anext__``, so the selected group is read
-        # per chunk off this object rather than snapshotted here.
-        router_logging_obj: Final = request_data.get("litellm_logging_obj")
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -8436,10 +8441,6 @@ async def async_data_generator(
                 model_mismatch_logged=model_mismatch_logged,
                 fallback_was_attempted=fallback_was_attempted,
                 fallback_model_from_metadata=fallback_model_from_metadata,
-            )
-            ProxyBaseLLMRequestProcessing.set_router_selected_model_field(
-                response_obj=chunk,
-                router_model_name=ProxyBaseLLMRequestProcessing.get_router_selected_model_name(router_logging_obj),
             )
 
             if strip_stream_usage and _is_injected_stream_usage_artifact(chunk):

@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1810
+    "limit": 1808
   },
   "reportRedeclaration": {
     "limit": 8
@@ -135,7 +135,7 @@
     "limit": 21
   },
   "reportUnusedFunction": {
-    "limit": 139
+    "limit": 138
   },
   "reportUnusedImport": {
     "limit": 544
