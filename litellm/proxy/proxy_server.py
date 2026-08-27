@@ -9253,6 +9253,7 @@ class ProxyStartupEvent:
                     prisma_client,
                     pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
                     alert=_alert_ptu_rollup_failure,
+                    router=llm_router,
                 )
 
             scheduler.add_job(

@@ -8,11 +8,12 @@ import time
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
 import litellm
@@ -180,6 +181,23 @@ class _VertexCandidateLike(Protocol):
 class _VertexChunkLike(Protocol):
     text: str
     candidates: Sequence[_VertexCandidateLike]
+
+
+class _ParsedChunkHiddenParams(BaseModel):
+    provider_specific_fields: Mapping[str, object] | None = None
+
+
+def _provider_hidden_params(chunk: object) -> Mapping[str, object] | None:
+    hidden: Final[object] = getattr(chunk, "_hidden_params", None)
+    if not isinstance(hidden, dict):
+        return None
+    try:
+        parsed: Final = _ParsedChunkHiddenParams.model_validate(hidden)
+    except ValidationError:
+        return None
+    if not parsed.provider_specific_fields:
+        return None
+    return MappingProxyType({"provider_specific_fields": dict(parsed.provider_specific_fields)})
 
 
 class CustomStreamWrapper:
@@ -801,7 +819,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def model_response_creator(self, chunk: dict | None = None, hidden_params: dict | None = None):
+    def model_response_creator(self, chunk: dict | None = None, hidden_params: Mapping[str, object] | None = None):
         _model: Final = self._cached_model_name
         _logging_obj_llm_provider: Final = self._cached_logging_llm_provider
 
@@ -1504,7 +1522,7 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk: Any):
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
-        model_response = self.model_response_creator()
+        model_response = self.model_response_creator(hidden_params=_provider_hidden_params(chunk))
         response_obj: dict[str, Any] = {}
         try:
             # return this for all models
