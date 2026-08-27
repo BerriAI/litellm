@@ -1,10 +1,5 @@
 from collections.abc import Coroutine
-from typing import (  # noqa: TID251  # Any only appears in the base overload's Coroutine[Any, Any, ...]
-    Any,
-    Final,
-    Literal,
-    overload,
-)
+from typing import Final, Literal, overload
 
 import httpx
 
@@ -101,7 +96,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(  # mutable-ok: base signature
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]  # mutable-ok: base signature
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...  # mutable-ok: base signature
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...  # mutable-ok: base signature
 
     @overload
     def _transform_messages(  # mutable-ok: base signature
@@ -110,7 +105,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(  # mutable-ok: base signature
         self, messages: list[AllMessageValues], model: str, is_async: bool = False  # mutable-ok: base signature
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:  # mutable-ok: base signature
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:  # mutable-ok: base signature
         # fmt: on
         """
         Cloudflare Workers AI requires message content to be a string, so OpenAI
