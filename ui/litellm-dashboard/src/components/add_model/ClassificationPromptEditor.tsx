@@ -42,7 +42,7 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
     <div>
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" variant="outline" onClick={openEditor}>
-          {isOverridden ? "Edit opening instructions" : "Change default prompt"}
+          Edit prompt
         </Button>
         {isOverridden && (
           <Button type="button" size="sm" variant="link" onClick={() => onChange(undefined)}>
@@ -52,8 +52,8 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
         {isOverridden
-          ? "This router opens its classifier prompt with your own instructions."
-          : "Replace the opening instructions, and write calibration examples of your own. Your tier definitions and the injection guard are always appended below them."}
+          ? "This router opens with your own instructions and calibration examples. Your tier definitions and the injection guard are still appended below them."
+          : "Write the opening instructions and your own calibration examples. Your tier definitions and the injection guard are always appended below them."}
       </p>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>

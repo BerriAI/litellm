@@ -1301,7 +1301,8 @@ describe("ComplexityRouterConfig tier editing", () => {
   it("lets an edited tier set write its own opening instructions instead of refusing a prompt outright", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByText("write calibration examples of your own", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("your own calibration examples", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit prompt" })).toBeInTheDocument();
     expect(screen.queryByText("A replacement prompt drops the tier bullets", { exact: false })).not.toBeInTheDocument();
   });
 
@@ -1315,7 +1316,7 @@ describe("ComplexityRouterConfig tier editing", () => {
     );
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("Replace the built-in complexity rubric", { exact: false })).toBeInTheDocument();
-    expect(screen.queryByText("write calibration examples of your own", { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByText("your own calibration examples", { exact: false })).not.toBeInTheDocument();
   });
 
   it("leaves built-in routers with their display-name inputs and no restriction copy", () => {
