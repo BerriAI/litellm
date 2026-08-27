@@ -5997,6 +5997,39 @@ async def test_refresh_cache_failure_evicts_stale_team_entry(mocker: MockerFixtu
 
 
 @pytest.mark.asyncio
+async def test_successful_refresh_after_rename_evicts_previous_alias(mocker: MockerFixture):  # test-quality-ok: the observable is the previous-alias eviction the helper must trigger; the eviction's cache delete is covered by auth_checks tests
+    """A successful refresh only writes the new keys, so after a rename the
+    previous alias cache key must still be evicted or alias-based auth keeps
+    serving the pre-rename organization policy until TTL expiry."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_v2 import (
+        _refresh_scim_updated_team_cache,
+    )
+
+    updated_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Engineering-Platform",
+        organization_id="org-eng",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    mocker.patch(  # test-quality-ok: pins the refresh success path under test
+        "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_team",
+        AsyncMock(),
+    )
+    evict_mock = mocker.patch(  # test-quality-ok: asserts the eviction the helper must trigger
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_team_object",
+        AsyncMock(),
+    )
+
+    await _refresh_scim_updated_team_cache(updated_team, "Sales")
+
+    evicted = [(call.kwargs["team_id"], call.kwargs["team_alias"]) for call in evict_mock.await_args_list]
+    assert evicted == [("team-1", "Sales")]
+
+
+@pytest.mark.asyncio
 async def test_org_validation_sees_final_roster_not_removed_members(mocker: MockerFixture):  # test-quality-ok: the observable is the roster snapshot the destination-org validator receives; the validator's auto-add is covered by team_endpoints tests
     """A PUT that moves a team into a mapped organization while removing a member
     must validate against the post-write roster, or the removed member would be

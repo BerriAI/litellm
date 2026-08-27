@@ -506,8 +506,9 @@ async def _refresh_scim_updated_team_cache(
 
     Best-effort: the DB write has already committed, so a cache backend failure
     must not fail the SCIM response and trigger an IdP retry of a successful write.
-    On failure both the current and previous alias keys are evicted alongside the
-    id key, so alias-based auth cannot keep serving the pre-write organization policy.
+    On failure the current keys are evicted so auth re-reads the DB, and after a
+    rename the previous alias key is always evicted, whether or not the refresh
+    succeeded, so alias-based auth cannot keep serving the pre-write organization policy.
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
@@ -531,13 +532,13 @@ async def _refresh_scim_updated_team_cache(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        if previous_team_alias is not None and previous_team_alias != updated_team.team_alias:
-            await delete_cache_team_object(
-                team_id=updated_team.team_id,
-                team_alias=previous_team_alias,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+    if previous_team_alias is not None and previous_team_alias != updated_team.team_alias:
+        await delete_cache_team_object(
+            team_id=updated_team.team_id,
+            team_alias=previous_team_alias,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
 
 def _team_with_final_roster(existing_team: LiteLLM_TeamTable, final_member_ids: Iterable[str]) -> LiteLLM_TeamTable:
