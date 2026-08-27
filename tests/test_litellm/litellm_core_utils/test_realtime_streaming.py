@@ -3019,3 +3019,95 @@ async def test_provider_config_path_captures_transcription_usage():
         and message.get("usage") == usage
     )
     assert len(usage_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_close_flushes_unbilled_transcription_usage():
+    """Trailing audio appended after the last transcript frame must still be billed:
+    on session close the provider's unbilled estimate is flushed into the logged
+    messages before log_messages runs, and never forwarded to the client."""
+    from typing import Final
+
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage
+
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+    logging_obj: Final = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    usage: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 153,
+        "output_tokens": 18,
+        "total_tokens": 171,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 153},
+    }
+    provider_config: Final = MagicMock()
+    provider_config.unbilled_usage_on_session_close = MagicMock(return_value=usage)
+
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-3.5-transcribe-live",
+    )
+    logged_snapshots: Final[list[tuple]] = []
+
+    original_log_messages: Final = streaming.log_messages
+
+    async def _snapshot_then_log():
+        logged_snapshots.append(tuple(streaming.messages))
+        await original_log_messages()
+
+    streaming.log_messages = _snapshot_then_log
+
+    await streaming.backend_to_client_send_messages()
+
+    provider_config.unbilled_usage_on_session_close.assert_called_once_with("gemini-3.5-transcribe-live")
+    flushed: Final = tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and message.get("usage") == usage
+    )
+    assert len(flushed) == 1
+    assert flushed[0] in logged_snapshots[0]
+    assert not client_ws.send_text.called
+
+
+@pytest.mark.asyncio
+async def test_session_close_flush_noop_without_unbilled_usage():
+    """Everything already billed mid-stream: the session-close flush must not append
+    a duplicate transcription event."""
+    from typing import Final
+
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+    logging_obj: Final = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config: Final = MagicMock()
+    provider_config.unbilled_usage_on_session_close = MagicMock(return_value=None)
+
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-3.5-transcribe-live",
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert not any(
+        isinstance(message, dict) and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        for message in streaming.messages
+    )

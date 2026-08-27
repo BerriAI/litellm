@@ -1191,6 +1191,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         }
         return usage
 
+    def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        return self._consume_input_transcription_usage_estimate(model)
+
     def transform_realtime_response(
         self,
         message: str | bytes,
