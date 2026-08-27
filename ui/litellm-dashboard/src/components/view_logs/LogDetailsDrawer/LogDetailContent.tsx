@@ -382,8 +382,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       : null;
 
   const responseCacheValue = String(logEntry.cache_hit ?? "").toLowerCase();
-  const responseCacheKey =
-    logEntry.cache_key && logEntry.cache_key !== "Cache OFF" ? logEntry.cache_key : undefined;
+  const responseCacheKey = logEntry.cache_key && logEntry.cache_key !== "Cache OFF" ? logEntry.cache_key : undefined;
   const isResponseCacheHit = responseCacheValue === "true";
   const showResponseCache = isResponseCacheHit || responseCacheValue === "false" || responseCacheKey != null;
   const promptCacheReadTokens = Number(metadata?.additional_usage_values?.cache_read_input_tokens) || 0;

@@ -367,11 +367,7 @@ describe("LogDetailContent", () => {
   });
 
   it("should display a cache miss and Cache Key for the request that populates the response cache", () => {
-    render(
-      <LogDetailContent
-        logEntry={createLogEntry({ cache_hit: "None", cache_key: "abc123cachekey" })}
-      />,
-    );
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "None", cache_key: "abc123cachekey" })} />);
 
     expect(screen.getByText("Response Cache")).toBeInTheDocument();
     expect(screen.getByText("Miss")).toBeInTheDocument();
