@@ -20,6 +20,7 @@ import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   type BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
+  getClassifierModelError,
   getKeywordTierRulesError,
   getSemanticConfigError,
   getPlanModeTierError,
@@ -268,7 +269,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         : null) ??
       getTierLabelsError(complexityRouterConfig.tier_labels) ??
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
-      getKeywordTierRulesError(keywordTierRules);
+      getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
+      getClassifierModelError(complexityRouterConfig);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -428,16 +430,17 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         toast.fromError("Please select at least one model for a complexity tier");
         return;
       }
-      if (classifier_type === "llm" && !classifier_llm_config?.model) {
+      const classifierError = getClassifierModelError(complexityRouterConfig);
+      if (classifierError) {
         setShowValidationErrors(true);
-        toast.fromError("Please select a classifier model, or switch back to Heuristic");
+        toast.fromError(classifierError);
         return;
       }
       // Same guards the create form applies (add_auto_router_tab.tsx). The backend rejects a
       // keyword rule with no keyword, and semantic_keyword_matching without an embedding model
       // or keyword rules (complexity_router/config.py), so without these a save fails as a raw
       // 400 instead of an inline message.
-      const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
+      const keywordRulesError = getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig));
       if (keywordRulesError) {
         setShowValidationErrors(true);
         toast.fromError(keywordRulesError);
