@@ -75,7 +75,7 @@ def test_ollama_json_mode():
 # test_ollama_json_mode()
 
 
-def test_ollama_vision_model():
+def test_ollama_vision_model(asset_base_url):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -93,7 +93,7 @@ def test_ollama_vision_model():
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": "https://dummyimage.com/100/100/fff&text=Test+image"
+                                    "url": f"{asset_base_url}/test_image.png"
                                 },
                             },
                         ],

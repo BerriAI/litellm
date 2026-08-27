@@ -1124,14 +1124,10 @@ def test_usage_object_null_tokens():
 def test_is_base64_encoded():
     import base64
 
-    import requests
+    from tests.fixtures.asset_server import TEST_IMAGE_PNG
 
     litellm.set_verbose = True
-    url = "https://dummyimage.com/100/100/fff&text=Test+image"
-    response = requests.get(url)
-    file_data = response.content
-
-    encoded_file = base64.b64encode(file_data).decode("utf-8")
+    encoded_file = base64.b64encode(TEST_IMAGE_PNG.read_bytes()).decode("utf-8")
     base64_image = f"data:image/png;base64,{encoded_file}"
 
     from litellm.utils import is_base64_encoded

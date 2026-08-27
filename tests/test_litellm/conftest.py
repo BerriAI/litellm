@@ -39,6 +39,13 @@ from litellm.llms.custom_httpx.async_client_cleanup import (
 )
 from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module
 
+from tests.fixtures.asset_server import serve_assets
+
+
+@pytest.fixture
+def asset_base_url():
+    yield from serve_assets()
+
 
 def _reset_module_level_aws_auth_caches():
     """

@@ -2441,7 +2441,7 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
 
 
 @pytest.mark.asyncio
-async def test_bedrock_image_url_sync_client():
+async def test_bedrock_image_url_sync_client(asset_base_url):
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     import logging
     from litellm import verbose_logger
@@ -2459,7 +2459,7 @@ async def test_bedrock_image_url_sync_client():
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
+                        "url": f"{asset_base_url}/test_image.png"
                     },
                 },
             ],
@@ -2523,18 +2523,12 @@ def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
 
 
 @pytest.mark.parametrize(
-    "image_url",
-    [
-        "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
-        # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
-        "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
-        # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
-        "https://raw.githubusercontent.com/mdn/content/main/README.md",
-    ],
+    "asset_name",
+    ["test_document.pdf", "test_table.csv", "test_document.md"],
 )
 @pytest.mark.flaky(retries=6, delay=2)
 @pytest.mark.asyncio
-async def test_bedrock_document_understanding(image_url):
+async def test_bedrock_document_understanding(asset_name, asset_base_url):
     from litellm import acompletion
 
     litellm._turn_on_debug()
@@ -2544,7 +2538,7 @@ async def test_bedrock_document_understanding(image_url):
         {"type": "text", "text": f"What's this file about?"},
         {
             "type": "image_url",
-            "image_url": image_url,
+            "image_url": f"{asset_base_url}/{asset_name}",
         },
     ]
 

@@ -11,7 +11,8 @@ import litellm
 from litellm import Choices, Message, ModelResponse
 from litellm.types.utils import StreamingChoices, ChatCompletionAudioResponse
 import base64
-import requests
+
+from tests.fixtures.asset_server import TEST_SPEECH_WAV
 
 
 def check_non_streaming_response(completion):
@@ -88,17 +89,12 @@ async def test_audio_output_from_model(stream):
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize("model", ["gpt-audio-1.5"])
 async def test_audio_input_to_model(stream, model):
-    # Fetch the audio file and convert it to a base64 encoded string
     audio_format = "pcm16"
     if stream is False:
         audio_format = "wav"
     litellm._turn_on_debug()
     litellm.drop_params = True
-    url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
-    response = requests.get(url)
-    response.raise_for_status()
-    wav_data = response.content
-    encoded_string = base64.b64encode(wav_data).decode("utf-8")
+    encoded_string = base64.b64encode(TEST_SPEECH_WAV.read_bytes()).decode("utf-8")
     try:
         completion = await litellm.acompletion(
             model=model,

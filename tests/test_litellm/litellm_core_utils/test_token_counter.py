@@ -380,7 +380,7 @@ def test_encoding_and_decoding():
 # test_encoding_and_decoding()
 
 
-def test_gpt_vision_token_counting():
+def test_gpt_vision_token_counting(asset_base_url):
     messages = [
         {
             "role": "user",
@@ -388,13 +388,17 @@ def test_gpt_vision_token_counting():
                 {"type": "text", "text": "What’s in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
+                    "image_url": f"{asset_base_url}/test_image.png",
                 },
             ],
         }
     ]
+    text_only_tokens = token_counter(
+        model="gpt-4-vision-preview",
+        messages=[{"role": "user", "content": "What’s in this image?"}],
+    )
     tokens = token_counter(model="gpt-4-vision-preview", messages=messages)
-    print(f"tokens: {tokens}")
+    assert tokens > text_only_tokens
 
 
 # test_gpt_vision_token_counting()

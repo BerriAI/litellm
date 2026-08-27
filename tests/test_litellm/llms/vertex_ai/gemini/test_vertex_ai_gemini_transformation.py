@@ -15,6 +15,8 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 from litellm.types.llms.vertex_ai import BlobType
 from litellm.types.utils import Message
 
+from tests.fixtures.asset_server import TEST_IMAGE_PNG
+
 
 def test_check_if_part_exists_in_parts():
     parts = [
@@ -1669,12 +1671,9 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
     ]
 
 
-def test_convert_tool_response_with_url_image():
+def test_convert_tool_response_with_url_image(asset_base_url):
     """Test tool response with HTTP URL image (will download and convert)."""
-    import pytest
-
-    # Use a publicly accessible test image URL
-    test_image_url = "https://via.placeholder.com/1x1.png"
+    test_image_url = f"{asset_base_url}/test_image.png"
 
     tool_message = {
         "role": "tool",
@@ -1697,30 +1696,23 @@ def test_convert_tool_response_with_url_image():
         ]
     }
 
-    try:
-        result = convert_to_gemini_tool_call_result(
-            tool_message, last_message_with_tool_calls
-        )
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
 
-        assert isinstance(
-            result, list
-        ), "Should return a parts list when media is present"
-        assert len(result) == 1, "Should return one function_response part"
-        result_part = result[0]
-        assert "function_response" in result_part
-        assert "inline_data" not in result_part
-        function_response = result_part["function_response"]
-        assert function_response["name"] == "type_text_at"
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    result_part = result[0]
+    assert "function_response" in result_part
+    assert "inline_data" not in result_part
+    function_response = result_part["function_response"]
+    assert function_response["name"] == "type_text_at"
 
-        # Check inline_data is nested under functionResponse.parts.
-        assert "parts" in function_response
-        assert len(function_response["parts"]) == 1
-        inline_data: BlobType = function_response["parts"][0]["inline_data"]
-        assert "data" in inline_data
-        assert "mime_type" in inline_data
-    except Exception as e:
-        # Skip test if URL download fails (no internet connection, etc.)
-        pytest.skip(f"Failed to download image from URL: {e}")
+    assert "parts" in function_response
+    assert len(function_response["parts"]) == 1
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
+    assert inline_data["data"] == base64.b64encode(TEST_IMAGE_PNG.read_bytes()).decode()
+    assert inline_data["mime_type"] == "image/png"
 
 
 def test_convert_tool_response_text_only():

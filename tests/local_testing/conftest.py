@@ -49,6 +49,12 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     vcr_config_dict,
 )
 from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
+from tests.fixtures.asset_server import serve_assets  # noqa: E402
+
+
+@pytest.fixture
+def asset_base_url():
+    yield from serve_assets()
 
 
 @pytest.fixture(scope="session", autouse=True)

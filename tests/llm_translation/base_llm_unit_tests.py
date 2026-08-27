@@ -30,6 +30,7 @@ from openai import OpenAI
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from tests._live_test_helpers import _skip_live_prompt_caching_test  # noqa: E402
+from tests.fixtures.asset_server import TEST_SPEECH_WAV  # noqa: E402
 
 
 def _usage_format_tests(usage: litellm.Usage):
@@ -758,11 +759,7 @@ class BaseLLMChatTest(ABC):
                 f"Model={base_completion_call_args['model']} does not support audio input"
             )
 
-        url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
-        response = httpx.get(url)
-        response.raise_for_status()
-        wav_data = response.content
-        encoded_string = base64.b64encode(wav_data).decode("utf-8")
+        encoded_string = base64.b64encode(TEST_SPEECH_WAV.read_bytes()).decode("utf-8")
 
         completion = self.completion_function(
             **base_completion_call_args,
@@ -1274,12 +1271,8 @@ class BaseLLMChatTest(ABC):
             print("Model does not support audio input")
             pytest.skip("Model does not support audio input")
 
-        url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
-        response = httpx.get(url)
-        response.raise_for_status()
-        wav_data = response.content
         audio_format = "wav"
-        encoded_string = base64.b64encode(wav_data).decode("utf-8")
+        encoded_string = base64.b64encode(TEST_SPEECH_WAV.read_bytes()).decode("utf-8")
 
         audio_content = [{"type": "text", "text": "What is in this recording?"}]
 

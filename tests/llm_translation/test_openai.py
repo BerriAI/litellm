@@ -209,19 +209,16 @@ async def test_vision_with_custom_model():
 
     """
     import base64
-    import requests
     from openai import AsyncOpenAI
+
+    from tests.fixtures.asset_server import TEST_IMAGE_PNG
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
     litellm.set_verbose = True
     api_base = "https://my-custom.api.openai.com"
 
-    # Fetch and encode a test image
-    url = "https://dummyimage.com/100/100/fff&text=Test+image"
-    response = requests.get(url)
-    file_data = response.content
-    encoded_file = base64.b64encode(file_data).decode("utf-8")
+    encoded_file = base64.b64encode(TEST_IMAGE_PNG.read_bytes()).decode("utf-8")
     base64_image = f"data:image/png;base64,{encoded_file}"
 
     with patch.object(
@@ -261,9 +258,7 @@ async def test_vision_with_custom_model():
                     {"type": "text", "text": "What's in this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABDElEQVRYhe2SzWqEMBRGPyQTfQxJsc5jBKGzFmlslyFIZxsCQ7sUaWd87EanpdpIrbtC71mE/NyTm9wEIAiCIAiC+N/otQBxU2Sf/aeh4enqptHXri+/yxIq63jlKCw6cXssnr3ObdzdGYFYCJ2IzHKXLygHXCB98Gm4DE+ZZemu5EisQSyZTmyg+AuzQbkezCuIy7EI0k9Ig3FtruwydY+qniqtV5yQyo8qpUIl2fc90KVzJWohWf2qu75vlw52rdfjVDHg8vLWwixW7PChqLkSyUadwfSS0uQZhEvRuIkS53uJvrK8cGWYaPwpGt8efvw+vlo8TPMzcmP8w7lrNypc1RsNgiAIgiD+Iu/RyDYhCaWrgQAAAABJRU5ErkJggg=="
-                        },
+                        "image_url": {"url": base64_image},
                     },
                 ],
             },
@@ -473,7 +468,7 @@ class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-4o"])
-async def test_openai_pdf_url(model):
+async def test_openai_pdf_url(model, asset_base_url):
     from litellm.utils import return_raw_request, CallTypes
 
     request = return_raw_request(
@@ -487,7 +482,9 @@ async def test_openai_pdf_url(model):
                         {"type": "text", "text": "What is the first page of the PDF?"},
                         {
                             "type": "file",
-                            "file": {"file_id": "https://arxiv.org/pdf/2303.08774"},
+                            "file": {
+                                "file_id": f"{asset_base_url}/test_document.pdf"
+                            },
                         },
                     ],
                 }

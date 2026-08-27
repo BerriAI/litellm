@@ -2000,16 +2000,12 @@ async def test_vertexai_multimodal_embedding_image_in_input():
 async def test_vertexai_multimodal_embedding_base64image_in_input():
     import base64
 
-    import requests
+    from tests.fixtures.asset_server import TEST_IMAGE_PNG
 
     load_vertex_ai_credentials()
     mock_response = AsyncMock()
 
-    url = "https://dummyimage.com/100/100/fff&text=Test+image"
-    response = requests.get(url)
-    file_data = response.content
-
-    encoded_file = base64.b64encode(file_data).decode("utf-8")
+    encoded_file = base64.b64encode(TEST_IMAGE_PNG.read_bytes()).decode("utf-8")
     base64_image = f"data:image/png;base64,{encoded_file}"
 
     def return_val():
@@ -4061,7 +4057,7 @@ def test_vertex_ai_gemini_audio_ogg():
                     "content": [
                         {
                             "file": {
-                                "file_id": "https://upload.wikimedia.org/wikipedia/commons/5/5f/En-us-public.ogg"
+                                "file_id": "https://example.com/audio.ogg"
                             },
                             "type": "file",
                         }
