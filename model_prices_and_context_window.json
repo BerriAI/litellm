@@ -46916,6 +46916,30 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "scaleway/glm-5.2": {
+        "input_cost_per_token": 1.8e-06,
+        "litellm_provider": "scaleway",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 5.5e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },    
+    "scaleway/deepseek-v4-flash-0731": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "scaleway",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": false
+    },
     "scaleway/qwen/qwen3.5-397b-a17b": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "scaleway",
