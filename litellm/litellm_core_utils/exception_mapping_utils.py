@@ -2341,6 +2341,7 @@ def exception_type(
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
     try:
         error_str = redact_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
+        extra_information = ""
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
@@ -2357,7 +2358,6 @@ def exception_type(
             # Common Extra information needed for all providers
             # We pass num retries, api_base, vertex_deployment etc to the exception here
             ################################################################################
-            extra_information = ""
             try:
                 _api_base: Final = litellm.get_api_base(model=model, optional_params=extra_kwargs)
                 messages: Final = litellm.get_first_chars_messages(kwargs=completion_kwargs)
