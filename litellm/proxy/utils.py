@@ -1422,7 +1422,7 @@ class ProxyLogging:
 
         if custom_logger and prompt_spec is not None:
             is_responses_call: Final = call_type == "aresponses"
-            original_responses_input: Final = data.get("input", "") if is_responses_call else None
+            original_responses_input: Final = data.get("input", "") if is_responses_call else ""
             client_messages: Final = (
                 ResponsesAPIRequestUtils.responses_input_to_chat_messages(original_responses_input)
                 if is_responses_call
