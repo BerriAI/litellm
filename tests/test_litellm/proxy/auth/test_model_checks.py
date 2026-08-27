@@ -1,9 +1,12 @@
-from unittest.mock import AsyncMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+import litellm
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
 from litellm.proxy.auth.handle_jwt import JWTAuthManager
+from litellm.types.router import LiteLLM_Params
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -803,3 +806,75 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+class TestProviderEndpointModelDiscovery:
+    """`get_provider_models` gated provider-endpoint discovery on membership in the
+    static `litellm.models_by_provider` catalog. Dynamic-list providers like
+    `litellm_proxy` and `hosted_vllm` are absent from that dict, so discovery was
+    skipped for exactly the providers needing it: a chained proxy's GET /v1/models
+    returned the literal `litellm_proxy/*` and never queried the upstream (#38547)"""
+
+    @staticmethod
+    def _upstream_params() -> LiteLLM_Params:
+        return LiteLLM_Params(
+            model="litellm_proxy/*",
+            api_base="http://127.0.0.1:4010",
+            api_key="sk-upstream-1234",
+        )
+
+    def test_dynamic_provider_delegates_to_discovery_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy.auth import model_checks
+
+        monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+        discover: Final = Mock(return_value=["gpt-4o", "claude-sonnet"])
+        monkeypatch.setattr(model_checks, "get_valid_models", discover)
+
+        params: Final = self._upstream_params()
+        result: Final = model_checks.get_provider_models("litellm_proxy", params)
+
+        assert result == ["gpt-4o", "claude-sonnet"]
+        discover.assert_called_once_with(custom_llm_provider="litellm_proxy", litellm_params=params)
+
+    def test_dynamic_provider_returns_none_when_discovery_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Discovery stays opt-in, so nothing should be fetched with the flag off"""
+        from litellm.proxy.auth import model_checks
+
+        monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+        discover: Final = Mock(return_value=["unused"])
+        monkeypatch.setattr(model_checks, "get_valid_models", discover)
+
+        assert model_checks.get_provider_models("litellm_proxy", self._upstream_params()) is None
+        discover.assert_not_called()
+
+    def test_unknown_provider_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unrecognised provider must not raise out of the gate's enum conversion"""
+        from litellm.proxy.auth.model_checks import get_provider_models
+
+        monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+
+        assert get_provider_models("not_a_real_provider") is None
+
+    @pytest.mark.parametrize("provider", ["litellm_proxy", "hosted_vllm"])
+    def test_gate_admits_dynamic_providers_when_enabled(self, monkeypatch: pytest.MonkeyPatch, provider: str) -> None:
+        """The gate is not specific to litellm_proxy: it covers every provider whose
+        model list comes from its endpoint rather than a static catalog"""
+        from litellm.proxy.auth.model_checks import _can_discover_models_from_provider_endpoint
+
+        assert provider not in litellm.models_by_provider
+
+        monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+        assert _can_discover_models_from_provider_endpoint(provider) is True
+
+        monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+        assert _can_discover_models_from_provider_endpoint(provider) is False
+
+    def test_static_catalog_provider_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Providers with a static catalog keep listing from it with discovery off"""
+        from litellm.proxy.auth.model_checks import get_provider_models
+
+        monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+
+        result: Final = get_provider_models("anthropic")
+
+        assert result is not None
+        assert any("claude" in model for model in result)
