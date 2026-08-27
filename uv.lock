@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-19T15:53:37.294198Z"
+exclude-newer = "2026-08-23T20:15:58.934396Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4266,7 +4266,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.99.0"
+version = "1.100.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -4314,6 +4314,9 @@ google = [
 ]
 grpc = [
     { name = "grpcio" },
+]
+mcp = [
+    { name = "mcp" },
 ]
 mlflow = [
     { name = "mlflow" },
@@ -4526,6 +4529,7 @@ requires-dist = [
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
     { name = "llm-sandbox", marker = "extra == 'proxy-runtime'", specifier = ">=0.3.39,<1.0" },
     { name = "mangum", marker = "extra == 'proxy-runtime'", specifier = ">=0.17.0,<1.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28.1,<2.0" },
     { name = "mcp", marker = "extra == 'proxy'", specifier = ">=1.28.1,<2.0" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.11.1,<4.0" },
     { name = "numpy", marker = "extra == 'stt-nvidia-riva'", specifier = ">=1.26.0" },
@@ -4569,7 +4573,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.21.0,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "saml", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 ci = [
@@ -4661,7 +4665,7 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.59"
+version = "0.1.60"
 source = { editable = "enterprise" }
 
 [[package]]

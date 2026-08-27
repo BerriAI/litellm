@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 import time
 
 import httpx
@@ -3867,6 +3866,90 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
     assert payload["litellm_call_id"] == call_id
 
 
+# ── Azure Model Router selected-model attribution ────────────────────────────
+
+
+def _model_router_response(selected_model: str, stamp: bool):
+    """A ModelResponse as AzureModelRouterConfig hands it back, with or without the stamp."""
+    from litellm.llms.azure_ai.common_utils import (
+        AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+    )
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(model=selected_model)
+    response._hidden_params = (
+        {AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model} if stamp else {}
+    )
+    return response
+
+
+def test_standard_logging_payload_uses_stamped_model_router_model(logging_obj):
+    """
+    The selected model must win off the stamp, not off "model-router" appearing in the
+    requested model. An operator whose model group is named anything else was invisible
+    to the name check, so their logs and spend rows named the router instead.
+    """
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "azure_ai/smart-pick",
+            "custom_llm_provider": "azure_ai",
+            "messages": [],
+            "litellm_params": {"metadata": {}},
+        },
+        init_response_obj=_model_router_response(
+            "azure_ai/grok-4-1-fast-reasoning", stamp=True
+        ),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["model"] == "azure_ai/grok-4-1-fast-reasoning"
+
+
+def test_standard_logging_payload_keeps_requested_model_without_router_stamp(
+    logging_obj,
+):
+    """
+    Control for the test above: an ordinary azure_ai deployment is unaffected, so the stamp
+    is what redirects attribution rather than the response model winning unconditionally.
+    """
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "azure_ai/smart-pick",
+            "custom_llm_provider": "azure_ai",
+            "messages": [],
+            "litellm_params": {"metadata": {}},
+        },
+        init_response_obj=_model_router_response(
+            "azure_ai/grok-4-1-fast-reasoning", stamp=False
+        ),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["model"] == "azure_ai/smart-pick"
+
+
 def _make_dict_logging_obj():
     """Build a Logging instance configured for a non-streaming dict result."""
     obj = LitellmLogging(
@@ -5142,6 +5225,197 @@ async def test_restore_correlation_context_works_across_asyncio_task_boundary():
         session_id_var.set("")
 
 
+class TestNonInferenceCallTypesAreNotBilled:
+    """A retrieved response replays the usage of the call that created it, so pricing a read
+    of it double bills the same tokens. Regression tests for LIT-5602."""
+
+    RETRIEVED_RESPONSE_USAGE = {"input_tokens": 4000, "output_tokens": 2000, "total_tokens": 6000}
+
+    BACKGROUND_POLL_METADATA = {"internal_call_origin": "background_response_cost_poll"}
+
+    def _logging_obj(self, call_type: str, litellm_metadata: dict | None = None):
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        obj = LiteLLMLoggingObj(
+            model="gpt-4o",
+            messages=[],
+            stream=False,
+            call_type=call_type,
+            start_time=time.time(),
+            litellm_call_id=f"lit5602-{call_type}",
+            function_id="fn-lit5602",
+        )
+        obj.update_environment_variables(
+            model="gpt-4o",
+            user="",
+            optional_params={},
+            litellm_params={
+                "api_base": "",
+                "custom_llm_provider": "openai",
+                "litellm_metadata": litellm_metadata or {},
+            },
+        )
+        return obj
+
+    def _retrieved_response(self, background: bool | None = None):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_lit5602",
+            created_at=1234567890,
+            model="gpt-4o",
+            output=[],
+            usage=self.RETRIEVED_RESPONSE_USAGE,
+            background=background,
+        )
+
+    def test_creating_a_response_is_still_priced(self):
+        """Guards the tests below: the same response object must cost money on the create path."""
+        cost = self._logging_obj("aresponses")._response_cost_calculator(result=self._retrieved_response())
+        assert cost is not None and cost > 0
+
+    @pytest.mark.parametrize(
+        "call_type",
+        [
+            "aget_responses",
+            "adelete_responses",
+            "acancel_responses",
+            "alist_input_items",
+            "avector_store_delete",
+            "avector_store_file_content",
+            "avector_store_file_delete",
+        ],
+    )
+    def test_read_and_management_calls_cost_nothing(self, call_type):
+        cost = self._logging_obj(call_type)._response_cost_calculator(result=self._retrieved_response())
+        assert cost == 0.0
+
+    def test_retrieved_usage_is_not_re_reported_in_standard_logging_payload(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
+
+        from datetime import datetime
+
+        logging_obj = self._logging_obj("aget_responses")
+        now = datetime.now()
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "litellm_call_id": "lit5602-payload",
+                "model": "gpt-4o",
+                "call_type": "aget_responses",
+                "litellm_params": {},
+            },
+            init_response_obj=self._retrieved_response(),
+            start_time=now,
+            end_time=now,
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert payload is not None
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["response_cost"] == 0.0
+
+    def test_background_cost_poll_read_is_still_priced(self):
+        """A background create returns queued with no usage, so the poller's read carries the job's
+        only billable usage. Zeroing it there means background jobs are never billed."""
+        cost = self._logging_obj(
+            "aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA
+        )._response_cost_calculator(result=self._retrieved_response())
+        assert cost is not None and cost > 0
+
+    def test_background_cost_poll_reports_usage_in_standard_logging_payload(self):
+        from datetime import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
+
+        now = datetime.now()
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "litellm_call_id": "lit5602-poll-payload",
+                "model": "gpt-4o",
+                "call_type": "aget_responses",
+                "litellm_params": {"litellm_metadata": self.BACKGROUND_POLL_METADATA},
+            },
+            init_response_obj=self._retrieved_response(),
+            start_time=now,
+            end_time=now,
+            logging_obj=self._logging_obj(
+                "aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA
+            ),
+            status="success",
+        )
+
+        assert payload is not None
+        assert payload["total_tokens"] == 6000
+
+    def test_reading_a_background_response_is_still_priced(self):
+        """A background create answers queued with no usage at all, so whoever reads the finished
+        job is the first and only caller to see its tokens. Zeroing that read bills the job nothing."""
+        cost = self._logging_obj("aget_responses")._response_cost_calculator(
+            result=self._retrieved_response(background=True)
+        )
+        assert cost is not None and cost > 0
+
+    def test_reading_a_background_response_reports_usage_in_standard_logging_payload(self):
+        from datetime import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
+
+        now = datetime.now()
+        payload = get_standard_logging_object_payload(
+            kwargs={
+                "litellm_call_id": "lit5602-background-payload",
+                "model": "gpt-4o",
+                "call_type": "aget_responses",
+                "litellm_params": {},
+            },
+            init_response_obj=self._retrieved_response(background=True),
+            start_time=now,
+            end_time=now,
+            logging_obj=self._logging_obj("aget_responses"),
+            status="success",
+        )
+
+        assert payload is not None
+        assert payload["total_tokens"] == 6000
+
+    def test_reading_a_foreground_response_is_still_free(self):
+        """Guards the test above against a blanket exemption: an explicit background=false read was
+        already billed by its create and must stay at zero."""
+        cost = self._logging_obj("aget_responses")._response_cost_calculator(
+            result=self._retrieved_response(background=False)
+        )
+        assert cost == 0.0
+
+    def _read_call_messages(self):
+        logging_obj, _ = litellm.utils.function_setup(
+            original_function="aget_responses",
+            rules_obj=litellm.utils.Rules(),
+            start_time=time.time(),
+            **{"litellm_call_id": "lit5602-setup", "response_id": "resp_lit5602"},
+        )
+        return logging_obj.model_call_details["messages"]
+
+    def test_read_calls_do_not_log_a_placeholder_chat_message(self):
+        assert self._read_call_messages() == []
+
+    def test_read_call_messages_survive_a_logger_that_walks_them(self):
+        """Loggers reach into this value expecting a chat history and branch on it being a list.
+        An empty list reads as no messages; a tuple matches no branch and crashes the success hook,
+        and None is not iterable where other loggers walk it."""
+        from litellm.integrations.lunary import parse_messages
+
+        assert parse_messages(self._read_call_messages()) == []
+
+
 def _build_success_payload(logging_obj, kwargs):
     import datetime
 
@@ -5595,3 +5869,107 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+class _ClientError(Exception):
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(message)
+
+
+def _raise_and_catch(exc):
+    try:
+        raise exc
+    except Exception as caught:
+        return caught
+
+
+def test_get_error_information_skips_traceback_for_expected_4xx(monkeypatch):
+    """Regression for LIT-6043: expected client (4xx) errors must not pay for
+    traceback.format_tb on every rejected request unless
+    litellm.log_client_error_tracebacks is enabled."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    client_exc = _raise_and_catch(_ClientError(status_code=403, message="team does not allow model"))
+    assert client_exc.__traceback__ is not None
+    result = StandardLoggingPayloadSetup.get_error_information(client_exc)
+    assert result["traceback"] == ""
+
+    server_exc = _raise_and_catch(_ClientError(status_code=500, message="boom"))
+    result = StandardLoggingPayloadSetup.get_error_information(server_exc)
+    assert "test_litellm_logging" in result["traceback"]
+
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", True)
+    result = StandardLoggingPayloadSetup.get_error_information(client_exc)
+    assert "test_litellm_logging" in result["traceback"]
+
+
+def test_get_error_information_keeps_traceback_for_provider_4xx():
+    """Regression for LIT-6163: a 4xx the provider returned (invalid deployment
+    key, upstream validation) is an operator problem, so its traceback must
+    survive the expected-client-error gate and reach every payload consumer."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    assert litellm.log_client_error_tracebacks is False
+    provider_exc = _raise_and_catch(
+        litellm.AuthenticationError(
+            message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
+        )
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(provider_exc)
+    assert result["error_code"] == "401"
+    assert result["llm_provider"] == "anthropic"
+    assert "test_litellm_logging" in result["traceback"]
+
+
+def test_get_error_information_keeps_traceback_for_unmapped_provider_4xx():
+    """Regression for LIT-6163 on /v1/messages: that route logs the provider's
+    raw BaseLLMException (no llm_provider), which still keeps its traceback."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    assert litellm.log_client_error_tracebacks is False
+    raw_provider_exc = _raise_and_catch(AnthropicError(status_code=401, message='{"type":"authentication_error"}'))
+    result = StandardLoggingPayloadSetup.get_error_information(raw_provider_exc)
+    assert result["error_code"] == "401"
+    assert result["error_class"] == "AnthropicError"
+    assert "test_litellm_logging" in result["traceback"]
+
+
+def test_get_error_information_skips_traceback_for_budget_rejection_with_provider():
+    """A key-over-budget 429 is the proxy's own rejection even after the auth
+    handler stamps the requested model's provider onto it, so it stays cheap."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    assert litellm.log_client_error_tracebacks is False
+    over_budget = _raise_and_catch(litellm.BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic"))
+    result = StandardLoggingPayloadSetup.get_error_information(over_budget)
+    assert result["error_code"] == "429"
+    assert result["llm_provider"] == "anthropic"
+    assert result["traceback"] == ""
+
+
+def test_failure_handler_helper_fn_builds_payload_once_per_exception():
+    """Regression for LIT-6043: async and sync failure handlers both call
+    _failure_handler_helper_fn for the same failed request; the standardized
+    payload must be built once, not once per handler."""
+    obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-6043-1",
+        function_id="f",
+    )
+    exc = _raise_and_catch(_ClientError(status_code=400, message="invalid model"))
+    obj._failure_handler_helper_fn(exception=exc, traceback_exception="")
+    first_payload = obj.model_call_details["standard_logging_object"]
+    assert first_payload is not None
+    obj._failure_handler_helper_fn(exception=exc, traceback_exception="")
+    assert obj.model_call_details["standard_logging_object"] is first_payload
+
+    other_exc = _raise_and_catch(_ClientError(status_code=429, message="rate limited"))
+    obj._failure_handler_helper_fn(exception=other_exc, traceback_exception="")
+    assert obj.model_call_details["standard_logging_object"] is not first_payload

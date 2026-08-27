@@ -268,6 +268,27 @@ def test_vector_store_file_management_is_not_chat(call_type):
     assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
 
 
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}{operation}"
+        for operation in ("get_responses", "delete_responses", "cancel_responses", "list_input_items")
+        for prefix in ("", "a")
+    ],
+)
+def test_responses_management_is_not_chat(call_type):
+    """Fetching, deleting or cancelling a stored response runs no inference, so it must not
+    read as a chat completion: the retrieved object replays the original call's tokens and
+    would inflate the chat series on every read. Regression test for LIT-5602."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_RESPONSES_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.responses_management"
+
+
+def test_creating_a_response_is_still_chat():
+    """Guards the test above: ``/v1/responses`` itself is a chat completion."""
+    assert resolve_operation("aresponses") is GenAIOperation.CHAT
+
+
 _NON_CHAT_ROUTES: Final = (
     ("image_generation", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.IMAGE),
     ("speech", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.SPEECH),

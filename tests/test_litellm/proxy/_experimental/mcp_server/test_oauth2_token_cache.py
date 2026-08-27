@@ -392,3 +392,22 @@ async def test_invalidate_clears_every_identity_for_a_server():
 
     assert refetched == "tok-after-invalidate"
     assert mock_client.post.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_m2m_mint_uses_admin_entered_token_url_when_issuer_yield_empties_resolved():
+    """A pinned issuer empties the resolved token_url while configured_token_url keeps the
+    admin-entered value; the client_credentials mint must POST there instead of raising."""
+    server = _server(token_url=None, configured_token_url="https://auth.example.com/token")
+    cache = MCPOAuth2TokenCache()
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _token_response("m2m-token-configured")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        result = await cache.async_get_token(server)
+
+    assert result == "m2m-token-configured"
+    assert mock_client.post.call_args[0][0] == "https://auth.example.com/token"

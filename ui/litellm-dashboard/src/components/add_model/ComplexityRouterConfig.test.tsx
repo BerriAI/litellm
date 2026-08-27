@@ -8,7 +8,12 @@ vi.mock(
 );
 
 const mockModelInfo = [
-  { model_group: "gpt-4", mode: "chat", supports_reasoning: true },
+  {
+    model_group: "gpt-4",
+    mode: "chat",
+    supports_reasoning: true,
+    supported_reasoning_efforts: ["medium", "high", "xhigh"],
+  },
   { model_group: "gpt-3.5-turbo", mode: "chat" },
   { model_group: "claude-3-opus", mode: "chat", supports_reasoning: true },
   { model_group: "text-embedding-3-small", mode: "embedding" },
@@ -954,5 +959,100 @@ describe("ComplexityRouterConfig reasoning effort gating", () => {
     expect(
       screen.getByRole("combobox", { name: "Reasoning effort for gpt-3.5-turbo in the Simple tier" }),
     ).toHaveTextContent("low");
+  });
+});
+
+describe("ComplexityRouterConfig per-model effort filtering", () => {
+  it("offers only the efforts the model group supports", async () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" }));
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(options).toEqual(["Default", "medium", "high", "xhigh"]);
+  });
+
+  it("falls back to every effort when the group only reports supports_reasoning", async () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("combobox", { name: "Reasoning effort for claude-3-opus in the Reasoning tier" }),
+    );
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(options).toEqual(["Default", "none", "minimal", "low", "medium", "high", "xhigh"]);
+  });
+
+  // An empty list is the group's own answer that its deployments share no level, which is different
+  // from the field being absent, so the control is dropped rather than falling back to every level.
+  it("offers no effort at all when the group intersects to nothing", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        modelInfo={[
+          ...mockModelInfo.filter((model) => model.model_group !== "claude-3-opus"),
+          { model_group: "claude-3-opus", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: [] },
+        ]}
+      />,
+    );
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for claude-3-opus in the Reasoning tier" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Hand-authored configs can carry a level outside the supported set (e.g. max); it must render
+  // and stay clearable rather than being masked as Default.
+  it("keeps showing a stored effort outside the supported set", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, tier_model_params: { COMPLEX: { "gpt-4": { reasoning_effort: "max" } } } }}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Reasoning effort for gpt-4 in the Complex tier" })).toHaveTextContent(
+      "max",
+    );
+  });
+});
+
+describe("ComplexityRouterConfig custom technical keywords", () => {
+  const openClassificationPanel = (value: ComplexityRouterConfigValue) => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+  };
+
+  const llmConfig = { model: "gpt-3.5-turbo", timeout_ms: 3000 };
+
+  it.each([
+    ["heuristic", { ...defaultValue, classifier_type: "heuristic" as const }],
+    [
+      "heuristic_first",
+      {
+        ...defaultValue,
+        classifier_type: "heuristic_first" as const,
+        heuristic_first_max_tier: "SIMPLE",
+        classifier_llm_config: llmConfig,
+      },
+    ],
+    [
+      "llm falling back to the scorer",
+      {
+        ...defaultValue,
+        classifier_type: "llm" as const,
+        classifier_llm_config: llmConfig,
+        classifier_fallback: "heuristic" as const,
+      },
+    ],
+  ])("offers the keywords on a router whose scorer runs: %s", (_label, value) => {
+    openClassificationPanel(value);
+    expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
+  });
+
+  it("hides the keywords when the scorer never runs, so they cannot imply an effect they have none", () => {
+    openClassificationPanel({
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: llmConfig,
+      classifier_fallback: "default_model",
+    });
+    expect(screen.queryByText("Custom Technical Keywords")).not.toBeInTheDocument();
   });
 });

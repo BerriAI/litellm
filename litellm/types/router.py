@@ -576,6 +576,11 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
+    no_healthy_deployments = "There are no healthy deployments for this model"
+    only_strategy_marker_deployments = (
+        "Every deployment for it is a strategy router marker (auto_router/...), which is not a callable "
+        "model, and no pre-routing strategy selected a deployment for this request"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -637,6 +642,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
+    supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 

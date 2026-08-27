@@ -67,7 +67,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         rest of the identity rather than stored in a key."""
         material: Final = "\x00".join(
             (
-                server.token_url or "",
+                server.effective_token_url or "",
                 server.client_id or "",
                 server.client_secret or "",
                 " ".join(server.scopes or ()),
@@ -82,7 +82,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
 
     @staticmethod
     def _has_client_credentials_config(server: "MCPServer") -> bool:
-        return bool(server.client_id and server.client_secret and server.token_url)
+        return bool(server.client_id and server.client_secret and server.effective_token_url)
 
     async def async_get_token(self, server: "MCPServer") -> str | None:
         """Return a valid access token, fetching or refreshing as needed.
@@ -112,19 +112,20 @@ class MCPOAuth2TokenCache(InMemoryCache):
             return token
 
     async def _fetch_token(self, server: "MCPServer") -> tuple[str, int]:
-        """POST to ``token_url`` with ``grant_type=client_credentials``.
+        """POST to ``effective_token_url`` with ``grant_type=client_credentials``.
 
         Returns ``(access_token, ttl_seconds)`` where ttl accounts for the
         expiry buffer so the cache entry expires before the real token does.
         """
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
-        if not server.client_id or not server.client_secret or not server.token_url:
+        token_url: Final = server.effective_token_url
+        if not server.client_id or not server.client_secret or not token_url:
             raise ValueError(
                 f"MCP server '{server.server_id}' missing required OAuth2 fields: "
                 f"client_id={bool(server.client_id)}, "
                 f"client_secret={bool(server.client_secret)}, "
-                f"token_url={bool(server.token_url)}"
+                f"token_url={bool(token_url)}"
             )
 
         token_request: Final = build_upstream_oauth2_token_request(
@@ -146,7 +147,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         )
 
         try:
-            response: Final = await client.post(server.token_url, data=data, headers=token_request.headers or None)
+            response: Final = await client.post(token_url, data=data, headers=token_request.headers or None)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(

@@ -1,5 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
+import inspect
 import os
 import traceback
 from collections.abc import Callable, Iterable, Mapping
@@ -20,6 +21,9 @@ from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     reconstruct_model_name,
     safe_deep_copy,
+)
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -140,6 +144,7 @@ class LangFuseLogger:
         langfuse_public_key=None,
         langfuse_secret=None,
         langfuse_host=None,
+        langfuse_environment: str | None = None,
         flush_interval=1,
         allow_env_credentials: bool = True,
     ):
@@ -159,6 +164,10 @@ class LangFuseLogger:
         if not (self.langfuse_host.startswith("http://") or self.langfuse_host.startswith("https://")):
             # add http:// if unset, assume communicating over private network - e.g. render
             self.langfuse_host = "http://" + self.langfuse_host
+        _env_override: Final = str(langfuse_environment).strip() if langfuse_environment is not None else None
+        self.langfuse_environment = _env_override or os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+        if self.langfuse_environment:
+            validate_langfuse_environment_value(self.langfuse_environment)
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
@@ -182,6 +191,8 @@ class LangFuseLogger:
         }
         self.langfuse_sdk_version: str = langfuse.version.__version__
 
+        if "environment" in inspect.signature(Langfuse.__init__).parameters:
+            parameters["environment"] = self.langfuse_environment
         if Version(self.langfuse_sdk_version) >= Version("2.6.0"):
             parameters["sdk_integration"] = "litellm"
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(parameters)

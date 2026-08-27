@@ -523,7 +523,7 @@ def _oauth_endpoints_unresolved(server: MCPServer) -> bool:
         # can come from resource discovery, so a server that resolved its endpoints but no scopes is
         # still unresolved for its flow.
         return True
-    if server.is_dcr_bridge and not server.client_id and server.registration_url is None:
+    if server.is_dcr_bridge and not server.client_id and server.effective_registration_url is None:
         # A DCR bridge with no admin-configured client can only register callers through the
         # upstream's registration endpoint, so a build that resolved the authorize and token
         # endpoints but not registration_endpoint (partial metadata) is still unresolved for its
@@ -535,8 +535,8 @@ def _oauth_endpoints_unresolved(server: MCPServer) -> bool:
     return _flow_endpoints_missing(
         server.auth_type,
         MCPServerManager.effective_oauth2_flow(server),
-        server.authorization_url,
-        server.token_url,
+        server.effective_authorization_url,
+        server.effective_token_url,
         server.token_exchange_endpoint,
     )
 
@@ -6204,14 +6204,6 @@ class MCPServerManager:
                     return None
                 return server
         return None
-
-    async def get_resolved_mcp_server_by_name(
-        self,
-        server_name: str,
-        client_ip: str | None = None,
-    ) -> MCPServer | None:
-        server: Final = self.get_mcp_server_by_name(server_name, client_ip=client_ip)
-        return await self.ensure_oauth_metadata_discovered(server) if server is not None else None
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """

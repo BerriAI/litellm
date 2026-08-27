@@ -54,8 +54,14 @@ const asStringArray = (value: unknown): string[] =>
 
 const dedupe = (models: string[]): string[] => Array.from(new Set(models));
 
+const COMPLEXITY_TYPE_LABELS: Record<string, string> = {
+  llm: "LLM Classifier",
+  heuristic_first: "Heuristic first",
+  custom: "Custom classifier",
+};
+
 export const complexityTypeLabel = (config: Record<string, unknown>): string =>
-  config.classifier_type === "llm" ? "LLM Classifier" : "Heuristic";
+  (typeof config.classifier_type === "string" && COMPLEXITY_TYPE_LABELS[config.classifier_type]) || "Heuristic";
 
 interface Presentation {
   typeLabel: string;
