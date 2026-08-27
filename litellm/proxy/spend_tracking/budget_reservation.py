@@ -1045,6 +1045,21 @@ def _estimate_request_max_cost_for_model(
     return max(valid_estimates) if valid_estimates else None
 
 
+_TIER_OUTPUT_RATE_KEYS: Final = ("output_cost_per_token", "output_cost_per_reasoning_token")
+
+
+def _tier_output_rate(tier: Mapping[str, object], model_info: Mapping[str, object]) -> float:
+    """Output rate to reserve for a request billed at ``tier``.
+
+    A tier table that prices only input falls back to the model's own output rates when
+    the request is billed, so reserving the tier's missing rate as 0 leaves every
+    completion under-reserved. The reasoning-token share is unknown before the request
+    runs, so the higher of the two rates is used either way.
+    """
+    rates: Final = tier if any(key in tier for key in _TIER_OUTPUT_RATE_KEYS) else model_info
+    return max(_to_float(rates.get(key)) or 0.0 for key in _TIER_OUTPUT_RATE_KEYS)
+
+
 def _max_cost_for_cost_info(
     request_body: dict,
     route: str,
@@ -1079,12 +1094,8 @@ def _max_cost_for_cost_info(
     if isinstance(tiered_pricing, list) and tiered_pricing:
         tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
-            output_rate = max(
-                tier_rate(tier, "output_cost_per_token"),
-                tier_rate(tier, "output_cost_per_reasoning_token"),
-            )
             return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * output_rate
+                output_tokens * output_multiplier * _tier_output_rate(tier=tier, model_info=model_info)
             )
 
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))

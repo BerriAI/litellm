@@ -1124,7 +1124,7 @@ def test_reservation_uses_most_expensive_deployment_in_group():
     ],
     ids=["litellm_params", "model_info"],
 )
-def test_free_deployment_of_tiered_model_reserves_nothing(deployment_overrides):
+def test_free_deployment_of_tiered_model_reserves_nothing(deployment_overrides: dict[str, dict[str, int]]):
     """A deployment priced at 0 on a model whose published entry carries a tier table
     must not be estimated against that table. Spend tracking bills such a deployment at
     its own rates, so reserving the published tier rate consumed, and rejected requests
@@ -1221,6 +1221,46 @@ def test_deployment_declaring_own_tier_table_keeps_it():
     )
 
     assert estimated is not None and estimated > 0
+
+
+def test_input_only_tier_reserves_the_models_own_output_rate():
+    """A tier table that prices only input is billed with the model's own output rates,
+    so reserving the tier's absent output rate as 0 would leave every completion
+    unreserved and let a budgeted caller run past their limit."""
+    output_tokens = 500
+    router = Router(
+        model_list=[
+            {
+                "model_name": "input-tiered",
+                "litellm_params": {
+                    "model": "dashscope/qwen-plus-latest",
+                    "api_key": "sk-fake",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 5e-06,
+                    "tiered_pricing": [{"range": [0, 32000], "input_cost_per_token": 2e-06}],
+                },
+            }
+        ]
+    )
+    request_body = {
+        "model": "input-tiered",
+        "messages": [{"role": "user", "content": "hello " * 100}],
+        "max_tokens": output_tokens,
+    }
+
+    input_cost = estimate_request_input_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+    )
+    estimated = estimate_request_max_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+    )
+
+    assert input_cost is not None and input_cost > 0
+    assert estimated == pytest.approx(input_cost + (output_tokens * 5e-06))
 
 
 @pytest.mark.asyncio
