@@ -3,6 +3,7 @@ import {
   getPlanModeTierError,
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
+  getClassifierModelError,
   getMissingTiersError,
   getSemanticConfigError,
   getTierLabelsError,
@@ -334,21 +335,24 @@ describe("getSemanticConfigError", () => {
 describe("getKeywordTierRulesError", () => {
   it("returns null when every rule carries a keyword", () => {
     expect(
-      getKeywordTierRulesError([
-        { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
-        { id: "r2", keywords: ["deploy to k8s"], tier: "REASONING" },
-      ]),
+      getKeywordTierRulesError(
+        [
+          { id: "r1", keywords: ["invoice"], tier: "MEDIUM" },
+          { id: "r2", keywords: ["deploy to k8s"], tier: "REASONING" },
+        ],
+        activeTierRows({ tiers }),
+      ),
     ).toBeNull();
   });
 
   it("returns null when there are no rules at all, since the section is optional", () => {
-    expect(getKeywordTierRulesError([])).toBeNull();
+    expect(getKeywordTierRulesError([], activeTierRows({ tiers }))).toBeNull();
   });
 
   // The whole point of the ticket: the semantic toggle is off by default, and an unfilled row
   // used to be discarded silently on an otherwise successful create.
   it("rejects a row left empty while semantic matching is off", () => {
-    expect(getKeywordTierRulesError([{ id: "r1", keywords: [], tier: "COMPLEX" }])).toBe(
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: [], tier: "COMPLEX" }], activeTierRows({ tiers }))).toBe(
       "Add at least one keyword to keyword rule(s): 1",
     );
   });
@@ -357,7 +361,9 @@ describe("getKeywordTierRulesError", () => {
     ["whitespace only", ["   "]],
     ["blank strings, as an unfilled row between filled ones leaves behind", ["", " ", ""]],
   ])("treats %s as empty rather than as a keyword", (_label, keywords) => {
-    expect(getKeywordTierRulesError([{ id: "r1", keywords, tier: "SIMPLE" }])).toMatch(/keyword rule\(s\): 1/);
+    expect(getKeywordTierRulesError([{ id: "r1", keywords, tier: "SIMPLE" }], activeTierRows({ tiers }))).toMatch(
+      /keyword rule\(s\): 1/,
+    );
   });
 
   // Row numbers have to survive rules that are fine, or the message points at the wrong input.
@@ -373,7 +379,9 @@ describe("getKeywordTierRulesError", () => {
   });
 
   it("keeps a keyword whose surrounding whitespace is the only thing trimmed", () => {
-    expect(getKeywordTierRulesError([{ id: "r1", keywords: ["  invoice  "], tier: "MEDIUM" }])).toBeNull();
+    expect(
+      getKeywordTierRulesError([{ id: "r1", keywords: ["  invoice  "], tier: "MEDIUM" }], activeTierRows({ tiers })),
+    ).toBeNull();
   });
 });
 
@@ -672,5 +680,82 @@ describe("buildComplexityRouterConfig tier model params", () => {
     expect(config.tier_model_configs).toEqual({
       COMPLEX: [{ model_name: "claude-sonnet-4", litellm_params: { reasoning_effort: "high" } }],
     });
+  });
+});
+
+describe("getClassifierModelError", () => {
+  it("stays quiet for a heuristic router, which needs no classifier model", () => {
+    expect(getClassifierModelError({ classifier_type: "heuristic" })).toBeNull();
+  });
+
+  it("blocks an LLM classifier with no model, which the router cannot start without", () => {
+    expect(getClassifierModelError({ classifier_type: "llm" })).toBe(
+      "Please select a classifier model, or switch back to Heuristic",
+    );
+  });
+
+  it("stays quiet once a model is chosen", () => {
+    expect(
+      getClassifierModelError({ classifier_type: "llm", classifier_llm_config: { model: "m", timeout_ms: 3000 } }),
+    ).toBeNull();
+  });
+});
+
+describe("getKeywordTierRulesError orphaned tiers", () => {
+  const rows = activeTierRows({ tiers });
+
+  it("accepts a rule naming a tier the router has", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: ["k"], tier: "COMPLEX" }], rows)).toBeNull();
+  });
+
+  it("names the rule pointing at a tier this router does not have", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: ["k"], tier: "AUDIT" }], rows)).toBe(
+      "Keyword rule(s) 1 route to a tier this router no longer has",
+    );
+  });
+
+  it("rejects a differently cased tier, because _validate_keyword_rule_tiers matches exactly", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: ["k"], tier: "complex" }], rows)).toBe(
+      "Keyword rule(s) 1 route to a tier this router no longer has",
+    );
+  });
+
+  it("reports an empty keyword row before an orphaned tier, since that is the nearer problem", () => {
+    expect(getKeywordTierRulesError([{ id: "r1", keywords: [], tier: "AUDIT" }], rows)).toContain(
+      "Add at least one keyword",
+    );
+  });
+});
+
+describe("heuristic_first", () => {
+  const heuristicFirstParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "heuristic_first",
+    heuristicFirstMaxTier: "SIMPLE",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierContextWindowSize: 5,
+    classifierContextBudgetChars: 4000,
+    classifierFallback: "default_model",
+  };
+
+  it("emits heuristic_first_max_tier", () => {
+    const config = buildComplexityRouterConfig(heuristicFirstParams);
+    expect(config.classifier_type).toBe("heuristic_first");
+    expect(config.heuristic_first_max_tier).toBe("SIMPLE");
+  });
+
+  it("keeps every classifier key the operator set, since heuristic_first still calls the classifier", () => {
+    const config = buildComplexityRouterConfig(heuristicFirstParams);
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(config.classifier_context_window_size).toBe(5);
+    expect(config.classifier_context_budget_chars).toBe(4000);
+    expect(config.classifier_fallback).toBe("default_model");
+  });
+
+  it("omits heuristic_first_max_tier on every other classifier type, which the backend rejects it on", () => {
+    for (const classifierType of ["heuristic", "llm"] as const) {
+      const config = buildComplexityRouterConfig({ ...heuristicFirstParams, classifierType });
+      expect(config.heuristic_first_max_tier).toBeUndefined();
+    }
   });
 });
