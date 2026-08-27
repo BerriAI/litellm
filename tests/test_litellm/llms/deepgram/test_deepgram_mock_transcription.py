@@ -127,10 +127,10 @@ class TestDeepgramMockTranscription:
                 {"version": "latest"},
                 "https://api.deepgram.com/v1/listen?model=nova-2&version=latest",
             ),
-            # Language parameter should be excluded
+            # Language parameter should be included
             (
                 {"language": "en", "punctuate": True},
-                "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true",
+                "https://api.deepgram.com/v1/listen?model=nova-2&punctuate=true&language=en",
             ),
             # Multiple parameters with boolean conversion
             (
