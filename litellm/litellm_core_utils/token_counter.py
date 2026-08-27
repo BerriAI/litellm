@@ -16,6 +16,8 @@ import litellm
 from litellm import verbose_logger
 from litellm._lazy_imports import _get_default_encoding
 from litellm.constants import (
+    AUDIO_BYTES_PER_TOKEN,
+    DEFAULT_AUDIO_TOKEN_ESTIMATE,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -866,6 +868,25 @@ def _count_anthropic_content(
     return tokens
 
 
+def _count_input_audio_content_block(c: Mapping[str, object]) -> int:
+    """
+    Estimate tokens for an OpenAI ``input_audio`` content block (audio
+    understanding), e.g. {"type": "input_audio", "input_audio": {"data":
+    "<base64>", "format": "wav"}}. The real token cost is the provider's
+    server-side audio tokenization and cannot be derived exactly client-side;
+    when the block carries a base64 payload, derive the estimate from the
+    decoded byte count at a conservative low bitrate, otherwise use the flat
+    per-block floor -- the same numbers ``parallel_request_limiter_v3``
+    already uses for its audio reservations (issue #38459).
+    """
+    input_audio: Final = c.get("input_audio")
+    b64_data: Final = input_audio.get("data") if isinstance(input_audio, dict) else None
+    if isinstance(b64_data, str) and b64_data:
+        decoded_bytes: Final = len(b64_data) * 3 // 4
+        return max(decoded_bytes // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    return DEFAULT_AUDIO_TOKEN_ESTIMATE
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -921,8 +942,7 @@ def _count_content_list(
                 # Claude extended thinking content block
                 # Count the thinking text and skip the opaque blobs (signature, redacted data)
                 thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
+                num_tokens += count_function(thinking_text) if thinking_text else 0
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
@@ -934,13 +954,15 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] == "input_audio":
+                num_tokens += _count_input_audio_content_block(c)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
+                    f"tool_reference, input_audio)."
                 )
         return num_tokens
     except Exception as e:
