@@ -346,10 +346,12 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             return built
 
     async def _check_and_increment_one(
-        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int
+        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
     ) -> tuple[bool, float]:
         if self._check_and_incr_script is not None:
-            raw: Final = await self._check_and_incr_script(keys=(key,), args=(limit, increment, ttl))
+            raw: Final = await self._check_and_incr_script(
+                keys=(key,), args=(limit, increment, ttl, 1 if refresh_ttl else 0)
+            )
             return bool(raw[0]), float(raw[1])
         async with self._lock:
             current_value: Final = await cache.async_get_cache(key=key, litellm_parent_otel_span=None)
@@ -357,7 +359,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if current + increment > limit:
                 return False, current
             new_value: Final = current + increment
-            await cache.async_set_cache(key=key, value=new_value, ttl=ttl, litellm_parent_otel_span=None)
+            await cache.async_set_cache(
+                key=key, value=new_value, ttl=ttl, refresh_ttl=refresh_ttl, litellm_parent_otel_span=None
+            )
             return True, new_value
 
     async def _decrement_floor_zero(self, cache: InternalUsageCache, key: str, delta: float) -> None:
@@ -371,7 +375,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
     async def _atomic_check_and_increment(
         self,
-        checks: Sequence[tuple[InternalUsageCache, str, float, float, int]],
+        checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]],
     ) -> tuple[int | None, tuple[float, ...]]:
         """All-or-nothing atomic admission across `checks` -- see
         `model_based_tag_rate_limits_hook._PROXY_ModelBasedTagRateLimitsHook._atomic_check_and_increment`'s
@@ -382,10 +386,10 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         if not checks:
             return None, ()
         admitted_values: Final = []  # mutable-ok: sequential async accumulator, discardable on early rejection
-        for index, (cache, key, limit, increment, ttl) in enumerate(checks):
+        for index, (cache, key, limit, increment, ttl, refresh_ttl) in enumerate(checks):
             admitted = False
             try:
-                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl)
+                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
             finally:
                 if not admitted:
                     await self._refund_admitted(checks, up_to_index=index)
@@ -396,10 +400,10 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         return None, tuple(admitted_values)
 
     async def _refund_admitted(
-        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int]], up_to_index: int
+        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]], up_to_index: int
     ) -> None:
         for refund_index in range(up_to_index):
-            refund_cache, refund_key, _limit, refund_increment, _ttl = checks[refund_index]
+            refund_cache, refund_key, _limit, refund_increment, _ttl, _refresh_ttl = checks[refund_index]
             try:
                 await self._decrement_floor_zero(refund_cache, refund_key, -refund_increment)
             except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
@@ -631,6 +635,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                         )
                         else 1.0,
                         self._ttl_for(check.unit, check.entry),
+                        check.unit == "concurrency",
                     )
                     for partition, check in zip(atomic_partitions, atomic_checks)
                 )
