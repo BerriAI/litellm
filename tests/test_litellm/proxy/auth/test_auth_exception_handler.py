@@ -1,5 +1,6 @@
 import asyncio
 import json
+from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -530,36 +531,57 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "header_value, expected_spend_logs_metadata",
+    "header_value, has_body_metadata, expected_spend_logs_metadata",
     [
         pytest.param(
             json.dumps({"my_request_id": "req_rejected_2"}),
+            True,
             {"my_request_id": "req_rejected_2"},
             id="valid_header_overrides_body",
         ),
         pytest.param(
+            json.dumps({"my_request_id": "req_rejected_2"}),
+            False,
+            {"my_request_id": "req_rejected_2"},
+            id="valid_header_without_body_metadata",
+        ),
+        pytest.param(
             "{invalid-json",
+            True,
             {"source": "request-body"},
             id="invalid_header_keeps_body",
         ),
         pytest.param(
             "null",
+            True,
             {"source": "request-body"},
             id="null_header_keeps_body",
+        ),
+        pytest.param(
+            None,
+            True,
+            {"source": "request-body"},
+            id="missing_headers_scope_keeps_body",
         ),
     ],
 )
 async def test_budget_auth_failure_logs_spend_metadata_from_request_header(
-    header_value: str,
+    header_value: str | None,
+    has_body_metadata: bool,
     expected_spend_logs_metadata: dict[str, str],
 ) -> None:
-    request_data: dict[str, object] = {
-        "model": "gpt-4o",
-        "metadata": {
+    request_data: dict[str, object] = {"model": "gpt-4o"}
+    if has_body_metadata:
+        request_data["metadata"] = {
             "existing": "keep-me",
             "spend_logs_metadata": {"source": "request-body"},
-        },
-    }
+        }
+    original_request_data = deepcopy(request_data)
+    request = _http_request(
+        headers={"x-litellm-spend-logs-metadata": header_value} if header_value is not None else None
+    )
+    if header_value is None:
+        request.scope.pop("headers")
 
     with (
         patch(  # test-quality-ok: identity seeding is outside the failure-log payload contract
@@ -578,11 +600,7 @@ async def test_budget_auth_failure_logs_spend_metadata_from_request_header(
         with pytest.raises(ProxyException):
             await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
                 BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100),
-                _http_request(
-                    headers={
-                        "x-litellm-spend-logs-metadata": header_value,
-                    }
-                ),
+                request,
                 request_data,
                 "/v1/chat/completions",
                 None,
@@ -591,14 +609,10 @@ async def test_budget_auth_failure_logs_spend_metadata_from_request_header(
 
     logged_request_data = mock_hook.call_args.kwargs["request_data"]
     assert logged_request_data["metadata"]["spend_logs_metadata"] == expected_spend_logs_metadata
-    assert logged_request_data["metadata"]["existing"] == "keep-me"
-    assert request_data == {
-        "model": "gpt-4o",
-        "metadata": {
-            "existing": "keep-me",
-            "spend_logs_metadata": {"source": "request-body"},
-        },
-    }
+    assert logged_request_data["metadata"]["requester_ip_address"] == "10.1.2.3"
+    if has_body_metadata:
+        assert logged_request_data["metadata"]["existing"] == "keep-me"
+    assert request_data == original_request_data
 
 
 @pytest.mark.asyncio

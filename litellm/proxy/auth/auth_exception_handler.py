@@ -19,6 +19,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # canonical non-throwing request header reader
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -177,7 +180,7 @@ class UserAPIKeyAuthExceptionHandler:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
             spend_logs_metadata: Final = LiteLLMProxyRequestSetup.get_spend_logs_metadata_from_request_headers(
-                dict(request.headers)
+                _safe_get_request_headers(request)
             )
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 request_data=_with_auth_failure_metadata(
