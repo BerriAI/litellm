@@ -711,7 +711,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         """
         await self._release_pending_for_call_id(request_data)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         # Always release regardless of which hook raised: this hook's own
         # rejection never reserves a slot, so pending_concurrency_keys is
         # already empty in that case and the check below no-ops; a rejection
@@ -719,7 +721,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # land after this hook already reserved its own slot.
         await self._release_pending_for_call_id(kwargs)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
         if stash is not None and stash.pending_concurrency_keys:
             release_task: Final = asyncio.create_task(self._release_pending_for_call_id(kwargs))
@@ -730,7 +734,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         if config is None:
             return
 
-        standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+        standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get(  # pyright: ignore[reportAssignmentType]  # untyped callback kwargs, same as shadow_eval_logger.py's identical read
+            "standard_logging_object"
+        )
         if standard_logging_object is None:
             return
 
@@ -738,7 +744,8 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # request kwargs admission sees: metadata/litellm_metadata are never
         # top-level here, only nested under kwargs["litellm_params"] (see
         # Logging.update_environment_variables).
-        litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
+        litellm_params_raw: Final = kwargs.get("litellm_params")
+        litellm_params_for_metadata: Final = litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
         metadata_variable_name: Final = _resolve_success_event_metadata_variable_name(litellm_params_for_metadata)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
@@ -803,7 +810,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             partition = await self._partition_for(partition_key)  # not Final: rebound each loop iteration
             accounting_task = asyncio.create_task(  # not Final: rebound each loop iteration
                 partition.v3.async_increment_tokens_with_ttl_preservation(
-                    pipeline_operations=tuple(group_operations), parent_otel_span=None
+                    pipeline_operations=group_operations, parent_otel_span=None
                 )
             )
             _BACKGROUND_TASKS.add(accounting_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
