@@ -866,6 +866,81 @@ def test_the_swallow_is_suppressible_with_a_reason(tmp_path):
     assert _swallowed(tmp_path, body) == []
 
 
+def test_a_raise_reachable_on_only_one_branch_still_swallows(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == expected\n"
+        "    except Exception as e:\n"
+        "        if expected is False:\n"
+        "            pass\n"
+        "        else:\n"
+        "            raise e\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_branch_that_reports_on_both_halves_is_left_alone(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == 3\n"
+        "    except Exception as e:\n"
+        "        if strict:\n"
+        "            pytest.fail(str(e))\n"
+        "        else:\n"
+        "            raise\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_an_if_with_no_else_falls_through_and_swallows(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == 3\n"
+        "    except Exception:\n"
+        "        if strict:\n"
+        "            raise\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_an_elif_chain_that_ends_in_a_swallowing_branch_is_flagged(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == 3\n"
+        "    except Exception as e:\n"
+        "        if 'timeout' in str(e):\n"
+        "            pass\n"
+        "        elif 'refused' in str(e):\n"
+        "            pass\n"
+        "        else:\n"
+        "            pytest.fail(str(e))\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_report_nested_in_a_with_block_still_counts(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == 3\n"
+        "    except Exception:\n"
+        "        with context():\n"
+        "            raise\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_a_report_after_a_swallowing_branch_still_counts(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == 3\n"
+        "    except Exception as e:\n"
+        "        if noisy:\n"
+        "            print(e)\n"
+        "        raise\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
 def test_a_swallow_outside_a_test_function_is_left_alone(tmp_path):
     source = (
         "def _helper():\n"

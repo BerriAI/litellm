@@ -438,14 +438,30 @@ def _catches_assertion_error(handler: ast.ExceptHandler) -> bool:
     return any(_dotted_name(node).rpartition(".")[2] in ASSERTION_ERROR_CATCHERS for node in named)
 
 
-def _reports_the_failure(handler: ast.ExceptHandler) -> bool:
-    """Re-raising, or failing the test, passes the failure on rather than eating it."""
-    return any(
-        isinstance(node, ast.Raise)
-        or (isinstance(node, ast.Call) and _is_pytest_assertion_call(node))
-        for parent in handler.body
-        for node in ast.walk(parent)
-    ) or _raises_assertion_error(handler.body)
+def _statement_reports(stmt: ast.stmt) -> bool:
+    """Whether control leaving this statement has necessarily reported the failure.
+    A `raise` or a `pytest.fail` does. An `if` does only when both halves do, since the
+    branch that falls through is the path a swallowed assertion takes."""
+    if isinstance(stmt, (ast.Raise, ast.Assert)):
+        return True
+    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+        return _is_pytest_assertion_call(stmt.value) or _is_assertion_helper_call(stmt.value)
+    if isinstance(stmt, ast.If):
+        return bool(stmt.orelse) and _reports_the_failure(stmt.body) and _reports_the_failure(stmt.orelse)
+    if isinstance(stmt, (ast.With, ast.AsyncWith)):
+        return _reports_the_failure(stmt.body)
+    if isinstance(stmt, ast.Try):
+        return _reports_the_failure(stmt.body) or _reports_the_failure(stmt.finalbody)
+    if isinstance(stmt, ast.Match):
+        return bool(stmt.cases) and all(_reports_the_failure(case.body) for case in stmt.cases)
+    return False
+
+
+def _reports_the_failure(body: Sequence[ast.stmt]) -> bool:
+    """Re-raising, or failing the test, passes the failure on rather than eating it.
+    Every path out of the block has to do it: a `raise` reachable on one branch only
+    leaves the other branch swallowing, which is the shape the rule exists to catch."""
+    return any(_statement_reports(stmt) for stmt in body)
 
 
 def _swallowing_handler(node: ast.Try) -> ast.ExceptHandler | None:
@@ -455,7 +471,7 @@ def _swallowing_handler(node: ast.Try) -> ast.ExceptHandler | None:
         (
             handler
             for handler in node.handlers
-            if _catches_assertion_error(handler) and not _reports_the_failure(handler)
+            if _catches_assertion_error(handler) and not _reports_the_failure(handler.body)
         ),
         None,
     )
