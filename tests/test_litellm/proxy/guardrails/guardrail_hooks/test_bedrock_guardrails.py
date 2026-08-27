@@ -4,6 +4,7 @@ Unit tests for Bedrock Guardrails
 
 import asyncio
 import base64
+import contextlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -5297,6 +5298,32 @@ class TestBedrockGuardrailImageInput:
             request=httpx.Request("GET", url),
         )
 
+    @staticmethod
+    def _fake_stream(chunks: list[bytes], served: list[int] | None = None):
+        """Stand in for httpx.AsyncClient.stream, serving `chunks` one at a time.
+
+        The guardrail caps the transfer, so the fetch goes through `stream` rather
+        than `get`. `served` counts the chunks actually pulled, which is how a test
+        tells "stopped mid-transfer" apart from "read everything, then rejected".
+        """
+
+        @contextlib.asynccontextmanager
+        async def _stream(self, method: str, url, **kwargs):
+            async def _aiter_bytes():
+                for chunk in chunks:
+                    if served is not None:
+                        served.append(len(chunk))
+                    yield chunk
+
+            response = MagicMock()
+            response.status_code = 200
+            response.headers = httpx.Headers({"content-type": "image/jpeg"})
+            response.request = httpx.Request("GET", str(url))
+            response.aiter_bytes = _aiter_bytes
+            yield response
+
+        return _stream
+
     def _guardrail(self, **kwargs) -> BedrockGuardrail:
         return BedrockGuardrail(
             guardrail_name="bedrock-image",
@@ -5430,9 +5457,7 @@ class TestBedrockGuardrailImageInput:
                 "content": [{"type": "image_url", "image_url": {"url": self._REMOTE_IMAGE_URL}}],
             }
         ]
-        get = AsyncMock(return_value=self._jpeg_response(self._REMOTE_IMAGE_URL))
-
-        with patch.object(httpx.AsyncClient, "get", new=get):
+        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream([self._JPEG_BYTES])):
             request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
         assert request["content"] == [
@@ -5456,8 +5481,12 @@ class TestBedrockGuardrailImageInput:
         url = "http://169.254.169.254/latest/meta-data/"
         messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
         get = AsyncMock(return_value=self._jpeg_response(url))
+        served: list[int] = []
 
-        with patch.object(httpx.AsyncClient, "get", new=get):
+        with (
+            patch.object(httpx.AsyncClient, "get", new=get),
+            patch.object(httpx.AsyncClient, "stream", new=self._fake_stream([self._JPEG_BYTES], served)),
+        ):
             with pytest.raises(HTTPException):
                 await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
@@ -5465,7 +5494,9 @@ class TestBedrockGuardrailImageInput:
                 source="INPUT", messages=messages
             )
 
+        # Both transports are stubbed: neither the plain nor the capped fetch ran.
         get.assert_not_awaited()
+        assert served == []
         assert request["content"] == []
 
     @pytest.mark.asyncio
@@ -5530,6 +5561,35 @@ class TestBedrockGuardrailImageInput:
         assert sent, "image-only latest message was skipped entirely"
         kinds = [k for item in sent[0]["content"] for k in item]
         assert "image" in kinds, f"image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_oversized_remote_image_is_cut_off_during_the_transfer(self):
+        """A caller-supplied url can serve an unbounded or indefinitely chunked body.
+
+        The decoded-size check runs once the bytes are already resident, so the cap
+        has to apply while the transfer is in flight. Asserting on how much was
+        pulled is what separates that from buffering it all and rejecting after.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._REMOTE_IMAGE_URL}}],
+            }
+        ]
+        # 8 MB offered one MB at a time against a 4 MB cap.
+        chunks: list[bytes] = [b"\0" * (1024 * 1024) for _ in range(8)]
+        served: list[int] = []
+
+        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream(chunks, served)):
+            with pytest.raises(HTTPException):
+                await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        # Without the cap the fetch buffers through `get` instead, so `served` stays
+        # empty and the HTTPException above would come from an unstubbed transport
+        # rather than from the size rejection. Assert the capped path actually ran.
+        assert served, "the fetch did not go through the capped stream path"
+        assert sum(served) <= 5 * 1024 * 1024, f"read {sum(served)} bytes past a 4 MB cap"
+        assert len(served) < len(chunks), "the whole body was pulled before rejecting it"
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_scans_images_from_inputs(self):

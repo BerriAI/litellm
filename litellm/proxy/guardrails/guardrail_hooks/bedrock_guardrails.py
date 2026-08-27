@@ -34,7 +34,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_guardrail_cost
 from litellm.litellm_core_utils.prompt_templates.factory import BedrockImageProcessor
-from litellm.litellm_core_utils.url_utils import SSRFError
+from litellm.litellm_core_utils.url_utils import PayloadTooLargeError, SSRFError
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -484,7 +484,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return None
 
         try:
-            block: Final = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
+            # Cap the fetch itself. The decoded-size check below runs after the
+            # bytes are already resident, so on its own it does not stop a caller
+            # from pointing the proxy at an arbitrarily large or chunked response
+            # -- and `_build_input_content_items` gathers these concurrently, so
+            # one request with several URLs multiplies the allocation.
+            block: Final = await BedrockImageProcessor.process_image_async(
+                image_url=image_url, format=None, max_bytes=_MAX_IMAGE_BYTES
+            )
+        except PayloadTooLargeError as e:
+            # Named before the ValueError arm it subclasses, so the operator sees
+            # "too large" rather than "could not be read" for a size rejection.
+            self._handle_unscannable_image(reason=f"remote image over ApplyGuardrail's 4 MB limit: {e}")
+            return None
         except (httpx.HTTPError, SSRFError, ValueError, TypeError, KeyError, binascii.Error) as e:
             self._handle_unscannable_image(reason=f"image content could not be read: {e}")
             return None

@@ -3407,14 +3407,14 @@ class BedrockImageProcessor:
         return base64_bytes, content_type
 
     @staticmethod
-    async def get_image_details_async(image_url) -> tuple[str, str]:
+    async def get_image_details_async(image_url, max_bytes: int | None = None) -> tuple[str, str]:
         try:
             client: Final = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.PromptFactory,
                 params={"concurrent_limit": 1},
             )
             # Send a GET request to the image URL
-            response: Final[httpx.Response] = await async_safe_get(client, image_url)
+            response: Final[httpx.Response] = await async_safe_get(client, image_url, max_bytes=max_bytes)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(response, image_url)
@@ -3595,13 +3595,20 @@ class BedrockImageProcessor:
         return cls._create_bedrock_block(img_bytes, mime_type, image_format)
 
     @classmethod
-    async def process_image_async(cls, image_url: str, format: str | None) -> BedrockContentBlock:
-        """Asynchronous image processing."""
+    async def process_image_async(
+        cls, image_url: str, format: str | None, max_bytes: int | None = None
+    ) -> BedrockContentBlock:
+        """Asynchronous image processing.
+
+        ``max_bytes`` caps a remote fetch and is ignored for a base64 data URI,
+        whose size the caller already knows before calling. Omitting it keeps the
+        previous unbounded fetch.
+        """
 
         if "base64" in image_url:
             img_bytes, mime_type, image_format = cls._parse_base64_image(image_url)
         elif "http://" in image_url or "https://" in image_url:
-            img_bytes, mime_type = await BedrockImageProcessor.get_image_details_async(image_url)
+            img_bytes, mime_type = await BedrockImageProcessor.get_image_details_async(image_url, max_bytes=max_bytes)
             image_format = mime_type.split("/")[1]
         else:
             raise ValueError("Unsupported image type. Expected either image url or base64 encoded string")
