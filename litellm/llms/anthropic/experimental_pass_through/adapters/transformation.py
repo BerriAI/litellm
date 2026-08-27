@@ -1358,12 +1358,10 @@ class LiteLLMAnthropicMessagesAdapter:
     @classmethod
     def _get_web_search_request_count(cls, usage: Usage) -> int:
         from litellm.litellm_core_utils.llm_cost_calc.utils import (
-            get_web_search_requests,
+            get_web_search_requests_from_usage,
         )
 
-        from_server_tool_use: Final = cls._positive_int(
-            get_web_search_requests(getattr(usage, "server_tool_use", None))
-        )
+        from_server_tool_use: Final = cls._positive_int(get_web_search_requests_from_usage(usage))
         if from_server_tool_use > 0:
             return from_server_tool_use
         return cls._first_positive_prompt_tokens_detail_value(usage, ("web_search_requests",))

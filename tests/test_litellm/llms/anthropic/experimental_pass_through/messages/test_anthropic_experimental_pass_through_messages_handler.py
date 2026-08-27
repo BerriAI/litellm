@@ -17,7 +17,12 @@ from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    StandardLoggingPayloadErrorInformation,
+    StreamingChoices,
+)
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -1292,7 +1297,7 @@ class TestMessagesStreamingSuccessLogging:
 class _FailureCapture(CustomLogger):
     def __init__(self):
         super().__init__()
-        self.error_information: List[Dict[str, Any]] = []
+        self.error_information: list[StandardLoggingPayloadErrorInformation] = []
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         payload = kwargs.get("standard_logging_object") or {}
