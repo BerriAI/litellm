@@ -429,6 +429,32 @@ class TestThinkingParameterTransformation:
 class TestThinkingSummaryPreservation:
     """Tests for thinking.summary preservation and reasoning_auto_summary flag."""
 
+    def test_use_chat_completions_url_skips_responses_api_routing(self):
+        """Enabled thinking + use_chat_completions_url_for_anthropic_messages should NOT
+        rewrite the model to openai/responses/* (stays on chat/completions)."""
+        import litellm
+
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        original = litellm.use_chat_completions_url_for_anthropic_messages
+        try:
+            litellm.use_chat_completions_url_for_anthropic_messages = True
+            completion_kwargs = {
+                "model": "openai/gpt-5.1",
+                "custom_llm_provider": "openai",
+                "reasoning_effort": "medium",
+            }
+            LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+                completion_kwargs, thinking={"type": "enabled", "budget_tokens": 5000}
+            )
+            # model must remain on chat/completions, not be rewritten to openai/responses/*
+            assert completion_kwargs["model"] == "openai/gpt-5.1"
+            assert "responses/" not in completion_kwargs["model"]
+        finally:
+            litellm.use_chat_completions_url_for_anthropic_messages = original
+
     def test_thinking_summary_concise_preserved_for_openai(self):
         """User-provided summary='concise' should not be replaced with 'detailed'."""
         from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
