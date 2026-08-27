@@ -641,6 +641,8 @@ model LiteLLM_SpendLogs {
   mcp_namespaced_tool_name String? 
   agent_id            String?
   proxy_server_request Json?     @default("{}")
+  created_at          DateTime   @default(now()) @map("created_at")
+  updated_at          DateTime   @default(now()) @updatedAt @map("updated_at")
   @@index([startTime])
   @@index([startTime, request_id])
   @@index([end_user])
@@ -945,6 +947,17 @@ model LiteLLM_DailyTagSpend {
 }
 
 
+// One row per live proxy worker process. Workers upsert their row on a fixed
+// heartbeat; counting rows with a recent heartbeat tells how many workers share
+// this database, which lets the Admin UI hide its "no Redis" warning for
+// deployments that are provably a single worker.
+model LiteLLM_ProxyWorkerHeartbeat {
+  worker_id         String   @id
+  hostname          String
+  started_at        DateTime @default(now())
+  last_heartbeat_at DateTime @default(now())
+}
+
 // Track the status of cron jobs running. Only allow one pod to run the job at a time
 model LiteLLM_CronJob {
   cronjob_id            String   @id @default(cuid()) // Unique ID for the record
@@ -1067,6 +1080,21 @@ model LiteLLM_DailyGuardrailMetrics {
   @@id([guardrail_id, date])
   @@index([date])
   @@index([guardrail_id])
+}
+
+// Daily guardrail billable usage units (one row per guardrail/day/team/key/unit type)
+model LiteLLM_DailyGuardrailUsageUnits {
+  guardrail_id String
+  date         String   // YYYY-MM-DD
+  team_id      String   // empty string when the request had no team
+  api_key      String   // hashed virtual key; empty string when unknown
+  usage_unit   String   // provider counter name, e.g. Bedrock's contentPolicyUnits
+  units        BigInt   @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@id([guardrail_id, date, team_id, api_key, usage_unit])
+  @@index([date])
 }
 
 // Daily policy metrics for usage dashboard (one row per policy per day)
@@ -1450,28 +1478,39 @@ model LiteLLM_AutoRouterSession {
   @@index([last_turn_at], map: "idx_autorouter_session_last_turn")
 }
 
-// Shadow eval: evaluation of an auto-router against a key's live traffic, in either
-// direction. forward duplicates the requests the key did not route through the router
-// through it, answering whether the key should adopt it; reverse duplicates the requests
-// the router did serve against a fixed baseline model, answering whether a key already on
-// it still benefits. Either way a sampled slice runs in a detached task and an LLM judge
-// compares real vs shadow responses blind. The job row is immutable config plus
-// stopped_at; every count, status, and spend figure is derived from the append-only
-// attempt rows, so nothing can disagree across pods or stop races.
+// Shadow eval: evaluation of an auto-router against one or more keys' live traffic, in
+// either direction. forward duplicates the requests the keys did not route through the
+// router through it, answering whether they should adopt it; reverse duplicates the
+// requests the router did serve against a fixed baseline model, answering whether a key
+// already on it still benefits. Either way a sampled slice runs in a detached task and an
+// LLM judge compares real vs shadow responses blind. Each row is ONE key's leg of a job:
+// immutable config plus that key's own turn budget and stop state, so one key exhausting
+// its budget never ends a sibling's sampling. A job is the set of legs sharing group_id
+// (the id the API reports), written together by one atomic create_many with identical
+// config; single-key jobs predating group_id were backfilled group_id = id. "One active
+// job per (key, direction)" is a partial unique index on (api_key_id, direction) WHERE
+// stopped_at IS NULL, expressed only in the migration because schema.prisma cannot state
+// partial indexes; it is what makes a concurrent start on another pod race-safe rather
+// than read-then-create. Every count, status, and spend figure is derived from the
+// append-only attempt rows, so nothing can disagree across pods or stop races.
 model LiteLLM_ShadowEvalJob {
   id                String   @id @default(cuid())
-  api_key_id        String   // hashed virtual key whose traffic is shadowed
+  group_id          String   // legs of one job share this; the API's job id
+  api_key_id        String   // hashed virtual key whose traffic this leg shadows
   router_name       String   // the auto-router under evaluation, in either direction
   direction         String   @default("forward") // forward | reverse
   baseline_model    String?  // reverse only: the fixed model the router is judged against
   judge_model       String
   shadow_percentage Float
-  max_turns         Int      // sample budget: judge at most this many turns
+  max_turns         Int      // sample-count ceiling: the whole budget on pre-max_budget jobs, the error-loop valve otherwise
+  max_budget        Float?   // per-key USD cap on the eval's own shadow + judge spend; null on jobs from before spend budgets
   created_at        DateTime @default(now())
   created_by        String?
   ends_at           DateTime
   stopped_at        DateTime?
+  stopped_by        String?  // operator who stopped it early; null when it ended on its own
 
+  @@index([group_id])
   @@index([api_key_id])
   @@index([created_at])
 }
@@ -1487,6 +1526,7 @@ model LiteLLM_ShadowEvalAttempt {
   shadow_model String?
   confidence   Float?
   judge_cost   Float    @default(0)
+  shadow_cost  Float    @default(0)
   error        String?
   created_at   DateTime @default(now())
 

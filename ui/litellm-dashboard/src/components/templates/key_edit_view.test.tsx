@@ -3,7 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import { getPoliciesList, getPromptsList, modelAvailableCall } from "../networking";
+import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
+import {
+  getPassThroughEndpointsCall,
+  getPoliciesList,
+  getPromptsList,
+  modelAvailableCall,
+  vectorStoreListCall,
+} from "../networking";
 import { KeyEditView } from "./key_edit_view";
 
 const can = vi.fn();
@@ -98,6 +105,36 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   }),
 }));
 
+vi.mock("../mcp_server_management/MCPServerSelector", () => ({
+  default: ({
+    value,
+    onChange,
+  }: {
+    value?: { servers?: string[]; accessGroups?: string[]; toolsets?: string[] };
+    onChange?: (v: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="mcp-server-selector"
+      onClick={() => onChange?.({ servers: ["mcp-1"], accessGroups: [], toolsets: value?.toolsets ?? [] })}
+    >
+      pick mcp server
+    </button>
+  ),
+}));
+
+vi.mock("../agent_management/AgentSelector", () => ({
+  default: ({ onChange }: { onChange?: (v: { agents: string[]; accessGroups: string[] }) => void }) => (
+    <button
+      type="button"
+      data-testid="agent-selector"
+      onClick={() => onChange?.({ agents: ["agent-1"], accessGroups: [] })}
+    >
+      pick agent
+    </button>
+  ),
+}));
+
 vi.mock("../common_components/AccessGroupSelector", () => ({
   default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
     <input
@@ -108,24 +145,12 @@ vi.mock("../common_components/AccessGroupSelector", () => ({
   ),
 }));
 
-/* eslint-disable local/no-antd-class-selectors -- the "Key Type" and "Models" Form.Items wrap a noStyle nested item, so antd renders a label with no associated control and there is no accessible query for these selects */
-const antdSelectorFor = (label: HTMLElement): Element =>
-  label.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
-/* eslint-enable local/no-antd-class-selectors */
+const visibleOptions = (): HTMLElement[] => screen.queryAllByRole("option");
 
-const visibleOptions = (): HTMLElement[] =>
-  // eslint-disable-next-line local/no-antd-class-selectors -- antd puts role="option" only on a hidden mirror list; the visible, clickable options carry no role or accessible name
-  Array.from(document.querySelectorAll<HTMLElement>(".ant-select-item-option"));
-
-const isOptionDisabled = (option: HTMLElement): boolean =>
-  // eslint-disable-next-line local/no-antd-class-selectors -- antd signals option disabled state only through this class; the rendered options carry no aria-disabled
-  option.classList.contains("ant-select-item-option-disabled");
+const isOptionDisabled = (option: HTMLElement): boolean => option.getAttribute("aria-disabled") === "true";
 
 const optionByContent = (label: string): HTMLElement | undefined =>
-  visibleOptions().find(
-    // eslint-disable-next-line local/no-antd-class-selectors -- the option's own label text lives in this child node, with no accessible equivalent
-    (el) => el.querySelector(".ant-select-item-option-content")?.textContent === label,
-  );
+  visibleOptions().find((el) => el.textContent === label);
 
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
@@ -348,6 +373,48 @@ describe("KeyEditView", () => {
         />,
       );
 
+    it("locks the prompts control for a non-premium admin so an unsavable value cannot be entered", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={false}
+        />,
+      );
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      expect(prompts).toBeDisabled();
+
+      await userEvent.type(prompts, "sneaky-prompt{Enter}");
+
+      expect(screen.queryByLabelText("sneaky-prompt")).not.toBeInTheDocument();
+    });
+
+    it("leaves the prompts control usable for a premium admin", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={true}
+        />,
+      );
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      expect(prompts).toBeEnabled();
+
+      await userEvent.type(prompts, "allowed-prompt{Enter}");
+
+      expect(await screen.findByLabelText("allowed-prompt")).toBeInTheDocument();
+    });
+
     it("should render both fields and load prompts for an admin", async () => {
       renderAs("Admin");
 
@@ -372,13 +439,14 @@ describe("KeyEditView", () => {
     });
   });
 
-  it("should call onCancel when cancel button is clicked", async () => {
+  it("should call onCancel without submitting the form when cancel button is clicked", async () => {
     const onCancelMock = vi.fn();
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={onCancelMock}
-        onSubmit={async () => {}}
+        onSubmit={onSubmitMock}
         accessToken={""}
         userID={""}
         userRole={""}
@@ -386,14 +454,11 @@ describe("KeyEditView", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
-    });
-
-    const cancelButton = screen.getByRole("button", { name: /cancel/i });
+    const cancelButton = await screen.findByRole("button", { name: /cancel/i });
     await userEvent.click(cancelButton);
 
     expect(onCancelMock).toHaveBeenCalledTimes(1);
+    expect(onSubmitMock).not.toHaveBeenCalled();
   });
 
   it("should display key alias input field", async () => {
@@ -1141,6 +1206,94 @@ describe("KeyEditView", () => {
     });
   });
 
+  describe("per-model budgets", () => {
+    const keyDataWithBudgets = {
+      ...MOCK_KEY_DATA,
+      model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "30d" } },
+    };
+
+    const renderWith = (premiumUser: boolean) => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyDataWithBudgets}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={premiumUser}
+        />,
+      );
+      return onSubmit;
+    };
+
+    // Same hazard as the user edit form: keyData changes while this component
+    // stays mounted (the effect re-seeds the form for exactly that reason), and
+    // the editor's rows live in state seeded once.
+    it("re-seeds the editor when a different key is loaded", async () => {
+      const withBudget = (limit: number, token: string) => ({
+        ...MOCK_KEY_DATA,
+        token,
+        model_max_budget: { "gpt-4": { budget_limit: limit, time_period: "1h" } },
+      });
+
+      const { rerender } = renderWithProviders(
+        <KeyEditView
+          keyData={withBudget(5, "tok-a")}
+          onCancel={() => {}}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={true}
+        />,
+      );
+      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(5);
+
+      rerender(
+        <KeyEditView
+          keyData={withBudget(99, "tok-b")}
+          onCancel={() => {}}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={true}
+        />,
+      );
+
+      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(99);
+    });
+
+    it("should say why the editor is locked when the proxy has no enterprise license", async () => {
+      renderWith(false);
+
+      expect(await screen.findByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    });
+
+    it("should leave the editor usable when the proxy has one", async () => {
+      renderWith(true);
+
+      expect(await screen.findByText(/Cap spend per model over its own window/)).toBeInTheDocument();
+      expect(screen.queryByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).not.toBeInTheDocument();
+    });
+
+    // /key/update validates model_max_budget whenever the field is present and
+    // rejects it without a license, so re-sending an untouched budget would turn
+    // every unrelated edit into a 400.
+    it("should leave model_max_budget out of an edit that did not touch it", async () => {
+      const onSubmit = renderWith(true);
+
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("model_max_budget");
+    });
+  });
+
   it("should display 'AI APIs' label for the llm_api key type option", async () => {
     const keyDataWithLlmApiRoutes = {
       ...MOCK_KEY_DATA,
@@ -1164,7 +1317,7 @@ describe("KeyEditView", () => {
     });
 
     // The selected key type label should show "AI APIs" (not "LLM API")
-    await userEvent.click(antdSelectorFor(screen.getByText("Key Type")));
+    await userEvent.click(screen.getByLabelText("Key Type"));
 
     await waitFor(() => {
       // Verify "AI APIs" appears as an option label
@@ -1312,8 +1465,8 @@ describe("KeyEditView", () => {
   });
 
   describe("models dropdown team gating", () => {
-    const openModelsDropdown = () => {
-      fireEvent.mouseDown(antdSelectorFor(screen.getByText("Models", { selector: "label" })));
+    const openModelsDropdown = async () => {
+      await userEvent.click(screen.getByLabelText("Models"));
     };
 
     it("should offer all-proxy-models but not all-team-models for a teamless key", async () => {
@@ -1333,7 +1486,7 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
       });
 
-      openModelsDropdown();
+      await openModelsDropdown();
 
       await waitFor(() => {
         expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
@@ -1364,7 +1517,7 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
       });
 
-      openModelsDropdown();
+      await openModelsDropdown();
 
       await waitFor(() => {
         expect(screen.getAllByText("team-model-1").length).toBeGreaterThan(0);
@@ -1395,7 +1548,7 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
       });
 
-      openModelsDropdown();
+      await openModelsDropdown();
 
       expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
       expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
@@ -1422,10 +1575,9 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
       });
 
-      openModelsDropdown();
+      await openModelsDropdown();
 
-      const proxyOptionLabels = () =>
-        Array.from(document.querySelectorAll('[role="option"]')).map((option) => option.getAttribute("aria-label"));
+      const proxyOptionLabels = () => visibleOptions().map((option) => option.textContent);
 
       await waitFor(() => {
         expect(proxyOptionLabels()).toContain("gpt-4");
@@ -1455,7 +1607,7 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
       });
 
-      openModelsDropdown();
+      await openModelsDropdown();
 
       const clickOption = async (label: string) => {
         const option = await waitFor(() => {
@@ -1468,6 +1620,7 @@ describe("KeyEditView", () => {
 
       await clickOption("gpt-4");
       await clickOption("All Proxy Models");
+      await userEvent.keyboard("{Escape}");
 
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1494,7 +1647,7 @@ describe("KeyEditView", () => {
         expect(screen.getByText("Models", { selector: "label" })).toBeInTheDocument();
       });
 
-      openModelsDropdown();
+      await openModelsDropdown();
 
       const findOption = (label: string) => optionByContent(label);
 
@@ -1536,6 +1689,47 @@ describe("KeyEditView", () => {
           premiumUser={false}
         />,
       );
+
+    it("refuses to save an invalid per-model estimate, and saves once it is corrected", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+      const perModel = screen.getByLabelText("Estimated Output Tokens Per Model");
+
+      fireEvent.change(perModel, { target: { value: "not json" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findByText(/JSON object of positive integers/)).toBeInTheDocument();
+      expect(onSubmitMock).not.toHaveBeenCalled();
+
+      fireEvent.change(perModel, { target: { value: '{"gpt-4": 4096}' } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+    });
+
+    it("refuses to save a fractional estimate, and saves once it is corrected", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderEditView(MOCK_KEY_DATA, onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+      const estimate = screen.getByLabelText("Estimated Output Tokens");
+
+      fireEvent.change(estimate, { target: { value: "12.5" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).not.toHaveBeenCalled();
+      });
+
+      fireEvent.change(estimate, { target: { value: "2048" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+    });
 
     it("loads the estimates from key metadata and resubmits them unchanged", async () => {
       const onSubmitMock = vi.fn().mockResolvedValue(undefined);
@@ -1647,6 +1841,429 @@ describe("KeyEditView", () => {
         expect(screen.getByLabelText("Estimated Output Tokens")).toBeEnabled();
       });
       expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
+    });
+  });
+
+  const UNTOUCHED_SAVE_PAYLOAD = {
+    key_alias: "asdasdas",
+    models: [],
+    max_budget: 0,
+    budget_duration: "30d",
+    tpm_limit: 10,
+    tpm_limit_type: null,
+    rpm_limit: 10,
+    rpm_limit_type: null,
+    throttle_on_budget_exceeded: false,
+    enable_prompt_caching: false,
+    max_parallel_requests: 10,
+    model_tpm_limit: undefined,
+    model_rpm_limit: undefined,
+    guardrails: undefined,
+    disable_global_guardrails: false,
+    policies: undefined,
+    tags: ["test-tag"],
+    prompts: undefined,
+    access_group_ids: [],
+    allowed_passthrough_routes: undefined,
+    vector_stores: [],
+    mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+    mcp_tool_permissions: {},
+    agents_and_groups: { agents: [], accessGroups: [] },
+    organization_id: null,
+    team_id: null,
+    logging_settings: [],
+    metadata: "{}",
+    duration: "30d",
+    token: "test-token-123",
+    disabled_callbacks: [],
+    auto_rotate: false,
+    rotation_interval: undefined,
+    tag_rpm_limit: {},
+  };
+
+  describe("submit payload contract", () => {
+    const renderForPayload = (
+      onSubmit: (values: Record<string, unknown>) => Promise<void>,
+      keyData: KeyResponse = MOCK_KEY_DATA,
+    ) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={true}
+        />,
+      );
+
+    it("sends exactly the bound form fields on an untouched save, and no server-only key data", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toStrictEqual(UNTOUCHED_SAVE_PAYLOAD);
+    });
+
+    it("drops the policy and prompt keys entirely for a role that cannot see those fields", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Internal User"}
+          premiumUser={true}
+        />,
+      );
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload).not.toHaveProperty("policies");
+      expect(payload).not.toHaveProperty("prompts");
+      expect(payload).toHaveProperty("guardrails");
+    });
+
+    it("routes the shared lifecycle and rate-limit-type controls into their own payload keys", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      const duration = screen.getByPlaceholderText("e.g., 30d");
+      await userEvent.clear(duration);
+      await userEvent.type(duration, "45d");
+
+      await userEvent.click(screen.getByLabelText(/TPM Rate Limit Type/));
+      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload.duration).toBe("45d");
+      expect(payload.tpm_limit_type).toBe("guaranteed_throughput");
+      expect(payload.rpm_limit_type).toBeNull();
+    });
+
+    it("blanks duration rather than dropping the key when Never Expire is ticked", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, { ...MOCK_KEY_DATA, expires: "2026-01-01T00:00:00Z" });
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("checkbox", { name: /never expire/i }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("duration", null);
+    });
+
+    it("carries a typed value from every free-text and numeric control into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      const retype = async (label: RegExp | string, text: string) => {
+        const control = screen.getByLabelText(label);
+        await userEvent.clear(control);
+        await userEvent.type(control, text);
+      };
+
+      await retype("Key Alias", "typed-alias");
+      await retype("Max Budget (USD)", "12.5");
+      await retype("TPM Limit", "111");
+      await retype("RPM Limit", "222");
+      await retype("Max Parallel Requests", "3");
+      await retype("Model TPM Limit", '{{"gpt-4": 7}');
+      await retype("Model RPM Limit", '{{"gpt-4": 8}');
+      await retype("Metadata", '{{"typed": true}');
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({
+        key_alias: "typed-alias",
+        max_budget: "12.5",
+        tpm_limit: "111",
+        rpm_limit: "222",
+        max_parallel_requests: "3",
+        model_tpm_limit: '{"gpt-4": 7}',
+        model_rpm_limit: '{"gpt-4": 8}',
+        metadata: '{"typed": true}',
+      });
+    });
+
+    it("carries every toggle driven off its default into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("switch", { name: /throttle on budget exceeded/i }));
+      await userEvent.click(screen.getByRole("switch", { name: /enable prompt caching/i }));
+      await userEvent.click(screen.getByRole("switch", { name: /disable global guardrails/i }));
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({
+        throttle_on_budget_exceeded: true,
+        enable_prompt_caching: true,
+        disable_global_guardrails: true,
+      });
+    });
+
+    it("carries a tag typed into the tags control into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.type(screen.getByLabelText("Tags"), "typed-tag{Enter}");
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].tags).toEqual(["test-tag", "typed-tag"]);
+    });
+
+    const pickFromCombobox = async (inputLabel: RegExp | string, optionName: RegExp | string) => {
+      await userEvent.click(screen.getByLabelText(inputLabel));
+      await userEvent.click(await screen.findByRole("option", { name: optionName }));
+      await userEvent.keyboard("{Escape}");
+    };
+
+    it("carries a picked guardrail into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await pickFromCombobox("Select guardrails", "guardrail-1");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].guardrails).toEqual(["guardrail-1"]);
+    });
+
+    it("carries a picked policy into the payload", async () => {
+      vi.mocked(getPoliciesList).mockResolvedValueOnce({
+        policies: [{ policy_name: "policy-1", version_number: 1, version_status: "production" }],
+      });
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await pickFromCombobox(/Select policies/, /policy-1/);
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].policies).toEqual(["policy-1"]);
+    });
+
+    it("carries a typed prompt into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.type(screen.getByLabelText("Prompts"), "prompt-1{Enter}");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].prompts).toEqual(["prompt-1"]);
+    });
+
+    it("carries the RPM rate limit type into its own payload key", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByLabelText(/RPM Rate Limit Type/));
+      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const payload = onSubmitMock.mock.calls[0][0];
+      expect(payload.rpm_limit_type).toBe("guaranteed_throughput");
+      expect(payload.tpm_limit_type).toBeNull();
+    });
+
+    it("carries a picked vector store into the payload", async () => {
+      vi.mocked(vectorStoreListCall).mockResolvedValueOnce({
+        data: [{ vector_store_id: "vs-1", vector_store_name: "VS One" }],
+      });
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await pickFromCombobox("Select vector stores", /VS One/);
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].vector_stores).toEqual(["vs-1"]);
+    });
+
+    it("carries a picked pass through route into the payload", async () => {
+      vi.mocked(getPassThroughEndpointsCall).mockResolvedValueOnce({
+        endpoints: [{ path: "/bria", methods: ["POST"] }],
+      });
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await pickFromCombobox(/allowed pass through routes/, /\/bria/);
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].allowed_passthrough_routes).toEqual(["/bria"]);
+    });
+
+    it("carries a picked team into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          teams={[{ team_id: "team-9", team_alias: "Team Nine" }]}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={true}
+        />,
+      );
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByLabelText("Team ID"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team Nine/ }));
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].team_id).toBe("team-9");
+    });
+
+    it("carries a picked MCP server into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: "pick mcp server" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].mcp_servers_and_groups.servers).toEqual(["mcp-1"]);
+    });
+
+    it("carries a picked agent into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: "pick agent" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].agents_and_groups.agents).toEqual(["agent-1"]);
+    });
+
+    it("carries an added logging integration into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /add integration/i }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].logging_settings).toEqual([
+        { callback_name: "", callback_type: "success", callback_vars: {} },
+      ]);
+    });
+
+    it("resends stored budget fallbacks on an untouched save", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        budget_fallbacks: { "gpt-4": ["gpt-4o-mini"] },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("budget_fallbacks", { "gpt-4": ["gpt-4o-mini"] });
+    });
+
+    it("omits budget fallbacks entirely for a key that has none", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).not.toHaveProperty("budget_fallbacks");
+    });
+
+    it("resends the stored per-tag rpm limits on an untouched save", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        metadata: { ...MOCK_KEY_DATA.metadata, tag_rpm_limit: { "test-tag": 7 } },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("tag_rpm_limit", { "test-tag": 7 });
     });
   });
 });

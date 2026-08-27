@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chooseSelectOption } from "@/../tests/test-utils";
 import { UsageViewSelect } from "./UsageViewSelect";
 
 const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -35,9 +36,7 @@ describe("UsageViewSelect", () => {
     const user = userEvent.setup();
     render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
 
-    await openMenu(user);
-    const matches = screen.getAllByText("Team Usage");
-    await user.click(matches[matches.length - 1]);
+    await chooseSelectOption(user, screen.getByRole("combobox"), /^Team Usage/);
 
     expect(mockOnChange).toHaveBeenCalled();
     expect(mockOnChange.mock.calls[0][0]).toBe("team");
@@ -77,6 +76,24 @@ describe("UsageViewSelect", () => {
 
     await openMenu(user);
     expect(offers(container, optionName)).toBe(false);
+  });
+
+  // An org admin's session role is "Internal User" — org-admin-ness lives in the
+  // membership table — so the two rows above cannot tell them apart from a plain
+  // internal user. Organization Usage must open for them, and only that option:
+  // the proxy serves them /organization/daily/activity scoped to the orgs they
+  // administer, but still refuses the agent usage route.
+  it.each([
+    ["Organization Usage", true],
+    ["Agent Usage (A2A)", false],
+  ] as const)("should offer %s to an org admin: %s", async (optionName, expected) => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" isOrgAdmin={true} />,
+    );
+
+    await openMenu(user);
+    expect(offers(container, optionName)).toBe(expected);
   });
 
   it.each(["Team Usage", "Tag Usage"])("should keep %s available to an internal user", async (optionName) => {

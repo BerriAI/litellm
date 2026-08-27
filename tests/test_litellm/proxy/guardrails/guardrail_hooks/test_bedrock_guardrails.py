@@ -3,7 +3,6 @@ Unit tests for Bedrock Guardrails
 """
 
 import json
-import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +10,6 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -2113,7 +2111,7 @@ async def test_make_bedrock_api_request_forwards_guardrail_action():
     ):
         mock_post.return_value = mock_bedrock_response
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="blocked"):
             await guardrail.make_bedrock_api_request(
                 source="INPUT",
                 messages=request_data["messages"],
@@ -5077,3 +5075,202 @@ async def test_apply_guardrail_failure_logs_a_dict_not_a_bare_string():
     logged = mock_log.call_args.kwargs["guardrail_json_response"]
     assert isinstance(logged, dict), f"expected a dict, got {type(logged).__name__}"
     assert "error" in logged
+
+
+def test_build_tracing_detail_surfaces_usage_counters_and_cost(monkeypatch):
+    """LIT-5650/LIT-5651: AWS-billed usage must land as guardrail_usage priced into guardrail_cost."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "guardrail_cost_per_unit": {
+                    "topicPolicyUnits": 0.00015,
+                    "contentPolicyUnits": 0.00015,
+                    "wordPolicyUnits": 0.0,
+                }
+            }
+        },
+    )
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    detail = guardrail._build_tracing_detail(
+        {
+            "action": "GUARDRAIL_INTERVENED",
+            "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0, "oddball": "not-an-int"},
+        },
+        aws_region_name="us-east-1",
+    )
+
+    assert detail["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0}
+    assert detail["guardrail_cost"] == pytest.approx(0.00045)
+
+
+def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    for detail in (
+        guardrail._build_tracing_detail({"action": "NONE"}, aws_region_name="us-east-1"),
+        guardrail._build_tracing_detail({"action": "NONE", "usage": {}}, aws_region_name="us-east-1"),
+    ):
+        assert "guardrail_usage" not in detail
+        assert "guardrail_cost" not in detail
+
+
+@pytest.mark.asyncio
+async def test_blocked_chunk_logs_usage_and_cost_of_prior_passed_chunks(monkeypatch):
+    """LIT-5651 regression: a block on a later chunk must still bill the chunks AWS already processed."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "guardrail_cost_per_unit": {
+                    "contentPolicyUnits": 0.00015,
+                    "wordPolicyUnits": 0.0,
+                }
+            }
+        },
+    )
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        chunk_budget_chars=40,
+    )
+
+    too_large_response = MagicMock()
+    too_large_response.status_code = 429
+    too_large_response.json.return_value = {
+        "message": "Input text size (60 text units) exceeds the maximum allowed (1 text units) for the content filter policy"
+    }
+
+    passed_chunk_response = MagicMock()
+    passed_chunk_response.status_code = 200
+    passed_chunk_response.json.return_value = {
+        "action": "NONE",
+        "outputs": [],
+        "assessments": [],
+        "usage": {"contentPolicyUnits": 2, "wordPolicyUnits": 1},
+    }
+
+    blocked_chunk_response = MagicMock()
+    blocked_chunk_response.status_code = 200
+    blocked_chunk_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"contentPolicy": {"filters": [{"type": "HATE", "confidence": "HIGH", "action": "BLOCKED"}]}}],
+        "outputs": [{"text": "Content blocked"}],
+        "usage": {"contentPolicyUnits": 3},
+    }
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "a" * 30},
+            {"role": "user", "content": "b" * 30},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = [too_large_response, passed_chunk_response, blocked_chunk_response]
+
+        with pytest.raises(HTTPException):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+    assert mock_post.call_count == 3
+    logged_entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert len(logged_entries) == 1
+    logged = logged_entries[0]
+    assert logged["guardrail_usage"] == {"contentPolicyUnits": 5, "wordPolicyUnits": 1}
+    assert logged["guardrail_cost"] == pytest.approx(0.00075)
+    assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 5, "wordPolicyUnits": 1}
+
+
+@pytest.mark.asyncio
+async def test_terminal_failure_logs_usage_and_cost_of_prior_passed_chunks(monkeypatch):
+    """LIT-5651 regression: a terminal failure on a later chunk must still bill the chunks AWS already processed."""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "bedrock/guardrails": {
+                "guardrail_cost_per_unit": {
+                    "contentPolicyUnits": 0.00015,
+                    "wordPolicyUnits": 0.0,
+                }
+            }
+        },
+    )
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        chunk_budget_chars=40,
+    )
+
+    too_large_response = MagicMock()
+    too_large_response.status_code = 429
+    too_large_response.json.return_value = {
+        "message": "Input text size (60 text units) exceeds the maximum allowed (1 text units) for the content filter policy"
+    }
+
+    passed_chunk_response = MagicMock()
+    passed_chunk_response.status_code = 200
+    passed_chunk_response.json.return_value = {
+        "action": "NONE",
+        "outputs": [],
+        "assessments": [],
+        "usage": {"contentPolicyUnits": 2, "wordPolicyUnits": 1},
+    }
+
+    failed_chunk_response = MagicMock()
+    failed_chunk_response.status_code = 400
+    failed_chunk_response.json.return_value = {"message": "ValidationException: guardrail is in a failed state"}
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "a" * 30},
+            {"role": "user", "content": "b" * 30},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.side_effect = [too_large_response, passed_chunk_response, failed_chunk_response]
+
+        with pytest.raises(HTTPException):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+    assert mock_post.call_count == 3
+    logged_entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert len(logged_entries) == 1
+    logged = logged_entries[0]
+    assert logged["guardrail_status"] == "guardrail_failed_to_respond"
+    assert logged["guardrail_usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
+    assert logged["guardrail_cost"] == pytest.approx(0.0003)
+    assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
+    assert "error" in logged["guardrail_response"]

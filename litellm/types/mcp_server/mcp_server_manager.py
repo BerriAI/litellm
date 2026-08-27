@@ -184,6 +184,18 @@ class MCPServer(BaseModel):
         return self.__repr__()
 
     @property
+    def effective_authorization_url(self) -> str | None:
+        return self.authorization_url or self.configured_authorization_url
+
+    @property
+    def effective_token_url(self) -> str | None:
+        return self.token_url or self.configured_token_url
+
+    @property
+    def effective_registration_url(self) -> str | None:
+        return self.registration_url or self.configured_registration_url
+
+    @property
     def has_client_credentials(self) -> bool:
         """True if this server should use the OAuth2 client_credentials (M2M) flow.
 
@@ -225,13 +237,21 @@ class MCPServer(BaseModel):
         return self.auth_type == MCPAuth.oauth_delegate
 
     @property
+    def is_client_forwarded_token(self) -> bool:
+        """True for the two modes whose upstream credential is the caller's own bearer, forwarded
+        unchanged: the gateway mints nothing for them and holds no OAuth client identity, so a
+        discovered ``authorization_url`` / ``token_url`` enriches only the gateway's own OAuth front
+        door and is never a precondition for opening a session."""
+        return self.is_true_passthrough or self.is_oauth_delegate
+
+    @property
     def is_dcr_bridge(self) -> bool:
         """True when this client-forwarded-token server serves the gateway-hosted DCR front door
         (gateway-self protected-resource and authorization-server metadata plus the register,
         authorize, and token relays) instead of relaying the upstream's own OAuth discovery
         verbatim. ``dcr_bridge`` is rejected on every other auth type at create, update, and
         config load, so the mode gate here only defends rows edited outside those paths."""
-        return bool(self.dcr_bridge) and (self.is_true_passthrough or self.is_oauth_delegate)
+        return bool(self.dcr_bridge) and self.is_client_forwarded_token
 
     @property
     def requires_per_user_auth(self) -> bool:
@@ -248,7 +268,7 @@ class MCPServer(BaseModel):
         if self.needs_user_oauth_token:
             return True
 
-        if self.is_true_passthrough or self.is_oauth_delegate:
+        if self.is_client_forwarded_token:
             return True
 
         # PAT passthrough: auth_type is none but extra_headers includes auth headers

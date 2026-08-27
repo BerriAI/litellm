@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import OrganizationDropdown from "./OrganizationDropdown";
@@ -63,7 +63,7 @@ describe("OrganizationDropdown", () => {
     render(<OrganizationDropdown organizations={MOCK_ORGS} />);
 
     await user.click(screen.getByRole("combobox"));
-    await user.type(screen.getByRole("combobox"), "org-2");
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "org-2" } });
 
     expect(await screen.findByText("Sales")).toBeInTheDocument();
     expect(screen.queryByText("Engineering")).not.toBeInTheDocument();

@@ -3,6 +3,7 @@ import json
 import os
 import time
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from contextlib import suppress
 from functools import cache
 from itertools import chain
 from types import MappingProxyType
@@ -149,11 +150,12 @@ class _BedrockS3RequestParams(BaseModel):
 
 
 class _TrustedS3ModelCredentials(BaseModel):
-    """The S3 bucket the server trusts file ids against, from the deployment snapshot."""
+    """The S3 buckets the server trusts file ids against, from the deployment snapshot."""
 
     model_config = ConfigDict(extra="ignore")
 
     s3_bucket_name: str | None = None
+    s3_output_bucket_name: str | None = None
 
 
 def extract_s3_uri_from_file_id(file_id: str) -> str:
@@ -179,6 +181,18 @@ def extract_s3_uri_from_file_id(file_id: str) -> str:
     raise ValueError("file_id must be a managed LiteLLM S3 file id")
 
 
+_S3_BUCKET_REQUIRED_ERROR: Final = "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+
+
+def _trusted_s3_model_credentials(litellm_params: Mapping[str, object]) -> _TrustedS3ModelCredentials:
+    trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
+    if not isinstance(trusted_model_credentials, MappingProxyType):
+        return _TrustedS3ModelCredentials()
+    snapshot: Final[dict[str, object]] = {}
+    snapshot.update(trusted_model_credentials)  # any-ok: untyped snapshot
+    return _TrustedS3ModelCredentials.model_validate(snapshot)
+
+
 def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
     """
     Resolve the server-configured S3 bucket for Bedrock file operations.
@@ -187,18 +201,48 @@ def get_configured_s3_bucket_name(litellm_params: Mapping[str, object]) -> str:
     environment; never a request-supplied param, since the bucket is what
     `validate_managed_cloud_file_id` checks file ids against.
     """
-    trusted_model_credentials: Final = litellm_params.get("_litellm_internal_model_credentials")
-    bucket_name: str | None = None
-    if isinstance(trusted_model_credentials, MappingProxyType):
-        snapshot: Final[dict[str, object]] = {}
-        snapshot.update(trusted_model_credentials)  # any-ok: untyped snapshot
-        bucket_name = _TrustedS3ModelCredentials.model_validate(snapshot).s3_bucket_name
-    bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+    bucket_name: Final = _trusted_s3_model_credentials(litellm_params).s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
     if not bucket_name:
-        raise ValueError(
-            "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
-        )
+        raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
     return bucket_name
+
+
+def get_configured_s3_bucket_names(litellm_params: Mapping[str, object]) -> tuple[str, ...]:
+    """
+    Resolve the server-configured S3 buckets a Bedrock file id may live in.
+
+    Bedrock batch outputs land in ``s3_output_bucket_name`` when it differs from
+    the input bucket, so retrieval validates against both. Same trust rules as
+    ``get_configured_s3_bucket_name``: only the immutable credential snapshot or
+    the environment, never a request param.
+    """
+    trusted: Final = _trusted_s3_model_credentials(litellm_params)
+    input_bucket: Final = trusted.s3_bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
+    output_bucket: Final = trusted.s3_output_bucket_name or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
+    buckets: Final = tuple(dict.fromkeys(bucket for bucket in (input_bucket, output_bucket) if bucket))
+    if not buckets:
+        raise ValueError(_S3_BUCKET_REQUIRED_ERROR)
+    return buckets
+
+
+def _validate_file_id_against_configured_buckets(
+    s3_uri: str,
+    configured_bucket_names: tuple[str, ...],
+    allow_legacy_cloud_file_ids: bool,
+) -> tuple[str, str]:
+    def validate_against(configured_bucket_name: str) -> tuple[str, str]:
+        return validate_managed_cloud_file_id(
+            file_id=s3_uri,
+            scheme="s3://",
+            configured_bucket_name=configured_bucket_name,
+            allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
+            allow_legacy_cloud_file_ids=allow_legacy_cloud_file_ids,
+        )
+
+    for candidate_bucket_name in configured_bucket_names[:-1]:
+        with suppress(ValueError):
+            return validate_against(candidate_bucket_name)
+    return validate_against(configured_bucket_names[-1])
 
 
 def _uploaded_object_size(litellm_params: Mapping[str, object], raw_response: Response) -> int:
@@ -1186,11 +1230,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ValueError("file_id is required for Bedrock file content retrieval")
 
         s3_uri: Final = extract_s3_uri_from_file_id(file_id)
-        bucket_name, object_key = validate_managed_cloud_file_id(
-            file_id=s3_uri,
-            scheme="s3://",
-            configured_bucket_name=get_configured_s3_bucket_name(litellm_params),
-            allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
+        bucket_name, object_key = _validate_file_id_against_configured_buckets(
+            s3_uri=s3_uri,
+            configured_bucket_names=get_configured_s3_bucket_names(litellm_params),
             allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
         )
 

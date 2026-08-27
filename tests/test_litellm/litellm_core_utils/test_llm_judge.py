@@ -27,7 +27,7 @@ def test_parse_json_verdict_tolerates_fences_and_prose(raw, expected):
 
 
 def test_parse_json_verdict_rejects_non_object():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='judge response is not a JSON object'):
         parse_json_verdict('["not", "an", "object"]')
     with pytest.raises((json.JSONDecodeError, ValueError)):
         parse_json_verdict("no json here at all")

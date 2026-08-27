@@ -16,6 +16,7 @@ import pytest
 
 import litellm
 from litellm.llms.apiserpent.search.transformation import APISerpentSearchConfig
+from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     _is_trusted_search_api_base,
@@ -59,6 +60,7 @@ _BASE_ENV_VARS = (
     "TINYFISH_API_BASE",
     "CRW_API_BASE",
     "NIMBLE_API_BASE",
+    "BING_GROUNDING_PROJECT_ENDPOINT",
 )
 
 
@@ -99,6 +101,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (TinyfishSearchConfig, {"TINYFISH_API_KEY": "srv"}, "caller-key", {}),
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
     (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
+    (BingGroundingSearchConfig, {"BING_GROUNDING_TOKEN": "srv"}, "caller-key", {}),
 )
 
 _IDS = tuple(spec[0].__name__ for spec in PROVIDERS)
@@ -270,7 +273,7 @@ async def test_asearch_does_not_leak_server_key_to_caller_api_base(
             new_callable=AsyncMock,
         ) as mock_get,
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.APIConnectionError):
             await litellm.asearch(
                 query="secrets",
                 search_provider="serper",
@@ -319,7 +322,7 @@ async def test_query_param_key_not_leaked_with_dummy_caller_key(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
         fake_get,
     ):
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.InternalServerError):
             await litellm.asearch(
                 query="secrets",
                 search_provider=provider,

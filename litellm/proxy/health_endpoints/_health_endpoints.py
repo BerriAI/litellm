@@ -34,6 +34,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
@@ -1112,6 +1113,7 @@ async def health_endpoint(
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
+                router=llm_router,
                 **_hc_filter,
             )
             return _post_process(router_result)
@@ -1451,7 +1453,7 @@ def callback_name(callback):
 DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
 
 
-def _show_no_redis_warning() -> bool:
+async def _show_no_redis_warning() -> bool:
     """
     Whether the UI should warn that no Redis is configured.
 
@@ -1461,16 +1463,22 @@ def _show_no_redis_warning() -> bool:
     coordination cache (from a Redis response cache, general_settings.
     coordination_redis, or the REDIS_* env fallback) and the router's own
     Redis (router_settings.redis_host), which backs cooldowns and usage-based
-    routing on its own. Operators who know they run one worker can silence the
-    warning with LITELLM_DISABLE_NO_REDIS_WARNING=true.
+    routing on its own. A deployment whose worker-heartbeat census proves it
+    is exactly one worker needs no cross-worker coordination, so it never
+    warns; when the census is unavailable or shows more than one worker, the
+    warning stands unless LITELLM_DISABLE_NO_REDIS_WARNING=true silences it.
     """
-    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
+    from litellm.proxy.proxy_server import llm_router, prisma_client, redis_usage_cache
 
     if redis_usage_cache is not None:
         return False
     if llm_router is not None and llm_router.cache.redis_cache is not None:
         return False
-    return get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is not True
+    if get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True:
+        return False
+    if prisma_client is None:
+        return True
+    return await count_live_proxy_workers(prisma_client) != 1
 
 
 async def _get_health_readiness_details(
@@ -1513,7 +1521,7 @@ async def _get_health_readiness_details(
         # check log level
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
-        show_no_redis_warning: Final = _show_no_redis_warning()
+        show_no_redis_warning: Final = await _show_no_redis_warning()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1789,6 +1797,7 @@ async def test_model_connection(
         "audio_speech",
         "audio_transcription",
         "image_generation",
+        "image_edit",
         "video_generation",
         "batch",
         "rerank",
@@ -1881,6 +1890,8 @@ async def test_model_connection(
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
         _reject_os_environ_references(request_litellm_params)
+        if model_info:
+            _reject_os_environ_references(model_info)
         model_name: Final = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
@@ -1943,22 +1954,22 @@ async def test_model_connection(
             **request_litellm_params,
         }
 
-        ## Auth check
-        auth_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        litellm_params = _update_litellm_params_for_health_check(
+            model_info=resolved_model_info or {},
+            litellm_params=litellm_params,
+        )
+
+        ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
-                model_info=auth_model_info,
+                model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-        )
-        # Include health_check_params if provided
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
-            litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
 

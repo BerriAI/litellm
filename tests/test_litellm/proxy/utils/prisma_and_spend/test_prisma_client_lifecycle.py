@@ -36,7 +36,7 @@ async def test_prismaclient_init_wires_default_config(
         proxy_logging_obj=proxy_logging,
     )
     pinned = {
-        "iam_token_db_auth": pc.iam_token_db_auth,
+        "token_auth": pc.token_auth,
         "db_reconnect_cooldown_seconds": pc._db_reconnect_cooldown_seconds,
         "db_health_watchdog_interval_seconds": pc._db_health_watchdog_interval_seconds,
         "db_health_watchdog_enabled": pc._db_health_watchdog_enabled,
@@ -48,7 +48,7 @@ async def test_prismaclient_init_wires_default_config(
         "db_reconnect_lock_is_lock": isinstance(pc._db_reconnect_lock, asyncio.Lock),
     }
     assert pinned == {
-        "iam_token_db_auth": None,
+        "token_auth": None,
         "db_reconnect_cooldown_seconds": 15,
         "db_health_watchdog_interval_seconds": 30,
         "db_health_watchdog_enabled": True,

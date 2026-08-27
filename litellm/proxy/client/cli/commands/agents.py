@@ -8,7 +8,7 @@ from typing import Final
 import click
 import requests
 
-from .auth import get_stored_api_key, login
+from .auth import context_secret_vault, get_stored_api_key, login
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
@@ -316,7 +316,7 @@ def resolve_api_key(ctx: click.Context) -> str:
 
     click.echo("No LiteLLM credentials found; starting login...")
     ctx.invoke(login)
-    api_key = get_stored_api_key(expected_base_url=base_url)
+    api_key = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
     if not api_key:
         raise click.ClickException("Login did not produce an API key; cannot start the agent.")
     return api_key

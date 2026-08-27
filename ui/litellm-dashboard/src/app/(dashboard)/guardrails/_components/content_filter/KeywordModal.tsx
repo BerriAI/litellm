@@ -5,7 +5,6 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ACTION_ITEMS } from "./action_options";
-import { ABOVE_ANTD_MODAL } from "./dialog_layering";
 
 interface KeywordModalProps {
   visible: boolean;
@@ -32,7 +31,7 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
 }) => {
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
-      <DialogContent className={`max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px] ${ABOVE_ANTD_MODAL}`}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
         <DialogHeader>
           <DialogTitle>Add blocked keyword</DialogTitle>
         </DialogHeader>

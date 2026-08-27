@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -120,7 +120,7 @@ describe("RequestLogsFilters", () => {
 
     const input = await screen.findByPlaceholderText("Search an internal user");
     await user.click(input);
-    await user.type(input, "alice@example.com");
+    fireEvent.change(input, { target: { value: "alice@example.com" } });
 
     await waitFor(() => expect(useInfiniteSpendLogUsers).toHaveBeenCalledWith(LOGS_WINDOW, 50, "alice@example.com"));
   });
@@ -189,7 +189,7 @@ describe("RequestLogsFilters", () => {
 
     const input = await screen.findByPlaceholderText("Search an end user");
     await user.click(input);
-    await user.type(input, "acme");
+    fireEvent.change(input, { target: { value: "acme" } });
 
     await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(LOGS_WINDOW, 50, "acme"));
   });
@@ -248,5 +248,15 @@ describe("RequestLogsFilters", () => {
     renderWithProviders(<RequestLogsFilters get={() => undefined} set={vi.fn()} teams={[]} logsWindow={otherWindow} />);
 
     await waitFor(() => expect(useInfiniteSpendLogEndUsers).toHaveBeenCalledWith(otherWindow, 50, undefined));
+  });
+
+  it.each([
+    ["", "All Statuses"],
+    ["success", "Success"],
+    ["failure", "Failure"],
+  ])("shows the human label on the Status trigger for %s", async (status, label) => {
+    renderFilters(status === "" ? {} : { [LOG_FILTER_IDS.STATUS]: status });
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
   });
 });

@@ -1,10 +1,10 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
-import { Form } from "antd";
 
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import { renderInMcpForm } from "./McpFormTestHarness";
 
 const defaultProps = {
   availableAccessGroups: [],
@@ -12,6 +12,7 @@ const defaultProps = {
   searchValue: "",
   setSearchValue: () => {},
   getAccessGroupOptions: () => [],
+  mountedAuthType: undefined,
 };
 
 describe("MCPPermissionManagement", () => {
@@ -24,54 +25,24 @@ describe("MCPPermissionManagement", () => {
     return user;
   };
 
-  const renderWithForm = (props = {}) => {
-    const Wrapper: React.FC = ({ children }) => {
-      const [form] = Form.useForm();
-      return (
-        <Form form={form} initialValues={{ allow_all_keys: false }}>
-          {children}
-        </Form>
-      );
-    };
-
-    return render(
-      <Wrapper>
-        <MCPPermissionManagement {...defaultProps} {...props} />
-      </Wrapper>,
-    );
-  };
+  const renderWithForm = (props = {}) =>
+    renderInMcpForm(<MCPPermissionManagement {...defaultProps} {...props} />, { allow_all_keys: false });
 
   it("should default allow_all_keys switch to unchecked for new servers", async () => {
     renderWithForm();
     await expandPanel();
-    // Find the switch associated with "Allow All LiteLLM Keys" text
-    // The first switch in the component is for allow_all_keys
-    const switches = screen.getAllByRole("switch");
-    const toggle = switches[0];
-    expect(toggle).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Allow All LiteLLM Keys" })).not.toBeChecked();
   });
 
-  const renderWithInitialValues = (initialValues: Record<string, unknown>, props = {}) => {
-    const Wrapper: React.FC = ({ children }) => {
-      const [form] = Form.useForm();
-      return (
-        <Form form={form} initialValues={initialValues}>
-          {/* In the real app auth_type is registered by the parent form; the
-              component only watches it. Register a hidden field here so
-              Form.useWatch("auth_type") resolves the initial value. */}
-          <Form.Item name="auth_type" hidden>
-            <input />
-          </Form.Item>
-          {children}
-        </Form>
-      );
-    };
-    return render(
-      <Wrapper>
-        <MCPPermissionManagement {...defaultProps} {...props} />
-      </Wrapper>,
+  const renderWithInitialValues = (initialValues: Record<string, unknown>, props = {}) =>
+    renderInMcpForm(
+      <MCPPermissionManagement
+        {...defaultProps}
+        mountedAuthType={initialValues.auth_type as string | undefined}
+        {...props}
+      />,
+      initialValues,
     );
-  };
 
   it("shows only the oauth2 PKCE-delegation toggle for oauth2 servers", async () => {
     renderWithInitialValues({ allow_all_keys: false, auth_type: "oauth2" });

@@ -173,6 +173,27 @@ def attach_cache_creation_token_details(
     return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
 
+def apply_grounding_request_counts(
+    prompt_tokens_details: PromptTokensDetailsWrapper | None,
+    web_search_requests: int | None,
+    google_maps_grounding_requests: int | None,
+) -> PromptTokensDetailsWrapper | None:
+    updates: Final = MappingProxyType(
+        {
+            field: value
+            for field, value in (
+                ("web_search_requests", web_search_requests),
+                ("google_maps_grounding_requests", google_maps_grounding_requests),
+            )
+            if value is not None
+        }
+    )
+    if not updates:
+        return prompt_tokens_details
+    counted: Final = prompt_tokens_details if prompt_tokens_details is not None else PromptTokensDetailsWrapper()
+    return counted.model_copy(update=updates)
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: list | None = None):
         self.chunks = self._sort_chunks(chunks)
@@ -723,7 +744,7 @@ class ChunkProcessor:
         for choice in response.choices:
             if (
                 hasattr(cast(Choices, choice).message, "reasoning_content")
-                and cast(Choices, choice).message.reasoning_content is not None
+                and cast(Choices, choice).message.reasoning_content
             ):
                 if reasoning_tokens is None:
                     reasoning_tokens = 0
@@ -778,6 +799,7 @@ class ChunkProcessor:
 
         server_tool_use: ServerToolUse | None = None
         web_search_requests: int | None = None
+        google_maps_grounding_requests: int | None = None
         completion_tokens_details: CompletionTokensDetails | None = None
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         # Anthropic emits the cache-creation TTL breakdown (5m/1h split) only on
@@ -827,6 +849,13 @@ class ChunkProcessor:
                     )
                     if chunk_web_search_requests is not None:
                         web_search_requests = chunk_web_search_requests
+                    chunk_google_maps_grounding_requests: int | None = getattr(
+                        usage_chunk_dict["prompt_tokens_details"],
+                        "google_maps_grounding_requests",
+                        None,
+                    )
+                    if chunk_google_maps_grounding_requests is not None:
+                        google_maps_grounding_requests = chunk_google_maps_grounding_requests
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"] or prompt_tokens_details
 
@@ -852,6 +881,7 @@ class ChunkProcessor:
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
+            google_maps_grounding_requests=google_maps_grounding_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
@@ -939,6 +969,7 @@ class ChunkProcessor:
 
         server_tool_use: Final[ServerToolUse | None] = calculated_usage_per_chunk["server_tool_use"]
         web_search_requests: Final[int | None] = calculated_usage_per_chunk["web_search_requests"]
+        google_maps_grounding_requests: Final[int | None] = calculated_usage_per_chunk["google_maps_grounding_requests"]
         completion_tokens_details: Final[CompletionTokensDetails | None] = calculated_usage_per_chunk[
             "completion_tokens_details"
         ]
@@ -987,19 +1018,22 @@ class ChunkProcessor:
                 returned_usage.completion_tokens_details is not None
                 and returned_usage.completion_tokens_details.reasoning_tokens is None
             ):
-                returned_usage.completion_tokens_details.reasoning_tokens = reasoning_tokens
+                capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
+                returned_usage.completion_tokens_details.reasoning_tokens = capped_reasoning_tokens
+                if returned_usage.completion_tokens_details.text_tokens is None:
+                    returned_usage.completion_tokens_details.text_tokens = (
+                        returned_usage.completion_tokens - capped_reasoning_tokens
+                    )
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
         if server_tool_use is not None:
             returned_usage.server_tool_use = server_tool_use
-        if web_search_requests is not None:
-            if returned_usage.prompt_tokens_details is None:
-                returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(
-                    web_search_requests=web_search_requests
-                )
-            else:
-                returned_usage.prompt_tokens_details.web_search_requests = web_search_requests
+        returned_usage.prompt_tokens_details = apply_grounding_request_counts(
+            returned_usage.prompt_tokens_details,
+            web_search_requests,
+            google_maps_grounding_requests,
+        )
 
         if cost is not None:
             setattr(returned_usage, "cost", cost)

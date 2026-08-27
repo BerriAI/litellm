@@ -29,8 +29,7 @@ added to this layer raises instead of silently passing - the inventory of seams
 cannot drift without a test failure.
 """
 
-import os
-import sys
+import json
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -38,7 +37,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -53,7 +51,7 @@ from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
-from fastapi import Response
+from fastapi import Request, Response
 
 # --------------------------------------------------------------------------- #
 # Fixtures: distinguishable credentials per model so a wrong/hardcoded model_id
@@ -115,6 +113,21 @@ class FakeRequest:
     ):
         self.headers = headers or {}
         self.query_params = query or {}
+
+
+@pytest.fixture
+def openai_env_creds(monkeypatch):
+    """Deterministic env creds so the implicit-openai fallback forwards instead
+    of tripping the no-creds 404 gate, regardless of the host environment."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai")
+
+
+@pytest.fixture
+def no_openai_creds(monkeypatch):
+    """Neutralize every credential source the 404 gate checks."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
 
 
 @dataclass
@@ -409,7 +422,7 @@ async def test_create__body_model_beats_header_and_query(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__fallback_default_openai(harness):
+async def test_create__fallback_default_openai(harness, openai_env_creds):
     set_body(
         harness,
         {
@@ -424,6 +437,63 @@ async def test_create__fallback_default_openai(harness):
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
     harness.creds_resolver.assert_not_called()  # inverse-bug guard
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_create__fallback_no_creds_404(harness, no_openai_creds):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await call_create(harness)
+
+    assert exc.value.code == "404"
+    assert exc.value.type == "invalid_request_error"
+    assert exc.value.param is None
+    assert exc.value.message == "No such File object: file-plain"
+    harness.litellm_acreate.assert_not_called()
+    harness.router_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__fallback_explicit_provider_bypasses_not_found_gate(harness, no_openai_creds):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness, provider="anthropic")
+
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_create__fallback_env_key_alone_forwards(harness, monkeypatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai")
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness)
+
     assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
 
 
@@ -782,6 +852,48 @@ async def test_create__missing_required_param_is_400(harness, body, missing_para
     harness.router_acreate.assert_not_called()
 
 
+def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
+    """A request that reaches the real pre-call logic, which the `harness` fixture
+    mocks out. Metadata validation lives there, so it cannot be seen through the seam."""
+    request = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.__str__.return_value = "http://localhost/v1/batches"
+    request.url.path = "/v1/batches"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    request.body = AsyncMock(return_value=json.dumps(body).encode())
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["metadata", "litellm_metadata"])
+async def test_create__non_object_metadata_is_400(field):
+    """A non-object metadata field is rejected with a 400 naming it (#37147), rather
+    than being coerced to None and silently dropped, or crashing behind a 500 with
+    "'str' object has no attribute 'update'"."""
+    body = {
+        "input_file_id": "file-abc",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        field: "abc",
+    }
+
+    with pytest.raises(ProxyException) as exc_info:
+        await endpoints.create_batch(
+            request=_raw_batches_request(body),
+            fastapi_response=Response(),
+            provider=None,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == field
+    assert "has no attribute 'update'" not in exc_info.value.message
+
+
 # =========================================================================== #
 # Team-level batch expiry enforcement (independent of routing).
 # =========================================================================== #
@@ -795,7 +907,7 @@ def _user_with_expiry(expiry: Any) -> UserAPIKeyAuth:
 
 
 @pytest.mark.asyncio
-async def test_create__team_expiry_injected(harness):
+async def test_create__team_expiry_injected(harness, openai_env_creds):
     set_body(
         harness,
         {
@@ -814,7 +926,7 @@ async def test_create__team_expiry_injected(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__no_team_expiry_not_injected(harness):
+async def test_create__no_team_expiry_not_injected(harness, openai_env_creds):
     set_body(
         harness,
         {
@@ -862,7 +974,7 @@ async def test_create__team_expiry_malformed_500(harness, expiry):
 
 
 @pytest.mark.asyncio
-async def test_create__uses_acreate_batch_route_type(harness):
+async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     set_body(
         harness,
         {
@@ -878,7 +990,7 @@ async def test_create__uses_acreate_batch_route_type(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__metadata_sanitized_before_forwarding(harness):
+async def test_create__metadata_sanitized_before_forwarding(harness, openai_env_creds):
     set_body(
         harness,
         {
@@ -896,7 +1008,7 @@ async def test_create__metadata_sanitized_before_forwarding(harness):
 
 
 @pytest.mark.asyncio
-async def test_create__exception_calls_failure_hook(harness):
+async def test_create__exception_calls_failure_hook(harness, openai_env_creds):
     set_body(
         harness,
         {
@@ -907,7 +1019,7 @@ async def test_create__exception_calls_failure_hook(harness):
     )
     harness.litellm_acreate.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_create(harness)
 
     harness.logging.post_call_failure_hook.assert_called_once()
@@ -1204,7 +1316,7 @@ async def test_retrieve__loadbalancing_raw_id_routes_to_router(retrieve_harness)
 
 
 @pytest.mark.asyncio
-async def test_retrieve__fallback_default_openai(retrieve_harness):
+async def test_retrieve__fallback_default_openai(retrieve_harness, openai_env_creds):
     await call_retrieve(retrieve_harness, "batch-raw-xyz")
 
     assert retrieve_harness.litellm_aretrieve.call_count == 1
@@ -1215,6 +1327,40 @@ async def test_retrieve__fallback_default_openai(retrieve_harness):
         "batch_id": "batch-raw-xyz",
     }
     assert retrieve_harness.update_batch_in_db.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_no_creds_404(retrieve_harness, no_openai_creds):
+    with pytest.raises(ProxyException) as exc:
+        await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert exc.value.code == "404"
+    assert exc.value.type == "invalid_request_error"
+    assert exc.value.param is None
+    assert exc.value.message == "No batch found with id 'batch-raw-xyz'."
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+    retrieve_harness.router_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_explicit_provider_bypasses_not_found_gate(retrieve_harness, no_openai_creds):
+    await call_retrieve(retrieve_harness, "batch-raw-xyz", provider="anthropic")
+
+    assert retrieve_harness.aretrieve_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__fallback_env_key_alone_forwards(retrieve_harness, monkeypatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai")
+
+    await call_retrieve(retrieve_harness, "batch-raw-xyz")
+
+    assert retrieve_harness.aretrieve_kwargs() == {
+        "custom_llm_provider": "openai",
+        "batch_id": "batch-raw-xyz",
+    }
 
 
 @pytest.mark.asyncio
@@ -1302,7 +1448,7 @@ async def test_retrieve__db_terminal_unified_resolves_file_ids(retrieve_harness)
 
 
 @pytest.mark.asyncio
-async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harness):
+async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harness, openai_env_creds):
     """A non-terminal DB row must NOT short-circuit; the endpoint syncs with the
     provider to refresh state."""
     db_response = make_batch(id="batch-from-db", status="validating")
@@ -1321,17 +1467,17 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
 
 
 @pytest.mark.asyncio
-async def test_retrieve__uses_aretrieve_batch_route_type(retrieve_harness):
+async def test_retrieve__uses_aretrieve_batch_route_type(retrieve_harness, openai_env_creds):
     await call_retrieve(retrieve_harness, "batch-raw-xyz")
 
     assert retrieve_harness.pre_call.call_args.kwargs["route_type"] == "aretrieve_batch"
 
 
 @pytest.mark.asyncio
-async def test_retrieve__exception_calls_failure_hook(retrieve_harness):
+async def test_retrieve__exception_calls_failure_hook(retrieve_harness, openai_env_creds):
     retrieve_harness.litellm_aretrieve.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_retrieve(retrieve_harness, "batch-raw-xyz")
 
     retrieve_harness.logging.post_call_failure_hook.assert_called_once()
@@ -1537,6 +1683,59 @@ async def test_list__managed_files_beats_model_param(list_harness):
     list_harness.creds_resolver.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit, expected_message, expected_openai_code",
+    [
+        (
+            -1,
+            "Invalid 'limit': integer below minimum value. Expected a value >= 0, but got -1 instead.",
+            "integer_below_min_value",
+        ),
+        (
+            101,
+            "Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 101 instead.",
+            "integer_above_max_value",
+        ),
+        (
+            1000,
+            "Invalid 'limit': integer above maximum value. Expected a value <= 100, but got 1000 instead.",
+            "integer_above_max_value",
+        ),
+    ],
+)
+async def test_list__out_of_range_limit_rejected_with_400(list_harness, limit, expected_message, expected_openai_code):
+    """OpenAI parity: GET /v1/batches rejects limit < 0 and limit > 100 with an
+    OpenAI-shaped 400 before any listing branch runs (issue #37149)."""
+    list_user_batches = list_harness.set_managed_files(FakeListPage([]))
+
+    with pytest.raises(ProxyException) as exc:
+        await call_list(list_harness, limit=limit)
+
+    assert exc.value.code == "400"
+    assert exc.value.param == "limit"
+    assert exc.value.type == "invalid_request_error"
+    assert exc.value.openai_code == expected_openai_code
+    assert exc.value.message == expected_message
+    list_user_batches.assert_not_called()
+    list_harness.litellm_alist.assert_not_called()
+    list_harness.router_alist.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [None, 0, 1, 100])
+async def test_list__in_range_limit_dispatches(list_harness, limit):
+    """OpenAI parity: live OpenAI accepts limit=0 (empty page) and 1..100, so
+    those values must keep flowing through to the listing branch untouched."""
+    page = FakeListPage([])
+    list_user_batches = list_harness.set_managed_files(page)
+
+    resp = await call_list(list_harness, limit=limit)
+
+    assert resp is page
+    assert list_user_batches.call_args.kwargs["limit"] == limit
+
+
 # --------------------------------------------------------------------------- #
 # Branch 2 - model from body/query/header. The endpoint resolves credentials
 # for the body model, forwards custom_llm_provider once (it pops it from data
@@ -1609,7 +1808,9 @@ async def test_list__target_model_names_takes_first_only(list_harness):
 
 
 @pytest.mark.asyncio
-async def test_list__fallback_default_openai(list_harness):
+async def test_list__fallback_default_openai(list_harness, no_openai_creds):
+    """list stays ungated by the no-creds 404 guard: it answers about a
+    collection, not a specific id, so there is nothing to 404 about."""
     await call_list(list_harness)
 
     assert list_harness.litellm_alist.call_count == 1
@@ -1683,7 +1884,7 @@ async def test_list__uses_alist_batches_route_type(list_harness):
 async def test_list__exception_calls_failure_hook(list_harness):
     list_harness.litellm_alist.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_list(list_harness)
 
     list_harness.logging.post_call_failure_hook.assert_called_once()
@@ -1960,7 +2161,7 @@ async def test_cancel__unified_no_router_500(cancel_harness):
 
 
 @pytest.mark.asyncio
-async def test_cancel__fallback_default_openai(cancel_harness):
+async def test_cancel__fallback_default_openai(cancel_harness, openai_env_creds):
     await call_cancel(cancel_harness, "batch-raw-xyz")
 
     assert cancel_harness.litellm_acancel.call_count == 1
@@ -1972,6 +2173,40 @@ async def test_cancel__fallback_default_openai(cancel_harness):
         "batch_id": "batch-raw-xyz",
     }
     assert cancel_harness.update_batch_in_db.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_no_creds_404(cancel_harness, no_openai_creds):
+    with pytest.raises(ProxyException) as exc:
+        await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert exc.value.code == "404"
+    assert exc.value.type == "invalid_request_error"
+    assert exc.value.param is None
+    assert exc.value.message == "No batch found with id 'batch-raw-xyz'."
+    cancel_harness.litellm_acancel.assert_not_called()
+    cancel_harness.router_acancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_explicit_provider_bypasses_not_found_gate(cancel_harness, no_openai_creds):
+    await call_cancel(cancel_harness, "batch-raw-xyz", provider="anthropic")
+
+    assert cancel_harness.acancel_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_cancel__fallback_env_key_alone_forwards(cancel_harness, monkeypatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-openai")
+
+    await call_cancel(cancel_harness, "batch-raw-xyz")
+
+    assert cancel_harness.acancel_kwargs() == {
+        "custom_llm_provider": "openai",
+        "batch_id": "batch-raw-xyz",
+    }
 
 
 @pytest.mark.asyncio
@@ -2028,17 +2263,17 @@ async def test_cancel__fallback_provider_precedence_path_over_body(cancel_harnes
 
 
 @pytest.mark.asyncio
-async def test_cancel__uses_acancel_batch_route_type(cancel_harness):
+async def test_cancel__uses_acancel_batch_route_type(cancel_harness, openai_env_creds):
     await call_cancel(cancel_harness, "batch-raw-xyz")
 
     assert cancel_harness.pre_call.call_args.kwargs["route_type"] == "acancel_batch"
 
 
 @pytest.mark.asyncio
-async def test_cancel__exception_calls_failure_hook(cancel_harness):
+async def test_cancel__exception_calls_failure_hook(cancel_harness, openai_env_creds):
     cancel_harness.litellm_acancel.side_effect = ValueError("provider boom")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProxyException):
         await call_cancel(cancel_harness, "batch-raw-xyz")
 
     cancel_harness.logging.post_call_failure_hook.assert_called_once()
@@ -2357,7 +2592,7 @@ async def test_create__model_encoded_input_file_id_rejected_when_managed_files_r
 
 
 @pytest.mark.asyncio
-async def test_create__raw_input_file_id_allowed_when_managed_files_not_required(harness):
+async def test_create__raw_input_file_id_allowed_when_managed_files_not_required(harness, openai_env_creds):
     set_body(
         harness,
         {
@@ -2459,7 +2694,7 @@ async def test_retrieve__managed_batch_still_accounts_inline_without_a_poller(re
 
 
 @pytest.mark.asyncio
-async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retrieve_harness):
+async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retrieve_harness, openai_env_creds):
     with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
         await call_retrieve(retrieve_harness, "batch-raw-xyz")
 

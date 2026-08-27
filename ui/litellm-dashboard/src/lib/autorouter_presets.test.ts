@@ -20,7 +20,7 @@ const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, 
 describe("autorouter_presets", () => {
   it("loads exactly the bundled presets", () => {
     const presets = getAllPresets();
-    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Lite", "OpenAI Family"]);
+    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family"]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
     for (const p of presets) {
       expect(p).toMatchObject({ key: expect.any(String), label: expect.any(String), description: expect.any(String) });
@@ -42,8 +42,16 @@ describe("autorouter_presets", () => {
     }
   });
 
+  it("keeps every preset on the shipped scorer knobs, so a preset cannot pin one to today's numbers", () => {
+    for (const { complexity_router_config: config } of getAllPresets()) {
+      expect(config.tier_boundaries).toBeUndefined();
+      expect(config.token_thresholds).toBeUndefined();
+      expect(config.dimension_weights).toBeUndefined();
+    }
+  });
+
   it("keeps the model-family presets on the heuristic classifier", () => {
-    for (const key of ["anthropic_family", "openai_family"]) {
+    for (const key of ["anthropic_family", "gemini_family", "openai_family"]) {
       expect(getPresetByKey(key)!.complexity_router_config.classifier_type).toBe("heuristic");
     }
   });
@@ -65,6 +73,23 @@ describe("autorouter_presets", () => {
     expect(getRequiredModelsInPreset(lite)).toEqual(
       new Set(["deepseek-v4-flash", "muse-spark-1.2", "kimi-k3", "claude-opus-5"]),
     );
+  });
+
+  it("pins the gemini preset to concrete model ids, never Google's hot-swapping -latest aliases", () => {
+    const gemini = getPresetByKey("gemini_family")!;
+    const config = gemini.complexity_router_config;
+    expect(config.classifier_type).toBe("heuristic");
+    expect(config.classifier_llm_config).toBeUndefined();
+    const expectedTiers = {
+      SIMPLE: ["gemini-2.5-flash-lite"],
+      MEDIUM: ["gemini-3.1-flash-lite"],
+      COMPLEX: ["gemini-3.7-flash"],
+      REASONING: ["gemini-3.1-pro-preview"],
+    };
+    expect(config.tiers).toEqual(expectedTiers);
+    const required = getRequiredModelsInPreset(gemini);
+    for (const model of required) expect(model).not.toMatch(/-latest$/);
+    expect(required.size).toBe(4);
   });
 
   it("collects every tier model as a required model", () => {

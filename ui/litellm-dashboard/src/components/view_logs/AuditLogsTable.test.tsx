@@ -1,5 +1,5 @@
 import type { ColumnFiltersState, PaginationState } from "@tanstack/react-table";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -135,12 +135,39 @@ describe("AuditLogsTable", () => {
     renderTable({ onColumnFiltersChange });
 
     await user.click(screen.getByTestId("datatable-filters-trigger"));
-    await user.type(await screen.findByPlaceholderText("Enter object ID…"), "obj-9");
+    fireEvent.change(await screen.findByPlaceholderText("Enter object ID…"), { target: { value: "obj-9" } });
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
     expect(onColumnFiltersChange).toHaveBeenCalledTimes(1);
     const arg = onColumnFiltersChange.mock.calls[0][0];
     const committed = typeof arg === "function" ? arg([]) : arg;
     expect(committed).toEqual([{ id: "object_id", value: "obj-9" }]);
+  });
+
+  it("shows the human label on both filter triggers while unfiltered", async () => {
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    const [action, table] = await screen.findAllByRole("combobox");
+
+    expect(action).toHaveTextContent("All Actions");
+    expect(table).toHaveTextContent("All Tables");
+  });
+
+  it("shows the human label on the filter triggers for an applied filter", async () => {
+    const user = userEvent.setup();
+    renderTable({
+      columnFilters: [
+        { id: "action", value: "created" },
+        { id: "table_name", value: "LiteLLM_TeamTable" },
+      ],
+    });
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    const [action, table] = await screen.findAllByRole("combobox");
+
+    expect(action).toHaveTextContent("Created");
+    expect(table).toHaveTextContent("Teams");
   });
 });
