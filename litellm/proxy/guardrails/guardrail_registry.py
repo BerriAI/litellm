@@ -785,11 +785,30 @@ class InMemoryGuardrailHandler:
             return None
 
         # Remove from memory if exists (also removes from callbacks)
+        previous_guardrail: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
+        previous_source: Final = self._sources.get(guardrail_id, source)
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             self.delete_in_memory_guardrail(guardrail_id)
 
-        # Initialize fresh (will add new callback to litellm.callbacks)
-        return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+        # Initialize fresh (will add new callback to litellm.callbacks). If the new
+        # params are invalid (a raising guardrail __init__), restore the previous
+        # instance instead of leaving the guardrail silently removed: a guardrail
+        # that was enforcing must never fail open because an update was bad.
+        try:
+            return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+        except Exception:
+            if previous_guardrail is not None:
+                verbose_proxy_logger.exception(
+                    "Reinitializing guardrail %s with updated params failed; restoring the previous configuration",
+                    guardrail_id,
+                )
+                try:
+                    self.initialize_guardrail(
+                        guardrail=previous_guardrail, config_file_path=config_file_path, source=previous_source
+                    )
+                except Exception:  # noqa: BLE001  # the original failure must propagate even if the restore breaks
+                    verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
+            raise
 
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """

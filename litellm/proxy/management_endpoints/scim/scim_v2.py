@@ -8,6 +8,7 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
@@ -2513,6 +2514,39 @@ async def get_group(
         raise handle_exception_on_proxy(e)
 
 
+def _new_team_request_with_defaults(
+    team_id: str,
+    team_alias: str | None,
+    members_with_roles: Sequence[Member],
+    organization_id: str | None = None,
+) -> NewTeamRequest:
+    """Build the SCIM group's team request, applying litellm.default_team_params
+    (including models) the same way SSO auto-created teams do."""
+    default_params: Final = litellm.default_team_params
+    defaults: Final[Mapping[str, object]] = (
+        deepcopy(default_params)
+        if isinstance(default_params, dict)
+        else default_params.model_dump(exclude_none=True)
+        if default_params is not None
+        else {}
+    )
+    default_metadata: Final = defaults.get("metadata")
+    metadata: Final = {
+        **(default_metadata if isinstance(default_metadata, dict) else {}),
+        SCIM_MANAGED_TEAM_METADATA_KEY: True,
+    }
+    return NewTeamRequest.model_validate(
+        {
+            **defaults,
+            "team_id": team_id,
+            "team_alias": team_alias,
+            "members_with_roles": members_with_roles,
+            "metadata": metadata,
+            **({"organization_id": organization_id} if organization_id is not None else {}),
+        }
+    )
+
+
 @scim_router.post(
     "/Groups",
     response_model=SCIMGroup,
@@ -2554,11 +2588,10 @@ async def create_group(
 
         # Create team in database
         created_team: Final = await new_team(
-            data=NewTeamRequest(
+            data=_new_team_request_with_defaults(
                 team_id=team_id,
                 team_alias=group.displayName,
                 members_with_roles=members_with_roles,
-                metadata={SCIM_MANAGED_TEAM_METADATA_KEY: True},
                 organization_id=mapped_organization_id,
             ),
             http_request=Request(scope={"type": "http", "path": "/scim/v2/Groups"}),
