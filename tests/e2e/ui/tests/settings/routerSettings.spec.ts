@@ -139,24 +139,18 @@ async function patchRouterSettings(
 }
 
 /**
- * Requires a consecutive streak because a single reply only proves the one replica that
- * served it has reloaded, not the sibling still answering from the pre-update config.
+ * Spreads its samples across more than one reload cycle: a single reply only proves the one
+ * replica that served it has reloaded, not the sibling still on the pre-update config.
  */
-async function pollUntilSettled(
-  probe: () => Promise<number>,
-  matches: (status: number) => boolean,
-  message: string,
-): Promise<void> {
-  let streak = 0;
-  await expect
-    .poll(
-      async () => {
-        streak = matches(await probe()) ? streak + 1 : 0;
-        return streak;
-      },
-      { timeout: SETTLE_TIMEOUT_MS, intervals: [SETTLE_INTERVAL_MS], message },
-    )
-    .toBeGreaterThanOrEqual(SETTLE_PROBES);
+async function sampleStatuses(probe: () => Promise<number>): Promise<readonly number[]> {
+  return Array.from({ length: SETTLE_PROBES }).reduce<Promise<readonly number[]>>(
+    async (taken, _unused, index) => {
+      const sofar = await taken;
+      if (index > 0) await new Promise((resolve) => setTimeout(resolve, SETTLE_INTERVAL_MS));
+      return [...sofar, await probe()];
+    },
+    Promise.resolve([]),
+  );
 }
 
 test.describe("Router Settings - Loadbalancing", () => {
@@ -289,19 +283,24 @@ test.describe("Router Settings - Fallbacks serve the request", () => {
         })
       ).status();
 
-    // The control: it proves the reply below could only have come from the fallback.
-    await pollUntilSettled(
-      chatStatus,
-      (status) => status >= 400,
-      "broken primary unexpectedly succeeded on its own",
-    );
+    // The control: every replica must reject, or the reply below could have come from one
+    // that was still serving a fallback left behind by an earlier attempt.
+    await expect
+      .poll(async () => (await sampleStatuses(chatStatus)).every((status) => status >= 400), {
+        timeout: SETTLE_TIMEOUT_MS,
+        message: "broken primary unexpectedly succeeded on its own",
+      })
+      .toBe(true);
 
     await patchRouterSettings(request, {
       fallbacks: [{ [BROKEN_PRIMARY]: [PRIMARY] }],
     } as Partial<NonNullable<ConfigYAML["router_settings"]>>);
 
-    // Same call now succeeds, served by the fallback model.
-    await pollUntilSettled(chatStatus, (status) => status === 200, "fallback never took effect");
+    // One success is the whole claim here, so this waits for a first sighting rather than
+    // for every replica: demanding a streak would also assert a fallback hit rate.
+    await expect
+      .poll(chatStatus, { timeout: SETTLE_TIMEOUT_MS, message: "fallback never took effect" })
+      .toBe(200);
 
     // And the playground renders a reply for a model whose own upstream is down.
     await openPlayground(page);
