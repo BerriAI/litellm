@@ -3465,7 +3465,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                                 ),
                                 finish_reason="stop",
                             )
-                            for _idx, _msg in enumerate(filtered_messages)
+                            # `or ()`: skip_scan is now bypassed when an image is present,
+                            # and images exist on the request side only, so a response scan
+                            # still always has messages here. Spelled out rather than left
+                            # leaning on that indirection.
+                            for _idx, _msg in enumerate(filtered_messages or ())
                         ]
                     )
                     bedrock_response = await self.make_bedrock_api_request(

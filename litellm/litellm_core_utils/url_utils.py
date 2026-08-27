@@ -443,7 +443,7 @@ async def _async_get_capped(
     client: object,
     url: str,
     max_bytes: int,
-    request_kwargs: dict[str, object],  # mutable-ok: forwarded straight to httpx as **kwargs
+    request_kwargs: dict[str, Any],  # mutable-ok: forwarded straight to httpx as **kwargs
 ) -> httpx.Response:
     """GET ``url``, aborting the transfer once the body exceeds ``max_bytes``.
 
@@ -483,7 +483,7 @@ async def async_safe_get(client: Any, url: str, max_bytes: int | None = None, **
 
     async def _issue(
         target_url: str,
-        request_kwargs: dict[str, object],  # mutable-ok: forwarded straight to httpx as **kwargs
+        request_kwargs: dict[str, Any],  # mutable-ok: forwarded straight to httpx as **kwargs
     ) -> httpx.Response:
         if max_bytes is None:
             return await client.get(target_url, **request_kwargs)
@@ -496,7 +496,7 @@ async def async_safe_get(client: Any, url: str, max_bytes: int | None = None, **
     caller_headers: Final = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
-        hop_kwargs: dict[str, object] = {  # mutable-ok: a fresh per-hop kwargs dict, consumed by this call
+        hop_kwargs: dict[str, Any] = {  # mutable-ok: a fresh per-hop kwargs dict, consumed by this call
             **kwargs,
             "headers": {**caller_headers, "Host": original_host},  # mutable-ok: httpx takes headers as a dict
             "follow_redirects": False,
