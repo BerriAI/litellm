@@ -118,9 +118,12 @@ class TestS3LogDelivery:
         are part of the audit trail, not an exemption from it.
 
         A deployment with an invalid upstream key lets the request pass proxy
-        auth and fail at the provider (the same lever as the OTEL error test);
-        proxy-side 401s during key propagation never reach the provider and
-        ship no payload, so exactly one provider failure exists for this alias."""
+        auth and fail at the provider (the same lever as the OTEL error test).
+        Proxy-side rejections during key/model propagation can also ship
+        failure payloads under this alias, but without a model_group and
+        without the provider error, so the read-back keys on both: only
+        provider-reaching calls carry them, and with this key every one of
+        those is the AnthropicException that ends the send loop."""
         _assert_s3_configured(client)
 
         model_name = f"s3-err-{unique_marker()}"
@@ -155,7 +158,9 @@ class TestS3LogDelivery:
 
         records = s3_logs.poll_records(
             prefix=f"{alias}/",
-            predicate=lambda r: r.status == "failure" and r.model_group == model_name,
+            predicate=lambda r: (
+                r.status == "failure" and r.model_group == model_name and "AnthropicException" in (r.error_str or "")
+            ),
         )
         assert records, (
             f"no failure object for {model_name} under prefix {alias}/ reached the bucket within the deadline"
