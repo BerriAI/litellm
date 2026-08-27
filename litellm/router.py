@@ -420,6 +420,46 @@ def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error
     return has_generated_content or not error.is_pre_first_chunk
 
 
+def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
+    raw_status: Final = getattr(error, "status_code", None)
+    if isinstance(raw_status, int):
+        return raw_status
+    if isinstance(raw_status, str) and raw_status.isdigit():
+        return int(raw_status)
+    response_status: Final = getattr(getattr(error, "response", None), "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _anthropic_stream_fallback_error_for_raised(
+    error: Exception, model: str, llm_provider: str, has_generated_content: bool
+) -> "MidStreamFallbackError | None":
+    """
+    A provider iterator that fails mid-stream by raising (Bedrock surfaces
+    its event-stream exception frames as a BedrockError, a transport drop
+    raises httpx's error) never produces the Anthropic SSE `event: error`
+    frame the wrapper detects, so the raise is converted into the same
+    MidStreamFallbackError a detected error event gets, under the same gate:
+    only before real content reached the caller and only for a retriable
+    status (429, 5xx, or none at all for a transport failure), mirroring
+    CustomStreamWrapper._handle_stream_fallback_error on /chat/completions.
+    None means the exception propagates to the caller unchanged.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+
+    if has_generated_content:
+        return None
+    status_code: Final = _anthropic_stream_raised_error_status(error)
+    if status_code is not None and not _is_retriable_anthropic_status(status_code):
+        return None
+    return MidStreamFallbackError(
+        message=str(error),
+        model=model,
+        llm_provider=llm_provider,
+        original_exception=error,
+        is_pre_first_chunk=True,
+    )
+
+
 def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
     """
     Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
@@ -5019,6 +5059,8 @@ class Router:
             has_generated_content = False  # rebind-ok: set once real content is seen, or the buffer cap is hit
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            custom_llm_provider: Final = initial_kwargs.get("custom_llm_provider")
+            llm_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else "anthropic"
             try:
                 async for chunk in source_iterator:
                     if _anthropic_stream_forwards_ping_live(
@@ -5061,14 +5103,16 @@ class Router:
                     yield chunk
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
-            except MidStreamFallbackError as e:
-                if _anthropic_stream_should_decline_fallback(has_generated_content, e):
-                    for buffered_chunk in buffered_lifecycle_chunks:
-                        yield buffered_chunk
-                    if e.original_exception is not None:
-                        raise e.original_exception from e
-                    raise
-                async for item in self._aanthropic_messages_fallback_attempt(e, initial_kwargs, wrapper):
+            except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate, like CustomStreamWrapper
+                async for item in self._aanthropic_messages_recover_stream_error(
+                    stream_error,
+                    has_generated_content,
+                    buffered_lifecycle_chunks,
+                    model,
+                    llm_provider,
+                    initial_kwargs,
+                    wrapper,
+                ):
                     yield item
             finally:
                 with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
@@ -5079,6 +5123,47 @@ class Router:
         # being defined textually after the function that captures it.
         wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator)
         return wrapper
+
+    async def _aanthropic_messages_recover_stream_error(
+        self,
+        stream_error: Exception,
+        has_generated_content: bool,
+        buffered_lifecycle_chunks: tuple[bytes, ...],
+        model: str,
+        llm_provider: str,
+        initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
+        wrapper: "FallbackAwareAnthropicMessagesStream",
+    ) -> AsyncGenerator[bytes, None]:
+        """
+        Decides what a source-iterator failure in
+        Router._aanthropic_messages_streaming_iterator turns into: a fallback
+        attempt, or the error reaching the caller. A MidStreamFallbackError
+        (completion-bridge path, or the wrapper's own SSE error-event
+        detection) is declined per _anthropic_stream_should_decline_fallback
+        with the held-back lifecycle frames flushed first; any other raise is
+        converted per _anthropic_stream_fallback_error_for_raised and, when
+        not convertible, propagates untouched so the caller still gets a
+        clean error response.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
+            has_generated_content, stream_error
+        ):
+            for buffered_chunk in buffered_lifecycle_chunks:
+                yield buffered_chunk
+            if stream_error.original_exception is not None:
+                raise stream_error.original_exception from stream_error
+            raise stream_error
+        fallback_error: Final = (
+            stream_error
+            if isinstance(stream_error, MidStreamFallbackError)
+            else _anthropic_stream_fallback_error_for_raised(stream_error, model, llm_provider, has_generated_content)
+        )
+        if fallback_error is None:
+            raise stream_error
+        async for item in self._aanthropic_messages_fallback_attempt(fallback_error, initial_kwargs, wrapper):
+            yield item
 
     async def _aanthropic_messages_fallback_attempt(
         self,

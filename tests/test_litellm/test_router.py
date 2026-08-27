@@ -15,6 +15,7 @@ import litellm
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
@@ -10220,6 +10221,119 @@ async def test_anthropic_messages_fallback_also_catches_raised_midstream_error()
     assert collected == [_anthropic_messages_content_chunk("fallback answer")]
     mock_fallback.assert_awaited_once()
     assert mock_fallback.await_args.kwargs["e"] is raised_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised_error",
+    [
+        BedrockError(status_code=503, message='serviceUnavailableException {"message": "Service unavailable"}'),
+        BedrockError(status_code=500, message='internalServerException {"message": "Internal error"}'),
+        BedrockError(status_code=429, message='throttlingException {"message": "Too many requests"}'),
+        httpx.ReadError("connection reset by upstream"),
+    ],
+    ids=["503", "500", "429", "transport-drop"],
+)
+async def test_anthropic_messages_raised_provider_error_before_content_triggers_fallback(raised_error):
+    """Bedrock surfaces a mid-stream exception frame by raising BedrockError
+    out of its iterator rather than yielding an Anthropic SSE error event, so
+    the wrapper must convert a retriable pre-content raise into a fallback
+    attempt exactly like a detected error event (parity with
+    CustomStreamWrapper._handle_stream_fallback_error on /chat/completions)."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], raised_error)
+    fallback_stream = _AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == [_anthropic_messages_content_chunk("fallback answer")]
+    mock_fallback.assert_awaited_once()
+    converted = mock_fallback.await_args.kwargs["e"]
+    assert isinstance(converted, MidStreamFallbackError)
+    assert converted.original_exception is raised_error
+    assert converted.is_pre_first_chunk is True
+    assert source.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised_error",
+    [
+        BedrockError(status_code=400, message='validationException {"message": "Malformed input"}'),
+        BedrockError(status_code=424, message='modelStreamErrorException {"message": "Model stream error"}'),
+    ],
+    ids=["400", "424"],
+)
+async def test_anthropic_messages_raised_non_retriable_provider_error_propagates_unchanged(raised_error):
+    """A raised 4xx (other than 429) is a client error no other deployment can
+    fix: it reaches the caller as the very same exception, with no fallback
+    attempt and nothing flushed, so the proxy still answers a clean 4xx."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], raised_error)
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(),
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = []
+
+        async def _consume():
+            async for chunk in wrapped:
+                collected.append(chunk)
+
+        with pytest.raises(BedrockError) as exc_info:
+            await _consume()
+
+    assert collected == []
+    assert exc_info.value is raised_error
+    mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_raised_provider_error_after_content_propagates_unchanged():
+    """Once real content reached the caller a fallback would append a second
+    message lifecycle to the same SSE stream, so a raised provider error after
+    content propagates as-is even when its status is retriable."""
+    router = _anthropic_messages_make_router()
+    content = _anthropic_messages_content_chunk("partial answer")
+    raised_error = BedrockError(status_code=503, message='serviceUnavailableException {"message": "Service unavailable"}')
+    source = _AnthropicMessagesRaisingByteStream([content], raised_error)
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(),
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = []
+
+        async def _consume():
+            async for chunk in wrapped:
+                collected.append(chunk)
+
+        with pytest.raises(BedrockError) as exc_info:
+            await _consume()
+
+    assert collected == [content]
+    assert exc_info.value is raised_error
+    mock_fallback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
