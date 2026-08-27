@@ -264,6 +264,7 @@ def _build_banned_observability_params() -> frozenset[str]:
 
 _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "api_base",
+    "responses_api_base",
     "base_url",
     "user_config",
     "aws_sts_endpoint",
