@@ -2302,20 +2302,14 @@ def sanitize_messages_for_tool_calling(
 def _is_unsignable_thinking_block(block: object) -> bool:
     """A thinking block that Anthropic cannot accept on input.
 
-    Anthropic verifies the thinking signature cryptographically, so a block whose
-    signature is null, empty, or missing (e.g. from an open-source reasoning model)
-    is rejected with a 400 and must be dropped rather than blanked or repaired, and
-    so is a block whose signature or data carries another provider's encrypted
-    reasoning. A `redacted_thinking` block Anthropic minted is always kept.
-
-    Anthropic also rejects a `thinking` block whose `thinking` text is empty or
-    whitespace-only ("each thinking block must contain thinking"), regardless of
-    signature. This shape reaches us when a caller replays a `thinking_blocks`
-    history item that originated from a non-Anthropic reasoning provider (e.g. an
-    OpenAI Responses-API turn with no summary text) through this Anthropic-shaped
-    request path (`/v1/chat/completions` -> anthropic/vertex_ai's claude models),
-    which is the same failure the Anthropic Responses-bridge adapter guards
-    against (see PR #36033) for its own separate content-block path.
+    Anthropic verifies the signature cryptographically, so a block with a null,
+    empty, or missing signature (e.g. from an open-source reasoning model) is
+    rejected with a 400, and so is a block whose signature or data carries
+    another provider's encrypted reasoning. It also rejects a `thinking` block
+    whose text is empty or whitespace-only ("each thinking block must contain
+    thinking"), regardless of signature, e.g. when a `thinking_blocks` history
+    item from a non-Anthropic reasoning provider is replayed through this path.
+    `redacted_thinking` blocks carry no signature and are always kept.
     """
     if is_encrypted_reasoning_block(block):
         return True
