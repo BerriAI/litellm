@@ -1864,3 +1864,53 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
 
     passthrough = cfg.map_openai_params(optional_params={}, non_default_params={"voice": "Kore"})
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+def test_gemini_response_done_bills_audio_output_tokens_at_audio_rate(monkeypatch):
+    """Regression for the Gemini Live AUDIO output breakdown: responseTokensDetails
+    must survive into response.done usage and bill at output_cost_per_audio_token,
+    not the text rate."""
+    from litellm.cost_calculator import (
+        RealtimeAPITokenUsageProcessor,
+        handle_realtime_stream_cost_calculation,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    config = GeminiRealtimeConfig()
+    done_event = config.transform_response_done_event(
+        message={
+            "serverContent": {"turnComplete": True},
+            "usageMetadata": {
+                "promptTokenCount": 377,
+                "responseTokenCount": 51,
+                "totalTokenCount": 428,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 377}],
+                "responseTokensDetails": [{"modality": "AUDIO", "tokenCount": 51}],
+                "thoughtsTokenCount": 37,
+            },
+        },
+        current_response_id="resp_lit6277",
+        current_conversation_id="conv_lit6277",
+        output_items=None,
+    )
+
+    usage = done_event["response"]["usage"]
+    assert usage["output_tokens_details"]["audio_tokens"] == 51
+    assert usage["output_token_details"]["audio_tokens"] == 51
+
+    results = [done_event]
+    combined_usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+    assert combined_usage.completion_tokens_details is not None
+    assert combined_usage.completion_tokens_details.audio_tokens == 51
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage,
+        custom_llm_provider="gemini",
+        litellm_model_name="gemini-2.5-flash-native-audio-preview-12-2025",
+    )
+    assert cost == pytest.approx(377 * 5e-07 + 51 * 1.2e-05 + 37 * 2e-06)
