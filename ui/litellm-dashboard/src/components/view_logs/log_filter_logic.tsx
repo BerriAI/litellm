@@ -20,13 +20,13 @@ export interface PaginatedResponse {
 export const LOG_FILTER_IDS = {
   TEAM_ID: "team_id",
   STATUS: "status",
+  CACHE_STATUS: "cache_hit",
   KEY_ALIAS: "key_alias",
   END_USER: "end_user",
   ERROR_CODE: "error_code",
   ERROR_MESSAGE: "error_message",
   KEY_HASH: "key_hash",
   SESSION_ID: "session_id",
-  CACHE_HIT: "cache_hit",
   MODEL_ID: "model_id",
   PUBLIC_MODEL_OR_SEARCH_TOOL: "model",
   REQUEST_ID: "request_id",
@@ -36,6 +36,7 @@ export const LOG_FILTER_IDS = {
 export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
   [LOG_FILTER_IDS.STATUS]: "Status",
+  [LOG_FILTER_IDS.CACHE_STATUS]: "Cache",
   [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
   [LOG_FILTER_IDS.USER_ID]: "User ID",
   [LOG_FILTER_IDS.END_USER]: "End User",
@@ -43,7 +44,6 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.ERROR_MESSAGE]: "Error Message",
   [LOG_FILTER_IDS.KEY_HASH]: "Key Hash",
   [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
-  [LOG_FILTER_IDS.CACHE_HIT]: "Cache Hit",
   [LOG_FILTER_IDS.MODEL_ID]: "Model",
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
 };
@@ -103,6 +103,7 @@ export function useLogFilterLogic({
   columnFilters,
   activeTab,
   isLiveTail,
+  excludeInternalHealthChecks,
   startTime,
   endTime,
   pagination,
@@ -116,6 +117,7 @@ export function useLogFilterLogic({
   columnFilters: ColumnFiltersState;
   activeTab: string;
   isLiveTail: boolean;
+  excludeInternalHealthChecks: boolean;
   startTime: string;
   endTime: string;
   pagination: PaginationState;
@@ -139,6 +141,7 @@ export function useLogFilterLogic({
       columnFilters,
       sortBy,
       sortOrder,
+      excludeInternalHealthChecks,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -169,7 +172,7 @@ export function useLogFilterLogic({
           user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
           status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
-          cache_hit: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_HIT),
+          cache_hit_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_STATUS),
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
           model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
@@ -177,6 +180,7 @@ export function useLogFilterLogic({
           error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
           sort_by: sortBy,
           sort_order: sortOrder,
+          exclude_internal_health_checks: excludeInternalHealthChecks,
         },
       });
     },

@@ -18,11 +18,12 @@ from typing import (
 )
 
 import fastapi
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -53,6 +54,11 @@ else:
 router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
+
+_INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
+)
 
 _RowT = TypeVar("_RowT")
 
@@ -209,9 +215,18 @@ async def _find_spend_logs(
     prisma_client: PrismaClient,
     where: Mapping[str, object],
     order: Mapping[str, str],
+    take: int,
+    http_response: Response,
 ) -> Sequence[_SupportsModelDump]:
-    """Read spend log rows as Prisma model instances."""
-    return await _spend_logs_table(prisma_client).find_many(where=where, order=order)
+    """Read spend log rows as Prisma model instances, capped at ``take`` rows."""
+    rows: Final = await _spend_logs_table(prisma_client).find_many(where=where, order=order, take=take)
+    if len(rows) == take:
+        http_response.headers["x-litellm-spend-logs-truncated"] = "true"
+        verbose_proxy_logger.warning(
+            "/spend/logs result truncated to the %s most recent rows; use /spend/logs/v2 for paginated access",
+            take,
+        )
+    return rows
 
 
 async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
@@ -2240,9 +2255,9 @@ async def ui_view_spend_logs(
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
     ),
-    cache_hit: str | None = fastapi.Query(
+    cache_hit_filter: str | None = fastapi.Query(
         default=None,
-        description="Filter logs by response cache result: 'true' (served from cache) or 'false' (cache miss)",
+        description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
     ),
     model: str | None = fastapi.Query(default=None, description="Filter logs by model"),
     model_id: str | None = fastapi.Query(
@@ -2263,6 +2278,10 @@ async def ui_view_spend_logs(
     sort_order: str | None = fastapi.Query(
         default="desc",
         description="Sort order: asc or desc",
+    ),
+    exclude_internal_health_checks: bool = fastapi.Query(
+        default=False,
+        description="Exclude LiteLLM internal health check requests from results",
     ),
 ):
     """
@@ -2316,13 +2335,11 @@ async def ui_view_spend_logs(
             param="sort_order",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    # isinstance guard: direct callers (tests) may leave the fastapi.Query default in place
-    cache_hit_filter: Final = cache_hit.lower() if isinstance(cache_hit, str) else None
-    if isinstance(cache_hit, str) and cache_hit_filter not in {"true", "false"}:
+    if isinstance(cache_hit_filter, str) and cache_hit_filter not in {"hit", "miss"}:
         raise ProxyException(
-            message=f"Invalid cache_hit: {cache_hit}. Must be one of: true, false",
+            message=f"Invalid cache_hit_filter: {cache_hit_filter}. Must be one of: hit, miss",
             type="bad_request",
-            param="cache_hit",
+            param="cache_hit_filter",
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -2556,12 +2573,6 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{like_escaped_session_id}%")
             p += 1
 
-        if cache_hit_filter is not None:
-            if cache_hit_filter == "true":
-                sql_conditions.append("LOWER(cache_hit) = 'true'")
-            else:
-                sql_conditions.append("(cache_hit IS NULL OR LOWER(cache_hit) <> 'true')")
-
         # Status filter
         if status_filter is not None:
             if status_filter == "success":
@@ -2570,6 +2581,16 @@ async def ui_view_spend_logs(
                 sql_conditions.append(f"status = ${p}")
                 sql_params.append(status_filter)
                 p += 1
+
+        if cache_hit_filter == "hit":
+            sql_conditions.append("LOWER(cache_hit) = 'true'")
+        elif cache_hit_filter == "miss":
+            sql_conditions.append("(cache_hit IS NULL OR LOWER(cache_hit) != 'true')")
+
+        if exclude_internal_health_checks:
+            sql_conditions.append(f"api_key NOT IN (${p}, ${p + 1})")
+            sql_params.extend(_INTERNAL_HEALTH_CHECK_API_KEYS)
+            p += 2  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Spend range
         if min_spend is not None:
@@ -2871,6 +2892,7 @@ async def ui_view_request_response_for_request_id(
     },
 )
 async def view_spend_logs(
+    fastapi_response: Response,
     api_key: str | None = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
@@ -2900,6 +2922,8 @@ async def view_spend_logs(
     """
     [DEPRECATED] This endpoint is not paginated and can cause performance issues.
     Please use `/spend/logs/v2` instead for paginated access to spend logs.
+
+    Row results are capped at 10,000 most recent entries per response.
 
     View all spend logs, if request_id is provided, only logs for that request_id will be returned
 
@@ -2951,7 +2975,6 @@ async def view_spend_logs(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        spend_logs = []
         if (
             start_date is not None
             and isinstance(start_date, str)
@@ -2990,6 +3013,8 @@ async def view_spend_logs(
                     prisma_client,
                     where=filter_query,
                     order={"startTime": "desc"},
+                    take=SPEND_LOGS_PAGINATION_COUNT_CAP,
+                    http_response=fastapi_response,
                 )
                 return data
 
@@ -3060,14 +3085,12 @@ async def view_spend_logs(
             if user_id is not None and isinstance(user_id, str):
                 scoped_filter["user"] = user_id
 
-            if not scoped_filter:
-                spend_logs = await prisma_client.get_data(table_name="spend", query_type="find_all")
-                return spend_logs
-
             data = await _find_spend_logs(
                 prisma_client,
                 where=scoped_filter,
                 order={"startTime": "desc"},
+                take=SPEND_LOGS_PAGINATION_COUNT_CAP,
+                http_response=fastapi_response,
             )
             return data
 

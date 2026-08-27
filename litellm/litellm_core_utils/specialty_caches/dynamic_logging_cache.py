@@ -13,6 +13,7 @@ import json
 from typing import Any, Final
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 
 from ...caching import InMemoryCache
@@ -45,6 +46,15 @@ class LangfuseInMemoryCache(InMemoryCache):
             litellm.initialized_langfuse_clients -= 1
             _created_langfuse_logger.Langfuse.flush()
             _created_langfuse_logger.Langfuse.shutdown()
+
+        # Loggers with a periodic flush task (e.g. NewRelicMetricsLogger) expose
+        # stop() so eviction actually ends the task instead of leaking it.
+        _evicted_stop: Final = getattr(self.cache_dict[key], "stop", None)
+        if callable(_evicted_stop):
+            try:
+                _evicted_stop()
+            except Exception:  # noqa: BLE001  # a failing stop() must not block eviction
+                verbose_logger.debug("DynamicLoggingCache: stop() raised during eviction", exc_info=True)
 
         #########################################################
         # Call parent class to remove key from cache

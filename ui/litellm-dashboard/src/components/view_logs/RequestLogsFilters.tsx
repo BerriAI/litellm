@@ -32,10 +32,10 @@ const STATUS_FILTER_ITEMS = [
   { value: "failure", label: "Failure" },
 ] as const;
 
-const CACHE_HIT_FILTER_ITEMS = [
+const CACHE_FILTER_ITEMS = [
   { value: ALL_VALUE, label: "All Requests" },
-  { value: "true", label: "Cache Hit" },
-  { value: "false", label: "Cache Miss" },
+  { value: "hit", label: "Cache Hit" },
+  { value: "miss", label: "Cache Miss" },
 ] as const;
 const PAGE_SIZE = 50;
 
@@ -334,6 +334,27 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
         </Select>
       </DataTableFilterField>
 
+      <DataTableFilterField label="Cache">
+        <Select
+          items={CACHE_FILTER_ITEMS}
+          value={valueOf(LOG_FILTER_IDS.CACHE_STATUS) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CACHE_STATUS)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.CACHE_STATUS, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Requests" />
+          </SelectTrigger>
+          <SelectContent>
+            {CACHE_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
+
       <KeyAliasFilterField
         value={valueOf(LOG_FILTER_IDS.KEY_ALIAS)}
         onChange={setter(LOG_FILTER_IDS.KEY_ALIAS)}
@@ -368,27 +389,6 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
           onChange={(event) => set(LOG_FILTER_IDS.KEY_HASH, emptyToUndefined(event.target.value))}
           placeholder="Enter key hash…"
         />
-      </DataTableFilterField>
-
-      <DataTableFilterField label="Cache Hit">
-        <Select
-          items={CACHE_HIT_FILTER_ITEMS}
-          value={valueOf(LOG_FILTER_IDS.CACHE_HIT) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CACHE_HIT)}
-          onValueChange={(next) =>
-            set(LOG_FILTER_IDS.CACHE_HIT, next === null || next === ALL_VALUE ? undefined : next)
-          }
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="All Requests" />
-          </SelectTrigger>
-          <SelectContent>
-            {CACHE_HIT_FILTER_ITEMS.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </DataTableFilterField>
 
       <DataTableFilterField label="Session ID">

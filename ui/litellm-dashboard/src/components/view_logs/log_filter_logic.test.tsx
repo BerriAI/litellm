@@ -47,6 +47,7 @@ const defaultProps = {
   columnFilters: [] as ColumnFiltersState,
   activeTab: "request logs",
   isLiveTail: false,
+  excludeInternalHealthChecks: false,
   startTime: "2025-01-01T00:00:00",
   endTime: "2025-01-01T23:59:59",
   pagination: FIRST_PAGE,
@@ -82,7 +83,8 @@ describe("useLogFilterLogic", () => {
       { id: LOG_FILTER_IDS.SESSION_ID, value: "sess-1", param: "session_id" },
       { id: LOG_FILTER_IDS.END_USER, value: "end-user-1", param: "end_user" },
       { id: LOG_FILTER_IDS.STATUS, value: "failure", param: "status_filter" },
-      { id: LOG_FILTER_IDS.CACHE_HIT, value: "true", param: "cache_hit" },
+      { id: LOG_FILTER_IDS.CACHE_STATUS, value: "hit", param: "cache_hit_filter" },
+      { id: LOG_FILTER_IDS.CACHE_STATUS, value: "miss", param: "cache_hit_filter" },
       { id: LOG_FILTER_IDS.MODEL_ID, value: "model-uuid-1", param: "model_id" },
       { id: LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL, value: "gpt-4o", param: "model" },
       { id: LOG_FILTER_IDS.KEY_ALIAS, value: "alias-1", param: "key_alias" },
@@ -153,6 +155,7 @@ describe("useLogFilterLogic", () => {
       ["pagination", { pagination: { pageIndex: 1, pageSize: 50 } }],
       ["startTime", { startTime: "2025-02-02T00:00:00" }],
       ["columnFilters", { columnFilters: [{ id: LOG_FILTER_IDS.TEAM_ID, value: "team-2" }] }],
+      ["excludeInternalHealthChecks", { excludeInternalHealthChecks: true }],
     ])("refetches when %s changes", async (_label, nextProps) => {
       const { rerender } = renderHook((props: HookOverrides) => useLogFilterLogic({ ...defaultProps, ...props }), {
         wrapper,
@@ -162,6 +165,22 @@ describe("useLogFilterLogic", () => {
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1));
       rerender(nextProps);
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  describe("hide health checks toggle", () => {
+    it("passes exclude_internal_health_checks when the toggle is on", async () => {
+      renderFilterHook({ excludeInternalHealthChecks: true });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params).toMatchObject({ exclude_internal_health_checks: true });
+    });
+
+    it("passes exclude_internal_health_checks as false when the toggle is off", async () => {
+      renderFilterHook();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params).toMatchObject({ exclude_internal_health_checks: false });
     });
   });
 

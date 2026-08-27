@@ -149,7 +149,6 @@ class PromptManager:
                 )
                 self.prompts[template_id] = template
             except Exception:
-                # Optional: print(f"Error loading prompt from JSON: {template_id}")
                 pass
 
     def _load_prompt_file(self, file_path: str | Path, prompt_id: str) -> PromptTemplate:
