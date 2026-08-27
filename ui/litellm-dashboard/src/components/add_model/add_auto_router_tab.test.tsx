@@ -592,6 +592,28 @@ describe("AddAutoRouterTab", () => {
       });
     });
 
+    // Every step between the bundled JSON and the payload drops these params silently.
+    it("carries a preset's per-tier reasoning effort through to the create payload", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      await selectTemplate("Anthropic Family");
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        complexity_router_config: {
+          tier_model_configs: {
+            REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+          },
+        },
+      });
+    });
+
     // Bugbot-found bug: submitBlockedReason disables the button for this, but Form's onFinish
     // (wired to the same handler as the button) fires whenever the form itself is submitted,
     // independent of the button's own disabled state. Without submitRecommendedRouter re-checking

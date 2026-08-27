@@ -411,7 +411,9 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
+    parse_background_health_check_model_groups,
     perform_health_check,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
@@ -3660,6 +3662,13 @@ async def _run_background_health_check():
         _llm_model_list = [
             m for m in _llm_model_list if not m.get("model_info", {}).get("disable_background_health_check", False)
         ]
+        scoped_model_groups = llm_router.background_health_check_model_groups if llm_router is not None else None
+        _llm_model_list = list(filter_deployments_to_model_groups(_llm_model_list, scoped_model_groups))
+        if scoped_model_groups is not None and not _llm_model_list:
+            verbose_proxy_logger.warning(
+                "background_health_check_model_groups matched no deployments; groups=%s",
+                sorted(scoped_model_groups),
+            )
         model_count_enabled = len(_llm_model_list)
         expected_peak_in_flight = model_count_enabled
         if isinstance(health_check_concurrency, int) and health_check_concurrency > 0 and model_count_enabled > 0:
@@ -5239,6 +5248,7 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+        _bg_hc_model_groups: Final = parse_background_health_check_model_groups(general_settings)
         _enable_hc_routing = False
         _hc_staleness = None
         _hc_ignore_transient = False
@@ -5434,13 +5444,14 @@ class ProxyConfig:
             _hc_staleness = general_settings.get("health_check_staleness_threshold", None)
             _hc_ignore_transient = general_settings.get("health_check_ignore_transient_errors", False)
             verbose_proxy_logger.info(
-                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s",
+                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s health_check_routing=%s model_groups=%s",
                 use_background_health_checks,
                 use_shared_health_check,
                 health_check_interval,
                 health_check_concurrency,
                 health_check_details,
                 _enable_hc_routing,
+                sorted(_bg_hc_model_groups) if _bg_hc_model_groups is not None else None,
             )
 
             ### RBAC ###
@@ -5472,6 +5483,8 @@ class ProxyConfig:
             router_params["health_check_staleness_threshold"] = _hc_staleness
         if _hc_ignore_transient:
             router_params["health_check_ignore_transient_errors"] = True
+        if _bg_hc_model_groups is not None:
+            router_params["background_health_check_model_groups"] = sorted(_bg_hc_model_groups)
         ## MODEL LIST
         model_list: Final = config.get("model_list", None)
         if model_list:
@@ -7268,6 +7281,7 @@ class ProxyConfig:
                 return None
 
         try:
+            prompt_ids_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
@@ -7290,6 +7304,18 @@ class ProxyConfig:
                         prompt_spec.prompt_id,
                         prompt_sync_error,
                     )
+            # An unparsable row still exists in the DB, so skip the sweep rather than unload its in-memory copy
+            every_row_parsed: Final = len(parsed_specs) == len(prompts_in_db)
+            if every_row_parsed:
+                deleted_db_prompt_ids: Final = tuple(
+                    prompt_id
+                    for prompt_id in prompt_ids_loaded_before_db_read
+                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(prompt_id)) is not None
+                    and loaded_spec.prompt_info.prompt_type == "db"
+                    and prompt_id not in newest_spec_per_id
+                )
+                for deleted_prompt_id in deleted_db_prompt_ids:
+                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id=deleted_prompt_id)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 
@@ -9227,6 +9253,7 @@ class ProxyStartupEvent:
                     prisma_client,
                     pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
                     alert=_alert_ptu_rollup_failure,
+                    router=llm_router,
                 )
 
             scheduler.add_job(
@@ -16388,6 +16415,13 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "options": ("5m", "1h"),
         "tab": "prompt_caching",
         "description": "Empty uses Anthropic's 5m default. 1h suits long sessions but doubles the cache write cost.",
+    },
+    "budget_rollover": {  # mutable-ok: registry literal, frozen with its siblings below
+        "type": "Boolean",
+        "description": (
+            "Carry spend beyond max_budget into the next window when budgets reset, instead of "
+            "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
+        ),
     },
     "max_ui_session_budget": {
         "type": "Dollar",

@@ -27,6 +27,7 @@ import {
   CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
+  heuristicScoringRole,
   usesLlmClassifier,
   DEFAULT_HEURISTIC_FIRST_MAX_TIER,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
@@ -502,7 +503,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      {value.classifier_type === "heuristic" && (
+      {heuristicScoringRole(value) !== "never" && (
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-1">
             <strong className="font-semibold">Custom Technical Keywords</strong>

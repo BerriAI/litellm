@@ -2190,7 +2190,7 @@ async def _get_and_validate_existing_key(
 
         existing_key_row: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
             VerificationTokenRepository(prisma_client)
-        ).find_unique(where={"token": hashed_token})
+        ).find_unique(where={"token": hashed_token}, include={"object_permission": True})
 
         if existing_key_row is None:
             raise ProxyException(
@@ -2442,11 +2442,13 @@ async def _validate_mcp_servers_for_key_update(
             check_db_only=True,
         )
     object_permission_dict: Final = _object_permission_to_dict(data.object_permission)
+    team_unchanged: Final = data.team_id is None or data.team_id == existing_key_row.team_id
     normalized_object_permission: Final = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         prisma_client=prisma_client,
         is_proxy_admin=is_proxy_admin,
+        existing_key_object_permission=existing_key_row.object_permission if team_unchanged else None,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,

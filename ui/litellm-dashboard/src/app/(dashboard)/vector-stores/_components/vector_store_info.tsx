@@ -280,7 +280,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                                   }}
                                 </SelectValue>
                               </SelectTrigger>
-                              <SelectContent alignItemWithTrigger={false}>
+                              <SelectContent>
                                 {Object.entries(Providers)
                                   .filter(([providerEnum]) => providerEnum === "Bedrock")
                                   .map(([providerEnum, providerDisplayName]) => (
