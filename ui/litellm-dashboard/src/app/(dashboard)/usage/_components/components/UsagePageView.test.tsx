@@ -586,6 +586,30 @@ describe("UsagePage", () => {
     });
   });
 
+  it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {
+    let resolveTagList: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTagList = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveTagList({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
+  });
+
   it("should show tag usage selector option for internal users", async () => {
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
