@@ -20,6 +20,7 @@ removed, so `test_internal_control_fields_never_leak_into_provider_body` proves
 they stay out of the body even without it.
 """
 
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,6 +35,8 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.utils import CustomStreamWrapper
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -212,6 +215,19 @@ class _LoggingStub:
 
     litellm_call_id = "call-test"
     dynamic_success_callbacks: List[Any] = []
+
+
+def _real_logging_obj() -> LiteLLMLoggingObj:
+    """A real logging object, which the streaming wrapper reads settings off."""
+    return LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="call-test",
+        function_id="fn-test",
+    )
 
 
 class _GateOnlyLogger(CustomLogger):
@@ -409,3 +425,72 @@ async def test_dispatcher_raises_on_repeated_tool_call_fingerprint(restore_callb
             )
 
     acompletion_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_converted_stream_result_is_async_iterable_after_the_loop_runs(
+    restore_callbacks,
+):
+    """A client that sent stream=true gets something it can `async for` over.
+
+    With code-interpreter interception the proxy converts the request to a
+    non-streaming call, so the dispatcher has to hand the streamed shape back.
+    It used to return a bare ModelResponseStream, and iterating that raised
+    "'async for' requires an object with __aiter__ method".
+    """
+    followup = _plain_model_response("42")
+    plan = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
+    )
+    litellm.callbacks = [_GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})]
+
+    with patch.object(litellm, "acompletion", AsyncMock(return_value=followup)):
+        result = await maybe_run_chat_completion_agentic_loop(
+            response=_tool_call_model_response(),
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "what is 6*7?"}],
+            optional_params={},
+            kwargs={
+                "_code_interpreter_interception_active": True,
+                "_code_interpreter_interception_converted_stream": True,
+            },
+            logging_obj=_real_logging_obj(),
+            custom_llm_provider="openai",
+            stream=True,
+        )
+
+    assert isinstance(result, CustomStreamWrapper)
+    chunks = [chunk async for chunk in result]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "42"
+
+
+@pytest.mark.asyncio
+async def test_converted_stream_result_is_async_iterable_without_a_tool_call(
+    restore_callbacks,
+):
+    """The same holds when the model never calls the tool.
+
+    No callback gates, so no follow-up runs, and the dispatcher returns the
+    original response in streamed form. That path had the same defect, which is
+    why a plain assistant reply was enough to trigger the failure.
+    """
+    litellm.callbacks = []
+
+    result = await maybe_run_chat_completion_agentic_loop(
+        response=_plain_model_response("no tool needed"),
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        kwargs={
+            "_code_interpreter_interception_active": True,
+            "_code_interpreter_interception_converted_stream": True,
+        },
+        logging_obj=_real_logging_obj(),
+        custom_llm_provider="openai",
+        stream=True,
+    )
+
+    assert isinstance(result, CustomStreamWrapper)
+    chunks = [chunk async for chunk in result]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "no tool needed"
