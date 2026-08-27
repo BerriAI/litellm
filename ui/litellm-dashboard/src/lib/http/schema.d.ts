@@ -30208,6 +30208,8 @@ export interface components {
             token_exchange_profile?: string | null;
             /** Upstream Resource */
             upstream_resource?: string | null;
+            /** Upstream Token Header */
+            upstream_token_header?: string | null;
         };
         /**
          * MCPEnvVar
