@@ -5032,7 +5032,7 @@ class StandardLoggingPayloadSetup:
         return start_time_float, end_time_float, completion_start_time_float
 
     @staticmethod
-    def get_system_prompt_from_kwargs(kwargs: dict[str, Any] | None) -> str | list[Any] | None:
+    def get_system_prompt_from_kwargs(kwargs: dict[str, Any] | None) -> str | list[Any] | None:  # noqa: LIT001  # caller kwargs contain mixed types; system can be str or content-block list
         """
         Extract the system prompt from kwargs, checking all known sources.
 
@@ -5048,7 +5048,7 @@ class StandardLoggingPayloadSetup:
         )
 
     @staticmethod
-    def append_system_prompt_messages(kwargs: dict[str, Any] | None = None, messages: Any | None = None):
+    def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
         """
         Append system prompt messages to the messages list.
 
@@ -5066,7 +5066,7 @@ class StandardLoggingPayloadSetup:
         if not isinstance(system, (str, list)):
             return messages
 
-        system_message: dict[str, Any] = {"role": "system", "content": system}
+        system_message = {"role": "system", "content": system}
 
         if messages is None:
             return [system_message]
