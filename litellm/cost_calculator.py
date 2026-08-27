@@ -258,6 +258,14 @@ def _model_info_from_params(params: Mapping[str, object], metadata_key: str) -> 
     return _litellm_params_as_mapping(metadata.get("model_info"))
 
 
+def _as_token_rate(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def _custom_rates_from_mapping(source: Mapping[str, object] | None) -> Mapping[str, float] | None:
     if source is None:
         return None
@@ -273,7 +281,7 @@ def _custom_rates_from_mapping(source: Mapping[str, object] | None) -> Mapping[s
         ("cache_read_input_token_cost", cache_read),
         ("cache_creation_input_token_cost", cache_creation),
     )
-    return MappingProxyType({key: float(value) for key, value in pairs if value is not None})
+    return MappingProxyType({key: rate for key, value in pairs if (rate := _as_token_rate(value)) is not None})
 
 
 def extract_custom_cost_per_token(
@@ -305,18 +313,16 @@ def _published_model_info(
     if not model:
         return None
     try:
-        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises Exception for unmapped models
         return None
+    return MappingProxyType({str(key): value for key, value in info.items()})
 
 
 def _rate_from_model_info(info: Mapping[str, object] | None, field: str) -> float | None:
     if info is None:
         return None
-    value: Final = info.get(field)
-    if value is None:
-        return None
-    return float(value)
+    return _as_token_rate(info.get(field))
 
 
 def _published_token_rate(
@@ -345,10 +351,7 @@ def _cost_map_rate(key: str | None, field: str) -> float | None:
     raw: Final = litellm.model_cost.get(key)
     if not isinstance(raw, Mapping):
         return None
-    value: Final = raw.get(field)
-    if value is None:
-        return None
-    return float(value)
+    return _as_token_rate(raw.get(field))
 
 
 def _declared_token_rate(
@@ -390,7 +393,7 @@ def _first_declared_token_rate(
     field: str,
 ) -> float | None:
     for candidate in _unique_model_names(*models):
-        rate: Final = _declared_token_rate(candidate, custom_llm_provider, field)
+        rate = _declared_token_rate(candidate, custom_llm_provider, field)
         if rate is not None:
             return rate
     return None

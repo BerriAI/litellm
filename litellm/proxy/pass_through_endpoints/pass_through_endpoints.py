@@ -79,8 +79,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
-    _key_or_team_allows_client_pricing_override,
-    _strip_client_pricing_overrides,
+    strip_unauthorized_client_pricing,
 )
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
@@ -553,8 +552,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         from litellm.types.utils import all_litellm_params
 
         _parsed_body = _parsed_body or {}
-        if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-            _strip_client_pricing_overrides(_parsed_body)
+        strip_unauthorized_client_pricing(_parsed_body, user_api_key_dict)
 
         litellm_params_in_body: Final = {}
         for k in all_litellm_params:
