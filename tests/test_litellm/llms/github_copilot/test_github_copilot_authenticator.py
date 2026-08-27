@@ -6,7 +6,10 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from litellm.llms.github_copilot.authenticator import Authenticator
+from litellm.llms.github_copilot.authenticator import (
+    Authenticator,
+    get_authenticator_for_litellm_params,
+)
 from litellm.llms.github_copilot.common_utils import (
     GetAccessTokenError,
     GetDeviceCodeError,
@@ -242,6 +245,41 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_base_without_global_token_file(self, authenticator):
         """Per-deployment auth does not require a global endpoint file."""
         assert authenticator.get_api_base() is None
+
+    def test_get_api_base_with_invalid_json(self, authenticator):
+        authenticator._write_private_text(authenticator.api_key_file, "not-json")
+
+        assert authenticator.get_api_base() is None
+
+    def test_authenticator_selection_reuses_default_without_override(self, authenticator):
+        assert get_authenticator_for_litellm_params(authenticator, None) is authenticator
+
+    def test_authenticator_selection_reuses_matching_directory(self, authenticator):
+        selected = get_authenticator_for_litellm_params(
+            authenticator,
+            {"github_copilot_token_dir": authenticator.token_dir},
+        )
+
+        assert selected is authenticator
+
+    def test_authenticator_selection_ignores_empty_override(self, authenticator):
+        selected = get_authenticator_for_litellm_params(
+            authenticator,
+            {"github_copilot_token_dir": "  "},
+        )
+
+        assert selected is authenticator
+
+    def test_authenticator_selection_uses_distinct_directory(self, authenticator, tmp_path):
+        token_dir = tmp_path / "second-account"
+
+        selected = get_authenticator_for_litellm_params(
+            authenticator,
+            {"github_copilot_token_dir": str(token_dir)},
+        )
+
+        assert selected is not authenticator
+        assert selected.token_dir == str(token_dir)
 
     def test_get_device_code_with_custom_url(self, authenticator, mock_http_client):
         """GITHUB_COPILOT_DEVICE_CODE_URL env var must be used by _get_device_code at call time."""
