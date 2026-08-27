@@ -1705,8 +1705,6 @@ if MCP_AVAILABLE:
 
         imported: Final = tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportResult))
         if imported:
-            # Best-effort registry refresh, mirroring add_mcp_server: rows are
-            # already committed, so a refresh failure must not surface as a 500.
             try:
                 await global_mcp_server_manager.reload_servers_from_database()
             except Exception as e:  # noqa: BLE001  # rows are committed; a refresh failure must not surface as a 500
