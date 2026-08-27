@@ -102,11 +102,8 @@ class TestCostHeaders:
                     return response
             return None
 
-        measured: StreamingResponse | None = None
-        for _ in range(CACHE_ATTEMPTS):
-            measured = prime_then_reread()
-            if measured is not None:
-                break
+        rounds = (prime_then_reread() for _ in range(CACHE_ATTEMPTS))
+        measured = next((response for response in rounds if response is not None), None)
         if measured is None:
             pytest.fail(
                 f"no cache read landed across {CACHE_ATTEMPTS} prime rounds of "
