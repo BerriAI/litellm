@@ -96,7 +96,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     to: initialToDate,
   });
 
-  const [allTags, setAllTags] = useState<EntityList[] | null>(null);
+  const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
   const { data: customers = [] } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
@@ -138,6 +138,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
 
+  // Stamped and selected during render like the request tiles below: the tag
+  // filter reads "no tags" from an empty list, so a list left over from the
+  // previous range would state that about a range nobody has measured yet.
+  const currentTagRangeKey = fetchedRangeKey(startTime, endTime);
+  const allTags = selectForRange(fetchedTags, currentTagRangeKey);
+
   useEffect(() => {
     if (!accessToken) return;
     let cancelled = false;
@@ -145,12 +151,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       try {
         const tags = await tagListCall(accessToken, startTime, endTime);
         if (cancelled) return;
-        setAllTags(
-          Object.values(tags).map((tag: Tag) => ({
+        setFetchedTags({
+          rangeKey: currentTagRangeKey,
+          value: Object.values(tags).map((tag: Tag) => ({
             label: tag.name,
             value: tag.name,
           })),
-        );
+        });
       } catch (e) {
         if (!cancelled) {
           console.error("Failed to fetch tag list", e);
@@ -160,7 +167,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, startTime, endTime]);
+  }, [accessToken, startTime, endTime, currentTagRangeKey]);
 
   // Everything the request tiles read is stamped with the range it answers and
   // selected during render, rather than cleared in an effect. An effect runs

@@ -610,6 +610,42 @@ describe("UsagePage", () => {
     expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
   });
 
+  it("should drop the previous range's tags as soon as the range changes", async () => {
+    mockTagListCall.mockResolvedValue({ "old-range-tag": { name: "old-range-tag" } } as never);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("entity-usage")).toHaveAttribute(
+        "data-entity-list",
+        JSON.stringify([{ label: "old-range-tag", value: "old-range-tag" }]),
+      );
+    });
+
+    let resolveNewRange: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveNewRange = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("pick-a-different-range"));
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveNewRange({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
+  });
+
   it("should show tag usage selector option for internal users", async () => {
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
