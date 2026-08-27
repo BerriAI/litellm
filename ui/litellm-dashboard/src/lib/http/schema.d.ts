@@ -21809,7 +21809,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */

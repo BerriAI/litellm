@@ -91,6 +91,30 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=False,
         description="If true, the alerting payload will be printed to the console.",
     )
+    daily_spend_per_user_threshold: float | None = Field(
+        default=None,
+        description="Alert when a user's spend for the current day (UTC) crosses this USD amount. Off by default.",
+    )
+    monthly_spend_per_user_threshold: float | None = Field(
+        default=None,
+        description="Alert when a user's spend for the current calendar month (UTC) crosses this USD amount. Off by default.",
+    )
+    spend_anomaly_multiplier: float = Field(
+        default=3.0,
+        description="Flag a user's spend as anomalous when today's spend exceeds this multiple of their trailing daily average.",
+    )
+    spend_anomaly_baseline_days: int = Field(
+        default=7,
+        description="Number of trailing days used to compute a user's daily average spend for anomaly detection.",
+    )
+    spend_anomaly_min_spend: float = Field(
+        default=10.0,
+        description="Minimum spend (USD) a user must reach today before an anomaly alert can fire. Reduces false positives.",
+    )
+    user_spend_check_interval: int = Field(
+        default=3600,
+        description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):
@@ -138,6 +162,8 @@ class AlertType(str, Enum):
     budget_alerts = "budget_alerts"
     spend_reports = "spend_reports"
     failed_tracking_spend = "failed_tracking_spend"
+    user_spend_thresholds = "user_spend_thresholds"
+    user_spend_anomalies = "user_spend_anomalies"
 
     # Database alerts
     db_exceptions = "db_exceptions"
@@ -182,6 +208,8 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     AlertType.budget_alerts,
     AlertType.spend_reports,
     AlertType.failed_tracking_spend,
+    AlertType.user_spend_thresholds,
+    AlertType.user_spend_anomalies,
     # Database alerts
     AlertType.db_exceptions,
     # Report alerts

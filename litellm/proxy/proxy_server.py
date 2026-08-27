@@ -249,6 +249,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
     ROUTER_MODEL_NAME_RESPONSE_FIELD,
+    USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
@@ -9619,6 +9620,32 @@ class ProxyStartupEvent:
                 replace_existing=True,
             )
 
+            user_spend_check_interval: Final = (
+                proxy_logging_obj.slack_alerting_instance.alerting_args.user_spend_check_interval
+            )
+
+            async def _scheduled_user_spend_alerts() -> None:
+                if (
+                    await pod_lock_manager.acquire_lock(
+                        cronjob_id=USER_SPEND_ALERTS_JOB_ID,
+                        ttl=max(user_spend_check_interval - 60, 60),
+                        allow_reentrant=False,
+                    )
+                    is False
+                ):
+                    return
+                await proxy_logging_obj.slack_alerting_instance.send_user_spend_alerts()
+
+            scheduler.add_job(
+                _scheduled_user_spend_alerts,
+                "interval",
+                seconds=user_spend_check_interval,
+                next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 60)),
+                id=USER_SPEND_ALERTS_JOB_ID,
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+
             if os.getenv("PROMETHEUS_URL"):
                 from zoneinfo import ZoneInfo
 
@@ -14658,6 +14685,12 @@ async def alerting_settings(
         "minor_outage_alert_threshold": {"type": "Integer"},
         "major_outage_alert_threshold": {"type": "Integer"},
         "max_outage_alert_list_size": {"type": "Integer"},
+        "daily_spend_per_user_threshold": {"type": "Float"},
+        "monthly_spend_per_user_threshold": {"type": "Float"},
+        "spend_anomaly_multiplier": {"type": "Float"},
+        "spend_anomaly_baseline_days": {"type": "Integer"},
+        "spend_anomaly_min_spend": {"type": "Float"},
+        "user_spend_check_interval": {"type": "Integer"},
     }
 
     _slack_alerting: Final[SlackAlerting] = proxy_logging_obj.slack_alerting_instance
