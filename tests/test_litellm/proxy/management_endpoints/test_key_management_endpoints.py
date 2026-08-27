@@ -7767,6 +7767,45 @@ async def test_validate_key_list_check_key_hash_not_found():
 
 
 @pytest.mark.asyncio
+async def test_validate_key_list_check_key_hash_row_missing():
+    """A key_hash with no row reaches the same 'Key Hash not found' 403 as a failed
+    lookup, instead of blowing up inside the ownership check on a None row."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="test-user",
+            user_email="test@example.com",
+            teams=[],
+            organization_memberships=[],
+        )
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        api_key="sk-caller",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await validate_key_list_check(
+            user_api_key_dict=user_api_key_dict,
+            user_id=None,
+            team_id=None,
+            organization_id=None,
+            key_alias=None,
+            key_hash="hash-of-a-deleted-key",
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.code == "403" or exc_info.value.code == 403
+    assert exc_info.value.param == "key_hash"
+    assert "Key Hash not found" in exc_info.value.message
+
+
+@pytest.mark.asyncio
 async def test_validate_key_list_check_proxy_admin_viewer_skips_db_lookup():
     """proxy_admin_viewer takes the same unscoped read fast-path as proxy_admin, so no
     user row is fetched and none of the user/team scoping filters apply."""

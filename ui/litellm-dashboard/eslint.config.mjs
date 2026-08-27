@@ -83,8 +83,21 @@ const eslintConfig = [
     },
   },
   {
+    files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+    rules: { "local/no-ad-hoc-z-index": "error" },
+  },
+  {
+    files: [
+      "src/components/ui/**/*.{ts,tsx}",
+      "src/components/shared/DataTable/**/*.{ts,tsx}",
+      "src/**/*.test.{ts,tsx}",
+      "tests/**/*.{ts,tsx}",
+    ],
+    rules: { "local/no-ad-hoc-z-index": ["error", { allowPopupLayer: true }] },
+  },
+  {
     files: ["tests/eslint-rules/**/*.{ts,tsx}"],
-    rules: { "local/no-noop-hover-variant": "off" },
+    rules: { "local/no-noop-hover-variant": "off", "local/no-ad-hoc-z-index": "off" },
   },
   {
     files: ["src/**/*.test.{ts,tsx}", "tests/**/*.{ts,tsx}"],

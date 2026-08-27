@@ -1,7 +1,12 @@
+import asyncio
+import base64
 import contextlib
 import copy
 import json
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import pytest
@@ -14,6 +19,9 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import main as litellm_main
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.types.utils import Usage
 
 
 async def _async_fake_bedrock_image_details(image_url):
@@ -2944,3 +2952,122 @@ def test_a_stream_that_reported_no_usage_is_still_billed(local_cost_map):
     assert cost == pytest.approx(
         _priced_at(rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens)
     )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_resolves_provider_from_api_base():
+    response = await litellm.acompletion(
+        model="deepseek-chat",
+        api_base="https://api.deepseek.com/v1",
+        api_key="fake-key",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="resolved",
+    )
+
+    assert response.choices[0].message.content == "resolved"
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordedSpeechSuccess:
+    call_type: str | None
+    spend_metadata: Mapping[str, object]
+    response_cost: float | None
+    logged_response_cost: float | None
+
+
+def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
+    call_type: Final = payload.get("call_type")
+    response_cost: Final = payload.get("response_cost")
+    logging_payload: Final = payload.get("standard_logging_object")
+    logged_cost: Final = logging_payload.get("response_cost") if isinstance(logging_payload, dict) else None
+    return _RecordedSpeechSuccess(
+        call_type=call_type if isinstance(call_type, str) else None,
+        spend_metadata=get_litellm_metadata_from_kwargs(payload),
+        response_cost=response_cost if isinstance(response_cost, float) else None,
+        logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
+    )
+
+
+class _SuccessEventRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[_RecordedSpeechSuccess] = []  # mutable-ok: test recorder of success-callback events
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_speech_success(kwargs))
+
+
+async def _wait_for_success_event(recorder: _SuccessEventRecorder, call_type: str) -> _RecordedSpeechSuccess:
+    for _ in range(100):
+        if (event := next((e for e in recorder.events if e.call_type == call_type), None)) is not None:
+            return event
+        await asyncio.sleep(0.05)
+    pytest.fail(f"no {call_type} success event; got {[e.call_type for e in recorder.events]}")
+
+
+def _gemini_tts_generate_content_response() -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": "audio/L16;codec=pcm;rate=24000",
+                                "data": base64.b64encode(b"pcm-audio-bytes").decode(),
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 60,
+            "totalTokenCount": 65,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 5}],
+            "candidatesTokensDetails": [{"modality": "AUDIO", "tokenCount": 60}],
+        },
+        "modelVersion": "gemini-2.5-flash-preview-tts",
+    }
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _SuccessEventRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="spend tracking check",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        metadata={"user_api_key": "hashed-virtual-key", "user_api_key_user_id": "user-1"},
+    )
+
+    assert mock_route.called
+    assert mock_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
+    speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
+    assert speech_event.spend_metadata["user_api_key"] == "hashed-virtual-key"
+    assert speech_event.spend_metadata["user_api_key_user_id"] == "user-1"
+    expected_prompt_cost, expected_completion_cost = litellm.cost_per_token(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        usage_object=Usage(prompt_tokens=5, completion_tokens=60, total_tokens=65),
+    )
+    expected_cost: Final = expected_prompt_cost + expected_completion_cost
+    assert expected_cost > 0
+    assert speech_event.response_cost == pytest.approx(expected_cost)
+    assert speech_event.logged_response_cost == pytest.approx(expected_cost)
