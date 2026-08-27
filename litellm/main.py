@@ -8629,7 +8629,7 @@ def _chunks_for_streaming_choice_index(
     ]
 
 
-def _renumbered_first_choice(response: Any, index: int) -> Choices | None:
+def _renumbered_first_choice(response: object, index: int) -> Choices | None:
     """The single choice a per-index build produced, renumbered to that index.
 
     None when the build did not yield a usable non-streaming choice: `stream_chunk_builder`
