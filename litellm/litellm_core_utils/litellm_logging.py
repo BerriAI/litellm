@@ -177,6 +177,7 @@ from ..integrations.lunary import LunaryLogger
 from ..integrations.newrelic import NewRelicLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
+from ..integrations.pointfive import PointFiveLogger
 from ..integrations.posthog import PostHogLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
@@ -4253,6 +4254,14 @@ def _init_custom_logger_compatible_class(
             _s3_v2_logger: Final = S3V2Logger()
             _in_memory_loggers.append(_s3_v2_logger)
             return _s3_v2_logger
+        elif logging_integration == "pointfive":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PointFiveLogger):
+                    return callback
+
+            _pointfive_logger: Final = PointFiveLogger()
+            _in_memory_loggers.append(_pointfive_logger)
+            return _pointfive_logger
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
                 if isinstance(callback, SQSLogger):
@@ -4886,6 +4895,10 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "s3_v2":
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
+                    return callback
+        elif logging_integration == "pointfive":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, PointFiveLogger):
                     return callback
         elif logging_integration == "aws_sqs":
             for callback in _in_memory_loggers:
