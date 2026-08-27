@@ -45,9 +45,9 @@ const defaultProps = {
   userRole: "Admin" as string | null,
   userID: "user-1" as string | null,
   columnFilters: [] as ColumnFiltersState,
-  filterByCurrentUser: false,
   activeTab: "request logs",
   isLiveTail: false,
+  excludeInternalHealthChecks: false,
   startTime: "2025-01-01T00:00:00",
   endTime: "2025-01-01T23:59:59",
   pagination: FIRST_PAGE,
@@ -153,6 +153,7 @@ describe("useLogFilterLogic", () => {
       ["pagination", { pagination: { pageIndex: 1, pageSize: 50 } }],
       ["startTime", { startTime: "2025-02-02T00:00:00" }],
       ["columnFilters", { columnFilters: [{ id: LOG_FILTER_IDS.TEAM_ID, value: "team-2" }] }],
+      ["excludeInternalHealthChecks", { excludeInternalHealthChecks: true }],
     ])("refetches when %s changes", async (_label, nextProps) => {
       const { rerender } = renderHook((props: HookOverrides) => useLogFilterLogic({ ...defaultProps, ...props }), {
         wrapper,
@@ -162,6 +163,22 @@ describe("useLogFilterLogic", () => {
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1));
       rerender(nextProps);
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  describe("hide health checks toggle", () => {
+    it("passes exclude_internal_health_checks when the toggle is on", async () => {
+      renderFilterHook({ excludeInternalHealthChecks: true });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params).toMatchObject({ exclude_internal_health_checks: true });
+    });
+
+    it("passes exclude_internal_health_checks as false when the toggle is off", async () => {
+      renderFilterHook();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params).toMatchObject({ exclude_internal_health_checks: false });
     });
   });
 
@@ -181,17 +198,16 @@ describe("useLogFilterLogic", () => {
     });
   });
 
-  describe("filterByCurrentUser", () => {
-    it("scopes to the current user when no explicit user filter is set", async () => {
-      renderFilterHook({ filterByCurrentUser: true });
+  describe("user scope", () => {
+    it("leaves an empty user filter for the backend to authorize", async () => {
+      renderFilterHook();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
-      expect(lastCallParams()?.params).toMatchObject({ user_id: "user-1" });
+      expect(lastCallParams()?.params?.user_id).toBeUndefined();
     });
 
-    it("lets an explicit user filter win over the current-user scope", async () => {
+    it("sends an explicit user filter for the backend to intersect with authorization", async () => {
       renderFilterHook({
-        filterByCurrentUser: true,
         columnFilters: [{ id: LOG_FILTER_IDS.USER_ID, value: "someone-else" }],
       });
 

@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import pytest
 
@@ -841,6 +838,44 @@ def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, ex
     assert reported == pytest.approx(expected_multiplier * baseline - served)
 
 
+def test_the_baseline_is_priced_on_the_vertex_location_the_request_was_billed_at(monkeypatch):
+    """A request served from a regional Vertex endpoint was billed with the
+    regional-endpoint uplift, so the counterfactual single-model operator would
+    have paid it too. The served model carries no uplift field, so only the
+    baseline moves with the recorded location."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    gemini = litellm.get_model_info("gemini-3.5-flash", "vertex_ai")
+    haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
+    assert gemini.get("regional_endpoint_uplift_multiplier") == 1.1
+    assert haiku.get("regional_endpoint_uplift_multiplier") is None, "served model must not move with the basis"
+
+    usage = _usage(fresh=20_000, cached=0, written=0, out=1_000)
+    served = 20_000 * haiku["input_cost_per_token"] + 1_000 * haiku["output_cost_per_token"]
+    baseline = 20_000 * gemini["input_cost_per_token"] + 1_000 * gemini["output_cost_per_token"]
+
+    regional = compute_autorouter_savings(
+        baseline_model="vertex_ai/gemini-3.5-flash",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(served, vertex_location="us-east5"),
+    )
+    global_endpoint = compute_autorouter_savings(
+        baseline_model="vertex_ai/gemini-3.5-flash",
+        selected_model="claude-haiku-4-5",
+        selected_provider="anthropic",
+        usage=usage,
+        conversation_continuing=False,
+        cost_breakdown=_breakdown(served, vertex_location="global"),
+    )
+
+    assert regional == pytest.approx(1.1 * baseline - served)
+    assert global_endpoint == pytest.approx(baseline - served)
+
+
 def test_a_baseline_recorded_on_the_decision_turns_the_driver_on():
     """An operator who configures nothing still sees the driver work."""
     result = compute_savings_spend(
@@ -973,3 +1008,122 @@ def test_a_recorded_baseline_deployment_prices_at_its_configured_rate():
         llm_router=lambda: router,
     )
     assert with_deployment_rate.autorouter > at_public_rate.autorouter
+
+
+def _routed_decision() -> dict:
+    return {"savings_baseline_model": "anthropic/claude-opus-5", "conversation_continuing": True}
+
+
+def test_recorded_savings_win_over_recomputation():
+    """The figure the logging path stamped is the one the rollup keeps, so the
+    per-request record and the daily rollup cannot disagree."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+        recorded_autorouter_savings=0.5,
+    )
+    assert result.autorouter == 0.5
+
+
+def test_recorded_savings_survive_an_unusable_usage_object():
+    """A recorded figure was computed when the usage still parsed; a later row whose
+    usage_object no longer does must keep the number, not zero it."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=_routed_decision(),
+        usage_object={"prompt_tokens": ["not", "a", "number"]},
+        recorded_autorouter_savings=0.25,
+    )
+    assert result.autorouter == 0.25
+
+
+def test_a_boolean_is_not_a_recorded_savings_figure():
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=None,
+        usage_object=_cached_usage_object(),
+        recorded_autorouter_savings=True,
+    )
+    assert result.autorouter == 0.0
+
+
+def test_rows_written_before_the_field_shipped_recompute():
+    """No recorded figure means the row predates the logging-path stamp; the writer
+    recomputes exactly what the one shared helper would have recorded."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    recomputed = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    direct = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    assert direct is not None and direct != 0.0
+    assert recomputed.autorouter == direct
+
+
+def test_driver_off_is_none_not_zero_for_the_request_helper():
+    """None and 0.0 are different facts on the logging payload: absence means the
+    request was never auto-routed, zero is a real figure for a routed request."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    assert (
+        autorouter_savings_for_request(
+            model="claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            routing_decision=None,
+            usage_object=_cached_usage_object(),
+        )
+        is None
+    )
+    assert (
+        autorouter_savings_for_request(
+            model="claude-haiku-4-5",
+            custom_llm_provider="anthropic",
+            routing_decision={"conversation_continuing": True},
+            usage_object=_cached_usage_object(),
+        )
+        is None
+    )
+
+
+def test_logging_payload_never_stamps_internal_calls():
+    """Shadow eval and classifier sub-calls carry a real routing decision but are not
+    requests the caller made; a stamped figure would report savings for traffic no
+    user sent, which the spend writer deliberately zeroes."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_logging_payload
+
+    routed_metadata = {"routing_decision": _routed_decision()}
+    stamped = autorouter_savings_for_logging_payload(
+        request_metadata=routed_metadata,
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        model_id=None,
+        usage_object=_cached_usage_object(),
+        cost_breakdown=None,
+    )
+    assert stamped is not None and stamped != 0.0
+
+    internal = autorouter_savings_for_logging_payload(
+        request_metadata={**routed_metadata, "internal_call_origin": "shadow_eval_shadow"},
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        model_id=None,
+        usage_object=_cached_usage_object(),
+        cost_breakdown=None,
+    )
+    assert internal is None

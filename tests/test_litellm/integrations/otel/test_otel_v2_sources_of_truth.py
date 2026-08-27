@@ -4,6 +4,7 @@ and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 import logging
 import re
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -14,6 +15,7 @@ from litellm.integrations.otel import (
     Error,
     GenAI,
     GenAIOperation,
+    GenAIOutputType,
     HTTP,
     LiteLLM,
     OpenTelemetryV2Config,
@@ -21,8 +23,10 @@ from litellm.integrations.otel import (
     is_otel_v2_enabled,
     promoted_baggage,
     resolve_operation,
+    resolve_output_type,
     resolve_provider,
 )
+from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
@@ -262,6 +266,95 @@ def test_vector_store_file_management_is_not_chat(call_type):
     they get their own vendor value instead of sharing one bucket."""
     assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT
     assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}{operation}"
+        for operation in ("get_responses", "delete_responses", "cancel_responses", "list_input_items")
+        for prefix in ("", "a")
+    ],
+)
+def test_responses_management_is_not_chat(call_type):
+    """Fetching, deleting or cancelling a stored response runs no inference, so it must not
+    read as a chat completion: the retrieved object replays the original call's tokens and
+    would inflate the chat series on every read. Regression test for LIT-5602."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_RESPONSES_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.responses_management"
+
+
+def test_creating_a_response_is_still_chat():
+    """Guards the test above: ``/v1/responses`` itself is a chat completion."""
+    assert resolve_operation("aresponses") is GenAIOperation.CHAT
+
+
+_NON_CHAT_ROUTES: Final = (
+    ("image_generation", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.IMAGE),
+    ("speech", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.SPEECH),
+    ("transcription", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.TEXT),
+    ("ocr", GenAIOperation.GENERATE_CONTENT, GenAIOutputType.TEXT),
+    ("moderation", GenAIOperation.LITELLM_MODERATION, None),
+)
+
+
+@pytest.mark.parametrize(
+    ("call_type", "operation", "output_type"),
+    [
+        (f"{prefix}{call_type}", operation, output_type)
+        for call_type, operation, output_type in _NON_CHAT_ROUTES
+        for prefix in ("", "a")
+    ],
+)
+def test_non_chat_inference_routes_follow_genai_semconv(call_type, operation, output_type):
+    """Image generation, speech, transcription and OCR all produce content, so the
+    convention names them ``generate_content`` and separates them by the requested
+    output modality rather than by an invented operation. Moderation classifies
+    instead of generating and the convention names nothing for it, so it keeps a
+    vendor value. Either way the spans must not land in the chat series a dashboard
+    reads."""
+    assert resolve_operation(call_type) is operation
+    assert resolve_output_type(call_type) is output_type
+
+
+@pytest.mark.parametrize(
+    ("call_type", "operation", "output_type"),
+    [(f"a{call_type}", operation, output_type) for call_type, operation, output_type in _NON_CHAT_ROUTES],
+)
+def test_non_chat_route_spans_carry_semconv_name_and_modality(call_type, operation, output_type):
+    """The emitted span, not just the mapping table: name is
+    ``{gen_ai.operation.name} {gen_ai.request.model}``, the modality rides
+    ``gen_ai.output.type``, and the route stays recoverable from
+    ``litellm.call_type`` now that several routes share one operation."""
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(call_type=call_type, model="some-model", custom_llm_provider="openai")
+    )
+    attrs = GenAIMapper().map(data)
+
+    assert spans_mod.llm_call_span_name(data) == f"{operation.value} some-model"
+    assert attrs[GenAI.OPERATION_NAME] == operation.value
+    assert attrs[GenAI.PROVIDER_NAME] == "openai"
+    assert attrs[GenAI.REQUEST_MODEL] == "some-model"
+    assert attrs[LiteLLM.CALL_TYPE] == call_type
+    assert attrs.get(GenAI.OUTPUT_TYPE) == (output_type.value if output_type else None)
+
+
+def test_non_chat_route_error_span_keeps_error_attributes():
+    """Modality mapping must not cost the failure signal: a failed non-chat call
+    still carries the error type alongside the standardized operation."""
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(
+            call_type="aspeech",
+            model="tts-1",
+            status="failure",
+            error_information={"error_class": "BadRequestError"},
+        )
+    )
+    attrs = GenAIMapper().map(data)
+
+    assert attrs[GenAI.OPERATION_NAME] == GenAIOperation.GENERATE_CONTENT.value
+    assert attrs[GenAI.OUTPUT_TYPE] == GenAIOutputType.SPEECH.value
+    assert attrs[Error.TYPE] == "BadRequestError"
 
 
 def test_vendor_operation_values_are_namespaced():

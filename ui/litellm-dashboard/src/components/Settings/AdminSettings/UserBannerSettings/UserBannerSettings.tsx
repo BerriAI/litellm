@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUpdateUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner";
 import { useUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUserBanner";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { UserBanner, UserBannerSeverity, UserBannerUpdate } from "@/components/networking";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,11 @@ const SEVERITY_LABELS: Record<UserBannerSeverity, string> = {
   warning: "Warning",
   error: "Error",
 };
+
+const SEVERITY_ITEMS = (Object.keys(SEVERITY_LABELS) as UserBannerSeverity[]).map((severity) => ({
+  value: severity,
+  label: SEVERITY_LABELS[severity],
+}));
 
 const EMPTY_BANNER: UserBanner = { enabled: false, message: "", severity: "info", revision: "" };
 
@@ -60,10 +65,10 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
   const handleSave = () => {
     saveBanner(draft, {
       onSuccess: () => {
-        NotificationManager.success("User banner updated successfully");
+        toast.success("User banner updated successfully");
       },
       onError: (error) => {
-        NotificationManager.fromBackend(error);
+        toast.fromError(error);
       },
     });
   };
@@ -109,6 +114,7 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
             <div className="flex flex-col gap-2">
               <Label>Severity</Label>
               <Select
+                items={SEVERITY_ITEMS}
                 value={draft.severity}
                 onValueChange={(value: string | null) =>
                   setDraft({ ...draft, severity: (value ?? "info") as UserBannerSeverity })
@@ -118,9 +124,9 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
                   <SelectValue placeholder="Severity" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(Object.keys(SEVERITY_LABELS) as UserBannerSeverity[]).map((severity) => (
-                    <SelectItem key={severity} value={severity}>
-                      {SEVERITY_LABELS[severity]}
+                  {SEVERITY_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

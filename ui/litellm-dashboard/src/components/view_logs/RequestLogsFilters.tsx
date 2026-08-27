@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
+import { useInfiniteSpendLogUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { DataTableFilterField } from "@/components/shared/DataTable";
@@ -24,6 +25,12 @@ import { ERROR_CODE_OPTIONS } from "./constants";
 import { LOG_FILTER_IDS, type LogsWindow } from "./log_filter_logic";
 
 const ALL_VALUE = "all";
+
+const STATUS_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Statuses" },
+  { value: "success", label: "Success" },
+  { value: "failure", label: "Failure" },
+] as const;
 const PAGE_SIZE = 50;
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -144,6 +151,51 @@ function ModelFilterField({ value, onChange }: { value: string; onChange: (value
   );
 }
 
+function UserIdFilterField({
+  value,
+  onChange,
+  logsWindow,
+}: {
+  value: string;
+  onChange: (value: string | undefined) => void;
+  logsWindow: LogsWindow;
+}) {
+  const [search, setSearch] = useState("");
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteSpendLogUsers(
+    logsWindow,
+    PAGE_SIZE,
+    emptyToUndefined(search),
+  );
+
+  const options = useMemo<SearchSelectOption[]>(() => {
+    const seen = new Set<string>();
+    return (data?.pages ?? []).flatMap((page) =>
+      page.data.flatMap((userId) => {
+        if (!userId || seen.has(userId)) return [];
+        seen.add(userId);
+        return [{ label: userId, value: userId }];
+      }),
+    );
+  }, [data]);
+
+  return (
+    <DataTableFilterField label="User ID">
+      <PaginatedSearchSelect
+        options={options}
+        value={value}
+        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        onSearchChange={setSearch}
+        onLoadMore={() => void fetchNextPage()}
+        hasNextPage={hasNextPage}
+        isLoading={isLoading}
+        isFetchingNextPage={isFetchingNextPage}
+        placeholder="Search an internal user"
+        emptyText="No users found"
+      />
+    </DataTableFilterField>
+  );
+}
+
 function EndUserFilterField({
   value,
   onChange,
@@ -259,6 +311,7 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
 
       <DataTableFilterField label="Status">
         <Select
+          items={STATUS_FILTER_ITEMS}
           value={valueOf(LOG_FILTER_IDS.STATUS) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.STATUS)}
           onValueChange={(next) => set(LOG_FILTER_IDS.STATUS, next === null || next === ALL_VALUE ? undefined : next)}
         >
@@ -266,9 +319,11 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
             <SelectValue placeholder="All Statuses" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL_VALUE}>All Statuses</SelectItem>
-            <SelectItem value="success">Success</SelectItem>
-            <SelectItem value="failure">Failure</SelectItem>
+            {STATUS_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </DataTableFilterField>
@@ -277,6 +332,12 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
         value={valueOf(LOG_FILTER_IDS.KEY_ALIAS)}
         onChange={setter(LOG_FILTER_IDS.KEY_ALIAS)}
         teamId={valueOf(LOG_FILTER_IDS.TEAM_ID)}
+      />
+
+      <UserIdFilterField
+        value={valueOf(LOG_FILTER_IDS.USER_ID)}
+        onChange={setter(LOG_FILTER_IDS.USER_ID)}
+        logsWindow={logsWindow}
       />
 
       <EndUserFilterField

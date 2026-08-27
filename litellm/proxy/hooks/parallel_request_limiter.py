@@ -20,6 +20,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.types.utils import Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -31,6 +32,13 @@ if TYPE_CHECKING:
 else:
     Span = Any
     InternalUsageCache = Any
+
+
+def _response_total_tokens(response_obj: object) -> int:
+    if not isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
+        return 0
+    response_usage: Final = getattr(response_obj, "usage", None)
+    return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
 
 
 class CacheObject(TypedDict):
@@ -480,7 +488,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )  # don't block execution for cache updates
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -529,21 +537,18 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             current_minute: Final = datetime.now().strftime("%M")
             precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
-            total_tokens = 0
-
-            if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
-                total_tokens = response_obj.usage.total_tokens
+            total_tokens: int = _response_total_tokens(response_obj)
 
             # ------------
             # Update usage - API Key
             # ------------
 
-            values_to_update_in_cache: Final = []
+            values_to_update_in_cache: Final[list[tuple[str, object]]] = []
 
             if user_api_key is not None:
                 request_count_api_key = f"{user_api_key}::{precise_minute}::request_count"
 
-                current = await self.internal_usage_cache.async_get_cache(
+                current: dict[str, int] = await self.internal_usage_cache.async_get_cache(
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
@@ -606,13 +611,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - User
             # ------------
             if user_api_key_user_id is not None:
-                total_tokens = 0
-
-                if isinstance(
-                    response_obj,
-                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
-                ):
-                    total_tokens = response_obj.usage.total_tokens
+                total_tokens = _response_total_tokens(response_obj)
 
                 request_count_api_key = f"{user_api_key_user_id}::{precise_minute}::request_count"
 
@@ -638,13 +637,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - Team
             # ------------
             if user_api_key_team_id is not None:
-                total_tokens = 0
-
-                if isinstance(
-                    response_obj,
-                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
-                ):
-                    total_tokens = response_obj.usage.total_tokens
+                total_tokens = _response_total_tokens(response_obj)
 
                 request_count_api_key = f"{user_api_key_team_id}::{precise_minute}::request_count"
 
@@ -670,13 +663,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - End User
             # ------------
             if user_api_key_end_user_id is not None:
-                total_tokens = 0
-
-                if isinstance(
-                    response_obj,
-                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
-                ):
-                    total_tokens = response_obj.usage.total_tokens
+                total_tokens = _response_total_tokens(response_obj)
 
                 request_count_api_key = f"{user_api_key_end_user_id}::{precise_minute}::request_count"
 

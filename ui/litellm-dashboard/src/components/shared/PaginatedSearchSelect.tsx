@@ -1,8 +1,7 @@
 "use client";
 
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { Loader2 } from "lucide-react";
-import { useMemo, type UIEvent } from "react";
+import { useMemo } from "react";
 
 import {
   Combobox,
@@ -12,25 +11,22 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 
 import type { SearchSelectOption } from "./SearchSelect";
-
-const SCROLL_THRESHOLD = 0.8;
-
-const SEARCH_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
+import { usePaginatedCombobox } from "./usePaginatedCombobox";
 
 interface PaginatedSearchSelectProps {
   options: SearchSelectOption[];
   value?: string;
   onValueChange: (value: string) => void;
   onSearchChange: (query: string) => void;
-  onLoadMore: () => void;
+  onLoadMore?: () => void;
   hasNextPage?: boolean;
   isLoading?: boolean;
   isFetchingNextPage?: boolean;
   placeholder?: string;
   emptyText?: string;
+  errorText?: string;
   loadingText?: string;
   disabled?: boolean;
   className?: string;
@@ -50,6 +46,7 @@ export function PaginatedSearchSelect({
   isFetchingNextPage = false,
   placeholder = "Search…",
   emptyText = "No results",
+  errorText,
   loadingText = "Loading…",
   disabled = false,
   className,
@@ -68,21 +65,8 @@ export function PaginatedSearchSelect({
     return [selected, ...options];
   }, [options, selected]);
 
-  const debouncedSearch = useDebouncedCallback(onSearchChange, { wait: DEBOUNCE_WAIT_MS });
-
-  const handleInputValueChange = (next: string, reason: string) => {
-    if (!SEARCH_REASONS.has(reason)) return;
-    debouncedSearch(next);
-  };
-
-  const handleScroll = (event: UIEvent<HTMLDivElement>) => {
-    const target = event.currentTarget;
-    if (target.scrollHeight === 0) return;
-    const ratio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
-    if (ratio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
-      onLoadMore();
-    }
-  };
+  const pagination = { onSearchChange, onLoadMore, hasNextPage, isFetchingNextPage };
+  const { handleInputValueChange, handleScroll } = usePaginatedCombobox(pagination);
 
   return (
     <Combobox
@@ -104,7 +88,9 @@ export function PaginatedSearchSelect({
         className={`w-full ${className ?? ""}`}
       />
       <ComboboxContent>
-        <ComboboxEmpty>{isLoading ? loadingText : emptyText}</ComboboxEmpty>
+        <ComboboxEmpty className={errorText == null ? undefined : "text-destructive"}>
+          {errorText ?? (isLoading ? loadingText : emptyText)}
+        </ComboboxEmpty>
         <ComboboxList onScroll={handleScroll} data-testid="paginated-search-select-list">
           {(item: SearchSelectOption) => (
             <ComboboxItem key={item.value} value={item}>

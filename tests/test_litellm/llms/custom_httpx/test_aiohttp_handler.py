@@ -1,14 +1,9 @@
-import os
-import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
-
+import litellm
 from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 
@@ -323,19 +318,47 @@ class TestBaseLLMAIOHTTPHandler:
         mock_client_session.assert_called_once_with(connector=mock_connector)
         assert result is mock_session_instance
 
-    @patch("aiohttp.ClientSession")
-    def test_create_client_session_default(self, mock_client_session):
-        """Test default session creation when no transport/connector provided"""
-        mock_session_instance = Mock()
-        mock_client_session.return_value = mock_session_instance
+    @pytest.mark.asyncio
+    async def test_create_client_session_default_honors_global_ssl_verify_false(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Regression test for LIT-3369: `litellm.ssl_verify = False` (set via
+        `litellm_settings.ssl_verify: false`) must reach the default session's
+        connector instead of being ignored by a bare `aiohttp.ClientSession()`."""
+        monkeypatch.setattr(litellm, "ssl_verify", False)
 
         handler = BaseLLMAIOHTTPHandler()
+        session = handler._create_client_session_with_transport()
+        try:
+            assert isinstance(session.connector, aiohttp.TCPConnector)
+            assert session.connector._ssl is False
+        finally:
+            await session.close()
+            await handler.close()
 
-        result = handler._create_client_session_with_transport()
+    @pytest.mark.asyncio
+    async def test_create_client_session_default_keeps_ssl_verification(self):
+        """Default `ssl_verify=True` must not collapse to `ssl=False`."""
+        handler = BaseLLMAIOHTTPHandler()
+        session = handler._create_client_session_with_transport()
+        try:
+            assert isinstance(session.connector, aiohttp.TCPConnector)
+            assert session.connector._ssl is not False
+        finally:
+            await session.close()
+            await handler.close()
 
-        # Should create default session
-        mock_client_session.assert_called_once_with()
-        assert result is mock_session_instance
+    def test_get_or_create_transport_resolves_global_ssl_verify(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The lazily created transport must carry the resolved global ssl config."""
+        monkeypatch.setattr(litellm, "ssl_verify", False)
+
+        handler = BaseLLMAIOHTTPHandler()
+        transport = handler._get_or_create_transport()
+
+        assert transport is not None
+        assert transport._ssl_verify is False
 
     def test_get_or_create_transport(self):
         """Test that _get_or_create_transport creates or returns a transport.

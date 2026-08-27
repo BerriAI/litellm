@@ -175,6 +175,11 @@
     "base_class": "openai_gpt",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
+  "cognition": {
+    "base_url": "https://api.cognition.ai/v1",
+    "api_key_env": "COGNITION_API_KEY",
+    "api_base_env": "COGNITION_API_BASE"
+  },
   "pinstripes": {
     "base_url": "https://pinstripes.io/v1",
     "api_key_env": "PINSTRIPES_API_KEY",
@@ -183,5 +188,17 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "scx-ai": {
+    "base_url": "https://api.scx.ai/v1",
+    "api_key_env": "SCX_API_KEY",
+    "api_base_env": "SCX_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "constraints": {
+      "temperature_max": 1.99
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
