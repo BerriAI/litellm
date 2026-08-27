@@ -316,6 +316,44 @@ def _extract_key_alias(request_kwargs: Mapping[str, object], metadata_variable_n
     return key_alias if isinstance(key_alias, str) else None
 
 
+def _active_metadata_bucket(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> Mapping[str, object]:
+    """Same fallback `_get_tags_from_request_kwargs` (tag_based_routing.py)
+    already relies on: `request_kwargs` is a flat, top-level-metadata dict at
+    admission time, but `Logging.model_call_details` (what `kwargs` actually
+    is by `async_log_success_event` time) never carries
+    `metadata`/`litellm_metadata` at its own top level, only nested under
+    `request_kwargs["litellm_params"]`. Checking only the top level would
+    silently find nothing at success time, exactly the same failure mode
+    that lookup already had to handle."""
+    top_level: Final = request_kwargs.get(metadata_variable_name)
+    if isinstance(top_level, Mapping):
+        return top_level
+    litellm_params: Final = request_kwargs.get("litellm_params")
+    nested: Final = litellm_params.get(metadata_variable_name) if isinstance(litellm_params, Mapping) else None
+    return nested if isinstance(nested, Mapping) else _EMPTY_MAPPING
+
+
+def _order_tags_for_identity_resolution(
+    tags: Sequence[str], request_kwargs: Mapping[str, object], metadata_variable_name: str
+) -> tuple[str, ...]:
+    """`_extract_identity`/`_entry_applies` both resolve a `tag_id` via
+    first-match-by-prefix. `_merge_tags` (litellm_pre_call_utils.py) appends
+    key/team/project tags only if not already present, keeping caller-supplied
+    tags first in the merged `tags` list -- so an authenticated caller could
+    submit e.g. `company_id:attacker-chosen` ahead of the calling key's real
+    `company_id:real-company` tag and have every entry scoped to `company_id`
+    resolve to the caller's own value instead of the key's. `metadata.inherited_tags`
+    is a separate, server-computed snapshot of only the tags the calling
+    key/team/project's own config contributed (see that field's docstring in
+    litellm_pre_call_utils.py), so putting it first makes a policy-backed tag
+    win over a same-prefix caller-supplied one.
+    """
+    inherited_tags: Final = _active_metadata_bucket(request_kwargs, metadata_variable_name).get("inherited_tags")
+    if not isinstance(inherited_tags, (list, tuple)) or not inherited_tags:
+        return tuple(tags)
+    return tuple(dict.fromkeys((*inherited_tags, *tags)))
+
+
 def _entries_for_unit(deployment: Mapping[str, object], unit: _LimitUnit) -> tuple[TagRateLimitEntry, ...]:
     raw_tag_rate_limits: Final = (deployment.get("model_info") or _EMPTY_MAPPING).get("tag_rate_limits")
     if not raw_tag_rate_limits:
@@ -1303,8 +1341,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         if not configured:
             return healthy_deployments
 
-        tags: Final = _get_tags_from_request_kwargs(
-            resolved_request_kwargs, metadata_variable_name=metadata_variable_name
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(resolved_request_kwargs, metadata_variable_name=metadata_variable_name),
+            resolved_request_kwargs,
+            metadata_variable_name,
         )
 
         present_deployment_ids: Final[frozenset[str]] = frozenset(
@@ -1816,7 +1856,11 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         if not configured:
             return
 
-        tags: Final = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
+            kwargs,
+            metadata_variable_name,
+        )
         if not tags:
             return
 

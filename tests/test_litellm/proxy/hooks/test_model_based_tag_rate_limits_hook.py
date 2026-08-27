@@ -913,6 +913,61 @@ async def test_filter_deployments_allows_under_limit_and_rejects_at_limit(time_c
 
 
 @pytest.mark.asyncio
+async def test_filter_deployments_a_caller_supplied_tag_cannot_shadow_the_policy_backed_identity_tag(time_controller):
+    """
+    Security regression: `_merge_tags` (litellm_pre_call_utils.py) keeps
+    caller-supplied tags first in the merged `tags` list, appending key/team/
+    project-contributed tags only if not already present. Since
+    `_extract_identity`/`_entry_applies` resolve a `tag_id` by
+    first-match-by-prefix, an authenticated caller could otherwise submit
+    e.g. `company_id:attacker-chosen` ahead of the real
+    `company_id:real-company` tag (surfaced via `metadata.inherited_tags`)
+    and have every `company_id`-scoped entry resolve to the forged value
+    instead of the real one -- letting the caller dodge the limit entirely
+    by rotating fabricated identities. `_order_tags_for_identity_resolution`
+    must put `inherited_tags` first so admission charges the real bucket.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "request_limits": {
+                        "limits": [{"name": "per-company", "tag_id": "company_id", "limit": 1, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    poisoned_request_kwargs = {
+        "metadata": {
+            "tags": ["company_id:attacker-chosen", "company_id:real-company"],
+            "inherited_tags": ["company_id:real-company"],
+        }
+    }
+    result = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=poisoned_request_kwargs
+    )
+    assert result == healthy
+
+    # The real company's own bucket must have been charged by the attack
+    # request, not a bucket keyed to the attacker's forged value -- so a
+    # second, genuine company_id:real-company request is now rejected.
+    victim_request_kwargs = {
+        "metadata": {"tags": ["company_id:real-company"], "inherited_tags": ["company_id:real-company"]}
+    }
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=victim_request_kwargs
+        )
+
+
+@pytest.mark.asyncio
 async def test_filter_deployments_falls_back_to_deployment_model_name_for_routing_group_calls(time_controller):
     """
     Router keeps a callable routing-group name distinct from every member
@@ -1615,6 +1670,63 @@ async def test_log_success_event_accounts_when_litellm_params_carries_a_null_lit
     assert (
         float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
     )
+
+
+@pytest.mark.asyncio
+async def test_log_success_event_accounts_the_key_backed_tag_not_a_caller_forged_one(time_controller):
+    """
+    Security regression: admission (async_filter_deployments) sees a flat
+    request_kwargs where metadata.inherited_tags sits at the top level, but
+    kwargs at async_log_success_event time is Logging.model_call_details,
+    which only ever nests metadata under kwargs["litellm_params"] (see
+    test_log_success_event_accounts_when_litellm_params_carries_a_null_litellm_metadata_key).
+    _order_tags_for_identity_resolution's own inherited_tags lookup must
+    check both shapes, or a caller-forged company_id tag that admission
+    correctly ignored could still get accounted against at success time,
+    charging a different bucket than the one admission actually checked.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "company_id", "limit": 500000, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "tags": ["company_id:attacker-chosen"],
+                "inherited_tags": ["company_id:real-company"],
+            },
+        },
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    real_key = _expected_bucket_key("grp", "tokens", "daily", "company_id", "real-company", 86400, now, limit=500000)
+    forged_key = _expected_bucket_key(
+        "grp", "tokens", "daily", "company_id", "attacker-chosen", 86400, now, limit=500000
+    )
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=real_key, litellm_parent_otel_span=None)) == 42.0
+    )
+    assert await limiter.internal_usage_cache.async_get_cache(key=forged_key, litellm_parent_otel_span=None) is None
 
 
 @pytest.mark.asyncio
