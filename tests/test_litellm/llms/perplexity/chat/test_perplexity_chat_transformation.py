@@ -19,6 +19,21 @@ from litellm.types.utils import Usage
 class TestPerplexityChatTransformation:
     """Test suite for Perplexity chat transformation functionality."""
 
+    @pytest.mark.parametrize(
+        ("headers", "expected"),
+        [({}, "litellm"), ({"X-Pplx-Integration": "custom"}, "custom")],
+    )
+    def test_integration_header_default_is_caller_overridable(self, headers, expected):
+        result = PerplexityChatConfig().validate_environment(
+            headers=headers,
+            model="sonar",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert result["X-Pplx-Integration"] == expected
+
     def test_enhance_usage_with_citation_tokens(self):
         """Test extraction of citation tokens from API response."""
         config = PerplexityChatConfig()

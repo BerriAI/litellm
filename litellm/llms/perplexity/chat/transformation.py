@@ -27,6 +27,21 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         dynamic_api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return api_base, dynamic_api_key
 
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        headers.setdefault("X-Pplx-Integration", "litellm")
+        return super().validate_environment(
+            headers, model, messages, optional_params, litellm_params, api_key, api_base
+        )
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Perplexity supports a subset of OpenAI params
