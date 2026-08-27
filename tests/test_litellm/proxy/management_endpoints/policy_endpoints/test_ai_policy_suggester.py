@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import litellm
+
 from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import (
     SUGGEST_TOOL,
     AiPolicySuggester,
@@ -242,3 +244,38 @@ class TestAiPolicySuggester:
         assert len(call_kwargs["messages"]) == 2
         assert call_kwargs["messages"][0]["role"] == "system"
         assert call_kwargs["messages"][1]["role"] == "user"
+
+
+class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
+    """The model is operator-supplied, so it can be a reasoning model whose only accepted
+    temperature is 1. This call pins temperature=0.2 for tool-selection determinism, which such
+    a model rejects outright: without drop_params litellm raises UnsupportedParamsError and the
+    whole suggestion fails rather than degrading. Every other internal LLM call in the proxy
+    already opts in through judge_acompletion; this one was the exception.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_model_gets_past_param_mapping(self, monkeypatch, local_model_cost_map):
+        """Drives the real entry point with no patching and no network. Which exception escapes is
+        the discriminator: param mapping runs before any credential check, so UnsupportedParamsError
+        means the call died on the pinned temperature, while AuthenticationError means it survived
+        that and got as far as needing a key. Asserting the latter is what the caller observes.
+        """
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        with pytest.raises(litellm.AuthenticationError):
+            await AiPolicySuggester().suggest(
+                templates=SAMPLE_TEMPLATES,
+                attack_examples=["My SSN is 123-45-6789"],
+                description="",
+                model="gpt-5.6-terra",
+            )
+
+    def test_the_pinned_temperature_is_what_such_a_model_refuses(self, local_model_cost_map):
+        """The other half of the discriminator above: the same temperature this call pins is
+        exactly what the model rejects, and drop_params is what removes it."""
+        from litellm.utils import get_optional_params
+
+        assert "temperature" not in get_optional_params(
+            model="gpt-5.6-terra", custom_llm_provider="openai", temperature=0.2, drop_params=True
+        )

@@ -74,6 +74,7 @@ class AiPolicySuggester:
                     "function": {"name": "select_policy_templates"},
                 },
                 temperature=0.2,
+                drop_params=True,
             )
 
             tool_calls: Final = response.choices[0].message.tool_calls
