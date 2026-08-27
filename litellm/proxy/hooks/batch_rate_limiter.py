@@ -35,6 +35,7 @@ from litellm.batches.batch_utils import (
 )
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.token_counter import messages_contain_input_audio_content_blocks
 from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
@@ -855,6 +856,17 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
                 try:
                     entry_total_tokens = _count_entry_tokens(entry)
+                    # An `input_audio` block's contribution is a size-derived
+                    # estimate at a deliberately low assumed bitrate (see
+                    # token_counter._count_input_audio_content_block), far
+                    # below this fallback's raw-bytes estimate. Before such
+                    # blocks were countable (#38459) an audio row RAISED
+                    # inside token_counter and fell back to the size-based
+                    # estimate; floor it there again so a row carrying a
+                    # large base64 audio payload cannot slide the batch
+                    # under the TPM limit.
+                    if messages_contain_input_audio_content_blocks((entry.get("body") or {}).get("messages")):
+                        entry_total_tokens = max(entry_total_tokens, _estimate_batch_entry_tokens(raw_line))
                 except Exception:
                     entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens

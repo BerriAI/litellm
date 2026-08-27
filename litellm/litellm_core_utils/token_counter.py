@@ -788,6 +788,28 @@ def _count_input_audio_content_block(c: Mapping[str, object]) -> int:
     return DEFAULT_AUDIO_TOKEN_ESTIMATE
 
 
+def messages_contain_input_audio_content_blocks(messages: object) -> bool:
+    """
+    True when any message carries an OpenAI ``input_audio`` content block.
+
+    Callers that use ``token_counter`` for reservations or rate limits must
+    check this first: an audio block's contribution is a size-derived
+    ESTIMATE at a deliberately low assumed bitrate (see
+    ``_count_input_audio_content_block``), not a measurement, so the count
+    for such a message must not be trusted as an upper bound.
+    """
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for content_item in content:
+            if isinstance(content_item, dict) and content_item.get("type") == "input_audio":
+                return True
+    return False
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
