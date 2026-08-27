@@ -195,12 +195,22 @@ class InMemoryPromptRegistry:
         """
         return self.prompt_id_to_custom_prompt.get(prompt_id)
 
-    def delete_prompts_by_base_id(self, base_prompt_id: str) -> list[str]:
+    def remove_prompt(self, prompt_id: str) -> None:
+        import litellm
+
+        self.IN_MEMORY_PROMPTS.pop(prompt_id, None)
+        stale_callback: Final = self.prompt_id_to_custom_prompt.pop(prompt_id, None)
+        if stale_callback is not None:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(stale_callback)
+
+    def delete_prompts_by_base_id(self, base_prompt_id: str, environment: str | None = None) -> list[str]:
         """
-        Delete all prompts matching the given base prompt ID from memory.
+        Delete all prompts matching the given base prompt ID from memory, along with their
+        registered callbacks; scoped to one environment when given.
 
         Args:
             base_prompt_id: The base prompt ID (without version suffix)
+            environment: When set, only delete prompts deployed to this environment
 
         Returns:
             List of prompt IDs that were deleted
@@ -208,13 +218,14 @@ class InMemoryPromptRegistry:
         from litellm.proxy.prompts.prompt_endpoints import get_base_prompt_id
 
         prompts_to_delete: Final = [
-            pid for pid in self.IN_MEMORY_PROMPTS if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+            pid
+            for pid, prompt in self.IN_MEMORY_PROMPTS.items()
+            if get_base_prompt_id(prompt_id=pid) == base_prompt_id
+            and (environment is None or prompt.environment == environment)
         ]
 
         for pid in prompts_to_delete:
-            del self.IN_MEMORY_PROMPTS[pid]
-            if pid in self.prompt_id_to_custom_prompt:
-                del self.prompt_id_to_custom_prompt[pid]
+            self.remove_prompt(prompt_id=pid)
 
         return prompts_to_delete
 

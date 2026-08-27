@@ -31,6 +31,12 @@ const STATUS_FILTER_ITEMS = [
   { value: "success", label: "Success" },
   { value: "failure", label: "Failure" },
 ] as const;
+
+const CACHE_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Requests" },
+  { value: "hit", label: "Cache Hit" },
+  { value: "miss", label: "Cache Miss" },
+] as const;
 const PAGE_SIZE = 50;
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -320,6 +326,27 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
           </SelectTrigger>
           <SelectContent>
             {STATUS_FILTER_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </DataTableFilterField>
+
+      <DataTableFilterField label="Cache">
+        <Select
+          items={CACHE_FILTER_ITEMS}
+          value={valueOf(LOG_FILTER_IDS.CACHE_STATUS) === "" ? ALL_VALUE : valueOf(LOG_FILTER_IDS.CACHE_STATUS)}
+          onValueChange={(next) =>
+            set(LOG_FILTER_IDS.CACHE_STATUS, next === null || next === ALL_VALUE ? undefined : next)
+          }
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="All Requests" />
+          </SelectTrigger>
+          <SelectContent>
+            {CACHE_FILTER_ITEMS.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
               </SelectItem>
