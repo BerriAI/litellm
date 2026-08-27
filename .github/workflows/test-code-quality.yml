@@ -74,6 +74,9 @@ jobs:
       - name: check_workflow_startup_safety
         run: uv run --no-sync python ./tests/code_coverage_tests/check_workflow_startup_safety.py
 
+      - name: check_python_min_version_imports
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_python_min_version_imports.py
+
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
 
