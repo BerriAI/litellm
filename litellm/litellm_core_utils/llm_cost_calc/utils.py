@@ -72,7 +72,7 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _get_web_search_requests(server_tool_use: Any) -> int | None:
+def get_web_search_requests(server_tool_use: Any) -> int | None:
     """
     Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
     that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
