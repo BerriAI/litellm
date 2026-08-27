@@ -89,30 +89,31 @@ class CloudflareChatConfig(OpenAIGPTConfig):
             api_base=api_base,
         )
 
+    # fmt: off
+    # The signature mirrors OpenAIGPTConfig._transform_messages, which is overloaded
+    # on is_async; the annotations below are the base's own.
     @overload
-    def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    def _transform_messages(  # mutable-ok: base signature
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]  # mutable-ok: base signature
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...  # mutable-ok: base signature
 
     @overload
-    def _transform_messages(
-        self,
-        messages: list[AllMessageValues],
-        model: str,
-        is_async: Literal[False] = False,
-    ) -> list[AllMessageValues]: ...
+    def _transform_messages(  # mutable-ok: base signature
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[False] = False  # mutable-ok: base signature
+    ) -> list[AllMessageValues]: ...  # mutable-ok: base signature
 
-    def _transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    def _transform_messages(  # mutable-ok: base signature
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False  # mutable-ok: base signature
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:  # mutable-ok: base signature
+        # fmt: on
         """
         Cloudflare Workers AI requires message content to be a string, so OpenAI
         content-part arrays have to be flattened before the request is sent
         """
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        flattened: Final = handle_messages_with_content_list_to_str_conversion(messages)
         if is_async:
-            return super()._transform_messages(messages=messages, model=model, is_async=True)
-        return super()._transform_messages(messages=messages, model=model, is_async=False)
+            return super()._transform_messages(messages=flattened, model=model, is_async=True)
+        return super()._transform_messages(messages=flattened, model=model, is_async=False)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CloudflareError(
