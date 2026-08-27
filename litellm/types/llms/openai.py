@@ -1258,6 +1258,8 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: int | None = None
+
     reasoning_tokens: int | None = None
 
     text_tokens: int | None = None
