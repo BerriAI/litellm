@@ -57,6 +57,9 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
 }
 
 
+_CUSTOM_RATE_KEYS: Final = ("input_cost_per_token", "output_cost_per_token")
+
+
 class _CounterReservationUnavailable(Exception):
     def __init__(
         self,
@@ -1182,10 +1185,26 @@ def _get_model_cost_infos(
     return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
 
 
+def _deployment_declares_own_rates(deployment: Mapping[str, Any]) -> bool:
+    """Whether a deployment's own config replaces the backend model's pricing.
+
+    A deployment that spells out per-token rates and no tier table of its own is
+    billed at those rates, so the backend model's published tier table must not be
+    used to estimate it: a deployment priced at 0 would otherwise reserve, and
+    reject on, budget it can never spend.
+    """
+    sources: Final = (deployment.get("litellm_params") or {}, deployment.get("model_info") or {})
+    if any(source.get("tiered_pricing") for source in sources):
+        return False
+    return any(source.get(key) is not None for source in sources for key in _CUSTOM_RATE_KEYS)
+
+
 def _deployment_tiered_pricing_table(
     deployment: dict[str, Any],
     llm_router: Router,
 ) -> list[dict] | None:
+    if _deployment_declares_own_rates(deployment):
+        return None
     model_id: Final = deployment.get("model_info", {}).get("id")
     backend_model: Final = deployment.get("litellm_params", {}).get("model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):

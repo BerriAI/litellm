@@ -30,6 +30,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.spend_tracking.budget_reservation import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     _approximate_input_size,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -1113,6 +1114,113 @@ def test_reservation_uses_most_expensive_deployment_in_group():
     expected_cheap = (input_tokens * 1e-06) + (output_tokens * 2e-06)
     assert expected_expensive > expected_cheap
     assert estimated == pytest.approx(expected_expensive)
+
+
+@pytest.mark.parametrize(
+    "deployment_overrides",
+    [
+        {"litellm_params": {"input_cost_per_token": 0, "output_cost_per_token": 0}},
+        {"model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0}},
+    ],
+    ids=["litellm_params", "model_info"],
+)
+def test_free_deployment_of_tiered_model_reserves_nothing(deployment_overrides):
+    """A deployment priced at 0 on a model whose published entry carries a tier table
+    must not be estimated against that table. Spend tracking bills such a deployment at
+    its own rates, so reserving the published tier rate consumed, and rejected requests
+    against, budget the deployment can never spend."""
+    litellm_params = {
+        "model": "dashscope/qwen-plus-latest",
+        "api_key": "sk-fake",
+        **deployment_overrides.get("litellm_params", {}),
+    }
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-free",
+                "litellm_params": litellm_params,
+                **({"model_info": deployment_overrides["model_info"]} if "model_info" in deployment_overrides else {}),
+            }
+        ]
+    )
+    request_body = {
+        "model": "qwen-free",
+        "messages": [{"role": "user", "content": "hello " * 100}],
+        "max_tokens": 500,
+    }
+
+    assert (
+        estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+        )
+        == 0.0
+    )
+    assert (
+        estimate_request_input_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+        )
+        == 0.0
+    )
+
+
+def test_priced_deployment_of_tiered_model_still_reserves_tier_rate():
+    """The published tier table still governs a deployment that declares no rates of
+    its own, so the free-deployment carve-out cannot silently disable reservation."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-paid",
+                "litellm_params": {"model": "dashscope/qwen-plus-latest", "api_key": "sk-fake"},
+            }
+        ]
+    )
+
+    estimated = estimate_request_max_cost(
+        request_body={
+            "model": "qwen-paid",
+            "messages": [{"role": "user", "content": "hello " * 100}],
+            "max_tokens": 500,
+        },
+        route="/chat/completions",
+        llm_router=router,
+    )
+
+    assert estimated is not None and estimated > 0
+
+
+def test_deployment_declaring_own_tier_table_keeps_it():
+    """A deployment that overrides pricing with its own tier table is estimated against
+    that table, not skipped as if it were unpriced."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "qwen-own-tiers",
+                "litellm_params": {
+                    "model": "dashscope/qwen-plus-latest",
+                    "api_key": "sk-fake",
+                    "tiered_pricing": [
+                        {"range": [0, 1000000], "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+                    ],
+                },
+            }
+        ]
+    )
+
+    estimated = estimate_request_max_cost(
+        request_body={
+            "model": "qwen-own-tiers",
+            "messages": [{"role": "user", "content": "hello " * 100}],
+            "max_tokens": 500,
+        },
+        route="/chat/completions",
+        llm_router=router,
+    )
+
+    assert estimated is not None and estimated > 0
 
 
 @pytest.mark.asyncio
