@@ -979,7 +979,25 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
     ) -> None:
-        """Translate Anthropic thinking to either thinking or reasoning_effort."""
+        """Translate Anthropic thinking to either thinking or reasoning_effort.
+
+        A Claude-family target keeps ``thinking`` verbatim, since every bridged provider serving one
+        speaks that param. Carrying its adaptive effort tier alongside takes two different params,
+        because the two are not interchangeable at the provider mapping below.
+
+        Bedrock takes ``output_config`` directly, which attaches the tier and leaves ``thinking``
+        alone. Every other bridged Claude target takes ``reasoning_effort``, and used to be sent no
+        tier at all, so an adaptive request arrived byte-identical whichever effort the caller
+        asked for. That tier stays a plain string there, since the summary it would otherwise be
+        wrapped with already travels inside the forwarded ``thinking`` block, and the wrapped dict
+        is rejected outright by some of these providers.
+
+        ``reasoning_effort`` is not a substitute for ``output_config`` on the Bedrock side: an
+        application inference profile ARN resolves to neither, so the tier is dropped, and providers
+        that rebuild ``output_config`` from it overwrite a caller-set ``thinking.display`` doing so.
+        An adaptive request with no tier stays untouched either way, so the provider's own default
+        still applies.
+        """
         if "thinking" not in anthropic_message_request:
             return
 
@@ -988,35 +1006,38 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         model: Final = new_kwargs.get("model", "")
-        if self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model):
+        is_bedrock_target: Final = model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(
+            model
+        )
+        is_claude_target: Final = self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
+        output_config: Final = anthropic_message_request.get("output_config")
+
+        if is_claude_target:
             new_kwargs["thinking"] = thinking
-            # Adaptive thinking without its effort tier makes Bedrock Converse
-            # return zero reasoning blocks, so forward output_config (minus
-            # `format`, already translated to response_format) for Bedrock
-            # targets only: other bridged providers reject the raw param, and
-            # get_llm_provider strips the `bedrock/` prefix before this runs.
-            if model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(model):
-                claude_output_config: Final = anthropic_message_request.get("output_config")
-                if isinstance(claude_output_config, dict):
-                    effort_config: Final = {k: v for k, v in claude_output_config.items() if k != "format"}
+            if is_bedrock_target:
+                if isinstance(output_config, dict):
+                    effort_config: Final = {k: v for k, v in output_config.items() if k != "format"}
                     if effort_config:
                         new_kwargs["output_config"] = effort_config  # rebind-ok: out-param store like thinking above
+                return
+
+        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
+        declared_effort: Final = (
+            output_config.get("effort") if thinking_type == "adaptive" and isinstance(output_config, dict) else None
+        )
+        if is_claude_target and not declared_effort:
             return
 
-        reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking))
+        reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
+            cast(AnthropicThinkingParam, thinking)
+        )
         if not reasoning_effort:
             return
 
-        thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
-
-        # For adaptive thinking, override with output_config.effort if available
-        if thinking_type == "adaptive":
-            output_config: Final = anthropic_message_request.get("output_config")
-            if isinstance(output_config, dict) and output_config.get("effort"):
-                reasoning_effort = output_config["effort"]
-
-        new_kwargs["reasoning_effort"] = self._apply_reasoning_summary_wrapping(
-            reasoning_effort, cast(dict[str, object], thinking)
+        new_kwargs["reasoning_effort"] = (
+            reasoning_effort
+            if is_claude_target
+            else self._apply_reasoning_summary_wrapping(reasoning_effort, cast(dict[str, object], thinking))
         )
 
     def _translate_output_format_to_openai(
