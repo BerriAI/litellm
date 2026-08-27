@@ -985,12 +985,16 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
 
     observed = {
         "source_cache_called": fake_user_cache.async_get_cache.called,
+        "seed_set_nx_called": fake_cache.redis_cache.async_set_cache.called,
         "seed_increment_called": fake_cache.redis_cache.async_increment.called,
+        "in_memory_seeded": fake_cache.in_memory_cache.set_cache.called,
         "warm_check_done": fake_cache.redis_cache.async_get_cache.called,
     }
     assert normalize(observed) == {
         "source_cache_called": True,
-        "seed_increment_called": True,
+        "seed_set_nx_called": True,
+        "seed_increment_called": False,
+        "in_memory_seeded": True,
         "warm_check_done": True,
     }
 
