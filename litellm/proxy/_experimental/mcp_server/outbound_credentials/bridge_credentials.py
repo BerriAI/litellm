@@ -239,5 +239,6 @@ def resolve_bridge_envelope(
     if opened.identity.server_id != expected_server_id:
         return BridgeEnvelopeInvalid()
     grant: Final = opened.grant
-    upstream_authorization: Final = f"{grant.token_type} {grant.access_token.get_secret_value()}"
+    authorization_scheme: Final = "Bearer" if grant.token_type.lower() == "bearer" else grant.token_type
+    upstream_authorization: Final = f"{authorization_scheme} {grant.access_token.get_secret_value()}"
     return BridgeEnvelopeAdmitted(identity=opened.identity, upstream_authorization=SecretStr(upstream_authorization))
