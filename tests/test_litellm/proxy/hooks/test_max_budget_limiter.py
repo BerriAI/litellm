@@ -235,3 +235,58 @@ async def test_no_max_budget_passes():
 
     assert result is None
     mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_skips_for_zero_cost_model_when_over_budget():
+    """
+    Zero-cost models bypass budget enforcement in common_checks and in the
+    reservation path (both via `_is_model_cost_zero`). This hook must apply the
+    same exemption, otherwise a user at their personal `max_budget` also loses
+    access to models that cannot incur cost - while the same models stay usable
+    when a *team* budget is the one exhausted, since this hook only ever reads
+    `user_max_budget`.
+    """
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._is_model_cost_zero",
+        return_value=True,
+    ), patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=10.0),
+    ) as mock_get_spend:
+        result = await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"model": "free-model"},
+            call_type="completion",
+        )
+
+    assert result is None
+    mock_get_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_still_rejects_priced_model_when_over_budget():
+    """The zero-cost exemption must not weaken enforcement for priced models."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(user_max_budget=10.0)
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._is_model_cost_zero",
+        return_value=False,
+    ), patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=10.0),
+    ), pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data={"model": "paid-model"},
+            call_type="completion",
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "Max budget limit reached." in exc_info.value.detail
