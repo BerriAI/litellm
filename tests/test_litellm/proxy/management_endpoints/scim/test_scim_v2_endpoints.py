@@ -4417,7 +4417,12 @@ async def test_create_group_stamps_scim_provenance(mocker, scim_upsert_user_enab
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("as_pydantic", [False, True])
-async def test_create_group_applies_default_team_params(mocker, monkeypatch, scim_upsert_user_enabled, as_pydantic):
+async def test_create_group_applies_default_team_params(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    scim_upsert_user_enabled: None,
+    as_pydantic: bool,
+):
     """SCIM-created teams must honor litellm_settings.default_team_params, including
     models, the same way SSO auto-created teams do."""
     import litellm
