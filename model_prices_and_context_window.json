@@ -53021,7 +53021,10 @@
         "cache_creation_input_token_cost": 1.25e-05,
         "supports_adaptive_thinking": true,
         "supports_reasoning": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 512,
+        "thinking_always_on": true,
+        "supports_sampling_params": false
     },
     "ofox/anthropic/claude-opus-5": {
         "max_tokens": 128000,
@@ -53037,7 +53040,8 @@
         "cache_creation_input_token_cost": 6.25e-06,
         "supports_adaptive_thinking": true,
         "supports_reasoning": true,
-        "supports_prompt_caching": true
+        "supports_prompt_caching": true,
+        "prompt_cache_min_tokens": 512
     },
     "ofox/deepseek/deepseek-v4-flash-0423": {
         "max_tokens": 384000,
