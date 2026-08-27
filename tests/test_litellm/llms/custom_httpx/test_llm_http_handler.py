@@ -1901,6 +1901,35 @@ async def test_async_audio_transcriptions_sends_dict_data_as_json_body():
     assert response.text == "transcribed"
 
 
+class _WordTimestampAudioTranscriptionConfig(_JSONBodyAudioTranscriptionConfig):
+    def transform_audio_transcription_response(self, raw_response):
+        payload = raw_response.json()
+        response = TranscriptionResponse(text=payload["text"])
+        response["words"] = payload["words"]
+        return response
+
+
+def test_transform_audio_transcription_response_without_subtitle_opt_in_keeps_text_and_words():
+    words = [
+        {"word": "hello", "start": 0.0, "end": 0.5},
+        {"word": "world", "start": 0.5, "end": 1.0},
+    ]
+    raw_response = httpx.Response(200, json={"text": "hello world", "words": words})
+
+    response = BaseLLMHTTPHandler()._transform_audio_transcription_response(
+        provider_config=_WordTimestampAudioTranscriptionConfig(),
+        model="test-model",
+        response=raw_response,
+        model_response=TranscriptionResponse(),
+        logging_obj=Mock(),
+        optional_params={"response_format": "srt"},
+        api_key=None,
+    )
+
+    assert response.text == "hello world"
+    assert response["words"] == words
+
+
 @pytest.mark.asyncio
 async def test_async_retrieve_file_content_raises_on_http_error():
     """
