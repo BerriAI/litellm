@@ -29467,6 +29467,11 @@ export interface components {
              */
             aws_bedrock_runtime_endpoint?: string | null;
             /**
+             * Aws External Id
+             * @description External ID required by the target role's trust policy on sts:AssumeRole
+             */
+            aws_external_id?: string | null;
+            /**
              * Aws Profile Name
              * @description AWS profile name for credential retrieval
              */
