@@ -869,6 +869,69 @@ class TestToolMessageImageHoisting:
         assert result[3]["content"] == self.HOISTED_USER_CONTENT
 
 
+class TestToolReferenceStripping:
+    """transform_request drops tool_reference parts from tool messages: OpenAI's
+    chat API rejects them, and the reference names an already-declared tool
+    rather than carrying content (#37462 round trip)."""
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages_with_tool_reference(self, extra_parts=()):
+        return [
+            {"role": "user", "content": "load the WebFetch tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [*extra_parts, {"type": "tool_reference", "tool_name": "WebFetch"}],
+            },
+        ]
+
+    def test_transform_request_keeps_text_and_drops_reference(self):
+        request = self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(extra_parts=({"type": "text", "text": "loaded"},)),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        tool_message = request["messages"][2]
+        assert tool_message["content"] == [{"type": "text", "text": "loaded"}]
+        assert tool_message["tool_call_id"] == "call_1"
+
+    def test_transform_request_reference_only_keeps_tool_message_with_empty_text(self):
+        request = self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool"]
+        assert request["messages"][2]["content"] == ""
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_drops_reference(self):
+        request = await self.config.async_transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert request["messages"][2]["content"] == ""
+
+
 class TestOpenAIPromptCacheBreakpointChatPath:
     """Chat-path shape for OpenAI explicit prompt caching (#37509)."""
 
