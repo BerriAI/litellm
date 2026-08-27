@@ -968,8 +968,9 @@ def generic_cost_per_token(
                 usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens - video_tokens,
             )
         else:
-            # No breakdown at all, all tokens are text tokens
-            text_tokens = usage.completion_tokens
+            # No breakdown at all, all tokens are text tokens. Clamped like
+            # the branch above, so a negative count cannot credit the budget.
+            text_tokens = max(0, usage.completion_tokens)
             is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost

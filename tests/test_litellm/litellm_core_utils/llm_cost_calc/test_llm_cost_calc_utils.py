@@ -3841,3 +3841,70 @@ def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(200_000 * 4e-06 + 50_000 * 1e-06)
     assert completion_cost == pytest.approx(1_000 * 1.2e-05)
+
+
+def test_negative_completion_tokens_do_not_produce_negative_cost():
+    """A negative completion count must not yield a negative cost.
+
+    generic_cost_per_token guards three of its four token paths with max(0, ...).
+    The fourth - completion tokens with no modality breakdown, which is the
+    common case - multiplied the raw value straight into the cost, so a negative
+    count produced a negative cost and a negative total.
+
+    That matters because these numbers feed spend tracking: a negative cost does
+    not merely report wrongly, it credits the budget.
+    """
+    usage = Usage(prompt_tokens=0, completion_tokens=-100, total_tokens=-100)
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-4o", usage=usage, custom_llm_provider="openai"
+    )
+
+    assert completion_cost == 0.0
+    assert prompt_cost + completion_cost >= 0.0
+
+
+def test_negative_completion_tokens_with_positive_prompt_keeps_total_positive():
+    """The mixed case: a real prompt with a bad completion count.
+
+    Before the fix this returned a negative total, so the request reduced
+    recorded spend instead of increasing it.
+    """
+    usage = Usage(prompt_tokens=100, completion_tokens=-100, total_tokens=0)
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-4o", usage=usage, custom_llm_provider="openai"
+    )
+
+    assert prompt_cost > 0.0
+    assert completion_cost == 0.0
+    assert prompt_cost + completion_cost > 0.0
+
+
+def test_negative_completion_tokens_with_breakdown_already_clamped():
+    """The branch that already clamped must keep behaving as it did."""
+    usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=-100,
+        total_tokens=-100,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=5),
+    )
+
+    _, completion_cost = generic_cost_per_token(
+        model="gpt-4o", usage=usage, custom_llm_provider="openai"
+    )
+
+    assert completion_cost >= 0.0
+
+
+def test_positive_token_costs_are_unchanged():
+    """The clamp must not alter ordinary pricing."""
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-4o", usage=usage, custom_llm_provider="openai"
+    )
+
+    model_info = litellm.get_model_info("gpt-4o")
+    assert prompt_cost == pytest.approx(1000 * model_info["input_cost_per_token"])
+    assert completion_cost == pytest.approx(500 * model_info["output_cost_per_token"])
