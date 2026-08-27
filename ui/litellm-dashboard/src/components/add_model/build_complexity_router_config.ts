@@ -9,6 +9,7 @@ import {
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTierLabels,
+  ComplexityRouterConfigValue,
   ComplexityTiers,
   DimensionWeights,
   TIER_KEYS,
@@ -187,11 +188,29 @@ export const getPlanModeTierError = (planModeMinTier: string | undefined, rows: 
   return `The plan-mode minimum tier (${floor ? activeTierName(floor) : planModeMinTier}) has no models. Add one or turn the override off.`;
 };
 
-export const getKeywordTierRulesError = (keywordTierRules: KeywordTierRule[]): string | null => {
+// The tier is a free string since #37413, and _validate_keyword_rule_tiers matches it EXACTLY, so a
+// rule naming a tier this router does not have is a raw 400 unless the gate catches it first.
+export const getKeywordTierRulesError = (
+  keywordTierRules: KeywordTierRule[],
+  rows: readonly TierRow[],
+): string | null => {
   const emptyRows = emptyKeywordTierRuleIndexes(keywordTierRules);
-  if (emptyRows.length === 0) return null;
-  return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+  if (emptyRows.length > 0)
+    return `Add at least one keyword to keyword rule(s): ${emptyRows.map((index) => index + 1).join(", ")}`;
+  const names = rows.map(activeTierName);
+  const orphaned = keywordTierRules.flatMap((rule, index) => (names.includes(rule.tier) ? [] : [index + 1]));
+  if (orphaned.length === 0) return null;
+  return `Keyword rule(s) ${orphaned.join(", ")} route to a tier this router no longer has`;
 };
+
+// The submit gate and the submit handler both read this, so a disabled button and a refused submit
+// cannot disagree about why.
+export const getClassifierModelError = (
+  config: Pick<ComplexityRouterConfigValue, "classifier_type" | "classifier_llm_config">,
+): string | null =>
+  config.classifier_type === "llm" && !config.classifier_llm_config?.model
+    ? "Please select a classifier model, or switch back to Heuristic"
+    : null;
 
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,

@@ -34,6 +34,7 @@ import {
   BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
   getKeywordTierRulesError,
+  getClassifierModelError,
   getMissingTiersError,
   getPlanModeTierError,
   getSemanticConfigError,
@@ -116,7 +117,7 @@ const tierConfigSummary = (config: ComplexityRouterConfigValue): string => {
 // itself and to say what is missing, so the two can never give different answers. Checks the
 // config actually being built, not which preset (if any) it came from: a preset only ever
 // prefills once (handlePresetChange), and everything after that is edited exactly like Custom.
-const getSubmitBlockedReason = (
+export const getSubmitBlockedReason = (
   config: ComplexityRouterConfigValue,
   keywordTierRules: KeywordTierRule[],
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
@@ -125,7 +126,8 @@ const getSubmitBlockedReason = (
   getMissingTiersError(activeTierRows(config)) ??
   getTierLabelsError(config.tier_labels) ??
   getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
-  getKeywordTierRulesError(keywordTierRules) ??
+  getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
+  getClassifierModelError(config) ??
   getReferencedModelsError(referencedModelsParams, availability);
 
 const autoRouterSchema = (requiresTeamScope: boolean) =>
@@ -370,50 +372,21 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const submitRecommendedRouter = async (name: string) => {
-    const { tiers, tierLabels, classifierType, classifierLlmConfig } = complexityRouterConfigParams;
+    const { tiers } = complexityRouterConfigParams;
 
-    const missingTiersError = getMissingTiersError(activeTierRows(complexityRouterConfig));
-    if (missingTiersError) {
+    // The one answer the submit button reads, so a disabled button and a refused submit cannot
+    // disagree about why. The handler needs it in its own right: the form fires this on Enter
+    // regardless of the button's disabled state.
+    const blockedReason =
+      getSubmitBlockedReason(
+        complexityRouterConfig,
+        keywordTierRules,
+        referencedModelsParams,
+        groupsOnlyAvailability,
+      ) ?? getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
+    if (blockedReason) {
       setShowValidationErrors(true);
-      toast.fromError(missingTiersError);
-      return;
-    }
-
-    const tierLabelsError = getTierLabelsError(tierLabels);
-    if (tierLabelsError) {
-      setShowValidationErrors(true);
-      toast.fromError(tierLabelsError);
-      return;
-    }
-
-    if (classifierType === "llm" && !classifierLlmConfig?.model) {
-      setShowValidationErrors(true);
-      toast.fromError("Please select a classifier model, or switch back to Heuristic");
-      return;
-    }
-
-    const keywordRulesError = getKeywordTierRulesError(keywordTierRules);
-    if (keywordRulesError) {
-      setShowValidationErrors(true);
-      toast.fromError(keywordRulesError);
-      return;
-    }
-
-    const semanticError = getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
-    if (semanticError) {
-      setShowValidationErrors(true);
-      toast.fromError(semanticError);
-      return;
-    }
-
-    // submitBlockedReason already disables the button for this, but the form's submit handler (wired to
-    // this same function) fires on Enter regardless of the button's disabled state - without this check,
-    // Enter in the name field could still create a router referencing a model that disappeared from
-    // availableModelSet after the tiers were filled in.
-    const referencedModelsError = getReferencedModelsError(referencedModelsParams, groupsOnlyAvailability);
-    if (referencedModelsError) {
-      setShowValidationErrors(true);
-      toast.fromError(referencedModelsError);
+      toast.fromError(blockedReason);
       return;
     }
 
