@@ -22976,7 +22976,7 @@ export interface components {
             extra_headers?: string[] | null;
             /**
              * Fail On Error
-             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
+             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
              * @default true
              */
             fail_on_error: boolean | null;
@@ -29666,7 +29666,7 @@ export interface components {
             extra_headers?: string[] | null;
             /**
              * Fail On Error
-             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor' and 'generic_guardrail_api'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
+             * @description Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.
              * @default true
              */
             fail_on_error: boolean | null;

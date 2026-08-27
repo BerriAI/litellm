@@ -18,8 +18,10 @@ class CrowdStrikeAIDRGuardrailConfigModel(GuardrailConfigModel[CrowdStrikeAIDRGu
     )
     fail_on_error: bool | None = Field(
         default=True,
-        description="When False, transport errors from the AIDR guard API (e.g. a 4xx/5xx rejecting "
-        "malformed input, as opposed to a policy block) fail open and the request proceeds unmodified.",
+        description="When False, errors calling the AIDR guard API (connection failures, timeouts, 4xx/5xx "
+        "responses, malformed reply bodies) fail open and the request proceeds unmodified. A blocked verdict "
+        "delivered on a success response still blocks, and a transformed response that cannot be parsed "
+        "fails closed so delivered redactions are never dropped.",
     )
 
     @staticmethod

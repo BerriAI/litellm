@@ -842,7 +842,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=True,
         description=(
             "Whether to fail the request if the guardrail encounters an error. "
-            "Implemented by guardrail='model_armor' and 'generic_guardrail_api'. "
+            "Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. "
             "True (default) raises the error. False logs a critical error and lets the request proceed, "
             "so only a valid guardrail response can block or modify it."
         ),

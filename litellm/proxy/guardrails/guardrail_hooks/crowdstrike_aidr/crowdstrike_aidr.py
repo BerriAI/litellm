@@ -1,10 +1,11 @@
 import json
 import os
+import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optional, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import Any, override
 
 from litellm._logging import verbose_proxy_logger
@@ -142,7 +143,7 @@ def _extract_text_from_message(message: _Message) -> str:
     return "\n".join(part.text for part in content if isinstance(part, _TextContentPart))
 
 
-def _merge_metadata_bags(request_data: Mapping[str, Any]) -> dict[str, Any] | None:
+def _merge_metadata_bags(request_data: Mapping[str, Any]) -> Mapping[str, Any] | None:
     merged: Final[dict[str, Any]] = {}
     present = False
     for bag in (request_data.get("metadata"), request_data.get("litellm_metadata")):
@@ -153,7 +154,7 @@ def _merge_metadata_bags(request_data: Mapping[str, Any]) -> dict[str, Any] | No
 
 
 def _messages_since_last_assistant(
-    messages: list[AllMessageValues],
+    messages: Sequence[AllMessageValues],
 ) -> _FilteredMessages:
     if not messages:
         return _FilteredMessages([], ())
@@ -274,7 +275,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         )
 
     async def _call_crowdstrike_aidr_guard(
-        self, payload: Mapping[str, Any], hook_name: str
+        self, payload: dict[str, Any], hook_name: str
     ) -> _GuardChatCompletionsResult:
         """
         Makes the API call to the CrowdStrike AIDR AI Guard endpoint.
@@ -308,11 +309,13 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         assert response is not None
         response.raise_for_status()
 
-        result = _GuardChatCompletionsResponse.model_validate(response.json()).result or _GuardChatCompletionsResult()
+        response_body: Final[object] = response.json()
+        raw_result: Final[object] = response_body.get("result") if isinstance(response_body, dict) else None
+        blocked_signal: Final[object] = raw_result.get("blocked") if isinstance(raw_result, dict) else None
 
-        if result.blocked:
+        if blocked_signal:
             verbose_proxy_logger.warning(
-                "CrowdStrike AIDR Guardrail (%s): Request blocked. Response: %s", hook_name, result
+                "CrowdStrike AIDR Guardrail (%s): Request blocked. Verdict: %s", hook_name, blocked_signal
             )
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
@@ -321,6 +324,23 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                     "guardrail_name": self.guardrail_name,
                 },
             )
+
+        try:
+            result: Final = (
+                _GuardChatCompletionsResponse.model_validate(response_body).result or _GuardChatCompletionsResult()
+            )
+        except ValidationError as validation_error:
+            transformed_signal: Final[object] = raw_result.get("transformed") if isinstance(raw_result, dict) else None
+            if transformed_signal:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "CrowdStrike AIDR returned a transformed response litellm could not parse; "
+                        "failing closed instead of dropping the delivered redactions",
+                        "guardrail_name": self.guardrail_name,
+                    },
+                ) from validation_error
+            raise
         verbose_proxy_logger.debug(
             "CrowdStrike AIDR Guardrail (%s): Request passed. Response: %s", hook_name, result.detectors
         )
@@ -364,7 +384,10 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
         return [_extract_text_from_message(msg) for msg in tail]
 
-    async def _call_or_fail_open(self, payload: Mapping[str, Any], hook_name: str) -> _GuardChatCompletionsResult:
+    async def _call_or_fail_open(
+        self, payload: dict[str, Any], hook_name: str, request_data: dict
+    ) -> _GuardChatCompletionsResult:
+        start_time: Final = time.time()
         try:
             return await self._call_crowdstrike_aidr_guard(payload, hook_name)
         except HTTPException:
@@ -377,6 +400,15 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 hook_name,
                 error,
                 exc_info=True,
+            )
+            end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=error,
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
             )
             return _GuardChatCompletionsResult()
 
@@ -457,7 +489,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 extra_info["user_name"] = user_email
             ai_guard_payload["extra_info"] = extra_info
 
-        result = await self._call_or_fail_open(ai_guard_payload, hook_name)
+        result: Final = await self._call_or_fail_open(ai_guard_payload, hook_name, request_data)
 
         if "body" in request_data or "messages" in request_data:
             add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
