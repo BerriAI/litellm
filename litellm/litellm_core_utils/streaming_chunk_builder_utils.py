@@ -751,6 +751,32 @@ class ChunkProcessor:
             return Usage(**usage_chunk)
         return usage_chunk
 
+    @staticmethod
+    def _update_usage_token_counts(
+        usage_chunk: Usage,
+        usage_chunk_dict: "_UsageSummary",
+        prompt_tokens: int,
+        completion_tokens: int,
+        completion_usage_updates: int,
+    ) -> tuple[int, int, bool, bool, int]:
+        prompt_tokens_provided = "prompt_tokens" in usage_chunk
+        completion_tokens_provided = "completion_tokens" in usage_chunk
+
+        if prompt_tokens_provided and (usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0):
+            prompt_tokens = usage_chunk_dict["prompt_tokens"]
+        if completion_tokens_provided and (usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0):
+            completion_tokens = usage_chunk_dict["completion_tokens"]
+            if completion_tokens > 0:
+                completion_usage_updates += 1
+
+        return (
+            prompt_tokens,
+            completion_tokens,
+            prompt_tokens_provided,
+            completion_tokens_provided,
+            completion_usage_updates,
+        )
+
     def _calculate_usage_per_chunk(
         self,
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
@@ -796,18 +822,19 @@ class ChunkProcessor:
 
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
-                if "prompt_tokens" in usage_chunk:
-                    prompt_tokens_provided = True
-                if "prompt_tokens" in usage_chunk and (usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0):
-                    prompt_tokens = usage_chunk_dict["prompt_tokens"]
-                if "completion_tokens" in usage_chunk:
-                    completion_tokens_provided = True
-                if "completion_tokens" in usage_chunk and (
-                    usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0
-                ):
-                    completion_tokens = usage_chunk_dict["completion_tokens"]
-                    if completion_tokens > 0:
-                        completion_usage_updates += 1
+                (
+                    prompt_tokens,
+                    completion_tokens,
+                    prompt_tokens_provided,
+                    completion_tokens_provided,
+                    completion_usage_updates,
+                ) = self._update_usage_token_counts(
+                    usage_chunk=usage_chunk,
+                    usage_chunk_dict=usage_chunk_dict,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    completion_usage_updates=completion_usage_updates,
+                )
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
                     usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
                 ):
