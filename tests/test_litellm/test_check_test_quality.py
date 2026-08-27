@@ -941,6 +941,56 @@ def test_a_report_after_a_swallowing_branch_still_counts(tmp_path):
     assert _swallowed(tmp_path, body) == []
 
 
+def test_an_early_return_below_a_raise_still_swallows(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == 3\n"
+        "    except Exception as e:\n"
+        "        if 'flaky' in str(e):\n"
+        "            return\n"
+        "        raise\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_continue_below_a_pytest_fail_still_swallows(tmp_path):
+    body = (
+        "    for item in items:\n"
+        "        try:\n"
+        "            assert f(item) == 3\n"
+        "        except Exception as e:\n"
+        "            if 'skip' in str(e):\n"
+        "                continue\n"
+        "            pytest.fail(str(e))\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_break_below_a_raise_still_swallows(tmp_path):
+    body = (
+        "    for item in items:\n"
+        "        try:\n"
+        "            assert f(item) == 3\n"
+        "        except Exception:\n"
+        "            if done:\n"
+        "                break\n"
+        "            raise\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_return_in_a_nested_def_does_not_escape_the_handler(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert f() == 3\n"
+        "    except Exception:\n"
+        "        def _later():\n"
+        "            return 1\n"
+        "        raise\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
 def test_a_swallow_outside_a_test_function_is_left_alone(tmp_path):
     source = (
         "def _helper():\n"

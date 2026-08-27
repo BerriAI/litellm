@@ -123,6 +123,7 @@ import sys
 import tokenize
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import takewhile
 from multiprocessing import Pool
 from pathlib import Path
 from types import MappingProxyType
@@ -438,6 +439,16 @@ def _catches_assertion_error(handler: ast.ExceptHandler) -> bool:
     return any(_dotted_name(node).rpartition(".")[2] in ASSERTION_ERROR_CATCHERS for node in named)
 
 
+def _walk_within_scope(node: ast.AST) -> Iterator[ast.AST]:
+    """`ast.walk` that stops at a nested function or class, whose body is a scope of its
+    own rather than more of the statements around it."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        return
+    yield node
+    for child in ast.iter_child_nodes(node):
+        yield from _walk_within_scope(child)
+
+
 def _statement_reports(stmt: ast.stmt) -> bool:
     """Whether control leaving this statement has necessarily reported the failure.
     A `raise` or a `pytest.fail` does. An `if` does only when both halves do, since the
@@ -457,11 +468,27 @@ def _statement_reports(stmt: ast.stmt) -> bool:
     return False
 
 
+def _statement_escapes(stmt: ast.stmt) -> bool:
+    """Whether control can leave the enclosing handler through this statement without
+    having reported. A `return`, `break` or `continue` on some branch does exactly that,
+    and it makes every reporting statement after it unreachable on that path. A nested
+    `def` is not walked into, since its `return` leaves the nested body, not the handler."""
+    return not _statement_reports(stmt) and any(
+        isinstance(node, (ast.Return, ast.Break, ast.Continue))
+        for node in _walk_within_scope(stmt)
+    )
+
+
 def _reports_the_failure(body: Sequence[ast.stmt]) -> bool:
     """Re-raising, or failing the test, passes the failure on rather than eating it.
-    Every path out of the block has to do it: a `raise` reachable on one branch only
-    leaves the other branch swallowing, which is the shape the rule exists to catch."""
-    return any(_statement_reports(stmt) for stmt in body)
+    Every path out of the block has to do it, so the scan stops at the first statement
+    that can escape without reporting: a `raise` reachable on one branch only, or sitting
+    below an early `return`, leaves the other path swallowing, which is the shape the
+    rule exists to catch."""
+    return any(
+        _statement_reports(stmt)
+        for stmt in takewhile(lambda candidate: not _statement_escapes(candidate), body)
+    )
 
 
 def _swallowing_handler(node: ast.Try) -> ast.ExceptHandler | None:
