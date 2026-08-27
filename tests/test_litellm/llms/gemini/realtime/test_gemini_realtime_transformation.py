@@ -1813,6 +1813,8 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         "gemini-2.5-flash-native-audio",
         "gemini-2.5-flash-native-audio-latest",
         "gemini/gemini-2.5-flash-native-audio-latest",
+        "gemini-live-2.5-flash-native-audio",
+        "gemini/gemini-live-2.5-flash-native-audio",
     ]
     flash_live_models = [
         "gemini-3.1-flash-live-preview",
@@ -1835,6 +1837,10 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         ("gemini/gemini-3.1-flash-live-preview", True),
         ("gemini-2.5-flash-native-audio-latest", True),
         ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-live-2.5-flash-native-audio", True),
+        ("gemini/gemini-live-2.5-flash-native-audio", True),
+        # vertex_ai/ prefix must resolve via the stripped-prefix fallback
+        ("vertex_ai/gemini-live-2.5-flash-native-audio", True),
         ("gemini-2.0-flash", False),
         ("gemini-2.5-flash", False),
     ],
@@ -1848,6 +1854,9 @@ def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_au
     [
         ("gemini-2.5-flash-native-audio-latest", True),
         ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-live-2.5-flash-native-audio", True),
+        ("gemini/gemini-live-2.5-flash-native-audio", True),
+        ("vertex_ai/gemini-live-2.5-flash-native-audio", True),
         ("gemini-3.1-flash-live-preview", False),
         ("gemini/gemini-3.1-flash-live-preview", False),
         ("gemini-2.0-flash", False),
