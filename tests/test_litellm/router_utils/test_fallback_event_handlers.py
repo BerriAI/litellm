@@ -22,6 +22,8 @@ class StreamingWrapper:
 
 
 class FakeRouter:
+    fallback_access_check = None
+
     def log_retry(self, kwargs, e):
         return kwargs
 
@@ -30,6 +32,8 @@ class FakeRouter:
 
 
 class AlwaysFailRouter:
+    fallback_access_check = None
+
     def log_retry(self, kwargs, e):
         return kwargs
 
@@ -92,6 +96,8 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 
 
 class RecordingRouter:
+    fallback_access_check = None
+
     def __init__(self):
         self.received_kwargs = None
 
@@ -151,6 +157,8 @@ async def test_run_async_fallback_skips_original_model_group():
 
 
 class AttemptRecordingRouter:
+    fallback_access_check = None
+
     def __init__(self):
         self.attempted_model_groups = []
         self.received_kwargs = None
@@ -339,7 +347,84 @@ async def test_run_async_fallback_records_batch_model_group_outside_provider_met
     assert router.received_kwargs["litellm_metadata"]["model_group"] == "openai-group"
 
 
+class AccessCheckedRouter(AttemptRecordingRouter):
+    def __init__(self, allowed_models: frozenset[str]):
+        super().__init__()
+        self.allowed_models = allowed_models
+        self.access_checks = []
+
+    async def fallback_access_check(self, *, model, request_kwargs, llm_router):
+        self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
+        return model in self.allowed_models
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_skips_targets_the_access_check_rejects():
+    router = AccessCheckedRouter(allowed_models=frozenset({"allowed-model"}))
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[
+            {"model": "secret-model", "messages": [{"role": "user", "content": "hi"}]},
+            "allowed-model",
+        ],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("primary failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="primary-model",
+        metadata={"user_api_key": "hashed"},
+    )
+
+    assert router.attempted_model_groups == ["allowed-model"]
+    assert router.access_checks == [
+        ("secret-model", "hashed", True),
+        ("allowed-model", "hashed", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_raises_original_error_when_no_target_is_authorized():
+    router = AccessCheckedRouter(allowed_models=frozenset())
+
+    with pytest.raises(RuntimeError, match="primary failed"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["secret-model", "other-secret-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("primary failed"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            model="primary-model",
+            metadata={"user_api_key": "hashed"},
+        )
+
+    assert router.attempted_model_groups == []
+    assert [model for model, _, _ in router.access_checks] == ["secret-model", "other-secret-model"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_consult_access_check_for_same_model_group_retries():
+    router = AccessCheckedRouter(allowed_models=frozenset())
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=[{"model": "primary-model", "_target_order": 2}],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("first order level failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        model="primary-model",
+        metadata={"user_api_key": "hashed"},
+    )
+
+    assert router.attempted_model_groups == ["primary-model"]
+    assert router.access_checks == []
+
+
 class RecordingFailRouter:
+    fallback_access_check = None
+
     def __init__(self):
         self.attempted_models = []
 
@@ -488,9 +573,7 @@ async def test_run_async_fallback_keeps_a_request_override_distinct_from_the_bar
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
             litellm_router=router,
-            fallback_model_group=[
-                {"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}
-            ],
+            fallback_model_group=[{"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
             max_fallbacks=3,
@@ -774,6 +857,8 @@ class TestTriggerCooldownForFailedDeployment:
 
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
+        fallback_access_check = None
+
         def __init__(self):
             self.cooldown_time = 60.0
 
