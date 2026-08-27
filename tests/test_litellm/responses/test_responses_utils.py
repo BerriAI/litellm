@@ -724,3 +724,20 @@ class TestMergePromptManagementInputReshape:
         )
 
         assert result == merged
+
+
+class TestResponsesInputToChatMessages:
+    def test_none_input_returns_empty_list(self):
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(None) == []
+
+    def test_str_input_becomes_user_message(self):
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages("hi") == [
+            {"role": "user", "content": "hi"}
+        ]
+
+    def test_list_input_keeps_only_role_items(self):
+        reasoning_item = {"type": "reasoning", "id": "rs_1", "summary": []}
+        user_message = {"role": "user", "content": "hi"}
+        assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(
+            [reasoning_item, user_message, "stray"]
+        ) == [user_message]
