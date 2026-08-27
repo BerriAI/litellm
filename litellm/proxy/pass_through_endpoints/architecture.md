@@ -62,7 +62,7 @@ sequenceDiagram
 | Streaming chunk collection | Collect chunks async for logging after stream completes |
 | Multipart form handling | Reconstruct multipart/form-data requests for file uploads |
 | Guardrails (opt-in) | Run content filtering when explicitly configured |
-| Cost injection | Inject cost into streaming chunks when `include_cost_in_streaming_usage` enabled |
+| Cost injection | Inject cost into streaming chunks when `include_cost_in_streaming_usage` enabled. OpenAI-protocol callers must also opt in via `stream_options.include_usage`; Anthropic and Vertex `rawPredict` have no such field, so injection is always-on there unless the caller sends an explicit `stream_options.include_usage: false` |
 
 ## What Does NOT Change
 
