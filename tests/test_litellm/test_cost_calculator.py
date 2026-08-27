@@ -1045,9 +1045,220 @@ def test_complete_custom_cost_per_token_defensive_branches(_local_model_cost_map
     assert _complete_custom_cost_per_token(None, model="gpt-4o-mini", custom_llm_provider="openai") is None
     assert _complete_custom_cost_per_token({}, model="gpt-4o-mini", custom_llm_provider="openai") is None
     assert _custom_cost_per_token_from_logging_obj(None) is None
-    assert _published_token_rate(None, "openai", "input_cost_per_token") == 0.0
-    assert _published_token_rate("", "openai", "output_cost_per_token") == 0.0
-    assert _published_token_rate("gpt-4o-mini", "openai", "this_field_does_not_exist") == 0.0
+    assert _published_token_rate(None, "openai", "input_cost_per_token") is None
+    assert _published_token_rate("", "openai", "output_cost_per_token") is None
+    assert _published_token_rate("gpt-4o-mini", "openai", "this_field_does_not_exist") is None
+    assert _published_token_rate(
+        "litellm-unmapped-custom-priced-qwen", "anthropic", "input_cost_per_token"
+    ) is None
+
+
+def test_complete_output_only_keeps_published_cache_rates(_local_model_cost_map):
+    """Output-only custom pricing must not bill cache at the normal input rate."""
+    model = "claude-sonnet-4-5-20250929"
+    published = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+    custom_output = 5e-06
+    assert published["cache_read_input_token_cost"] != published["input_cost_per_token"]
+    assert published["cache_creation_input_token_cost"] != published["input_cost_per_token"]
+
+    completed = _complete_custom_cost_per_token(
+        {"output_cost_per_token": custom_output},
+        model=model,
+        custom_llm_provider="anthropic",
+    )
+    assert completed is not None
+    assert completed["output_cost_per_token"] == custom_output
+    assert completed["input_cost_per_token"] == published["input_cost_per_token"]
+    assert completed["cache_read_input_token_cost"] == published["cache_read_input_token_cost"]
+    assert completed["cache_creation_input_token_cost"] == published["cache_creation_input_token_cost"]
+
+
+def test_completion_cost_output_only_custom_rate_uses_published_cache_rates(
+    _local_model_cost_map,
+):
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    model = "claude-sonnet-4-5-20250929"
+    published = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+    custom_output = 5e-06
+    regular_prompt = 20
+    cache_read = 80
+    completion_tokens = 10
+
+    logging_obj = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-output-only-cache-rates",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user="",
+        optional_params={},
+        litellm_params={
+            "custom_llm_provider": "anthropic",
+            "output_cost_per_token": custom_output,
+        },
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    response = ModelResponse(
+        id="test-id",
+        model=model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=regular_prompt + cache_read,
+            completion_tokens=completion_tokens,
+            total_tokens=regular_prompt + cache_read + completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cache_read),
+        ),
+    )
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+        litellm_logging_obj=logging_obj,
+    )
+    expected = (
+        regular_prompt * published["input_cost_per_token"]
+        + cache_read * published["cache_read_input_token_cost"]
+        + completion_tokens * custom_output
+    )
+    assert cost == pytest.approx(expected)
+    billed_cache_at_input = (
+        regular_prompt * published["input_cost_per_token"]
+        + cache_read * published["input_cost_per_token"]
+        + completion_tokens * custom_output
+    )
+    assert cost != pytest.approx(billed_cache_at_input)
+
+
+def test_complete_output_only_router_id_uses_backend_cache_rates(_local_model_cost_map):
+    """A custom router_model_id usually stores only input/output. Missing cache
+    rates must come from the backend Anthropic model, not the normal input rate.
+    """
+    backend = "claude-sonnet-4-5-20250929"
+    router_id = "71ad2e1c-71db-4246-a558-d01480578941"
+    published = litellm.get_model_info(model=backend, custom_llm_provider="anthropic")
+    custom_output = 5e-06
+    litellm.register_model(
+        {
+            router_id: {
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": custom_output,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+    )
+    assert litellm.model_cost[router_id].get("cache_read_input_token_cost") is None
+    assert published["cache_read_input_token_cost"] != published["input_cost_per_token"]
+
+    without_backend = _complete_custom_cost_per_token(
+        {"output_cost_per_token": custom_output},
+        model=f"anthropic/{router_id}",
+        custom_llm_provider="anthropic",
+    )
+    assert without_backend is not None
+    assert without_backend["cache_read_input_token_cost"] == without_backend["input_cost_per_token"]
+
+    completed = _complete_custom_cost_per_token(
+        {"output_cost_per_token": custom_output},
+        model=f"anthropic/{router_id}",
+        custom_llm_provider="anthropic",
+        fallback_models=(backend,),
+    )
+    assert completed is not None
+    assert completed["output_cost_per_token"] == custom_output
+    assert completed["input_cost_per_token"] == 1e-06
+    assert completed["cache_read_input_token_cost"] == published["cache_read_input_token_cost"]
+    assert completed["cache_creation_input_token_cost"] == published["cache_creation_input_token_cost"]
+
+
+def test_completion_cost_router_id_uses_backend_cache_rates(_local_model_cost_map):
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    backend = "claude-sonnet-4-5-20250929"
+    router_id = "test-router-custom-cache-uuid"
+    published = litellm.get_model_info(model=backend, custom_llm_provider="anthropic")
+    custom_input = 1e-06
+    custom_output = 5e-06
+    regular_prompt = 20
+    cache_read = 80
+    completion_tokens = 10
+    litellm.register_model(
+        {
+            router_id: {
+                "input_cost_per_token": custom_input,
+                "output_cost_per_token": custom_output,
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model=backend,
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-router-id-cache-rates",
+        function_id="test-fn",
+    )
+    logging_obj.update_environment_variables(
+        model=backend,
+        user="",
+        optional_params={},
+        litellm_params={
+            "model": backend,
+            "custom_llm_provider": "anthropic",
+            "input_cost_per_token": custom_input,
+            "output_cost_per_token": custom_output,
+        },
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+
+    response = ModelResponse(
+        id="test-id",
+        model=backend,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=regular_prompt + cache_read,
+            completion_tokens=completion_tokens,
+            total_tokens=regular_prompt + cache_read + completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cache_read),
+        ),
+    )
+    cost = completion_cost(
+        completion_response=response,
+        model=backend,
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+        custom_pricing=True,
+        router_model_id=router_id,
+        litellm_logging_obj=logging_obj,
+    )
+    expected = (
+        regular_prompt * custom_input
+        + cache_read * published["cache_read_input_token_cost"]
+        + completion_tokens * custom_output
+    )
+    billed_cache_at_custom_input = (
+        regular_prompt * custom_input + cache_read * custom_input + completion_tokens * custom_output
+    )
+    assert cost == pytest.approx(expected)
+    assert cost != pytest.approx(billed_cache_at_custom_input)
 
 
 def test_completion_cost_unknown_anthropic_model_uses_litellm_params_rates():

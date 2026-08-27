@@ -682,11 +682,13 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
     assert parsed_body["temperature"] == 0.7
     assert parsed_body["max_tokens"] == 100
 
-    # Verify pricing parameters are stored in litellm_params for internal use
+    # Unauthorized keys must not keep client rates in litellm_params; otherwise
+    # extract_custom_cost_per_token would bill from the request body (budget bypass).
+    # Authorized keys are covered by test_init_kwargs_keeps_client_pricing_when_key_allows_override.
     litellm_params = result["litellm_params"]
-    assert litellm_params["input_cost_per_token"] == 0.00002
-    assert litellm_params["output_cost_per_token"] == 0.00002
-    # Note: Other pricing params are also stored but we test the key ones that caused the regression
+    assert "input_cost_per_token" not in litellm_params
+    assert "output_cost_per_token" not in litellm_params
+    assert extract_custom_cost_per_token(litellm_params) is None
 
 
 def test_custom_pricing_used_in_cost_calculation():
