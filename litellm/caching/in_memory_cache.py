@@ -163,7 +163,12 @@ class InMemoryCache(BaseCache):
             return
 
         self.cache_dict[key] = value
-        if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+        # refresh_ttl bypasses allow_ttl_override's "leave a still-live ttl
+        # alone" guard -- a caller only sets it for a counter whose ttl must
+        # keep extending on every write (e.g. a concurrency reservation's
+        # crash-safety-net ttl), never for one that must stay fixed to its
+        # original epoch window (e.g. a fixed-period rate-limit bucket).
+        if kwargs.get("refresh_ttl") or self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
             if "ttl" in kwargs and kwargs["ttl"] is not None:
                 self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
                 heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))

@@ -123,19 +123,35 @@ _BACKGROUND_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: see c
 # `atomic_check_and_increment_by_n` in parallel_request_limiter_v3.py, applied
 # per-key instead of per-descriptor since each key already is one hash-tag
 # group by construction.
+# refresh_ttl (ARGV[4]) distinguishes the two callers of this script:
+# "requests" is an epoch-bucketed fixed window, whose TTL must be set once
+# (at first write) and never extended, or the bucket outlives the epoch it's
+# meant to reset at. "concurrency" is not windowed at all -- its TTL exists
+# purely as a crash-safety net for a reservation whose explicit release never
+# runs -- so a still-active bucket must keep pushing that TTL out on every
+# admission, or a long-lived burst of continuous traffic expires the whole
+# counter mid-flight (silently admitting past the cap, and letting a release
+# for a since-reset counter decrement an unrelated, newer cohort).
 TAG_RL_CHECK_AND_INCR_SCRIPT: Final = """
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
 local increment = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
+local refresh_ttl = tonumber(ARGV[4])
 local current = tonumber(redis.call('GET', key) or 0)
 if current + increment > limit then
     return { 0, current }
 end
 local new_value = redis.call('INCRBY', key, increment)
-local current_ttl = redis.call('TTL', key)
-if current_ttl == -1 and ttl > 0 then
-    redis.call('EXPIRE', key, ttl)
+if ttl > 0 then
+    if refresh_ttl == 1 then
+        redis.call('EXPIRE', key, ttl)
+    else
+        local current_ttl = redis.call('TTL', key)
+        if current_ttl == -1 then
+            redis.call('EXPIRE', key, ttl)
+        end
+    end
 end
 return { 1, new_value }
 """
@@ -611,7 +627,20 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
     sorted_by_model_name: Final = sorted(model_list, key=lambda deployment: deployment["model_name"])
     by_model_name: Final[Mapping[str, tuple[_ConfiguredLimit, ...]]] = MappingProxyType(
         {
-            model_name: configured
+            model_name: (
+                # `Router.should_include_deployment` lets a same-team caller
+                # reach a team-owned deployment by its own internal
+                # model_name, not only its team_public_model_name alias
+                # (litellm auto-generates a name unique per (team_id, uuid),
+                # so every deployment in this group shares one team_id when
+                # any does) -- stamping the identical team_scope here as the
+                # alias entry below gets keeps both paths resolving to the
+                # same bucket, so a caller can't split its usage across two
+                # independent counters just by alternating which name it calls.
+                tuple(replace(limit, team_scope=team_scope) for limit in configured)
+                if (team_scope := next((key[0] for dep in group if (key := _team_alias_key(dep))), None)) is not None
+                else configured
+            )
             for model_name, deployment_group in groupby(
                 sorted_by_model_name, key=lambda deployment: deployment["model_name"]
             )
@@ -1184,12 +1213,16 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             return built
 
     async def _check_and_increment_one(
-        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int
+        self, cache: InternalUsageCache, key: str, limit: float, increment: float, ttl: int, refresh_ttl: bool
     ) -> tuple[bool, float]:
         """Single-key atomic check-and-increment. Always one key per Lua
-        call -- see TAG_RL_CHECK_AND_INCR_SCRIPT's module docstring for why."""
+        call -- see TAG_RL_CHECK_AND_INCR_SCRIPT's module docstring for why,
+        and for why `refresh_ttl` must be True for a concurrency key and
+        False for a requests key."""
         if self._check_and_incr_script is not None:
-            raw: Final = await self._check_and_incr_script(keys=(key,), args=(limit, increment, ttl))
+            raw: Final = await self._check_and_incr_script(
+                keys=(key,), args=(limit, increment, ttl, 1 if refresh_ttl else 0)
+            )
             return bool(raw[0]), float(raw[1])
 
         async with self._lock:
@@ -1198,7 +1231,9 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             if current + increment > limit:
                 return False, current
             new_value: Final = current + increment
-            await cache.async_set_cache(key=key, value=new_value, ttl=ttl, litellm_parent_otel_span=None)
+            await cache.async_set_cache(
+                key=key, value=new_value, ttl=ttl, refresh_ttl=refresh_ttl, litellm_parent_otel_span=None
+            )
             return True, new_value
 
     async def _decrement_floor_zero(self, cache: InternalUsageCache, key: str, delta: float) -> None:
@@ -1212,7 +1247,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
 
     async def _atomic_check_and_increment(
         self,
-        checks: Sequence[tuple[InternalUsageCache, str, float, float, int]],
+        checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]],
     ) -> tuple[int | None, tuple[float, ...]]:
         """
         All-or-nothing across every (cache, key, limit, increment, ttl) in
@@ -1269,10 +1304,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # accumulated so far in favor of refunding and returning early, so
         # this can't be expressed as a one-shot comprehension.
         admitted_values: Final = []  # mutable-ok: sequential async accumulator, discardable on early rejection; see comment above
-        for index, (cache, key, limit, increment, ttl) in enumerate(checks):
+        for index, (cache, key, limit, increment, ttl, refresh_ttl) in enumerate(checks):
             admitted = False
             try:
-                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl)
+                admitted, value = await self._check_and_increment_one(cache, key, limit, increment, ttl, refresh_ttl)
             finally:
                 # Runs on a normal rejection (admitted stays False) and on
                 # any exception/cancellation from the awaited call above
@@ -1290,10 +1325,10 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         return None, tuple(admitted_values)
 
     async def _refund_admitted(
-        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int]], up_to_index: int
+        self, checks: Sequence[tuple[InternalUsageCache, str, float, float, int, bool]], up_to_index: int
     ) -> None:
         for refund_index in range(up_to_index):
-            refund_cache, refund_key, _limit, refund_increment, _ttl = checks[refund_index]
+            refund_cache, refund_key, _limit, refund_increment, _ttl, _refresh_ttl = checks[refund_index]
             try:
                 await self._decrement_floor_zero(refund_cache, refund_key, -refund_increment)
             except Exception as e:  # noqa: BLE001 - one failed refund must not block refunding the rest
@@ -1400,6 +1435,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                         # with nothing to replace it.
                         0.0 if configured_limit.unit == "requests" and key in stale_request_keys else 1.0,
                         self._ttl_for(configured_limit),
+                        configured_limit.unit == "concurrency",
                     )
                     for partition, (configured_limit, _tag_value, key) in zip(atomic_partitions, atomic_checks)
                 )
