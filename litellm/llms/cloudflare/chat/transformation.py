@@ -1,4 +1,5 @@
-from typing import Any, Coroutine, Final, Literal, overload
+from collections.abc import Coroutine
+from typing import Any, Final, Literal, overload
 
 import httpx
 
@@ -99,7 +100,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
 
     @overload
     def _transform_messages(  # mutable-ok: base signature
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[False] = False  # mutable-ok: base signature
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[False] = False  # mutable-ok: base sig
     ) -> list[AllMessageValues]: ...  # mutable-ok: base signature
 
     def _transform_messages(  # mutable-ok: base signature
