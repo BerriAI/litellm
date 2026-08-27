@@ -276,6 +276,29 @@ describe("PaginatedSearchSelect", () => {
     await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("gamma"));
   });
 
+  it("highlights the picked label on focus so typing starts over", async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: "alias-alpha" });
+
+    await user.tab();
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("alias-alpha".length);
+  });
+
+  it("takes a paste over the highlighted label wholesale even when it shares a prefix", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    await user.tab();
+    await user.paste("alias-alphabet");
+
+    expect(screen.getByRole("combobox")).toHaveValue("alias-alphabet");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("alias-alphabet"));
+  });
+
   it("starts a fresh query when typing lands inside the selected label", async () => {
     const user = userEvent.setup();
     const onSearchChange = vi.fn();

@@ -69,6 +69,38 @@ describe("PaginatedMultiSelect", () => {
     await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""), { timeout: 2000 });
   });
 
+  it("puts the unfiltered page back when a typed query is abandoned by closing", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange });
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"), { timeout: 2000 });
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""), { timeout: 2000 });
+    expect(input).toHaveValue("");
+  });
+
+  it("puts the unfiltered page back when the popup is dismissed by clicking away", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange });
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"), { timeout: 2000 });
+
+    await user.click(document.body);
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""), { timeout: 2000 });
+    expect(input).toHaveValue("");
+  });
+
   it("selects multiple values and reports them cumulatively", async () => {
     const user = userEvent.setup();
     const onValueChange = vi.fn();
