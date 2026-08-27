@@ -8593,6 +8593,11 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            # bedrock-runtime serves the OpenAI models on an OpenAI-compatible surface
+            # (/openai/v1/responses) alongside Converse. The adapter decides whether a
+            # given model is on it; None keeps the chat-completions bridge.
+            return litellm.BedrockOpenAIResponsesConfig.for_model(model)
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from

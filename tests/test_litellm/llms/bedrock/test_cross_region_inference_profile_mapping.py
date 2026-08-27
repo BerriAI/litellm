@@ -287,9 +287,11 @@ def test_bedrock_gpt_5_6_advertises_only_converse_supported_features(
     raw = _packaged_cost_map()[profile.model_id]
     assert raw["supported_modalities"] == ["text", "image"]
     assert raw["supported_output_modalities"] == ["text"]
-    # No bedrock_converse entry declares supported_endpoints; these models are reachable
-    # on chat completions and on the Responses API without it.
-    assert "supported_endpoints" not in raw
+    # supported_endpoints opts these models into bedrock-runtime's native OpenAI
+    # Responses surface (/openai/v1/responses), which AWS serves alongside Converse.
+    # It is the only signal that selects it; without the entry they fall back to the
+    # Chat Completions bridge, as every other bedrock_converse model still does.
+    assert raw["supported_endpoints"] == ["/v1/responses"]
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
