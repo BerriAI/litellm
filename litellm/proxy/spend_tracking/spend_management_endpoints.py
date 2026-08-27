@@ -2254,6 +2254,10 @@ async def ui_view_spend_logs(
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
     ),
+    cache_hit_filter: str | None = fastapi.Query(
+        default=None,
+        description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
+    ),
     model: str | None = fastapi.Query(default=None, description="Filter logs by model"),
     model_id: str | None = fastapi.Query(
         default=None,
@@ -2328,6 +2332,13 @@ async def ui_view_spend_logs(
             message=f"Invalid sort_order: {sort_order}. Must be one of: asc, desc",
             type="bad_request",
             param="sort_order",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if isinstance(cache_hit_filter, str) and cache_hit_filter not in {"hit", "miss"}:
+        raise ProxyException(
+            message=f"Invalid cache_hit_filter: {cache_hit_filter}. Must be one of: hit, miss",
+            type="bad_request",
+            param="cache_hit_filter",
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -2569,6 +2580,11 @@ async def ui_view_spend_logs(
                 sql_conditions.append(f"status = ${p}")
                 sql_params.append(status_filter)
                 p += 1
+
+        if cache_hit_filter == "hit":
+            sql_conditions.append("LOWER(cache_hit) = 'true'")
+        elif cache_hit_filter == "miss":
+            sql_conditions.append("(cache_hit IS NULL OR LOWER(cache_hit) != 'true')")
 
         if exclude_internal_health_checks:
             sql_conditions.append(f"api_key NOT IN (${p}, ${p + 1})")
