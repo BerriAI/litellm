@@ -117,6 +117,11 @@ const ADMIN_AUTH = {
   Authorization: `Bearer ${users[Role.ProxyAdmin].password}`,
 };
 
+// Five probes 2s apart outlast the e2e stack's proxy_config_reload_interval_seconds of 7.
+const SETTLE_INTERVAL_MS = 2_000;
+const SETTLE_PROBES = 5;
+const SETTLE_TIMEOUT_MS = 60_000;
+
 /**
  * Apply a router_settings patch through the typed /config/update contract. The
  * server merges it over existing settings (request wins), so only the passed keys
@@ -131,6 +136,27 @@ async function patchRouterSettings(
     data: { router_settings: patch },
   });
   expect(res.ok(), `seed /config/update failed: ${res.status()} ${await res.text()}`).toBeTruthy();
+}
+
+/**
+ * Requires a consecutive streak because a single reply only proves the one replica that
+ * served it has reloaded, not the sibling still answering from the pre-update config.
+ */
+async function pollUntilSettled(
+  probe: () => Promise<number>,
+  matches: (status: number) => boolean,
+  message: string,
+): Promise<void> {
+  let streak = 0;
+  await expect
+    .poll(
+      async () => {
+        streak = matches(await probe()) ? streak + 1 : 0;
+        return streak;
+      },
+      { timeout: SETTLE_TIMEOUT_MS, intervals: [SETTLE_INTERVAL_MS], message },
+    )
+    .toBeGreaterThanOrEqual(SETTLE_PROBES);
 }
 
 test.describe("Router Settings - Loadbalancing", () => {
@@ -252,29 +278,30 @@ test.describe("Router Settings - Fallbacks serve the request", () => {
   });
 
   test("a request to an unreachable model is answered by its fallback", async ({ page, request }) => {
-    const chat = async () =>
-      request.post("/v1/chat/completions", {
-        headers: { ...ADMIN_AUTH, "Content-Type": "application/json" },
-        data: {
-          model: BROKEN_PRIMARY,
-          messages: [{ role: "user", content: "fallback probe" }],
-        },
-      });
+    const chatStatus = async () =>
+      (
+        await request.post("/v1/chat/completions", {
+          headers: { ...ADMIN_AUTH, "Content-Type": "application/json" },
+          data: {
+            model: BROKEN_PRIMARY,
+            messages: [{ role: "user", content: "fallback probe" }],
+          },
+        })
+      ).status();
 
     // The control: it proves the reply below could only have come from the fallback.
-    expect((await chat()).status(), "broken primary unexpectedly succeeded on its own").toBeGreaterThanOrEqual(400);
+    await pollUntilSettled(
+      chatStatus,
+      (status) => status >= 400,
+      "broken primary unexpectedly succeeded on its own",
+    );
 
     await patchRouterSettings(request, {
       fallbacks: [{ [BROKEN_PRIMARY]: [PRIMARY] }],
     } as Partial<NonNullable<ConfigYAML["router_settings"]>>);
 
     // Same call now succeeds, served by the fallback model.
-    await expect
-      .poll(async () => (await chat()).status(), {
-        timeout: 30_000,
-        message: "fallback never took effect",
-      })
-      .toBe(200);
+    await pollUntilSettled(chatStatus, (status) => status === 200, "fallback never took effect");
 
     // And the playground renders a reply for a model whose own upstream is down.
     await openPlayground(page);
