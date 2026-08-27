@@ -685,18 +685,29 @@ class TestHumanizeLakeraBlockReasons:
 
 class TestAdvisorySystemMessageValidation:
     """advisory_system_message must be validated eagerly at construction time,
-    not lazily the first time a real request gets flagged."""
+    not lazily the first time a real request gets flagged -- but only when
+    on_flagged='inject_system_message' actually reads it. Maintainer finding
+    on BerriAI/litellm#34940: this check previously ran unconditionally, so a
+    leftover/typo'd advisory_system_message on a guardrail configured
+    on_flagged='block' (which never calls _build_advisory_message at all)
+    disabled the entire guardrail for a field it never uses."""
 
     def test_valid_template_constructs_without_error(self):
-        guardrail = LakeraAIGuardrail(api_key="test_key", advisory_system_message="Flagged for {reason}.")
+        guardrail = LakeraAIGuardrail(
+            api_key="test_key", on_flagged="inject_system_message", advisory_system_message="Flagged for {reason}."
+        )
         assert guardrail.advisory_system_message == "Flagged for {reason}."
 
     def test_malformed_template_raises_at_construction(self):
         with pytest.raises(ValueError, match="Invalid advisory_system_message template"):
-            LakeraAIGuardrail(api_key="test_key", advisory_system_message="Flagged for {typo_field}.")
+            LakeraAIGuardrail(
+                api_key="test_key",
+                on_flagged="inject_system_message",
+                advisory_system_message="Flagged for {typo_field}.",
+            )
 
     def test_none_template_is_allowed(self):
-        guardrail = LakeraAIGuardrail(api_key="test_key", advisory_system_message=None)
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", advisory_system_message=None)
         assert guardrail.advisory_system_message is None
 
     def test_template_missing_reason_placeholder_raises_at_construction(self):
@@ -704,41 +715,76 @@ class TestAdvisorySystemMessageValidation:
         silently never tells the LLM why the request was flagged, defeating the
         point of advisory mode; this must be rejected too, not just malformed ones."""
         with pytest.raises(ValueError, match="must include a real"):
-            LakeraAIGuardrail(api_key="test_key", advisory_system_message="This request was flagged.")
+            LakeraAIGuardrail(
+                api_key="test_key", on_flagged="inject_system_message", advisory_system_message="This request was flagged."
+            )
 
     def test_escaped_reason_placeholder_raises_at_construction(self):
         """{{reason}} contains the substring "{reason}" but str.format() treats
         double braces as an escaped literal, never substituting the real value --
         a naive substring check would wrongly accept this."""
         with pytest.raises(ValueError, match="must include a real"):
-            LakeraAIGuardrail(api_key="test_key", advisory_system_message="Flagged for {{reason}}.")
-
-
-class TestAdvisoryModeDuringCallUnsupported:
-    """inject_system_message cannot deliver its advertised behavior for
-    mode='during_call' (no pre-call barrier exists to land the mutation before
-    dispatch), so that combination must be rejected at construction time rather
-    than silently downgrading to monitor with no clear signal to the operator."""
-
-    def test_during_call_string_mode_raises_at_construction(self):
-        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
-            LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", event_hook="during_call")
-
-    def test_during_call_in_list_mode_raises_at_construction(self):
-        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
             LakeraAIGuardrail(
-                api_key="test_key",
-                on_flagged="inject_system_message",
-                event_hook=["pre_call", "during_call"],
+                api_key="test_key", on_flagged="inject_system_message", advisory_system_message="Flagged for {{reason}}."
             )
 
-    def test_during_call_in_tag_mode_raises_at_construction(self):
-        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
-            LakeraAIGuardrail(
-                api_key="test_key",
-                on_flagged="inject_system_message",
-                event_hook=Mode(tags={"vip": "during_call"}, default="pre_call"),
-            )
+    def test_malformed_template_with_block_mode_constructs_without_error(self):
+        """Maintainer finding on BerriAI/litellm#34940: on_flagged='block' never
+        reads advisory_system_message, so a malformed/leftover value there must
+        not disable the guardrail -- it's dead config, not a real error."""
+        guardrail = LakeraAIGuardrail(
+            api_key="test_key", on_flagged="block", advisory_system_message="This request was flagged."
+        )
+        assert guardrail.on_flagged == "block"
+
+    def test_malformed_template_with_monitor_mode_constructs_without_error(self):
+        guardrail = LakeraAIGuardrail(
+            api_key="test_key", on_flagged="monitor", advisory_system_message="Flagged for {typo_field}."
+        )
+        assert guardrail.on_flagged == "monitor"
+
+    def test_in_memory_update_to_block_mode_with_malformed_template_is_allowed(self):
+        """A hot-reload that turns off advisory mode in the same update that
+        introduces a malformed advisory_system_message must succeed, not be
+        rejected for a field the new on_flagged value never reads."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message")
+        updated_params = LitellmParams(
+            guardrail="lakera_v2", mode="pre_call", on_flagged="block", advisory_system_message="No placeholder here."
+        )
+        guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
+        assert guardrail.on_flagged == "block"
+
+
+class TestAdvisoryModeDuringCallDegradesGracefully:
+    """Maintainer finding on BerriAI/litellm#34940: rejecting on_flagged=
+    'inject_system_message' + mode='during_call' at construction time disabled
+    the entire guardrail (via init_guardrails_v2's catch-and-skip) for a
+    combination async_moderation_hook already handles safely at runtime --
+    it masks whatever's maskable and falls back to a log-only warning when
+    the advisory itself can't be delivered (see TestAdvisoryModeWiring's
+    during_call coverage). Construction/hot-reload must allow this
+    combination rather than disabling the guardrail outright."""
+
+    def test_during_call_string_mode_constructs_without_error(self):
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", event_hook="during_call")
+        assert guardrail.on_flagged == "inject_system_message"
+        assert guardrail.event_hook == "during_call"
+
+    def test_during_call_in_list_mode_constructs_without_error(self):
+        guardrail = LakeraAIGuardrail(
+            api_key="test_key",
+            on_flagged="inject_system_message",
+            event_hook=["pre_call", "during_call"],
+        )
+        assert guardrail.on_flagged == "inject_system_message"
+
+    def test_during_call_in_tag_mode_constructs_without_error(self):
+        guardrail = LakeraAIGuardrail(
+            api_key="test_key",
+            on_flagged="inject_system_message",
+            event_hook=Mode(tags={"vip": "during_call"}, default="pre_call"),
+        )
+        assert guardrail.on_flagged == "inject_system_message"
 
     def test_pre_call_only_mode_constructs_without_error(self):
         guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="inject_system_message", event_hook="pre_call")
@@ -750,18 +796,11 @@ class TestAdvisoryModeDuringCallUnsupported:
         assert guardrail.on_flagged == "block"
         assert guardrail.event_hook == "during_call"
 
-    def test_in_memory_update_reintroducing_the_combo_raises(self):
-        """update_in_memory_litellm_params (the DB/UI hot-reload path) setattrs
-        every LitellmParams field onto a live instance with no revalidation, so
-        an update that flips on_flagged to inject_system_message on an instance
-        already running as during_call must be rejected too, not just the
-        combination formed at construction time."""
+    def test_in_memory_update_reintroducing_the_combo_is_allowed(self):
         guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="block", event_hook="during_call")
         updated_params = LitellmParams(guardrail="lakera_v2", mode="during_call", on_flagged="inject_system_message")
-        with pytest.raises(ValueError, match="not supported for mode='during_call'"):
-            guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
-
-        assert guardrail.on_flagged == "block", "a rejected update must leave the live instance untouched"
+        guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
+        assert guardrail.on_flagged == "inject_system_message"
 
     def test_in_memory_update_moving_off_during_call_in_the_same_update_is_allowed(self):
         """Bugbot finding on BerriAI/litellm#34940: validation checked the live,

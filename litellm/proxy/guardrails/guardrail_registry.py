@@ -778,15 +778,23 @@ class InMemoryGuardrailHandler:
         """
         Force re-initialization of a guardrail even if it exists in memory.
         Removes old callback from litellm.callbacks and creates fresh instance.
+
+        If the new config fails to initialize (e.g. an invalid on_flagged
+        combination), the previous instance is restored rather than left
+        deleted: initialize_guardrail's own ValueError/TypeError propagate
+        uncaught, so a caller reaching this point after already deleting the
+        old instance would otherwise leave the guardrail providing no
+        protection at all, not merely "still enforcing the old config."
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
         if not guardrail_id:
             verbose_proxy_logger.error("Cannot reinitialize guardrail without guardrail_id")
             return None
 
-        # Remove from memory if exists (also removes from callbacks)
         previous_guardrail: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
         previous_source: Final = self._sources.get(guardrail_id, source)
+
+        # Remove from memory if exists (also removes from callbacks)
         if guardrail_id in self.IN_MEMORY_GUARDRAILS:
             self.delete_in_memory_guardrail(guardrail_id)
 

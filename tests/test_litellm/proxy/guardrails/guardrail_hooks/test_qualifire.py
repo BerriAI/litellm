@@ -102,6 +102,40 @@ class TestQualifireGuardrailInit:
 
         assert guardrail.qualifire_api_base == "https://custom.qualifire.ai"
 
+    def test_on_flagged_defaults_to_block(self):
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(api_key="test_key", guardrail_name="test_guardrail")
+        assert guardrail.on_flagged == "block"
+
+    def test_on_flagged_monitor_is_accepted(self):
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(api_key="test_key", guardrail_name="test_guardrail", on_flagged="monitor")
+        assert guardrail.on_flagged == "monitor"
+
+    def test_on_flagged_inject_system_message_raises_at_construction(self):
+        """
+        Maintainer finding on BerriAI/litellm#34940: on_flagged is defined on
+        LakeraV2GuardrailConfigModel, but LitellmParams flattens every guardrail
+        config mixin together, so 'inject_system_message' type-checks for any
+        guardrail's config, including Qualifire, which never implements it.
+        Silently accepting it would let an admin believe advisory mode is active
+        when Qualifire actually just blocks on any unrecognized value.
+        """
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        with pytest.raises(ValueError, match="does not support on_flagged"):
+            QualifireGuardrail(
+                api_key="test_key", guardrail_name="test_guardrail", on_flagged="inject_system_message"
+            )
+
 
 class TestQualifireGuardrailMessageConversion:
     """Tests for message conversion to API format."""

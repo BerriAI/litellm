@@ -87,6 +87,16 @@ class QualifireGuardrail(CustomGuardrail):
         self.tool_selection_quality_check = tool_selection_quality_check
         self.assertions = assertions
         self.on_flagged = on_flagged or "block"
+        if self.on_flagged not in ("block", "monitor"):
+            # on_flagged is defined on LakeraV2GuardrailConfigModel but LitellmParams
+            # flattens every guardrail config mixin together, so a value Lakera
+            # supports (e.g. "inject_system_message") type-checks for any guardrail,
+            # including this one, which never implements it. Reject it explicitly
+            # instead of silently falling through to a block-on-anything-else branch.
+            raise ValueError(
+                f"Qualifire guardrail does not support on_flagged={self.on_flagged!r}; "
+                "only 'block' and 'monitor' are supported."
+            )
 
         # If no checks are specified and no evaluation_id, default to prompt_injections
         if not self._has_any_check_enabled() and not self.evaluation_id:

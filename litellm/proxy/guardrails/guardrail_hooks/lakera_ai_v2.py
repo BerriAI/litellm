@@ -31,7 +31,7 @@ from litellm.proxy.guardrails._content_utils import (
     has_non_string_content,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, Mode
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIBreakdownItem,
@@ -80,28 +80,6 @@ def _template_uses_reason_placeholder(template: str) -> bool:
     literal substring -- an escaped ``{{reason}}`` contains the substring but
     formats to a literal "{reason}", never substituting the actual value."""
     return any(field_name == "reason" for _, field_name, _, _ in Formatter().parse(template))
-
-
-def _event_hook_includes_during_call(
-    event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | str | Sequence[str] | None,
-) -> bool:
-    """True if ``event_hook`` could ever resolve to during_call, covering a plain
-    value, a list of values, or a tag-based Mode (checked across every tag value
-    and the default)."""
-    candidates: Final = (
-        tuple(event_hook.tags.values()) + (event_hook.default,)
-        if isinstance(event_hook, Mode)
-        else tuple(event_hook)
-        if isinstance(event_hook, list)
-        else (event_hook,)
-    )
-
-    flattened: Final = tuple(
-        value
-        for candidate in candidates
-        for value in (tuple(candidate) if isinstance(candidate, list) else (candidate,))
-    )
-    return any(value == GuardrailEventHooks.during_call for value in flattened if value is not None)
 
 
 def _pre_masking_scope_indices(
@@ -303,7 +281,6 @@ class LakeraAIGuardrail(CustomGuardrail):
         self._validate_advisory_config(
             on_flagged=self.on_flagged,
             advisory_system_message=self.advisory_system_message,
-            event_hook=self.event_hook,
             payload=self.payload,
             breakdown=self.breakdown,
         )
@@ -311,21 +288,18 @@ class LakeraAIGuardrail(CustomGuardrail):
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
         The base implementation blindly ``setattr``s every field on ``litellm_params``
-        (including ``on_flagged``/``advisory_system_message``) onto this live instance
-        with no revalidation, so an in-place config update (via the DB/UI, without a
-        restart) could otherwise reintroduce the exact invalid on_flagged/event_hook
-        combinations __init__ rejects. Validate the prospective post-update state
-        *before* mutating, so a rejected update leaves the live instance untouched
+        (including ``on_flagged``/``advisory_system_message``/``payload``/``breakdown``)
+        onto this live instance with no revalidation, so an in-place config update (via
+        the DB/UI, without a restart) could otherwise reintroduce the exact invalid
+        on_flagged combinations __init__ rejects. Validate the prospective post-update
+        state *before* mutating, so a rejected update leaves the live instance untouched
         instead of raising after it's already been corrupted.
 
-        The base setattr also writes ``litellm_params.mode`` onto a new
-        ``self.mode`` attribute rather than the ``self.event_hook`` dispatch
-        actually reads (LitellmParams has no field literally named
-        ``event_hook``), so without the explicit sync below a hot reload that
-        moves this guardrail off during_call would pass validation but still
-        dispatch as during_call afterward -- inject_system_message would then
-        run against a live instance validation had confirmed was safe, but
-        whose real dispatch hook never changed.
+        The base setattr also writes ``litellm_params.mode`` onto a new ``self.mode``
+        attribute rather than the ``self.event_hook`` dispatch actually reads
+        (LitellmParams has no field literally named ``event_hook``), so without the
+        explicit sync below a hot reload that changes mode would pass validation but
+        keep dispatching on the stale event_hook.
         """
         new_event_hook: Final = getattr(litellm_params, "mode", None) or self.event_hook
         prospective_payload: Final = getattr(litellm_params, "payload", None)
@@ -333,7 +307,6 @@ class LakeraAIGuardrail(CustomGuardrail):
         self._validate_advisory_config(
             on_flagged=getattr(litellm_params, "on_flagged", None) or self.on_flagged,
             advisory_system_message=getattr(litellm_params, "advisory_system_message", None),
-            event_hook=new_event_hook,
             payload=self.payload if prospective_payload is None else prospective_payload,
             breakdown=self.breakdown if prospective_breakdown is None else prospective_breakdown,
         )
@@ -344,11 +317,10 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         on_flagged: str,
         advisory_system_message: str | None,
-        event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | str | Sequence[str] | None,
         payload: bool | None,
         breakdown: bool | None,
     ) -> None:
-        if advisory_system_message is not None:
+        if on_flagged == "inject_system_message" and advisory_system_message is not None:
             if not _template_uses_reason_placeholder(advisory_system_message):
                 raise ValueError(
                     "Invalid advisory_system_message template: must include a real {reason} "
@@ -361,12 +333,6 @@ class LakeraAIGuardrail(CustomGuardrail):
                     f"Invalid advisory_system_message template: {e}. The template must be a valid "
                     "str.format() string using only the {reason} placeholder."
                 ) from e
-        if on_flagged == "inject_system_message" and _event_hook_includes_during_call(event_hook):
-            raise ValueError(
-                "on_flagged='inject_system_message' is not supported for mode='during_call': during_call "
-                "runs concurrently with the LLM dispatch with no pre-call barrier, so the advisory message "
-                "cannot reliably reach the request. Use mode='pre_call' instead."
-            )
         if on_flagged == "inject_system_message" and not (payload and breakdown):
             raise ValueError(
                 "on_flagged='inject_system_message' requires payload=True and breakdown=True: advisory "

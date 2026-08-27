@@ -553,6 +553,67 @@ def test_reinitialized_judge_guardrail_uses_lazy_router_provider():
             cb_list[:] = snapshot
 
 
+def _lakera_guardrail(guardrail_id: str, **litellm_params_overrides) -> Guardrail:
+    params = {"guardrail": "lakera_v2", "mode": "pre_call", "on_flagged": "block", **litellm_params_overrides}
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name="lakera-test",
+        litellm_params=LitellmParams(**params),
+    )
+
+
+class TestReinitializeGuardrailRestoresOnFailure:
+    """Maintainer finding on BerriAI/litellm#34940: reinitialize_guardrail deletes
+    the old in-memory instance and its callback registration before attempting to
+    construct the new one. initialize_guardrail's own ValueError/TypeError
+    propagate uncaught, so a rejected hot-reload (e.g. PATCH /guardrails/{id}
+    with an invalid on_flagged combination) previously left the guardrail
+    deleted entirely, not merely "still enforcing the old config", while the
+    DB/API kept reporting the new config as live."""
+
+    def test_invalid_update_restores_previous_instance(self):
+        handler = InMemoryGuardrailHandler()
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            handler.reinitialize_guardrail(_lakera_guardrail("lakera-restore", on_flagged="block"), source="db")
+
+            with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+                handler.reinitialize_guardrail(
+                    _lakera_guardrail("lakera-restore", on_flagged="inject_system_message", payload=False),
+                    source="db",
+                )
+
+            assert "lakera-restore" in handler.IN_MEMORY_GUARDRAILS, "a rejected update must not delete the guardrail"
+            restored_instance = handler.guardrail_id_to_custom_guardrail["lakera-restore"]
+            assert restored_instance.on_flagged == "block"
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    def test_invalid_update_leaves_dict_metadata_matching_the_restored_instance(self):
+        """IN_MEMORY_GUARDRAILS's own dict entry (what /guardrails/list-style
+        reads would see) must reflect the restored config too, not the
+        rejected one -- otherwise admin-facing reads and the live callback
+        instance disagree about what's actually configured."""
+        handler = InMemoryGuardrailHandler()
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            handler.reinitialize_guardrail(_lakera_guardrail("lakera-restore-meta", on_flagged="block"), source="db")
+
+            with pytest.raises(ValueError):
+                handler.reinitialize_guardrail(
+                    _lakera_guardrail("lakera-restore-meta", on_flagged="inject_system_message", breakdown=False),
+                    source="db",
+                )
+
+            assert handler.IN_MEMORY_GUARDRAILS["lakera-restore-meta"]["litellm_params"].on_flagged == "block"
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+
 class TestScanOnlyToolResultsInitRefusal:
     """A guardrail whose role filtering never scans tool results must be rejected at
     initialization when configured with scan_only_tool_results, instead of booting a
