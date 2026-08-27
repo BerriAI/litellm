@@ -52,6 +52,40 @@ describe("Logo", () => {
     warnSpy.mockRestore();
   });
 
+  it("leaves the caller's class list untouched for an asset that reads on dark", () => {
+    render(<Logo src="/ui/assets/logos/slack.svg" label="Slack" className="w-5 h-5 shrink-0" />);
+    expect(screen.getByRole("img", { name: "Slack logo" })).toHaveClass("w-5 h-5 shrink-0", { exact: true });
+  });
+
+  it("passes an untreated logo's classes through verbatim rather than normalizing them", () => {
+    render(<Logo src="/ui/assets/logos/slack.svg" label="Slack" className="w-4 w-5 h-5" />);
+    expect(screen.getByRole("img", { name: "Slack logo" })).toHaveClass("w-4 w-5 h-5", { exact: true });
+  });
+
+  it("forces a monochrome mark to white on dark without disturbing the caller's classes", () => {
+    render(<Logo src="/ui/assets/logos/github.svg" label="GitHub" className="w-5 h-5" />);
+    const img = screen.getByRole("img", { name: "GitHub logo" });
+    expect(img).toHaveClass("w-5", "h-5", "dark:[filter:brightness(0)_invert(1)]");
+    expect(img).not.toHaveClass("dark:bg-logo-surface");
+  });
+
+  it("plates a multicolor dark mark rather than inverting it", () => {
+    render(<Logo src="/ui/assets/logos/fireworks.svg" label="Fireworks" className="w-5 h-5" />);
+    const img = screen.getByRole("img", { name: "Fireworks logo" });
+    expect(img).toHaveClass("dark:bg-logo-surface", "dark:object-contain", "dark:p-0.5");
+    expect(img).not.toHaveClass("dark:[filter:brightness(0)_invert(1)]");
+  });
+
+  it("does not treat an external logo URL that collides with a bundled filename", () => {
+    render(<Logo src="https://cdn.example.com/github.svg" label="Ext" className="w-5 h-5" />);
+    expect(screen.getByRole("img", { name: "Ext logo" })).toHaveClass("w-5 h-5", { exact: true });
+  });
+
+  it("applies the treatment to a provider logo resolved through the bundler", () => {
+    render(<Logo provider="openrouter" className="w-5 h-5" />);
+    expect(screen.getByRole("img", { name: "openrouter logo" })).toHaveClass("dark:[filter:brightness(0)_invert(1)]");
+  });
+
   it("retries with a new src after a previous src errored", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { rerender } = render(<Logo src="/ui/assets/logos/broken.svg" label="Agent" />);
