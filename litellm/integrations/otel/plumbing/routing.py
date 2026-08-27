@@ -2,12 +2,13 @@
 
 When a request carries team/key vendor credentials in
 ``standard_callback_dynamic_params``, or the key/team config resolved at auth
-names a destination project, its spans must export through a
-``TracerProvider`` whose OTLP headers carry those credentials / that project.
-``TenantTracerCache`` builds and caches one provider per distinct
-(credentials, project) pair, and otherwise hands back the logger's default
-tracer. This lets a single logger fan requests out to many tenants without
-needing a logger per tenant.
+names a destination project or a service name, its spans must export through a
+``TracerProvider`` whose OTLP headers carry those credentials / that project,
+or whose Resource carries that ``service.name``. ``TenantTracerCache`` builds
+and caches one provider per distinct (credentials, project, service name)
+tuple, and otherwise hands back the logger's default tracer. This lets a
+single logger fan requests out to many tenants without needing a logger per
+tenant.
 """
 
 import threading
@@ -65,7 +66,29 @@ _MAX_RETIRED_PROVIDERS: Final = 64
 
 _HeaderItems: TypeAlias = tuple[tuple[str, str], ...]
 
+_RouteKey: TypeAlias = tuple[_HeaderItems, _HeaderItems, str | None, str | None]
+
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+#: Key/team config fields naming the Resource ``service.name``, highest
+#: precedence first. Read only from ``user_api_key_auth_metadata`` (the config
+#: the proxy resolved at auth), never from client-supplied request metadata:
+#: the service name picks the dataset/service traces land in (Honeycomb routes
+#: datasets by it), so a caller must not be able to choose one.
+_SERVICE_NAME_KEYS: Final = ("otel_service_name_override", "otel_service_name")
+
+
+def tenant_service_name(auth_metadata: Mapping[str, str] | None) -> str | None:
+    """The per-request ``service.name`` override for this key/team, if any.
+
+    ``None`` keeps the env-configured default (``OTEL_SERVICE_NAME``).
+    """
+    if not auth_metadata:
+        return None
+    return next(
+        (stripped for key in _SERVICE_NAME_KEYS if (stripped := (auth_metadata.get(key) or "").strip())),
+        None,
+    )
 
 
 def _shutdown_provider(provider: TracerProvider) -> None:
@@ -116,7 +139,7 @@ class TenantRoute:
 
 
 class TenantTracerCache:
-    """Credential/project-scoped ``TracerProvider`` cache keyed by the routing headers."""
+    """Tenant-scoped ``TracerProvider`` cache keyed by routing headers and service name."""
 
     def __init__(
         self,
@@ -131,7 +154,7 @@ class TenantTracerCache:
         # thread-pool workers concurrently with the event loop, so cache
         # updates, span counts, and retirement must be atomic.
         self._lock: Final = threading.Lock()
-        self._providers: OrderedDict[tuple[_HeaderItems, _HeaderItems, str | None], TracerProvider] = (
+        self._providers: OrderedDict[_RouteKey, TracerProvider] = (
             OrderedDict()  # mutable-ok: bounded LRU; eviction needs in-place ordered mutation
         )
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
@@ -172,10 +195,11 @@ class TenantTracerCache:
     ) -> TenantRoute:
         """Return the tracer (and trace-detachment flag) for this request.
 
-        Use ``default`` unless the request's dynamic credentials or its key/team
-        project require a scoped tracer, in which case build (or reuse) one. The
-        cache is a bounded LRU: the least-recently-used provider is flushed and
-        shut down on overflow so its exporter threads don't accumulate.
+        Use ``default`` unless the request's dynamic credentials, its key/team
+        project, or its key/team service name require a scoped tracer, in
+        which case build (or reuse) one. The cache is a bounded LRU: the
+        least-recently-used provider is flushed and shut down on overflow so
+        its exporter threads don't accumulate.
 
         A routed provider is returned already held — its open-span count is
         incremented in the same critical section as the cache update — so a
@@ -184,7 +208,8 @@ class TenantTracerCache:
         """
         credential_headers: Final = dynamic_otlp_headers(self._callback_name, dynamic_params) or _NO_HEADERS
         project_headers: Final = self._project_headers(auth_metadata)
-        if not credential_headers and not project_headers:
+        service_name: Final = tenant_service_name(auth_metadata)
+        if not credential_headers and not project_headers and service_name is None:
             return TenantRoute(tracer=default, detached=False)
         # A fixed per-integration region endpoint (New Relic us/eu), never a
         # caller-supplied host; ``None`` keeps the preset's own endpoint.
@@ -193,9 +218,12 @@ class TenantTracerCache:
             tuple(sorted(credential_headers.items())),
             tuple(sorted(project_headers.items())),
             endpoint,
+            service_name,
         )
         with self._lock:
-            provider: Final = self._cached_provider_locked(cache_key, credential_headers, project_headers, endpoint)
+            provider: Final = self._cached_provider_locked(
+                cache_key, credential_headers, project_headers, endpoint, service_name
+            )
             self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
             evicted: Final = self._evicted_on_overflow_locked()
         if evicted is not None:
@@ -208,16 +236,19 @@ class TenantTracerCache:
 
     def _cached_provider_locked(
         self,
-        cache_key: tuple[_HeaderItems, _HeaderItems, str | None],
+        cache_key: _RouteKey,
         credential_headers: Mapping[str, str],
         project_headers: Mapping[str, str],
         endpoint: str | None,
+        service_name: str | None,
     ) -> TracerProvider:
         cached: Final = self._providers.get(cache_key)
         if cached is not None:
             self._providers.move_to_end(cache_key)
             return cached
-        built: Final = build_tracer_provider(self._routed_config(credential_headers, project_headers, endpoint))
+        built: Final = build_tracer_provider(
+            self._routed_config(credential_headers, project_headers, endpoint, service_name)
+        )
         self._providers[cache_key] = built
         return built
 
@@ -267,6 +298,7 @@ class TenantTracerCache:
         credential_headers: Mapping[str, str],
         project_headers: Mapping[str, str],
         endpoint: str | None = None,
+        service_name: str | None = None,
     ) -> OpenTelemetryV2Config:
         """Clone the config, rewriting headers on the callback's own exporter.
 
@@ -285,7 +317,10 @@ class TenantTracerCache:
             self._routed_exporter(spec, credential_headers, project_headers, endpoint)
             for spec in self._config.exporters
         ]
-        return self._config.model_copy(update={"exporters": exporters})
+        update: Final = (
+            {"exporters": exporters} if service_name is None else {"exporters": exporters, "service_name": service_name}
+        )
+        return self._config.model_copy(update=update)
 
     def _routed_exporter(
         self,
