@@ -6982,9 +6982,13 @@ class Router:
             _sibling_metadata_key: Final = (
                 "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
             )
-            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict):
-                _sibling_metadata.pop("attempted_fallbacks", None)
-                _sibling_metadata.pop("original_model_group", None)
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict) and (
+                "attempted_fallbacks" in _sibling_metadata or "original_model_group" in _sibling_metadata
+            ):
+                _scrubbed_sibling_metadata: Final = _sibling_metadata.copy()
+                _scrubbed_sibling_metadata.pop("attempted_fallbacks", None)
+                _scrubbed_sibling_metadata.pop("original_model_group", None)
+                kwargs[_sibling_metadata_key] = _scrubbed_sibling_metadata
             if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
                 _fallback_metadata["attempted_fallbacks"] = 0
                 if model_group is not None:
