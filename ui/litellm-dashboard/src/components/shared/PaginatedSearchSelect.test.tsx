@@ -262,6 +262,34 @@ describe("PaginatedSearchSelect", () => {
     expect(screen.getByRole("combobox")).toHaveValue("Beta Team");
   });
 
+  it("starts a fresh query when typing lands after the selected label", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    await user.keyboard("gamma");
+
+    expect(input).toHaveValue("gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("gamma"));
+  });
+
+  it("starts a fresh query when typing lands inside the selected label", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(3, 3);
+    await user.keyboard("g");
+
+    expect(input).toHaveValue("g");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("g"));
+  });
+
   it("surfaces loading and fetching-more affordances", async () => {
     const user = userEvent.setup();
     const { unmount } = render(

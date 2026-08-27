@@ -35,6 +35,19 @@ interface PaginatedSearchSelectProps {
   "aria-describedby"?: string;
 }
 
+const typedInsertion = (previous: string, next: string): string => {
+  let start = 0;
+  while (start < previous.length && start < next.length && previous[start] === next[start]) start++;
+  let end = 0;
+  while (
+    end < previous.length - start &&
+    end < next.length - start &&
+    previous[previous.length - 1 - end] === next[next.length - 1 - end]
+  )
+    end++;
+  return next.slice(start, next.length - end);
+};
+
 export function PaginatedSearchSelect({
   options,
   value,
@@ -82,7 +95,12 @@ export function PaginatedSearchSelect({
         setPickedOption(item);
         onValueChange(item?.value ?? "");
       }}
-      onInputValueChange={(next, eventDetails) => handleInputValueChange(next, eventDetails.reason)}
+      onInputValueChange={(next, eventDetails) =>
+        handleInputValueChange(
+          typedQuery === null ? typedInsertion(selected?.label ?? "", next) : next,
+          eventDetails.reason,
+        )
+      }
       onOpenChange={(nextOpen, eventDetails) => handleOpenChange(nextOpen, eventDetails.reason)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
