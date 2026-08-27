@@ -2951,7 +2951,9 @@ async def _ensure_spend_counter_initialized(
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
-            if base_spend > 0:
+            # Re-check after the awaits above: a concurrent task may have
+            # seeded the counter; incrementing then would double-count.
+            if base_spend > 0 and spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None:
                 await _increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
 
 

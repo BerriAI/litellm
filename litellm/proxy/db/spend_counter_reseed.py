@@ -195,7 +195,16 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=db_spend, refresh_ttl=True)
+                    # Re-check after the awaited DB read: another task (e.g. a
+                    # reservation reconcile calling reseed_spend_counter_from_db)
+                    # may have seeded the counter during the await. Incrementing
+                    # then would double it to 2x db_spend. get+set here has no
+                    # awaits, so it is atomic within the event loop.
+                    cached_val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    if cached_val is not None:
+                        current_value = float(cached_val)
+                    else:
+                        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=db_spend)
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
