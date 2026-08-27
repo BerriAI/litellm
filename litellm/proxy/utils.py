@@ -1420,6 +1420,16 @@ class ProxyLogging:
         input_data: Final = (
             safe_deep_copy(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
         )
+        # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
+        # successful run, which unconditionally stamps bookkeeping metadata onto
+        # the dict regardless of whether the guardrail's own hook mutated
+        # anything -- so comparing `result` straight against `input_data` would
+        # warn on every single scan_raw_request call. Apply that same stamp to a
+        # throwaway copy first so the comparison isolates the guardrail's own
+        # content mutation from this bookkeeping noise.
+        expected_if_unmutated: Final[dict | None] = safe_deep_copy(input_data) if scans_raw_request else None
+        if expected_if_unmutated is not None:
+            callback.mark_pre_call_hook_ran(expected_if_unmutated)
         result: Final = await self._process_guardrail_callback(
             callback=callback,
             data=input_data,
@@ -1427,7 +1437,12 @@ class ProxyLogging:
             call_type=call_type,
             event_type=GuardrailEventHooks.pre_call,
         )
-        if scans_raw_request and result is not None:
+        if (
+            scans_raw_request
+            and expected_if_unmutated is not None
+            and result is not None
+            and result != expected_if_unmutated
+        ):
             verbose_proxy_logger.warning(
                 "Guardrail '%s' has scan_raw_request=True but returned a modified payload; "
                 "scan_raw_request is for block-only guardrails and this mutation is being "

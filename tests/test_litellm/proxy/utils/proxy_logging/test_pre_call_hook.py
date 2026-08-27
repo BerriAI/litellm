@@ -663,7 +663,7 @@ async def test_scan_raw_request_warns_when_guardrail_mutation_discarded(
 
         async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
             for msg in data.get("messages", []):
-                msg["content"] = msg["content"].replace("SECRET-VALUE-123", "[REDACTED]")
+                msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
             return data
 
     from litellm.proxy import utils as proxy_utils_module
@@ -671,6 +671,64 @@ async def test_scan_raw_request_warns_when_guardrail_mutation_discarded(
     mock_logger = MagicMock()
     monkeypatch.setattr(proxy_utils_module, "verbose_proxy_logger", mock_logger)
     monkeypatch.setattr(litellm, "callbacks", [_MutatingScanner()])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data=_secret_request(),
+        call_type="completion",
+    )
+    mock_logger.warning.assert_called_once()
+    assert "scan_raw_request" in str(mock_logger.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_does_not_warn_when_guardrail_only_blocks(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Bugbot finding on BerriAI/litellm#34940: _process_guardrail_callback always
+    returns a dict once a guardrail actually runs (it only returns None when
+    should_run_guardrail is False), so checking `result is not None` is true on
+    every single request -- a correctly configured, non-mutating scan_raw_request
+    blocker (like _BlockOnSecretGuardrail here) would warn on every call, not just
+    when it actually mutates something.
+    """
+    from litellm.proxy import utils as proxy_utils_module
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(proxy_utils_module, "verbose_proxy_logger", mock_logger)
+    monkeypatch.setattr(litellm, "callbacks", [_BlockOnSecretGuardrail(scan_raw_request=True)])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"messages": [{"role": "user", "content": "nothing flagged here"}], "model": "m"},
+        call_type="completion",
+    )
+    mock_logger.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scan_raw_request_warns_on_in_place_mutation_returning_none(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    _RedactingGuardrail mirrors the common in-place-mutate-and-return-None
+    guardrail contract (e.g. real masking integrations). Detecting this case
+    correctly requires comparing dict *content*, not object identity: the
+    mutated dict is still the exact same object reference the guardrail was
+    given, so an identity check (`result is input_data`) would wrongly say
+    nothing changed.
+    """
+    from litellm.proxy import utils as proxy_utils_module
+
+    class _ScanningRedactor(_RedactingGuardrail):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.scan_raw_request = True
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(proxy_utils_module, "verbose_proxy_logger", mock_logger)
+    monkeypatch.setattr(litellm, "callbacks", [_ScanningRedactor()])
     proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
     await proxy_logging.pre_call_hook(
         user_api_key_dict=make_user_api_key_auth(),
