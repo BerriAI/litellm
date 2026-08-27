@@ -435,6 +435,115 @@ def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
         litellm.model_cost.pop(registered_key, None)
 
 
+def test_register_model_no_warning_without_custom_pricing(caplog):
+    """LIT-6318: an entry with no custom pricing (e.g. router deployment
+    metadata) never drives cost calculation, so registering it under an
+    unmatched key must not emit the missing-cache-pricing warning.
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "azure/lit6318-deployment-without-pricing"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "litellm_provider": "azure",
+                        "base_model": "azure/text-embedding-3-large",
+                    }
+                }
+            )
+
+        assert not any("register_model" in record.message for record in caplog.records), (
+            "entry without custom pricing must register silently"
+        )
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
+def test_router_deployment_without_custom_pricing_registers_silently(caplog):
+    """LIT-6318: the router registers every deployment under its hashed id and
+    its backend key. Deployments without custom pricing are costed at request
+    time from the underlying model name, so startup must not warn about them.
+    """
+    import logging
+
+    from litellm import Router
+    from litellm._logging import verbose_logger
+
+    deployment_model = "azure/lit6318-my-deployment-name"
+    deployment_id = "lit6318-no-pricing-deployment"
+    snapshot = _snapshot_model_cost_entries([deployment_model, deployment_id])
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "indexing",
+                        "litellm_params": {
+                            "model": deployment_model,
+                            "api_base": "https://example.openai.azure.com",
+                            "api_key": "fake-key",
+                        },
+                        "model_info": {
+                            "id": deployment_id,
+                            "base_model": "azure/text-embedding-3-large",
+                        },
+                    }
+                ]
+            )
+
+        register_warnings = [record.message for record in caplog.records if "register_model" in record.message]
+        assert not register_warnings, register_warnings
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_router_custom_priced_deployment_warning_names_model_not_hash(caplog):
+    """LIT-6318: when a custom-priced deployment genuinely lacks cache pricing
+    and no built-in entry matches, the warning must name the deployment's
+    model rather than its opaque hashed id.
+    """
+    import logging
+
+    from litellm import Router
+    from litellm._logging import verbose_logger
+
+    deployment_model = "bedrock/lit6318-totally-made-up-model"
+    deployment_id = "lit6318-custom-priced-deployment-hash"
+    snapshot = _snapshot_model_cost_entries([deployment_model, deployment_id])
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "made-up",
+                        "litellm_params": {
+                            "model": deployment_model,
+                            "aws_region_name": "us-east-1",
+                            "input_cost_per_token": 1e-06,
+                            "output_cost_per_token": 5e-06,
+                        },
+                        "model_info": {"id": deployment_id},
+                    }
+                ]
+            )
+
+        register_warnings = [record.message for record in caplog.records if "register_model" in record.message]
+        assert register_warnings, "expected a warning for missing cache pricing"
+        for message in register_warnings:
+            assert deployment_id not in message, message
+            assert deployment_model in message, message
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
 def test_register_model_router_add_deployment_custom_pricing_applies():
     """End-to-end regression for https://github.com/BerriAI/litellm/issues/28336.
 
