@@ -318,11 +318,83 @@ def test_aws_iam_environment_settings_install_provider(clean_redis_environment, 
     monkeypatch.setenv("REDIS_AWS_IAM_USER_NAME", "iam-user")
     monkeypatch.setenv("REDIS_AWS_IAM_CACHE_NAME", "cache.example.com")
     monkeypatch.setenv("REDIS_AWS_IAM_REGION", "us-east-1")
+    monkeypatch.setenv("REDIS_SSL", "true")
 
     redis_kwargs = _get_redis_client_logic(host="cache.example.com", port=6379)
 
     assert isinstance(redis_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
     assert not {"aws_iam_auth", "aws_iam_user_name", "aws_iam_cache_name", "aws_iam_region"} & redis_kwargs.keys()
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        pytest.param({"host": "cache.example.com", "port": 6379}, id="host_without_ssl"),
+        pytest.param({"host": "cache.example.com", "port": 6379, "ssl": False}, id="host_ssl_false"),
+        pytest.param({"url": "redis://cache.example.com:6379", "ssl": True}, id="plaintext_url"),
+        pytest.param(
+            {"startup_nodes": [{"host": "cache.example.com", "port": 6379}]},
+            id="cluster_without_ssl",
+        ),
+        pytest.param(
+            {
+                "url": "rediss://cache.example.com:6379",
+                "startup_nodes": [{"host": "cache.example.com", "port": 6379}],
+            },
+            id="cluster_without_ssl_ignores_url_scheme",
+        ),
+        pytest.param(
+            {
+                "sentinel_nodes": [("sentinel.example.com", 26379)],
+                "service_name": "cache",
+            },
+            id="sentinel_without_ssl",
+        ),
+    ],
+)
+def test_aws_iam_auth_rejects_non_tls_connections(clean_redis_environment, transport):
+    with pytest.raises(ValueError, match="requires TLS"):
+        _get_redis_client_logic(
+            **transport,
+            aws_iam_auth=True,
+            aws_iam_user_name="iam-user",
+            aws_iam_cache_name="cache.example.com",
+            aws_iam_region="us-east-1",
+        )
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        pytest.param({"host": "cache.example.com", "port": 6379, "ssl": True}, id="host"),
+        pytest.param({"url": "rediss://cache.example.com:6379"}, id="url"),
+        pytest.param(
+            {
+                "startup_nodes": [{"host": "cache.example.com", "port": 6379}],
+                "ssl": True,
+            },
+            id="cluster",
+        ),
+        pytest.param(
+            {
+                "sentinel_nodes": [("sentinel.example.com", 26379)],
+                "service_name": "cache",
+                "ssl": True,
+            },
+            id="sentinel",
+        ),
+    ],
+)
+def test_aws_iam_auth_accepts_tls_connections(clean_redis_environment, transport):
+    redis_kwargs = _get_redis_client_logic(
+        **transport,
+        aws_iam_auth=True,
+        aws_iam_user_name="iam-user",
+        aws_iam_cache_name="cache.example.com",
+        aws_iam_region="us-east-1",
+    )
+
+    assert isinstance(redis_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
 
 
 def test_aws_iam_settings_are_removed_for_url_and_static_credentials(clean_redis_environment):
@@ -350,6 +422,7 @@ def test_aws_iam_missing_setting_fails_closed(clean_redis_environment, missing):
         "aws_iam_user_name": "iam-user",
         "aws_iam_cache_name": "cache.example.com",
         "aws_iam_region": "us-east-1",
+        "ssl": True,
     }
     settings[missing] = None
 
@@ -364,6 +437,7 @@ def test_aws_iam_region_falls_back_to_environment(clean_redis_environment, monke
     redis_kwargs = _get_redis_client_logic(
         host="cache.example.com",
         port=6379,
+        ssl=True,
         aws_iam_auth=True,
         aws_iam_user_name="iam-user",
         aws_iam_cache_name="cache.example.com",
@@ -381,6 +455,7 @@ def test_aws_iam_region_prefers_aws_region_over_default_region(clean_redis_envir
     redis_kwargs = _get_redis_client_logic(
         host="cache.example.com",
         port=6379,
+        ssl=True,
         aws_iam_auth=True,
         aws_iam_user_name="iam-user",
         aws_iam_cache_name="cache.example.com",
@@ -395,6 +470,7 @@ def test_aws_iam_region_prefers_explicit_over_environment(clean_redis_environmen
     redis_kwargs = _get_redis_client_logic(
         host="cache.example.com",
         port=6379,
+        ssl=True,
         aws_iam_auth=True,
         aws_iam_user_name="iam-user",
         aws_iam_cache_name="cache.example.com",
@@ -408,6 +484,7 @@ def test_aws_iam_settings_map_to_distinct_provider_fields(clean_redis_environmen
     redis_kwargs = _get_redis_client_logic(
         host="cache.example.com",
         port=6379,
+        ssl=True,
         aws_iam_auth=True,
         aws_iam_user_name="iam-user-value",
         aws_iam_cache_name="iam-cache-value",
@@ -488,6 +565,7 @@ def test_async_cluster_installs_aws_iam_provider(clean_redis_environment):
 
     client = get_redis_async_client(
         startup_nodes=startup_nodes,
+        ssl=True,
         aws_iam_auth=True,
         aws_iam_user_name="iam-user",
         aws_iam_cache_name="cache.example.com",

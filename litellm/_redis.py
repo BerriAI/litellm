@@ -181,6 +181,13 @@ def _is_true(value: object | None) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
+def _uses_tls(redis_kwargs: Mapping[str, object]) -> bool:
+    if redis_kwargs.get("startup_nodes") is not None:
+        return _is_true(redis_kwargs.get("ssl"))
+    url: Final = redis_kwargs.get("url")
+    return urlsplit(url).scheme.lower() == "rediss" if isinstance(url, str) else _is_true(redis_kwargs.get("ssl"))
+
+
 def _build_elasticache_iam_provider(
     user_name: object | None,
     cache_name: object | None,
@@ -506,6 +513,8 @@ def _get_redis_client_logic(**env_overrides):
                 "for Redis. Using Azure AD. Remove one to avoid misconfiguration."
             )
         elif _aws_iam_enabled:
+            if not _uses_tls(redis_kwargs):
+                raise ValueError("AWS ElastiCache IAM Redis authentication requires TLS")
             verbose_logger.debug("Setting up AWS ElastiCache IAM authentication for Redis.")
             redis_kwargs["credential_provider"] = _build_elasticache_iam_provider(
                 user_name=redis_kwargs.get("aws_iam_user_name"),
