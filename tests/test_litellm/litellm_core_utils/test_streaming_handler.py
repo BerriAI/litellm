@@ -4463,13 +4463,6 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
 
 
 def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chunk():
-    """
-    Vertex/Gemini chunk_parser stores usageMetadata.trafficType in the parsed
-    chunk's _hidden_params["provider_specific_fields"], but chunk_creator builds
-    a fresh ModelResponseStream per outgoing chunk. Before the fix those hidden
-    provider fields were dropped, so streaming flex traffic was billed at
-    standard rates (LIT-6292).
-    """
     wrapper = CustomStreamWrapper(
         completion_stream=None,
         model="gemini-3.5-flash",
@@ -4489,10 +4482,6 @@ def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chu
 
 @pytest.mark.asyncio
 async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging_obj: Logging):
-    """
-    End-to-end through the async wrapper: the assembled response handed to cost
-    tracking must carry traffic_type so flex/priority tiers price correctly.
-    """
     content_chunk = ModelResponseStream(
         choices=[StreamingChoices(index=0, delta=Delta(content="hello", role="assistant"), finish_reason=None)],
     )
