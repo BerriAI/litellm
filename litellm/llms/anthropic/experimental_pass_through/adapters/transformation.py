@@ -18,6 +18,22 @@ TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LE
 PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 
 
+_ANTHROPIC_TOOL_SCHEMA_KEYS: Final = frozenset(
+    {"name", "type", "input_schema", "description", "cache_control", "strict"}
+)
+
+
+def _is_openai_function_tool(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == "function" and "function" in tool
+
+
+def _is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
+    if len(tool) != 1:
+        return False
+    key, value = next(iter(tool.items()))
+    return key not in _ANTHROPIC_TOOL_SCHEMA_KEYS and isinstance(value, dict)
+
+
 def truncate_tool_name(name: str) -> str:
     """
     Truncate tool names that exceed OpenAI's 64-character limit.
@@ -768,6 +784,10 @@ class LiteLLMAnthropicMessagesAdapter:
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
                 # Keep Anthropic-native tools in their original format
                 new_tools.append(tool)
+                continue
+
+            if _is_openai_function_tool(tool) or _is_provider_native_tool_dict(tool):
+                new_tools.append(cast(ChatCompletionToolParam, tool))  # cast-ok: passed through verbatim to provider
                 continue
 
             raw_name = tool.get("name")
