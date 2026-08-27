@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import {
   Combobox,
@@ -54,10 +54,15 @@ export function PaginatedSearchSelect({
   "aria-invalid": ariaInvalid,
   "aria-describedby": ariaDescribedBy,
 }: PaginatedSearchSelectProps) {
+  const [pickedOption, setPickedOption] = useState<SearchSelectOption | null>(null);
+
   const selected = useMemo<SearchSelectOption | null>(() => {
     if (value === undefined || value === "") return null;
-    return options.find((option) => option.value === value) ?? { label: value, value };
-  }, [options, value]);
+    return (
+      options.find((option) => option.value === value) ??
+      (pickedOption?.value === value ? pickedOption : { label: value, value })
+    );
+  }, [options, value, pickedOption]);
 
   const items = useMemo<SearchSelectOption[]>(() => {
     if (selected === null) return options;
@@ -66,14 +71,19 @@ export function PaginatedSearchSelect({
   }, [options, selected]);
 
   const pagination = { onSearchChange, onLoadMore, hasNextPage, isFetchingNextPage };
-  const { handleInputValueChange, handleScroll } = usePaginatedCombobox(pagination);
+  const { query, handleInputValueChange, handleOpenChange, handleScroll } = usePaginatedCombobox(pagination);
 
   return (
     <Combobox
       items={items}
       value={selected}
-      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? "")}
+      inputValue={query ?? selected?.label ?? ""}
+      onValueChange={(item: SearchSelectOption | null) => {
+        setPickedOption(item);
+        onValueChange(item?.value ?? "");
+      }}
       onInputValueChange={(next, eventDetails) => handleInputValueChange(next, eventDetails.reason)}
+      onOpenChange={(nextOpen, eventDetails) => handleOpenChange(nextOpen, eventDetails.reason)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={null}

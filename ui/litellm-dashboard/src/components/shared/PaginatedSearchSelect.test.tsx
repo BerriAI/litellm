@@ -142,6 +142,125 @@ describe("PaginatedSearchSelect", () => {
     expect(onValueChange).toHaveBeenCalledWith("alias-beta");
   });
 
+  it("keeps the typed query when a refreshed page of options arrives while a value is selected", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+
+    function ServerBacked() {
+      const [search, setSearch] = useState("");
+      const [value, setValue] = useState("alias-alpha");
+      // A refetch hands back structurally equal but freshly built option objects.
+      const options = OPTIONS.filter((option) => option.label.includes(search)).map((option) => ({ ...option }));
+      return (
+        <PaginatedSearchSelect
+          options={options}
+          value={value}
+          onValueChange={setValue}
+          onSearchChange={(query) => {
+            onSearchChange(query);
+            setSearch(query);
+          }}
+          onLoadMore={vi.fn()}
+        />
+      );
+    }
+    render(<ServerBacked />);
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("gamma"));
+    await waitFor(() => expect(input).toHaveValue("gamma"));
+    expect(await screen.findByText("gamma-key")).toBeInTheDocument();
+  });
+
+  it("shows the selection again after the popup closes with the query abandoned", async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: "alias-alpha" });
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    expect(input).toHaveValue("");
+
+    await user.type(input, "gamma");
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(input).toHaveValue("alias-alpha"));
+  });
+
+  it("puts the unfiltered page back when a typed query is abandoned", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange });
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"));
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""));
+  });
+
+  it("puts the unfiltered page back once an option found by typing is picked", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange });
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"));
+
+    await user.click(await screen.findByText("gamma-key"));
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""));
+  });
+
+  it("keeps the first character when typing is what opened the list", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange });
+
+    await user.tab();
+    await user.keyboard("gamma");
+
+    expect(screen.getByRole("combobox")).toHaveValue("gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("gamma"));
+  });
+
+  it("keeps showing a picked option's label after it drops out of the loaded page", async () => {
+    const user = userEvent.setup();
+
+    function Refetching() {
+      const [options, setOptions] = useState<SearchSelectOption[]>([{ label: "Beta Team", value: "team-2" }]);
+      const [value, setValue] = useState("");
+      return (
+        <>
+          <PaginatedSearchSelect
+            options={options}
+            value={value}
+            onValueChange={setValue}
+            onSearchChange={vi.fn()}
+            onLoadMore={vi.fn()}
+          />
+          <button type="button" onClick={() => setOptions([])}>
+            refetch
+          </button>
+        </>
+      );
+    }
+    render(<Refetching />);
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("Beta Team"));
+    await user.click(screen.getByRole("button", { name: "refetch" }));
+
+    expect(screen.getByRole("combobox")).toHaveValue("Beta Team");
+  });
+
   it("surfaces loading and fetching-more affordances", async () => {
     const user = userEvent.setup();
     const { unmount } = render(
