@@ -2316,7 +2316,9 @@ async def ui_view_spend_logs(
             param="sort_order",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    if cache_hit is not None and cache_hit.lower() not in {"true", "false"}:
+    # isinstance guard: direct callers (tests) may leave the fastapi.Query default in place
+    cache_hit_filter: Final = cache_hit.lower() if isinstance(cache_hit, str) else None
+    if isinstance(cache_hit, str) and cache_hit_filter not in {"true", "false"}:
         raise ProxyException(
             message=f"Invalid cache_hit: {cache_hit}. Must be one of: true, false",
             type="bad_request",
@@ -2554,8 +2556,8 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{like_escaped_session_id}%")
             p += 1
 
-        if cache_hit is not None:
-            if cache_hit.lower() == "true":
+        if cache_hit_filter is not None:
+            if cache_hit_filter == "true":
                 sql_conditions.append("LOWER(cache_hit) = 'true'")
             else:
                 sql_conditions.append("(cache_hit IS NULL OR LOWER(cache_hit) <> 'true')")
