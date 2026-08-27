@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import reduce
+from itertools import accumulate, chain
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -32,7 +32,6 @@ class SubtitleCue:
 
 @dataclass(frozen=True, slots=True)
 class _CueAccumulator:
-    cues: tuple[SubtitleCue, ...] = ()
     texts: tuple[str, ...] = ()
     start_ms: int | None = None
     end_ms: int | None = None
@@ -59,27 +58,27 @@ def _cue_break_reached(accumulator: _CueAccumulator, token: SubtitleToken) -> bo
     )
 
 
-def _absorb_token(accumulator: _CueAccumulator, token: SubtitleToken) -> _CueAccumulator:
+_AbsorbStep = tuple[tuple[SubtitleCue, ...], _CueAccumulator]
+
+
+def _absorb_token(accumulator: _CueAccumulator, token: SubtitleToken) -> _AbsorbStep:
     if token.start_ms is None and accumulator.start_ms is None:
-        return accumulator
+        return (), accumulator
     if token.speaker is not None and token.speaker != accumulator.speaker:
-        return _CueAccumulator(
-            cues=accumulator.cues + _completed_cue(accumulator),
+        return _completed_cue(accumulator), _CueAccumulator(
             texts=(token.text,),
             start_ms=token.start_ms,
             end_ms=token.end_ms,
             speaker=token.speaker,
         )
     if _cue_break_reached(accumulator, token):
-        return _CueAccumulator(
-            cues=accumulator.cues + _completed_cue(accumulator),
+        return _completed_cue(accumulator), _CueAccumulator(
             texts=(token.text,),
             start_ms=token.start_ms,
             end_ms=token.end_ms,
             speaker=accumulator.speaker,
         )
-    return _CueAccumulator(
-        cues=accumulator.cues,
+    return (), _CueAccumulator(
         texts=(*accumulator.texts, token.text),
         start_ms=accumulator.start_ms if accumulator.start_ms is not None else token.start_ms,
         end_ms=token.end_ms if token.end_ms is not None else accumulator.end_ms,
@@ -87,9 +86,14 @@ def _absorb_token(accumulator: _CueAccumulator, token: SubtitleToken) -> _CueAcc
     )
 
 
+def _absorb_step(carry: _AbsorbStep, token: SubtitleToken) -> _AbsorbStep:
+    return _absorb_token(carry[1], token)
+
+
 def group_subtitle_tokens_into_cues(tokens: Sequence[SubtitleToken]) -> tuple[SubtitleCue, ...]:
-    accumulator: Final = reduce(_absorb_token, tokens, _CueAccumulator())
-    return accumulator.cues + _completed_cue(accumulator)
+    steps: Final = tuple(accumulate(tokens, _absorb_step, initial=((), _CueAccumulator())))
+    completed: Final = chain.from_iterable(emitted for emitted, _ in steps)
+    return (*completed, *_completed_cue(steps[-1][1]))
 
 
 def _format_timestamp(total_ms: int, millis_separator: str) -> str:
