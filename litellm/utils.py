@@ -9309,6 +9309,12 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsTextToSpeechConfig()
+        elif litellm.LlmProviders.FLOWSPEECH == provider:
+            from litellm.llms.flowspeech.text_to_speech.transformation import (
+                FlowSpeechTextToSpeechConfig,
+            )
+
+            return FlowSpeechTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,
