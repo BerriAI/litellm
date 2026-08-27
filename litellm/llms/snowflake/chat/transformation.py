@@ -322,7 +322,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 "required": {"type": "any"},
                 "none": {"type": "none"},
             }
-            return mapping.get(tool_choice, {"type": "auto"})
+            if tool_choice not in mapping:
+                raise ValueError(
+                    "Unsupported tool_choice value for Snowflake Claude model: "
+                    f"{tool_choice!r}. Expected one of: auto, required, none."
+                )
+            return mapping[tool_choice]
         elif isinstance(tool_choice, dict):
             if tool_choice.get("type") == "function":
                 func: Final = tool_choice.get("function", {})

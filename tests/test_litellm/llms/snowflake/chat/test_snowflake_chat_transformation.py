@@ -118,6 +118,21 @@ class TestSnowflakeToolTransformation:
                 f"got {transformed_request['tool_choice']}"
             )
 
+    def test_claude_rejects_invalid_string_tool_choice(self):
+        """
+        Test that invalid string tool_choice values are not silently downgraded to auto.
+        """
+        config = SnowflakeConfig()
+
+        with pytest.raises(ValueError, match="Unsupported tool_choice value"):
+            config.transform_request(
+                model="snowflake/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Test"}],
+                optional_params={"tool_choice": "requried"},
+                litellm_params={},
+                headers={},
+            )
+
     def test_transform_response_with_tool_calls(self):
         """
         Test that standard OpenAI tool_calls response format is parsed correctly.
