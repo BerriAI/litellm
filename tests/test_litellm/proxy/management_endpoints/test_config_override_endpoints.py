@@ -45,6 +45,7 @@ def _make_mock_proxy_config():
     cfg = MagicMock()
     cfg.initialize_secret_manager = MagicMock()
     cfg._last_hashicorp_vault_config = None
+    cfg._cyberark_boot_env = None
     cfg._encrypt_env_variables = MagicMock(
         side_effect=lambda d: {k: f"enc_{v}" for k, v in d.items()}
     )
@@ -396,6 +397,7 @@ async def test_cyberark_validation_errors_and_access_control(client, monkeypatch
     mock_prisma, mock_db = _make_mock_db()
     mock_cfg = MagicMock()
     mock_cfg._last_cyberark_config = {"cyberark_api_base": "old"}
+    mock_cfg._cyberark_boot_env = None
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(ps, "proxy_config", mock_cfg)
     old_client, old_kms = litellm.secret_manager_client, litellm._key_management_system
@@ -448,6 +450,79 @@ async def test_cyberark_validation_errors_and_access_control(client, monkeypatch
         assert client.delete(CYBERARK_URL).status_code == 403
         assert client.post(CYBERARK_URL + "/test_connection").status_code == 403
 
+    finally:
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        _cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cyberark_delete_restores_deployment_env_config(client, monkeypatch):
+    """Deleting the DB override must restore env vars the deployment started with,
+    and reinitialize the manager from them, instead of wiping CyberArk entirely."""
+    mock_prisma, mock_db = _make_mock_db()
+    mock_cfg = _make_mock_proxy_config()
+    mock_cfg._last_cyberark_config = None
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+    old_client, old_kms = litellm.secret_manager_client, litellm._key_management_system
+    _set_admin()
+
+    try:
+        monkeypatch.setenv("CYBERARK_API_BASE", "https://conjur.boot.com")
+        monkeypatch.setenv("CYBERARK_API_KEY", "boot-key")
+
+        r = client.post(
+            CYBERARK_URL,
+            json={"cyberark_api_base": "https://conjur.db.com", "cyberark_api_key": "db-key"},
+        )
+        assert r.status_code == 200
+        assert os.environ["CYBERARK_API_BASE"] == "https://conjur.db.com"
+
+        mock_cfg.initialize_secret_manager.reset_mock()
+        r = client.delete(CYBERARK_URL)
+        assert r.status_code == 200
+        assert os.environ["CYBERARK_API_BASE"] == "https://conjur.boot.com"
+        assert os.environ["CYBERARK_API_KEY"] == "boot-key"
+        mock_cfg.initialize_secret_manager.assert_called_with(key_management_system="cyberark")
+        assert mock_cfg._last_cyberark_config is None
+    finally:
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        _cleanup()
+
+
+@pytest.mark.asyncio
+async def test_cyberark_persist_failure_rolls_back_runtime_state(client, monkeypatch):
+    """If the DB upsert fails after the manager was reinitialized, the endpoint
+    must restore the previous env vars and reinitialize from them, so this pod
+    does not keep serving credentials that were never committed to the DB."""
+    mock_prisma, mock_db = _make_mock_db()
+    mock_cfg = _make_mock_proxy_config()
+    mock_cfg._last_cyberark_config = None
+    mock_db.upsert = AsyncMock(side_effect=Exception("db write failed"))
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+    old_client, old_kms = litellm.secret_manager_client, litellm._key_management_system
+    _set_admin()
+
+    try:
+        monkeypatch.setenv("CYBERARK_API_BASE", "https://conjur.prev.com")
+        monkeypatch.setenv("CYBERARK_API_KEY", "prev-key")
+
+        r = client.post(
+            CYBERARK_URL,
+            json={"cyberark_api_base": "https://conjur.new.com", "cyberark_api_key": "new-key"},
+        )
+        assert r.status_code == 500
+        assert "persist" in r.json()["detail"].lower()
+        assert os.environ["CYBERARK_API_BASE"] == "https://conjur.prev.com"
+        assert os.environ["CYBERARK_API_KEY"] == "prev-key"
+        # last call must be the rollback reinit against the restored env
+        assert (
+            mock_cfg.initialize_secret_manager.call_args_list[-1].kwargs["key_management_system"] == "cyberark"
+        )
+        assert os.environ.get("CYBERARK_API_BASE") != "https://conjur.new.com"
     finally:
         litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
         litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them

@@ -4239,6 +4239,7 @@ class ProxyConfig:
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
         self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
@@ -7096,6 +7097,7 @@ class ProxyConfig:
             _get_current_env_values,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
             _parse_config_value,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
             _set_env_vars,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _snapshot_cyberark_boot_env,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
         )
 
         try:
@@ -7121,18 +7123,15 @@ class ProxyConfig:
             if self._last_cyberark_config == config_data:
                 return
 
-            # Decrypt all fields and set env vars
             decrypted_data: Final = self._decrypt_db_variables(config_data)
 
-            # Snapshot current env vars so we can restore on failure
+            _snapshot_cyberark_boot_env(self)
             previous_env: Final = _get_current_env_values(CYBERARK_ENV_VAR_MAPPING)
             _set_env_vars(decrypted_data, CYBERARK_ENV_VAR_MAPPING)
 
-            # Reinitialize the secret manager
             try:
                 self.initialize_secret_manager(key_management_system="cyberark")
             except Exception:
-                # Restore previous working env vars instead of wiping all
                 _set_env_vars(previous_env, CYBERARK_ENV_VAR_MAPPING)
                 raise
 
