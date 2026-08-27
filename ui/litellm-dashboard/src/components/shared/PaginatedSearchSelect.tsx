@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type SyntheticEvent } from "react";
 
 import {
   Combobox,
@@ -68,6 +68,13 @@ export function PaginatedSearchSelect({
   "aria-describedby": ariaDescribedBy,
 }: PaginatedSearchSelectProps) {
   const [pickedOption, setPickedOption] = useState<SearchSelectOption | null>(null);
+  const wholeSelectionRef = useRef(false);
+
+  const snapshotWholeSelection = (event: SyntheticEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    wholeSelectionRef.current =
+      input.value.length > 0 && input.selectionStart === 0 && input.selectionEnd === input.value.length;
+  };
 
   const selected = useMemo<SearchSelectOption | null>(() => {
     if (value === undefined || value === "") return null;
@@ -95,12 +102,14 @@ export function PaginatedSearchSelect({
         setPickedOption(item);
         onValueChange(item?.value ?? "");
       }}
-      onInputValueChange={(next, eventDetails) =>
+      onInputValueChange={(next, eventDetails) => {
+        const replacedWholeInput = wholeSelectionRef.current;
+        wholeSelectionRef.current = false;
         handleInputValueChange(
-          typedQuery === null ? typedInsertion(selected?.label ?? "", next) : next,
+          typedQuery === null && !replacedWholeInput ? typedInsertion(selected?.label ?? "", next) : next,
           eventDetails.reason,
-        )
-      }
+        );
+      }}
       onOpenChange={(nextOpen, eventDetails) => handleOpenChange(nextOpen, eventDetails.reason)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
@@ -111,6 +120,9 @@ export function PaginatedSearchSelect({
         id={inputId}
         aria-invalid={ariaInvalid}
         aria-describedby={ariaDescribedBy}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={snapshotWholeSelection}
+        onPaste={snapshotWholeSelection}
         placeholder={placeholder}
         showClear={value !== undefined && value !== ""}
         className={`w-full ${className ?? ""}`}
