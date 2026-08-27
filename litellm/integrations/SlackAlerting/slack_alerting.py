@@ -1950,7 +1950,7 @@ Model Info:
                     message="\n\n".join(event.message for event in typed_events),
                     level="High",
                     alert_type=alert_type,
-                    alerting_metadata={},
+                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
                 )
                 for event in typed_events:
                     await self.internal_usage_cache.async_set_cache(
