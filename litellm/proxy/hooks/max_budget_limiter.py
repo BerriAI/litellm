@@ -53,18 +53,15 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             if user_counter_key in get_reserved_counter_keys(user_api_key_dict.budget_reservation):
                 return
 
-            # Zero-cost models are exempt from budget checks — mirrors the auth
-            # layer (user_api_key_auth.py). A free model must stay usable when
-            # the user's personal budget is exhausted. Imported lazily like the
-            # other proxy_server imports in this hook to avoid import cycles.
+            # Zero-cost models skip budget checks, mirroring the auth layer
+            # (user_api_key_auth.py) so both personal-budget gates agree.
             from litellm.proxy.auth.auth_checks import (
                 _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # auth layer's own exemption helper, reused for parity across budget gates
             )
             from litellm.proxy.proxy_server import llm_router
 
-            # Runtime-checked narrowing: `data` is an untyped dict at this
-            # boundary, and pre-call data carries the caller's single model
-            # name, which is also what the 429 label below accepts.
+            # Runtime-checked narrowing; pre-call data carries the caller's
+            # single model name, which is also what the 429 label accepts.
             raw_model: Final[object] = data.get("model") if data else None  # pyright: ignore[reportUnknownMemberType]  # bare `dict` param, same pattern the raise site below has always used
             requested_model: Final[str | None] = raw_model if isinstance(raw_model, str) else None
             if _is_model_cost_zero(model=requested_model, llm_router=llm_router):
