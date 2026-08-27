@@ -717,6 +717,34 @@ async def test_terminal_drop_leaves_untried_late_arrival_for_next_drain():
 
 
 @pytest.mark.asyncio
+async def test_record_appended_on_an_early_pass_is_not_dropped_short_of_the_retry_budget():
+    """A record a callback appends during an early drain pass entered the queue
+    after this drain's snapshot, so it has not seen the full retry budget. The
+    terminal drop must clear only records queued when the drain began, leaving
+    the early-pass arrival for its own serialized drain instead of dropping it
+    after fewer than the configured attempts."""
+    logger = _make_logger()
+    logger.stop()
+    early_record = _record(model="early-pass-arrival")
+    posts = {"n": 0}
+
+    async def _fail_and_append_on_first_pass(url, data=None, headers=None, **kw):
+        posts["n"] += 1
+        # One record queued at start means the first pass's post is the 1st;
+        # append during it, before this drain's later passes.
+        if posts["n"] == 1:
+            logger.log_queue.append(early_record)
+        resp = _response(503)
+        raise HTTPStatusError("err", request=resp.request, response=resp)
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        logger.async_client.post = _fail_and_append_on_first_pass
+        logger.log_queue.append(_record(model="doomed"))
+        await logger._drain_with_retry()
+    assert logger.log_queue == [early_record], "the early-pass arrival is left for its own drain, not dropped short"
+
+
+@pytest.mark.asyncio
 async def test_post_stop_drains_are_serialized():
     """A callback that appends to a stopped logger and starts its own drain must
     queue behind an already-running drain, not race it: otherwise one drain's

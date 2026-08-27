@@ -207,17 +207,16 @@ class NewRelicMetricsLogger(CustomBatchLogger):
         of racing it. Each pass attempts the whole current queue in
         ``batch_size`` chunks, unlike the periodic path it does not stop at the
         first failing chunk, so a persistently failing head never starves the
-        tail, and a record appended mid-drain is snapshotted and delivered by a
-        later pass. Only after ``_MAX_DRAIN_PASSES`` against a permanently
-        failing destination is the remainder dropped, and then only the records
-        this drain actually tried: a record a callback appended after our last
-        snapshot is left for its own serialized drain, so it is never wiped
-        un-tried and never stranded.
+        tail. Only after ``_MAX_DRAIN_PASSES`` against a permanently failing
+        destination is the remainder dropped, and then only the records that were
+        queued when this drain began, so every dropped record got the full retry
+        budget: a record a callback appended mid-drain is not in that snapshot,
+        so it is left for its own serialized drain rather than dropped after
+        fewer attempts, and is never stranded.
         """
         async with self._drain_lock:
-            attempted: tuple[NewRelicMetricRecord, ...] = ()  # rebind-ok: each pass's pre-attempt snapshot
+            attempted: Final = tuple(self.log_queue)
             for _pass in range(NEWRELIC_METRICS_MAX_DRAIN_PASSES):
-                attempted = tuple(self.log_queue)
                 await self._drain_flush_once()
                 if not self.log_queue:
                     return
