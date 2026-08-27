@@ -49988,6 +49988,7 @@
         "supports_tool_choice": true
     },
     "runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": {
+        "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 5e-08,
         "litellm_provider": "runinfra",
         "max_input_tokens": 262144,
@@ -50001,6 +50002,7 @@
         ],
         "supports_function_calling": true,
         "supports_native_streaming": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
@@ -50015,6 +50017,27 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "source": "https://runinfra.ai/inference-api/ornith-1-5-35b",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "runinfra/zai-org/GLM-5.3-Flash": {
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "runinfra",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "source": "https://runinfra.ai/inference-api/glm-5-3-flash",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],

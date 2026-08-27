@@ -423,11 +423,12 @@ class TestRuninfra:
             "runinfra/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": (
                 5e-08,
                 1.5e-07,
-                None,
+                1e-08,
             ),
             "runinfra/Inferact/Qwen3.8-2.4T-A95B-NVFP4": (2e-06, 6e-06, 2e-07),
             "runinfra/Qwen/Qwen3.8-27B": (1e-07, 4e-07, 1e-08),
             "runinfra/ornith-ai/Ornith-1.5-35B-A3B": (1e-07, 4e-07, 1e-08),
+            "runinfra/zai-org/GLM-5.3-Flash": (1e-07, 4e-07, 1e-08),
         }
         for model, (input_cost, output_cost, cache_read_cost) in expected_models.items():
             assert model in model_cost
