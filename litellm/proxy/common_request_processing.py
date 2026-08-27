@@ -3927,6 +3927,7 @@ class ProxyBaseLLMRequestProcessing:
         request: Request | None = None,
         flush_tail: Callable[[], bytes] | None = None,
         seal_open_frame: Callable[[bytes], str] | None = None,
+        protocol_supports_stream_options: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -3942,6 +3943,10 @@ class ProxyBaseLLMRequestProcessing:
         relays raw upstream bytes, so an upstream that hangs up mid-frame leaves the
         client inside an open frame, where an error frame would be swallowed or
         misparsed instead of raised.
+
+        ``protocol_supports_stream_options`` says whether this route's protocol gives
+        callers a ``stream_options.include_usage`` to opt in with, which gates cost
+        injection; see ``_should_inject_cost_for_request``.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3952,7 +3957,10 @@ class ProxyBaseLLMRequestProcessing:
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
         caps: Final = ProxyLogging.callback_capabilities()
-        cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
+        cost_injection_enabled: Final = ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            request_data,
+            protocol_supports_stream_options=protocol_supports_stream_options,
+        )
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
@@ -3995,7 +4003,10 @@ class ProxyBaseLLMRequestProcessing:
 
                     model_name = request_data.get("model", "")
                     chunk = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
-                        chunk, model_name, request_data.get("litellm_logging_obj")
+                        chunk,
+                        model_name,
+                        request_data.get("litellm_logging_obj"),
+                        enabled=cost_injection_enabled,
                     )
 
                 # Set before the yield: an async generator suspends at the yield,
@@ -4078,6 +4089,7 @@ class ProxyBaseLLMRequestProcessing:
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
         restamp_model: str | None = None,
+        protocol_supports_stream_options: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages streaming data generator, which requires SSE events.
@@ -4105,23 +4117,59 @@ class ProxyBaseLLMRequestProcessing:
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
             seal_open_frame=seal_open_sse_frame,
+            protocol_supports_stream_options=protocol_supports_stream_options,
         )
+
+    @staticmethod
+    def _should_inject_cost_for_request(
+        request_data: Mapping[str, Any] | None,
+        *,
+        protocol_supports_stream_options: bool = True,
+    ) -> bool:
+        """
+        Whether this request's streamed usage events should carry ``usage.cost``.
+
+        ``litellm.include_cost_in_streaming_usage`` is process-wide, so on its own it
+        injects for every caller on every route. OpenAI-protocol callers opt into usage
+        reporting per request via ``stream_options.include_usage``, so that opt-in gates
+        injection too. An explicit ``include_usage: false`` opts out on any protocol.
+        Anthropic Messages, Vertex ``rawPredict`` and Gemini ``generateContent`` have no
+        such field for a caller to set, so injection stays always-on there.
+        """
+        if not getattr(litellm, "include_cost_in_streaming_usage", False):
+            return False
+        stream_options: Final = request_data.get("stream_options") if isinstance(request_data, Mapping) else None
+        if isinstance(stream_options, Mapping):
+            return bool(stream_options.get("include_usage", False))
+        return not protocol_supports_stream_options
 
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: bytes, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: bytes,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        enabled: bool | None = None,
     ) -> bytes: ...
 
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        enabled: bool | None = None,
     ) -> object: ...
 
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        enabled: bool | None = None,
     ) -> object:
         """
         Process a streaming chunk and inject cost information if enabled.
@@ -4130,11 +4178,16 @@ class ProxyBaseLLMRequestProcessing:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
             litellm_logging_obj: The call's logging object, used for pricing
+            enabled: Per-stream decision from ``_should_inject_cost_for_request``.
+                Falls back to the global flag alone when not passed.
 
         Returns:
             The processed chunk with cost information injected if applicable
         """
-        if not getattr(litellm, "include_cost_in_streaming_usage", False):
+        injection_enabled: Final = (
+            enabled if enabled is not None else bool(getattr(litellm, "include_cost_in_streaming_usage", False))
+        )
+        if not injection_enabled:
             return chunk
 
         try:
