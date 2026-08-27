@@ -93,6 +93,19 @@ class TestExtractRequestToolNames:
             "run_sql",
         ]
 
+    def test_anthropic_openai_format_tools_forwarded_by_bridge(self):
+        data = {
+            "tools": [
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"name": "run_sql"},
+                {"googleSearch": {}},
+            ]
+        }
+        assert extract_request_tool_names("/v1/messages", data) == [
+            "get_weather",
+            "run_sql",
+        ]
+
     def test_generate_content_tools(self):
         data = {
             "tools": [
@@ -155,6 +168,20 @@ class TestCheckToolsAllowlist:
                 valid_token=token,
                 team_object=None,
                 route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "get_weather" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_disallowed_openai_format_tool_raises_on_messages_route(self):
+        token = _token(metadata={"allowed_tools": ["other_tool"]})
+        body = {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/messages",
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "get_weather" in str(exc_info.value.message)
