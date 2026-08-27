@@ -177,9 +177,10 @@ class _ImageFetchBudget:
 
     Held for the lifetime of a single content-request build and passed down rather
     than kept on the guardrail, which is a callback instance shared by every
-    request. Claims are optimistic: a fetch reserves the largest cap it could use
-    and hands back what it did not, so the worst-case resident size is the budget
-    plus the in-flight remainder, not the sum of every url a caller listed.
+    request. A fetch reserves one whole image's worth up front and hands back what
+    the decoded image did not take, so the worst-case resident size is the budget
+    plus whatever the in-flight fetches have pulled, not the sum of every url a
+    caller listed. See `claim` for why the reservation is all or nothing.
     """
 
     def __init__(self, total: int = _MAX_TOTAL_IMAGE_FETCH_BYTES) -> None:
@@ -577,6 +578,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         `inputs["images"]`: structured_messages is already narrowed by the
         skip/scope flags, so a mismatch is not by itself evidence of a dropped
         image, and blocking a legitimate request is worse than the gap.
+
+        That narrowing cuts both ways and this check inherits it. `images` is
+        extracted from every message while structured_messages holds only the
+        scoped subset (guardrail_translation/handler.py builds them from different
+        lists), so a file source in a message the scope excluded is not seen here.
+        Reading the unscoped list instead would refuse requests for content the
+        operator's skip flags deliberately took out of scanning, which is a
+        different wrong answer.
         """
         if not isinstance(structured_messages, list):
             return 0
