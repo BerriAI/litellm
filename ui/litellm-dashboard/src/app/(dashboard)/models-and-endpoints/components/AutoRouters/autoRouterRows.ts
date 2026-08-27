@@ -30,7 +30,8 @@ export interface AutoRouterRow {
   editBlockedReason: EditBlockedReason | null;
   targets: string[];
   defaultModel: string | null;
-  createdAt: string | null;
+  /** `undefined`, not `null`: the table's `sortUndefined` pin only matches `undefined` */
+  createdAt: string | undefined;
   deployment: AutoRouterDeployment;
 }
 
@@ -113,7 +114,7 @@ export const toAutoRouterRow = (
     canEdit: canEdit && mayActOnRow,
     canDelete: canDelete && mayActOnRow,
     editBlockedReason,
-    createdAt: info.created_at ?? null,
+    createdAt: info.created_at ?? undefined,
     defaultModel: (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
     deployment,
     ...PRESENTERS[strategy.kind](asRecord(params[strategy.configKey])),
