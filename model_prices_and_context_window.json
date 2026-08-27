@@ -51357,7 +51357,9 @@
         "supported_output_modalities": [
             "text"
         ],
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "tpm": 800000,
+        "rpm": 2000
     },
     "gemini/gemini-3.5-transcribe-live": {
         "input_cost_per_audio_token": 3.5e-06,
@@ -51375,7 +51377,9 @@
         "supported_output_modalities": [
             "text"
         ],
-        "supports_audio_input": true
+        "supports_audio_input": true,
+        "tpm": 250000,
+        "rpm": 10
     },
     "perplexity/pplx-embed-context-v1-0.6b": {
         "input_cost_per_token": 8e-09,
