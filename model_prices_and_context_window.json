@@ -31872,6 +31872,17 @@
         "supports_video_input": true,
         "supports_vision": true
     },
+    "moonshot/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "moonshot",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://platform.kimi.ai/docs/pricing/chat-k27-code",
+        "supports_prompt_caching": true
+    },
     "moonshot/kimi-k3": {
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
