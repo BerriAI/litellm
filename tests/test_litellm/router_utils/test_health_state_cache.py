@@ -137,3 +137,34 @@ def test_set_prunes_expired_entries(health_cache, cache):
     )
     stored = cache.get_cache(key=DeploymentHealthCache.CACHE_KEY)
     assert set(stored.keys()) == {"fresh"}
+
+
+class _SharedRedisFake:
+    """Shared get/set key-value store standing in for the Redis layer of a DualCache."""
+
+    def __init__(self):
+        self.store = {}
+
+    def get_cache(self, key, parent_otel_span=None, **kwargs):
+        return self.store.get(key)
+
+    def set_cache(self, key, value, **kwargs):
+        self.store[key] = value
+
+
+def test_scoped_writers_on_shared_redis_preserve_each_other():
+    """Pods with different allowlists share one Redis entry; each merge must keep the peer's scope."""
+    redis_fake = _SharedRedisFake()
+    pod_a = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    pod_b = DeploymentHealthCache(cache=DualCache(redis_cache=redis_fake), staleness_threshold=60.0)
+    pod_a.set_deployment_health_states(
+        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+    )
+    pod_b.set_deployment_health_states(
+        {"internal-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "timeout"}}
+    )
+    pod_a.set_deployment_health_states(
+        {"prod-bad": {"is_healthy": False, "timestamp": time.time(), "reason": "check_failed"}}
+    )
+    assert set(redis_fake.store[DeploymentHealthCache.CACHE_KEY]) == {"prod-bad", "internal-bad"}
+    assert pod_a.get_unhealthy_deployment_ids() == {"prod-bad", "internal-bad"}

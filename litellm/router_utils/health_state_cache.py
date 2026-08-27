@@ -48,9 +48,15 @@ class DeploymentHealthCache:
         Merging instead of replacing lets writers probing different deployment
         scopes (e.g. pods with different background health check allowlists)
         coexist on the one shared entry without erasing each other's results.
+        The snapshot is read from Redis when available, since a pod-local read
+        would only ever see this writer's own previous merge.
         """
         try:
-            raw: Final = self.cache.get_cache(key=self.CACHE_KEY)
+            raw: Final = (
+                self.cache.redis_cache.get_cache(self.CACHE_KEY)
+                if self.cache.redis_cache is not None
+                else self.cache.get_cache(key=self.CACHE_KEY)
+            )
             existing: Final = raw if isinstance(raw, dict) else {}
             expiry_seconds: Final = self.staleness_threshold * 1.5
             now: Final = time.time()
