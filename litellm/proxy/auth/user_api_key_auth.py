@@ -2576,9 +2576,7 @@ async def _run_centralized_common_checks(
             raise team_result
     else:
         team_object = (
-            _team_obj_from_token(user_api_key_auth_obj)
-            if user_api_key_auth_obj.team_id == UI_TEAM_ID
-            else team_result
+            _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
         )
 
     user_object: LiteLLM_UserTable | None = None if isinstance(user_result, BaseException) else user_result
