@@ -111,3 +111,29 @@ def test_malformed_state_entries_are_skipped(health_cache):
     health_cache.set_deployment_health_states(states)
     result = health_cache.get_unhealthy_deployment_ids()
     assert result == {"deploy-1"}
+
+
+def test_set_merges_states_from_scoped_writers(health_cache):
+    """A writer covering one scope must not erase another scope's fresh states."""
+    now = time.time()
+    health_cache.set_deployment_health_states(
+        {"listed-bad": {"is_healthy": False, "timestamp": now, "reason": "check_failed"}}
+    )
+    health_cache.set_deployment_health_states(
+        {"other-ok": {"is_healthy": True, "timestamp": now, "reason": ""}}
+    )
+    assert health_cache.get_unhealthy_deployment_ids() == {"listed-bad"}
+
+
+def test_set_prunes_expired_entries(health_cache, cache):
+    """Entries older than 1.5x the staleness threshold are dropped on write."""
+    expired_time = time.time() - 100  # threshold 60s, prune horizon 90s
+    health_cache.set_deployment_health_states(
+        {"gone": {"is_healthy": False, "timestamp": expired_time, "reason": "check_failed"}}
+    )
+    now = time.time()
+    health_cache.set_deployment_health_states(
+        {"fresh": {"is_healthy": False, "timestamp": now, "reason": "check_failed"}}
+    )
+    stored = cache.get_cache(key=DeploymentHealthCache.CACHE_KEY)
+    assert set(stored.keys()) == {"fresh"}
