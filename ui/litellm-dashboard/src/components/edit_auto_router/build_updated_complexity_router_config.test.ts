@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { buildUpdatedComplexityRouterConfig, type KeywordMatchingState } from "./edit_auto_router_modal";
+import {
+  MANAGED_COMPLEXITY_ROUTER_KEYS,
+  buildUpdatedComplexityRouterConfig,
+  hydrateComplexityRouterConfig,
+  type KeywordMatchingState,
+} from "./edit_auto_router_modal";
 
 const STORED = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
@@ -438,5 +443,50 @@ describe("buildUpdatedComplexityRouterConfig tier model params", () => {
   it("emits no tier_model_configs for a config that never had params", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, hydratedState);
     expect(result).not.toHaveProperty("tier_model_configs");
+  });
+});
+
+describe("managed keys survive an untouched open-and-save", () => {
+  // Every managed key is rewritten from form state on save, so one the hydrator forgets is silently
+  // dropped from the saved config. This config sets each managed key to a value that actually
+  // applies, so an untouched open-and-save must return every one of them.
+  const STORED_ALL_MANAGED: Record<string, unknown> = {
+    tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: ["gpt-4o"], COMPLEX: ["opus"], REASONING: ["o1"] },
+    tier_model_configs: { REASONING: [{ model_name: "o1", litellm_params: { reasoning_effort: "high" } }] },
+    default_model: "gpt-4o",
+    plan_mode_min_tier: "COMPLEX",
+    tier_labels: { SIMPLE: "Cheap" },
+    classifier_type: "heuristic_first",
+    heuristic_first_max_tier: "SIMPLE",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_context_window_size: 5,
+    classifier_context_budget_chars: 4000,
+    classifier_context_include_assistant_turns: true,
+    classifier_fallback: "default_model",
+    session_affinity: true,
+    deployment_affinity: false,
+    adaptive: true,
+    adaptive_weights: { quality: 0.4, cost: 0.6 },
+    tier_distance_penalty: 0.25,
+    adaptive_eligible: "all",
+    return_raw_model_name: true,
+    tier_boundaries: { simple_medium: 0.2, medium_complex: 0.4, complex_reasoning: 0.7 },
+    token_thresholds: { simple: 20, complex: 500 },
+    dimension_weights: { tokenCount: 0.1 },
+    reasoning_override_min_score: 0.3,
+  };
+
+  it("carries every managed key through hydrate then save", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
+
+    const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS].filter((key) => saved[key] === undefined);
+    expect(dropped).toEqual([]);
+  });
+
+  it("round-trips the heuristic_first threshold, which save requires and the backend rejects without", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
+    expect(hydrated.heuristic_first_max_tier).toBe("SIMPLE");
+    expect(buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated).heuristic_first_max_tier).toBe("SIMPLE");
   });
 });

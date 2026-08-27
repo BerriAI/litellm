@@ -142,7 +142,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
         config=ClientCredentialsConfig(
             client_id=server.client_id,
             client_secret=SecretStr(server.client_secret) if server.client_secret else None,
-            token_url=server.token_url,
+            token_url=server.effective_token_url,
             scopes=tuple(server.scopes or ()),
             audience=server.audience,
             upstream_resource=resolve_upstream_resource(server),
@@ -163,7 +163,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     normalizes to ``rfc8693`` so a bad config value cannot crash spec-building. ``audience`` is
     forwarded only when the operator set it; a missing one is omitted, not derived.
     """
-    endpoint: Final = server.token_exchange_endpoint or server.token_url
+    endpoint: Final = server.token_exchange_endpoint or server.effective_token_url
     if not server.client_id or not server.client_secret:
         return None
     profile: Final[Literal["rfc8693", "entra_obo"]] = (

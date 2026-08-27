@@ -13,6 +13,7 @@ global state.
 """
 
 import re
+from collections.abc import Mapping
 from typing import Final
 
 from botocore.exceptions import (
@@ -31,30 +32,39 @@ BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws", re.IGNORECASE)
 
 
+def resolve_mantle_bearer_token(api_key: str | None) -> str | None:
+    return api_key or get_secret_str("BEDROCK_MANTLE_API_KEY") or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+
+
+def resolve_mantle_region(params: Mapping[str, object]) -> str:
+    region: Final = params.get("aws_region_name")
+    if isinstance(region, str) and region:
+        BaseAWSLLM._validate_aws_region_name(region)
+        return region
+    api_base: Final = params.get("api_base")
+    base: Final = (api_base if isinstance(api_base, str) else None) or get_secret_str("BEDROCK_MANTLE_API_BASE")
+    if base:
+        match: Final = MANTLE_HOST_RE.match(base.rstrip("/"))
+        if match:
+            return match.group(1)
+    return (
+        get_secret_str("BEDROCK_MANTLE_REGION")
+        or get_secret_str("AWS_REGION_NAME")
+        or get_secret_str("AWS_REGION")
+        or BEDROCK_MANTLE_DEFAULT_REGION
+    )
+
+
 class BedrockMantleAuthMixin:
     _aws_signer: BaseAWSLLM
 
     @staticmethod
     def _resolve_bearer_token(api_key: str | None) -> str | None:
-        return api_key or get_secret_str("BEDROCK_MANTLE_API_KEY") or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        return resolve_mantle_bearer_token(api_key)
 
     @staticmethod
     def _resolve_region(params: dict) -> str:
-        region: Final = params.get("aws_region_name")
-        if region:
-            BaseAWSLLM._validate_aws_region_name(region)
-            return region
-        base: Final = params.get("api_base") or get_secret_str("BEDROCK_MANTLE_API_BASE")
-        if base:
-            match: Final = MANTLE_HOST_RE.match(base.rstrip("/"))
-            if match:
-                return match.group(1)
-        return (
-            get_secret_str("BEDROCK_MANTLE_REGION")
-            or get_secret_str("AWS_REGION_NAME")
-            or get_secret_str("AWS_REGION")
-            or BEDROCK_MANTLE_DEFAULT_REGION
-        )
+        return resolve_mantle_region(params)
 
     def sign_request(
         self,

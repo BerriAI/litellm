@@ -4,7 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal
@@ -36,6 +36,21 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
     "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+
+# Anthropic error `type` (both the JSON error body and SSE `event: error`
+# payloads use this field) mapped to the HTTP status code it corresponds to.
+ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
+    {
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "rate_limit_error": 429,
+        "api_error": 500,
+        "overloaded_error": 503,
+        "timeout_error": 504,
+    }
 )
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
@@ -78,8 +93,8 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     """
     Handle Anthropic OAuth token detection and header setup.
 
-    If an OAuth token is detected in the Authorization header, extracts it
-    and sets the required OAuth headers.
+    If an OAuth token is detected in the Authorization header (any casing),
+    extracts it and sets the required OAuth headers.
 
     Args:
         headers: Request headers dict
@@ -89,16 +104,21 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
         Tuple of (updated headers, api_key)
     """
     # Check Authorization header (passthrough / forwarded requests)
-    auth_header: Final = headers.get("authorization", "")
-    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.replace("Bearer ", "")
-        headers.pop("x-api-key", None)
+    auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
+    if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.removeprefix("Bearer ")
+        for name in tuple(
+            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+        ):
+            headers.pop(name)
+        headers["authorization"] = auth_header
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
-        headers.pop("x-api-key", None)
+        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+            headers.pop(name)
         headers["authorization"] = f"Bearer {api_key}"
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
@@ -453,7 +473,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def maybe_drop_disabled_thinking(
         model: str,
-        optional_params: dict,  # mutable-ok: in-place out-param, same contract as AnthropicConfig._maybe_drop_speed_param
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
         custom_llm_provider: str,
     ) -> None:
         """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
