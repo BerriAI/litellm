@@ -4742,6 +4742,90 @@ async def test_add_router_settings_from_db_config_merge_logic():
 
 
 @pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_empty_db_lists_do_not_clobber_config_fallbacks():
+    """
+    Regression test for DB router_settings rows carrying explicit empty lists
+    (e.g. {"fallbacks": []} written by the dashboard's delete-last-fallback flow):
+    empty lists are "no value" and must not clobber config.yaml fallbacks,
+    matching _deep_merge_dicts semantics. Non-empty DB lists still win.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {
+        "router_settings": {
+            "fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "context_window_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+            "content_policy_fallbacks": [{"gpt-oss-120b": ["granite-4-h-small"]}],
+        }
+    }
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "fallbacks": [],
+        "context_window_fallbacks": [],
+        "content_policy_fallbacks": [{"gpt-oss-120b": ["other-model"]}],
+        "model_group_alias": {},
+        "num_retries": 3,
+    }
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert combined_settings["fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["context_window_fallbacks"] == [{"gpt-oss-120b": ["granite-4-h-small"]}]
+    assert combined_settings["content_policy_fallbacks"] == [{"gpt-oss-120b": ["other-model"]}]
+    assert combined_settings["num_retries"] == 3
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unconfigured_key():
+    """
+    An empty DB list only yields to config.yaml where the yaml configures that key.
+    When the yaml router_settings has no fallbacks, a DB {"fallbacks": []} (the
+    dashboard's delete-last-fallback write) must still reach the router so the
+    running pods drop the deleted fallback without a restart.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {"router_settings": {"num_retries": 1}}
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {"fallbacks": [], "model_group_alias": {}}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert combined_settings["fallbacks"] == []
+    assert combined_settings["num_retries"] == 1
+
+
+@pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_edge_cases():
     """
     Test edge cases for _add_router_settings_from_db_config method.
@@ -9068,6 +9152,78 @@ class TestLazyFeatureMiddleware:
         )
 
 
+class TestInjectLazyStubs:
+    """Stub injection keys off the app-tracked loaded set, never sys.modules:
+    proxy boot imports several feature modules (mcp_management, cloudzero,
+    vantage, config_overrides) without mounting their routers, and their
+    /openapi.json entries must survive that (LIT-6275)."""
+
+    def test_imported_but_unregistered_module_still_gets_stub(self):
+        import sys
+
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+        )
+        assert feat.module_path in sys.modules
+
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset(), features=(feat,))
+        assert "/dummy-lazy-test" in schema["paths"]
+
+    def test_registered_module_gets_no_stub(self):
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+        )
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset({"json"}), features=(feat,))
+        assert "/dummy-lazy-test" not in schema["paths"]
+
+    def test_snapshot_fragments_injected_for_boot_imported_features(self):
+        from litellm.proxy._lazy_features import LAZY_FEATURES, inject_lazy_stubs
+        from litellm.proxy._lazy_openapi_snapshot import load_snapshot
+
+        snapshot = load_snapshot()
+        assert snapshot
+        boot_imported = tuple(
+            f for f in LAZY_FEATURES if f.name in ("mcp_management", "cloudzero", "vantage", "config_overrides")
+        )
+        assert len(boot_imported) == 4
+
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset(), features=boot_imported)
+        for feat in boot_imported:
+            missing = [p for p in snapshot[feat.name]["paths"] if p not in schema["paths"]]
+            assert not missing, f"{feat.name} snapshot paths missing from /openapi.json: {missing}"
+
+    def test_persistent_stub_survives_load(self):
+        from litellm.proxy._lazy_features import LazyFeature, inject_lazy_stubs
+
+        feat = LazyFeature(
+            name="dummy_lazy_test",
+            module_path="json",
+            path_prefixes=("/dummy-lazy-test",),
+            persistent_swagger_stub=True,
+        )
+        schema = inject_lazy_stubs({"paths": {}}, loaded_modules=frozenset({"json"}), features=(feat,))
+        assert "/dummy-lazy-test" in schema["paths"]
+
+    def test_loaded_lazy_modules_reads_app_state(self):
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import loaded_lazy_modules
+
+        app = FastAPI()
+        assert loaded_lazy_modules(app) == frozenset()
+
+        app.state.lazy_loaded = {"litellm.proxy.spend_tracking.cloudzero_endpoints"}
+        assert loaded_lazy_modules(app) == frozenset({"litellm.proxy.spend_tracking.cloudzero_endpoints"})
+
+
 @pytest.mark.asyncio
 async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
     """When Redis is reachable and cleanly returns None (TTL expired,
@@ -11325,9 +11481,7 @@ class TestRouterModelNameOnStreamingChunks:
             with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
                 return [
                     data
-                    async for data in async_data_generator(
-                        mock_response, MagicMock(spec=UserAPIKeyAuth), request_data
-                    )
+                    async for data in async_data_generator(mock_response, MagicMock(spec=UserAPIKeyAuth), request_data)
                 ]
 
     @staticmethod

@@ -9,6 +9,7 @@ import {
   hydrateTierLabels,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
+import { activeTierRows } from "./tier_rows";
 
 const tiers = {
   SIMPLE: ["gpt-4o-mini"],
@@ -275,30 +276,30 @@ describe("buildComplexityRouterConfig", () => {
 
 describe("getMissingTiersError", () => {
   it("returns null when all four tiers have a model", () => {
-    expect(getMissingTiersError(tiers)).toBeNull();
+    expect(getMissingTiersError(activeTierRows({ tiers: tiers }))).toBeNull();
   });
 
   it("names the specific missing tier when only one is blank", () => {
-    expect(getMissingTiersError({ ...tiers, REASONING: [] })).toBe(
+    expect(getMissingTiersError(activeTierRows({ tiers: { ...tiers, REASONING: [] } }))).toBe(
       "Select a model for the following tier(s): REASONING",
     );
   });
 
   it("names multiple missing tiers in SIMPLE/MEDIUM/COMPLEX/REASONING order", () => {
-    expect(getMissingTiersError({ ...tiers, SIMPLE: [], REASONING: [] })).toBe(
+    expect(getMissingTiersError(activeTierRows({ tiers: { ...tiers, SIMPLE: [], REASONING: [] } }))).toBe(
       "Select a model for the following tier(s): SIMPLE, REASONING",
     );
   });
 
   it("names all four tiers when none are filled", () => {
     const noTiers = { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] };
-    expect(getMissingTiersError(noTiers)).toBe(
+    expect(getMissingTiersError(activeTierRows({ tiers: noTiers }))).toBe(
       "Select a model for the following tier(s): SIMPLE, MEDIUM, COMPLEX, REASONING",
     );
   });
 
   it("treats a tier with more than one model as filled", () => {
-    expect(getMissingTiersError({ ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o"] })).toBeNull();
+    expect(getMissingTiersError(activeTierRows({ tiers: { ...tiers, SIMPLE: ["gpt-4o-mini", "gpt-4o"] } }))).toBeNull();
   });
 });
 
@@ -645,15 +646,15 @@ describe("getPlanModeTierError", () => {
   const tiersWithEmptyComplex = { SIMPLE: ["m1"], MEDIUM: ["m1"], COMPLEX: [], REASONING: [] };
 
   it("passes when the override is off", () => {
-    expect(getPlanModeTierError(undefined, tiersWithEmptyComplex)).toBeNull();
+    expect(getPlanModeTierError(undefined, activeTierRows({ tiers: tiersWithEmptyComplex }))).toBeNull();
   });
 
   it("passes when the named tier has models", () => {
-    expect(getPlanModeTierError("MEDIUM", tiersWithEmptyComplex)).toBeNull();
+    expect(getPlanModeTierError("MEDIUM", activeTierRows({ tiers: tiersWithEmptyComplex }))).toBeNull();
   });
 
   it("blocks a tier whose models were removed, which the backend would reject with a 400", () => {
-    expect(getPlanModeTierError("COMPLEX", tiersWithEmptyComplex)).toContain("COMPLEX");
+    expect(getPlanModeTierError("COMPLEX", activeTierRows({ tiers: tiersWithEmptyComplex }))).toContain("COMPLEX");
   });
 });
 

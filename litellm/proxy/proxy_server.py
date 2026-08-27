@@ -1504,9 +1504,9 @@ def get_openapi_schema():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs
+    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
 
-    openapi_schema = inject_lazy_stubs(openapi_schema)
+    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
@@ -1536,9 +1536,9 @@ def custom_openapi():
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
     # Stub unloaded lazy features so they appear as Swagger sections.
-    from litellm.proxy._lazy_features import inject_lazy_stubs
+    from litellm.proxy._lazy_features import inject_lazy_stubs, loaded_lazy_modules
 
-    openapi_schema = inject_lazy_stubs(openapi_schema)
+    openapi_schema = inject_lazy_stubs(openapi_schema, loaded_lazy_modules(app))
     openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
@@ -3395,9 +3395,7 @@ def _rss_mb_for_log() -> str:
     return f"{rss_mb:.2f}"
 
 
-def _is_unexpected_keyword_argument_type_error(exc: BaseException) -> bool:
-    """True when ``exc`` is a TypeError from passing a kwarg the callee does not accept."""
-    return isinstance(exc, TypeError) and ("unexpected keyword argument" in str(exc).lower())
+_UNEXPECTED_KWARG: Final = re.compile(r"unexpected keyword argument '(?P<name>[^']+)'")
 
 
 async def _run_direct_health_check_with_instrumentation(
@@ -3406,31 +3404,33 @@ async def _run_direct_health_check_with_instrumentation(
     max_concurrency: int | None,
     instrumentation_context: dict,
 ):
-    """Call ``perform_health_check``, retrying with fewer kwargs on unexpected-kw TypeErrors."""
-    _hc_filter: Final = health_check_filter_kwargs_from_general_settings(general_settings)
-    last_type_error: TypeError | None = None
-    for extra_kwargs in (
+    """Call ``perform_health_check``, dropping exactly the optional kwarg each TypeError names.
+
+    A callee that predates an argument rejects it by name, so only that one is dropped. A
+    hand-written ladder of combinations would drop working options alongside it, and would
+    need a new rung every time an argument is added.
+    """
+    optional: Mapping[str, object] = MappingProxyType(  # rebind-ok: loses the kwarg the callee rejected
         {
+            "router": llm_router,
             "instrumentation_context": instrumentation_context,
-            **_hc_filter,
-        },
-        {"instrumentation_context": instrumentation_context},
-        dict(_hc_filter),
-        {},
-    ):
+            **health_check_filter_kwargs_from_general_settings(general_settings),
+        }
+    )
+    for _ in range(len(optional) + 1):
         try:
             return await perform_health_check(
                 model_list=model_list,
                 details=details,
                 max_concurrency=max_concurrency,
-                **extra_kwargs,
+                **optional,
             )
         except TypeError as e:
-            if not _is_unexpected_keyword_argument_type_error(e):
+            rejected = _UNEXPECTED_KWARG.search(str(e))
+            if rejected is None or rejected["name"] not in optional:
                 raise
-            last_type_error = e
-    assert last_type_error is not None
-    raise last_type_error
+            optional = MappingProxyType({k: v for k, v in optional.items() if k != rejected["name"]})
+    raise AssertionError("perform_health_check rejected every optional argument")
 
 
 def _schedule_background_health_check_db_save(
@@ -3685,6 +3685,7 @@ async def _run_background_health_check():
                     model_list=_llm_model_list,
                     details=details_bool,
                     max_concurrency=health_check_concurrency,
+                    router=llm_router,
                     **_hc_filter,
                 )
             except Exception as e:
@@ -6270,7 +6271,14 @@ class ProxyConfig:
             ):
                 from litellm.utils import _update_dictionary
 
-                combined_router_settings = _update_dictionary(config_router_settings, db_router_settings.param_value)
+                db_overlay_deferring_empty_lists_to_config: Final = {
+                    k: v
+                    for k, v in db_router_settings.param_value.items()
+                    if not (k in config_router_settings and isinstance(v, list) and len(v) == 0)
+                }
+                combined_router_settings = _update_dictionary(
+                    config_router_settings, db_overlay_deferring_empty_lists_to_config
+                )
             elif config_router_settings is not None and isinstance(config_router_settings, dict):
                 combined_router_settings = config_router_settings
             elif db_router_settings is not None and isinstance(db_router_settings.param_value, dict):

@@ -10,12 +10,25 @@ the router silently dropping the deployment at load time under
 ``ignore_invalid_deployments``.
 """
 
-from collections.abc import Mapping
-from typing import Final, Literal
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+
+StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyRouterDependency:
+    """A model name a strategy router must be able to reach to do its job."""
+
+    model_name: str
+    role: StrategyRouterDependencyRole
+
 
 STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -61,6 +74,84 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
     if remainder.startswith("quality_router"):
         return "quality"
     return "semantic"
+
+
+def _named(value: object, role: StrategyRouterDependencyRole) -> tuple[StrategyRouterDependency, ...]:
+    """One dependency from a scalar field, or none when it is absent or not a name."""
+    return (StrategyRouterDependency(value, role),) if isinstance(value, str) and value else ()
+
+
+def _pool(value: object, role: StrategyRouterDependencyRole) -> tuple[StrategyRouterDependency, ...]:
+    """Dependencies from a field holding either a single name or a pool of them."""
+    if isinstance(value, str):
+        return _named(value, role)
+    if isinstance(value, Sequence):
+        return tuple(dep for entry in value for dep in _named(entry, role))
+    return ()
+
+
+_NO_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else _NO_CONFIG
+
+
+def strategy_router_dependencies(
+    litellm_params: Mapping[str, object],
+) -> tuple[StrategyRouterDependency, ...]:
+    """The model names a strategy-router deployment must reach, in no particular order.
+
+    A field is a dependency only under the condition the runtime itself reads it: the
+    classifier model needs `classifier_type: llm`, and the complexity embedding model needs
+    `semantic_keyword_matching`. Listing one the router never calls reds a working deployment.
+
+    The two default-model spellings are not symmetric. A quality router falls back to its
+    config's `default_model`, so both are read. A complexity router ignores that field and
+    derives its default from the tiers instead (`fallback_tier`, then MEDIUM, then SIMPLE),
+    overwriting the config value at init, so only the `litellm_params` spelling is a
+    dependency here; the derived one is already covered as a tier.
+
+    Returns empty for a regular deployment, and for any name this module cannot reach from
+    the deployment dict alone: a semantic router's routes live in an `auto_router_config`
+    JSON string or an `auto_router_config_path` file, so only its default and embedding
+    models are enumerable here. Every field is read defensively, since a caller may hold a
+    config the router itself would refuse, and a health check must not raise on one.
+    """
+    kind: Final = classify_strategy_router_model(str(litellm_params.get("model", "")))
+    if kind is None:
+        return ()
+    if kind == "semantic":
+        return _named(litellm_params.get("auto_router_default_model"), "default") + _named(
+            litellm_params.get("auto_router_embedding_model"), "embedding"
+        )
+    if kind == "adaptive":
+        return _pool(_mapping(litellm_params.get("adaptive_router_config")).get("available_models"), "tier")
+    if kind == "quality":
+        quality: Final = _mapping(litellm_params.get("quality_router_config"))
+        return tuple(
+            dict.fromkeys(
+                _pool(quality.get("available_models"), "tier")
+                + _named(
+                    litellm_params.get("quality_router_default_model") or quality.get("default_model"),
+                    "default",
+                )
+            )
+        )
+    complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
+    classifier: Final = _mapping(complexity.get("classifier_llm_config"))
+    return tuple(
+        dict.fromkeys(
+            tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
+            + _named(litellm_params.get("complexity_router_default_model"), "default")
+            + (_named(classifier.get("model"), "classifier") if complexity.get("classifier_type") == "llm" else ())
+            + (
+                _named(complexity.get("embedding_model"), "embedding")
+                if complexity.get("semantic_keyword_matching")
+                else ()
+            )
+        )
+    )
 
 
 def validate_complexity_router_config_write(complexity_router_config: Mapping[str, object] | None) -> str | None:

@@ -16,7 +16,7 @@ import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
 import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
+import { normalizeTierModels } from "./add_model/complexity_router_tiers";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
@@ -91,12 +91,10 @@ const buildComplexityRouterTestTargets = (
     config = rawConfig;
   }
 
-  const tiers = {
-    SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(config.tiers?.REASONING),
-  };
+  const tiers: [string, string[]][] =
+    config.tiers && typeof config.tiers === "object"
+      ? Object.entries(config.tiers).map(([tier, models]) => [tier, normalizeTierModels(models)])
+      : [];
 
   // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
   // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
@@ -108,7 +106,7 @@ const buildComplexityRouterTestTargets = (
     tiers,
     semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
     embeddingModel: config.embedding_model,
-    defaultModel: resolveComplexityDefaultModel(tiers, effectiveDefaultModel),
+    defaultModel: effectiveDefaultModel,
   };
   return buildAutoRouterTestTargets(testTargetParams);
 };

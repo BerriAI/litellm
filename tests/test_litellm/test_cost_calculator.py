@@ -2619,6 +2619,49 @@ def test_completion_cost_anthropic_auto_tier_uses_served_priority_rate(_local_mo
     assert cost == pytest.approx(expected_priority)
 
 
+def test_completion_cost_vertex_ai_gemini_flex_traffic_type(_local_model_cost_map):
+    """
+    Vertex AI flex-tier billing regression for issue #37647.
+
+    Vertex Gemini 3.x models route through ``cost_per_character`` (the
+    ``cost_router`` token-path gate only matches "gemini-2"), and its token
+    fallbacks dropped ``service_tier``. A response served with
+    ``trafficType=ON_DEMAND_FLEX`` must be billed at the flex rate, not the
+    standard rate.
+    """
+    from litellm import completion_cost
+
+    model = "gemini-3-test-flex-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1.5e-6,
+                "output_cost_per_token": 9e-6,
+                "input_cost_per_token_flex": 7.5e-7,
+                "output_cost_per_token_flex": 4.5e-6,
+                "litellm_provider": "vertex_ai",
+                "max_tokens": 8192,
+            }
+        }
+    )
+
+    def _cost_for_traffic_type(traffic_type):
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        response = ModelResponse(usage=usage, model=model)
+        response._hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type}
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="vertex_ai",
+        )
+
+    standard_cost = _cost_for_traffic_type("ON_DEMAND")
+    flex_cost = _cost_for_traffic_type("ON_DEMAND_FLEX")
+
+    assert standard_cost == pytest.approx(1000 * 1.5e-6 + 500 * 9e-6)
+    assert flex_cost == pytest.approx(1000 * 7.5e-7 + 500 * 4.5e-6)
+
+
 def test_completion_cost_non_string_service_tier_defers_to_served_tier(_local_model_cost_map):
     """
     Regression: a non-string request-level ``service_tier`` (reachable via
@@ -3907,6 +3950,167 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     )
 
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
+
+
+def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
+    """A router-facing model_name alias containing "/" whose leading segment is NOT a
+    registered provider must not be double-prefixed into a non-existent cost key.
+
+    Regression test for #38069: alias "vertex/claude-opus-5" (real deployment
+    "vertex_ai/claude-opus-5") was re-prefixed into "vertex_ai/vertex/claude-opus-5",
+    silently pricing every streamed request at $0.
+    """
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/claude-opus-5"
+
+
+def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_map):
+    """A "region/model" alias whose leading segment repeats the request's region must
+    resolve to the region-priced cost key instead of keeping the region segment twice."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="us-east-1/anthropic.claude-v2:1",
+    )
+    response._hidden_params = {"region_name": "us-east-1"}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
+    """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {"custom_llm_provider": "vertex_ai"}
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert cost == pytest.approx(100 * 5e-6 + 50 * 2.5e-5, rel=1e-9)
+
+
+def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
+    """An alias that resolves to no known cost key keeps the legacy double-prefixed name."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="team/nonsense-model",
+    )
+    response._hidden_params = {}
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert selected == "vertex_ai/team/nonsense-model"
+
+
+def test_completion_cost_keeps_custom_priced_slash_router_id(_local_model_cost_map):
+    """A custom-priced router id containing "/" keeps its custom pricing instead of being
+    rewritten to the built-in key its suffix happens to match."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    litellm.register_model(
+        model_cost={
+            "vertex/claude-opus-5": {
+                "input_cost_per_token": 7e-6,
+                "output_cost_per_token": 8e-6,
+                "litellm_provider": "vertex_ai",
+            }
+        }
+    )
+
+    selected = _select_model_name_for_cost_calc(
+        model="vertex_ai/claude-opus-5",
+        completion_response=None,
+        custom_pricing=True,
+        custom_llm_provider="vertex_ai",
+        router_model_id="vertex/claude-opus-5",
+    )
+    assert selected == "vertex_ai/vertex/claude-opus-5"
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="vertex/claude-opus-5",
+    )
+    response._hidden_params = {"custom_llm_provider": "vertex_ai"}
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+        custom_pricing=True,
+        router_model_id="vertex/claude-opus-5",
+    )
+    assert cost == pytest.approx(100 * 7e-6 + 50 * 8e-6, rel=1e-9)
 
 
 @pytest.mark.parametrize(
