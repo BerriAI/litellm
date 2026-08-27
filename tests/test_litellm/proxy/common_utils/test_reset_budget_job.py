@@ -2782,6 +2782,54 @@ def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
     } in enduser_writes
 
 
+def _replay_spend_writes(writes, spend):
+    """Apply the queued update_many statements in order, the way the DB
+    transaction executes them, and return the row's final spend."""
+    for write in writes:
+        condition = write["where"].get("spend")
+        if isinstance(condition, dict):
+            if "gt" in condition and not spend > condition["gt"]:
+                continue
+            if "lte" in condition and not spend <= condition["lte"]:
+                continue
+        payload = write["data"]["spend"]
+        spend = payload if not isinstance(payload, dict) else spend - payload["decrement"]
+    return spend
+
+
+@pytest.mark.parametrize("table", ["team_membership", "enduser"])
+def test_cascade_rollover_writes_survive_sequential_execution(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch, table
+):
+    """The statements run one after another inside a transaction, so a
+    decrement-then-zero order would re-match the decremented row (now in the
+    0..cap range) and erase the carried spend. Replaying the writes in queue
+    order must leave the overage, for any spend between cap and twice the cap."""
+    _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(budget_id="budget-roll", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [budget]
+    membership = type(
+        "Membership",
+        (),
+        {"user_id": "member-1", "team_id": "team-1", "spend": 15.0, "budget_id": "budget-roll"},
+    )
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results([membership])
+    mock_prisma_client.data["enduser"] = [
+        type(
+            "EndUser",
+            (),
+            {"spend": 15.0, "litellm_budget_table": budget, "user_id": "enduser-roll", "budget_id": "budget-roll"},
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert _replay_spend_writes(writes, 15.0) == 5.0
+    assert _replay_spend_writes(writes, 8.0) == 0
+    assert _replay_spend_writes(writes, 25.0) == 15.0
+
+
 def test_budget_cascade_zeroes_everything_when_rollover_disabled(reset_budget_job, mock_prisma_client, monkeypatch):
     """Control: with the flag off the cascade keeps the plain zeroing writes."""
     _make_counter_invalidation_job(monkeypatch)
