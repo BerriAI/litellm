@@ -9,6 +9,10 @@ reasoning.encrypted_content for multi-turn stateless workflows.
 Related issue: https://github.com/BerriAI/litellm/issues/22189
 """
 
+import json
+from unittest.mock import Mock
+
+import httpx
 import pytest
 
 import litellm
@@ -80,6 +84,107 @@ class TestOpenRouterResponsesAPIConfig:
             )
         e = exc_info.value
         assert "OpenRouter API key is required" in str(e)
+
+
+class TestOpenRouterResponsesAPICostTracking:
+    """
+    Regression tests: OpenRouter's Responses API must request and extract cost
+    data the same way the chat completions path already does. Without this,
+    every request routed through the Responses API (e.g. Codex-style clients)
+    gets logged with $0 spend despite real token usage.
+    """
+
+    def test_transform_request_adds_usage_include(self):
+        """Request should always ask OpenRouter to include usage.cost in the response."""
+        config = OpenRouterResponsesAPIConfig()
+        from litellm.types.router import GenericLiteLLMParams
+
+        request = config.transform_responses_api_request(
+            model="openai/gpt-5-mini",
+            input="Hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request.get("usage") == {"include": True}
+
+    def test_transform_request_preserves_existing_usage_param(self):
+        """An explicitly-set usage param should not be clobbered."""
+        config = OpenRouterResponsesAPIConfig()
+        from litellm.types.router import GenericLiteLLMParams
+
+        request = config.transform_responses_api_request(
+            model="openai/gpt-5-mini",
+            input="Hello",
+            response_api_optional_request_params={"usage": {"include": False}},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request.get("usage") == {"include": False}
+
+    def test_transform_response_extracts_cost(self):
+        """Response should pull usage.cost into hidden params for the cost calculator."""
+        config = OpenRouterResponsesAPIConfig()
+
+        body = {
+            "id": "resp_abc123",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "openai/gpt-5-mini",
+            "output": [],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "cost": 0.01234,
+            },
+        }
+        raw_response = Mock(spec=httpx.Response)
+        raw_response.text = json.dumps(body)
+        raw_response.json.return_value = body
+        raw_response.headers = {}
+
+        result = config.transform_response_api_response(
+            model="openai/gpt-5-mini",
+            raw_response=raw_response,
+            logging_obj=Mock(),
+        )
+
+        assert (
+            result._hidden_params["additional_headers"][
+                "llm_provider-x-litellm-response-cost"
+            ]
+            == 0.01234
+        )
+
+    def test_transform_response_without_cost_does_not_error(self):
+        """Missing usage.cost should not raise or set the header."""
+        config = OpenRouterResponsesAPIConfig()
+
+        body = {
+            "id": "resp_abc123",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "openai/gpt-5-mini",
+            "output": [],
+            "usage": {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+        }
+        raw_response = Mock(spec=httpx.Response)
+        raw_response.text = json.dumps(body)
+        raw_response.json.return_value = body
+        raw_response.headers = {}
+
+        result = config.transform_response_api_response(
+            model="openai/gpt-5-mini",
+            raw_response=raw_response,
+            logging_obj=Mock(),
+        )
+
+        assert "llm_provider-x-litellm-response-cost" not in result._hidden_params.get(
+            "additional_headers", {}
+        )
 
 
 class TestOpenRouterResponsesAPIRegistration:
