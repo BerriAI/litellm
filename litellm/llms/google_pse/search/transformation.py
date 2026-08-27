@@ -4,7 +4,7 @@ Calls Google Programmable Search Engine (PSE) API to search the web.
 Google PSE API Reference: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
 """
 
-from typing import Dict, List, Literal, Optional, TypedDict, Union
+from typing import Final, Literal, TypedDict
 
 import httpx
 
@@ -70,11 +70,11 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
 
@@ -92,7 +92,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
             raise ValueError("GOOGLE_PSE_API_KEY is not set. Set `GOOGLE_PSE_API_KEY` environment variable.")
 
         # Also check for search engine ID
-        search_engine_id = kwargs.get("search_engine_id") or get_secret_str("GOOGLE_PSE_ENGINE_ID")
+        search_engine_id: Final = kwargs.get("search_engine_id") or get_secret_str("GOOGLE_PSE_ENGINE_ID")
         if not search_engine_id:
             raise ValueError(
                 "GOOGLE_PSE_ENGINE_ID is not set. Set `GOOGLE_PSE_ENGINE_ID` environment variable or pass `search_engine_id` parameter."
@@ -103,9 +103,9 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -120,21 +120,21 @@ class GooglePSESearchConfig(BaseSearchConfig):
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_google_pse_params" in data:
-            params = data["_google_pse_params"]
-            query_string = urlencode(params)
+            params: Final = data["_google_pse_params"]
+            query_string: Final = urlencode(params)
             return f"{api_base}?{query_string}"
 
         return api_base
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         api_base: str | None = None,
-        search_engine_id: Optional[str] = None,
+        search_engine_id: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Google PSE API format.
 
@@ -177,7 +177,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
         if not search_engine_id:
             raise ValueError("GOOGLE_PSE_ENGINE_ID is required")
 
-        request_data: GooglePSESearchRequest = {
+        request_data: Final[GooglePSESearchRequest] = {
             "q": query,
             "cx": search_engine_id,
             "key": api_key,
@@ -186,12 +186,12 @@ class GooglePSESearchConfig(BaseSearchConfig):
         # Transform unified spec parameters to Google PSE format
         if "max_results" in optional_params:
             # Google PSE supports 1-10 results per request
-            num_results = min(optional_params["max_results"], 10)
+            num_results: Final = min(optional_params["max_results"], 10)
             request_data["num"] = num_results
 
         if "search_domain_filter" in optional_params:
             # Convert list to single domain (take first if multiple)
-            domains = optional_params["search_domain_filter"]
+            domains: Final = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
                 request_data["siteSearch"] = domains[0]
                 request_data["siteSearchFilter"] = "i"  # include
@@ -204,7 +204,7 @@ class GooglePSESearchConfig(BaseSearchConfig):
             request_data["gl"] = optional_params["country"].upper()
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # Pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -239,10 +239,10 @@ class GooglePSESearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
         for item in response_json.get("items", []):
             search_result = SearchResult(
                 title=item.get("title", ""),

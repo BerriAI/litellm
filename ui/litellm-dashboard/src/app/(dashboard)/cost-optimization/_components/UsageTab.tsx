@@ -1,15 +1,33 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Collapse } from "antd";
 
-import { AreaChart, BarChart, DonutChart, DEFAULT_COLOR_CYCLE } from "@/components/shared/charts";
+import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import useCan from "@/app/(dashboard)/hooks/useCan";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
-import { SpendMetrics } from "@/components/UsagePage/types";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { buildDailyToolSeries, topToolsBySpend, usd } from "./costOptimizationUtils";
+import {
+  autorouterOf,
+  buildDailyToolSeries,
+  cachingOf,
+  compressionOf,
+  formatRangeLabel,
+  localIsoDay,
+  MAX_POINTS_WITH_DOTS,
+  SAVINGS_COLORS,
+  SAVINGS_DRIVERS,
+  SAVINGS_SERIES,
+  SavingsAccumulation,
+  SavingsPoint,
+  shortDate,
+  toCumulative,
+  topToolsBySpend,
+  usd,
+  withStartAnchor,
+} from "./costOptimizationUtils";
+import SavingsTiles, { useSavingsTotals } from "@/components/shared/SavingsTiles";
 import { DailyActivityRange } from "./useDailyActivityRange";
 
 interface UsageTabProps {
@@ -20,66 +38,11 @@ interface UsageTabProps {
 const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   by_tool: [],
   daily: [],
-  total_spend: 0,
   start_date: null,
   end_date: null,
 };
 
-const shortDate = (iso: string): string =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
-
-const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
-const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
-const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
-
-const MethodologyNote = () => (
-  <Collapse
-    ghost
-    items={[
-      {
-        key: "methodology",
-        label: <span className="text-sm font-medium">How savings are calculated</span>,
-        children: (
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <p>
-              Savings are computed for each request when it is logged, using the provider&apos;s reported usage and the
-              model&apos;s pricing, then summed into a daily rollup. Totals below are read from that rollup over the
-              selected date range, so the numbers never require a scan of raw request logs.
-            </p>
-            <p>
-              Compression savings are the tokens Headroom removed before the call, priced at the model&apos;s input
-              rate: <code>compression_saved_tokens * input_cost_per_token</code>
-            </p>
-            <p>
-              Prompt caching savings are the tokens the provider served from cache (Anthropic{" "}
-              <code>cache_read_input_tokens</code>, or OpenAI-style <code>prompt_tokens_details.cached_tokens</code>),
-              priced at the discount between the normal input rate and the cache-read rate:{" "}
-              <code>cache_read_input_tokens * max(input_cost_per_token - cache_read_input_token_cost, 0)</code>
-            </p>
-            <p>
-              Total saved is the sum of both drivers. Models without a separate cache-read price in the pricing map
-              contribute zero caching savings rather than erroring.
-            </p>
-          </div>
-        ),
-      },
-    ]}
-  />
-);
-
-const SummaryCard = ({ label, value, hint }: { label: string; value: string; hint?: string }) => (
-  <Card>
-    <CardHeader>
-      <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-    </CardHeader>
-    <CardContent>
-      <p className="text-2xl font-semibold text-foreground">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
-    </CardContent>
-  </Card>
-);
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
@@ -87,12 +50,13 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
 
-  const toolSpendEnabled = !!accessToken && !!startTime && !!endTime;
+  const canViewProxyWideCostData = useCan("viewProxyWideCostData");
+  const toolSpendEnabled = canViewProxyWideCostData && !!accessToken && !!startTime && !!endTime;
   const rangeKey = startTime && endTime ? `${isoDay(startTime)}|${isoDay(endTime)}` : "";
   const [toolSpendState, setToolSpendState] = useState<{ key: string; data: ToolSpendResponse } | null>(null);
 
   useEffect(() => {
-    if (!accessToken || !startTime || !endTime) return;
+    if (!canViewProxyWideCostData || !accessToken || !startTime || !endTime) return;
     let cancelled = false;
     getToolSpend(accessToken, isoDay(startTime), isoDay(endTime))
       .then((res) => {
@@ -104,34 +68,64 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, startTime, endTime, rangeKey]);
+  }, [canViewProxyWideCostData, accessToken, startTime, endTime, rangeKey]);
 
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
 
-  const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
-  const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
-  const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal;
+  const totals = useSavingsTotals(results);
 
-  const overTime = useMemo(
+  const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
+
+  // The daily rollup arrives newest first; sort on the raw ISO date so the axis
+  // reads oldest to newest and the running total accumulates forward in time
+  // rather than backward. Sort here, before shortDate() drops the year and makes
+  // the labels unsortable.
+  const perInterval = useMemo<SavingsPoint[]>(
     () =>
-      results.map((d) => ({
-        date: shortDate(d.date),
-        Compression: compressionOf(d.metrics),
-        "Prompt caching": cachingOf(d.metrics),
-      })),
+      [...results]
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((d) => ({
+          date: shortDate(d.date),
+          Compression: compressionOf(d.metrics),
+          "Prompt caching": cachingOf(d.metrics),
+          "Auto-router": autorouterOf(d.metrics),
+        })),
     [results],
   );
 
+  // Cumulative anchors on a synthetic $0 point at the range start so a short
+  // range (down to a single day) rises from zero instead of floating as one dot.
+  const overTime = useMemo(() => {
+    if (accumulation !== "cumulative") return perInterval;
+    const startLabel = startTime ? shortDate(localIsoDay(startTime)) : "";
+    return withStartAnchor(toCumulative(perInterval), startLabel);
+  }, [accumulation, perInterval, startTime]);
+
+  const intervalLabel = "Per day";
+  const rangeLabel = formatRangeLabel(startTime ?? undefined, endTime ?? undefined);
+  const savingsSubtitle = [
+    accumulation === "cumulative" ? "Running total saved" : `Saved ${intervalLabel.toLowerCase()}`,
+    rangeLabel && `${rangeLabel} (UTC)`,
+  ]
+    .filter(Boolean)
+    .join(" \u00b7 ");
+
+  // A driver can come out negative (auto-router pays a cold-cache write on every
+  // model switch), and a negative slice has no meaning in a donut, so only drivers
+  // that actually saved are plotted; the range total keeps the signed truth.
   const byDriver = useMemo(
     () =>
-      [
-        { driver: "Compression", usd: compressionTotal },
-        { driver: "Prompt caching", usd: cachingTotal },
-      ].filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal],
+      SAVINGS_DRIVERS.map(({ name, color }) => ({
+        driver: name,
+        color,
+        usd: { Compression: totals.compression, "Prompt caching": totals.caching, "Auto-router": totals.autorouter }[
+          name
+        ],
+      })).filter((d) => d.usd > 0),
+    [totals],
   );
+  const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
 
   const topTools = useMemo(() => topToolsBySpend(toolSpend?.by_tool ?? []), [toolSpend]);
   const topToolNames = useMemo(() => topTools.map((t) => t.tool_name), [topTools]);
@@ -147,42 +141,60 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
       })),
     [toolSpend, topToolNames],
   );
-  const toolColors = useMemo(() => DEFAULT_COLOR_CYCLE.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
+  const toolColors = useMemo(() => SEQUENTIAL_COLOR_RAMP.slice(0, Math.max(topToolNames.length, 1)), [topToolNames]);
 
   return (
     <div className="w-full space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <MethodologyNote />
+      <div className="flex flex-wrap items-center justify-end gap-4">
+        <span className="text-sm text-muted-foreground">Spend is bucketed by UTC day</span>
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        <SummaryCard
-          label="Total saved"
-          value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching"}
-        />
-        <SummaryCard
-          label="Compression savings"
-          value={usd(compressionTotal)}
-          hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
-        />
-        <SummaryCard label="Prompt caching savings" value={usd(cachingTotal)} hint="Cache read discount" />
-      </div>
+      <SavingsTiles results={results} isLoading={loading || isFetchingMore} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
+          {/* CardHeader's own slots rather than hand-rolled rows: the action column is
+              sized to its content and the title column takes the rest, so the subtitle
+              never competes with the controls for width and neither moves when it grows.
+              The controls wrap within their column instead of pushing past the card */}
           <CardHeader>
-            <CardTitle>Savings over time</CardTitle>
+            <CardTitle>Savings</CardTitle>
+            <CardDescription>{savingsSubtitle}</CardDescription>
+            <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+              <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
+              <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
+                <TabsList>
+                  <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
+                  <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </CardAction>
           </CardHeader>
           <CardContent>
-            <AreaChart
-              data={overTime}
-              index="date"
-              categories={["Compression", "Prompt caching"]}
-              colors={["emerald", "blue"]}
-              valueFormatter={usd}
-            />
+            {accumulation === "cumulative" ? (
+              <AreaChart
+                data={overTime}
+                index="date"
+                categories={SAVINGS_SERIES}
+                colors={SAVINGS_COLORS}
+                valueFormatter={usd}
+                showLegend={false}
+                showDots={overTime.length <= MAX_POINTS_WITH_DOTS}
+              />
+            ) : (
+              // Not stacked: a driver can be negative once a model switch is charged
+              // for its cold cache, and stacking would draw that segment below the axis
+              // while the remaining bar still read as the day's total
+              <BarChart
+                data={overTime}
+                index="date"
+                categories={SAVINGS_SERIES}
+                colors={SAVINGS_COLORS}
+                valueFormatter={usd}
+                showLegend={false}
+              />
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -195,58 +207,66 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               data={byDriver}
               index="driver"
               category="usd"
-              colors={["emerald", "blue"]}
+              colors={byDriver.map((d) => d.color)}
               valueFormatter={usd}
               showLabel
-              label={usd(totalSaved)}
+              label={usd(plottedDriverTotal)}
             />
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Spend by tool</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Spend on requests that called each tool (MCP and client-side tools). A request that used multiple tools
-            counts its full spend toward each, so this attributes rather than partitions spend.
-          </p>
-        </CardHeader>
-        <CardContent>
-          {topTools.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              {toolSpendLoading ? "Loading..." : "No tool usage in this range."}
+      {canViewProxyWideCostData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Spend by tool</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Spend on requests that invoked each tool (MCP and client-side tools); declaring a tool without invoking it
+              does not count. A request that invoked multiple tools counts its full spend toward each, so this
+              attributes rather than partitions spend.
             </p>
-          ) : (
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <div>
-                <p className="mb-2 text-sm font-medium text-muted-foreground">Total by tool</p>
-                <BarChart
-                  data={topToolsChart}
-                  index="tool_name"
-                  categories={["spend"]}
-                  colors={["emerald"]}
-                  layout="vertical"
-                  yAxisWidth={140}
-                  showLegend={false}
-                  valueFormatter={usd}
-                />
+          </CardHeader>
+          <CardContent>
+            {topTools.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                {toolSpendLoading ? "Loading..." : "No tool usage in this range."}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div>
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">Total by tool</p>
+                  <BarChart
+                    data={topToolsChart}
+                    index="tool_name"
+                    categories={["spend"]}
+                    colors={toolColors}
+                    colorByDatum
+                    layout="vertical"
+                    yAxisWidth={140}
+                    maxBarSize={64}
+                    showLegend={false}
+                    valueFormatter={usd}
+                  />
+                </div>
+                <div>
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
+                  <CustomLegend categories={topToolNames} colors={toolColors} />
+                  <BarChart
+                    data={dailyToolSeries}
+                    index="date"
+                    categories={topToolNames}
+                    colors={toolColors}
+                    stack
+                    maxBarSize={64}
+                    valueFormatter={usd}
+                    showLegend={false}
+                  />
+                </div>
               </div>
-              <div>
-                <p className="mb-2 text-sm font-medium text-muted-foreground">Daily spend by tool</p>
-                <BarChart
-                  data={dailyToolSeries}
-                  index="date"
-                  categories={topToolNames}
-                  colors={toolColors}
-                  stack
-                  valueFormatter={usd}
-                />
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 };

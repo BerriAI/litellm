@@ -7,10 +7,14 @@ environment so the same tests run against localhost or a deployed proxy.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from fixture_mode import deterministic_marker, parse_fixture_mode
+from provider_edge import provider_edge_api_base
 
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
 # Compose injects them into the proxy container, but pytest on the host does not
@@ -74,16 +78,62 @@ DD_SEARCH_INTERVAL = float(os.environ.get("E2E_DD_SEARCH_INTERVAL", "10"))
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
+SLOW_PROVIDER_TIMEOUT_SECONDS = float(os.environ.get("E2E_SLOW_PROVIDER_TIMEOUT", "180"))
+
+# How long a control-plane write (/model/new, /guardrails, /v1/agents) may take to
+# reach EVERY replica. Distinct from POLL_TIMEOUT, which is sized for spend-row
+# flush; this one is sized for the proxy's config reload
+# (`proxy_config_reload_interval_seconds`, 30s by default and 7s on the e2e stack)
+# plus margin.
+#
+# The barriers below wait this out instead of returning on first sight, because a
+# single successful read only proves ONE replica converged: every request opens a
+# fresh connection, so a load-balanced Service routes each one independently and
+# the next call re-rolls. See ProxyClient._await_model_servable.
+PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 
 EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
 
-LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "750"))
-LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "50"))
+# Record/replay fixture selection (see fixture_mode.py and provider_edge.py).
+# The raw mode value is parsed and validated there; "live" (the default, also
+# for empty values) means the harness behaves exactly as before this knob
+# existed.
+FIXTURE_MODE_RAW = os.environ.get("E2E_FIXTURE_MODE", "live")
+FIXTURE_DIR = Path(
+    os.environ.get("E2E_FIXTURE_DIR", "").strip()
+    or str(Path(__file__).resolve().parent / ".fixtures")
+)
+
+# Where the provider-edge server binds, and the host name edge api_base URLs
+# advertise to the proxy. They differ when the proxy runs in a container and
+# reaches the pytest host via a gateway name like host.docker.internal.
+PROVIDER_EDGE_BIND_HOST = os.environ.get("E2E_PROVIDER_EDGE_BIND_HOST", "").strip() or "127.0.0.1"
+PROVIDER_EDGE_ADVERTISE_HOST = (
+    os.environ.get("E2E_PROVIDER_EDGE_ADVERTISE_HOST", "").strip() or PROVIDER_EDGE_BIND_HOST
+)
+
+# Deliberately modest concurrency. The suite shares its proxy with every other
+# suite in the run, and 750 users at spawn rate 50 saturated the request path hard
+# enough to distort latency-sensitive neighbours (and to spend real provider money
+# fast).
+LOAD_USERS = int(os.environ.get("E2E_LOAD_USERS", "200"))
+LOAD_SPAWN_RATE = float(os.environ.get("E2E_LOAD_SPAWN_RATE", "20"))
 LOAD_DURATION_SECONDS = float(os.environ.get("E2E_LOAD_DURATION_SECONDS", "60"))
-LOAD_MIN_RPS = float(os.environ.get("E2E_LOAD_MIN_RPS", "355"))
 LOAD_MAX_FAILURE_RATIO = float(os.environ.get("E2E_LOAD_MAX_FAILURE_RATIO", "0.01"))
 
+# The throughput floor is derived per replica instead of being an absolute fleet
+# number, so the verdict does not depend on how many replicas happen to be warm.
+# One closed-loop user only ever occupies one replica at a time, so a short serial
+# pass measures a single replica's request path: its throughput is 1/latency, and
+# the concurrent phase then has to reach at least that much no matter how large
+# the fleet is. An absolute floor instead asserted replicas x per-replica rate,
+# which reactive autoscaling decides rather than the request path.
+LOAD_BASELINE_SECONDS = float(os.environ.get("E2E_LOAD_BASELINE_SECONDS", "15"))
+LOAD_MAX_SERIAL_LATENCY_SECONDS = float(os.environ.get("E2E_LOAD_MAX_SERIAL_LATENCY_SECONDS", "0.5"))
+LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY_EFFICIENCY", "0.8"))
+
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
+MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -100,6 +150,15 @@ ANOMALY_MAX_KEY_SPEND_USD = float(
 ANOMALY_SPEND_SETTLE_SECONDS = float(
     os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
 )
+
+
+def ws_base_url() -> str:
+    """PROXY_BASE_URL with its scheme swapped for the websocket one, so a suite
+    opening a socket points at the same proxy every HTTP suite uses."""
+    for scheme, ws_scheme in (("https://", "wss://"), ("http://", "ws://")):
+        if PROXY_BASE_URL.startswith(scheme):
+            return ws_scheme + PROXY_BASE_URL[len(scheme) :]
+    return PROXY_BASE_URL
 
 
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
@@ -119,7 +178,38 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
     return f"{base}?toolsets={toolsets}" if toolsets else base
 
 
+def provider_edge_base(mount: str) -> str | None:
+    """The api_base an edge-wired deployment should register with, using this
+    process's fixture-mode and edge-host configuration: None in live mode, the
+    shared edge server's mount URL in record and replay."""
+    return provider_edge_api_base(
+        mount,
+        mode_raw=FIXTURE_MODE_RAW,
+        bundle_dir=FIXTURE_DIR,
+        bind_host=PROVIDER_EDGE_BIND_HOST,
+        advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+        forward_timeout=REQUEST_TIMEOUT,
+    )
+
+
 def unique_marker() -> str:
     """A short unique token per call/run, so concurrent runs and the shared
-    response cache never collide on prompts, tags, or customer ids."""
+    response cache never collide on prompts, tags, or customer ids. In record
+    and replay modes the token is deterministic per test instead, so a replay
+    run regenerates the exact requests the record run sent."""
+    if parse_fixture_mode(FIXTURE_MODE_RAW) in ("record", "replay"):
+        return deterministic_marker()
     return uuid.uuid4().hex[:12]
+
+
+def settle_propagation(written_at: float) -> None:
+    """Block until PROPAGATION_TIMEOUT has elapsed since `written_at`, a
+    `time.monotonic()` stamp taken the moment a control-plane write returned.
+
+    Callers that already polled for the object still need this: the poll proves one
+    replica has it, not all of them. Waiting out the config-reload budget is what
+    makes the object safe to use on whichever replica the next request lands on.
+    """
+    remaining = PROPAGATION_TIMEOUT - (time.monotonic() - written_at)
+    if remaining > 0:
+        time.sleep(remaining)

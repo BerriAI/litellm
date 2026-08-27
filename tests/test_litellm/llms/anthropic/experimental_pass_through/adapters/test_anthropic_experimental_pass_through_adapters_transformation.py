@@ -1,14 +1,18 @@
-import os
-import sys
+import base64
 from typing import Any, cast
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
+import litellm
 
 
+
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+    _bedrock_converse_messages_pt,
 )
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
@@ -16,6 +20,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     create_tool_name_mapping,
     truncate_tool_name,
 )
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
     AnthropicMessagesUserMessageParam,
@@ -356,6 +361,48 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
 
 
+def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
+    """Reasoning-aware chat providers read reasoning_content, so thinking text must land there.
+
+    Without it Moonshot and DeepSeek fill in a single-space placeholder and the model gets
+    a blank where its own prior reasoning belongs.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Which city is best for a picnic?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "Denver is dry in August.", "signature": "sig1"},
+                {"type": "thinking", "thinking": "San Francisco is foggy.", "signature": "sig2"},
+                {"type": "redacted_thinking", "data": "REDACTED"},
+                {"type": "text", "text": "Denver."},
+            ],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["reasoning_content"] == "Denver is dry in August.\nSan Francisco is foggy."
+    assert result[1]["content"] == "Denver."
+
+
+def test_translate_anthropic_messages_to_openai_sets_no_reasoning_content_without_thinking():
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[{"type": "text", "text": "Denver."}],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert "reasoning_content" not in result[0]
+
+
 def test_translate_anthropic_messages_to_openai_tool_message_placement():
     """Test that tool result messages are placed before user messages in the conversation order."""
 
@@ -411,6 +458,312 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     assert (
         tool_message_idx < user_message_idx
     ), "Tool message should be placed before user message"
+
+
+@pytest.mark.parametrize(
+    ("system_content", "expected_content"),
+    [
+        ("Use the corrected result.", "Use the corrected result."),
+        (
+            [{"type": "text", "text": "Use the corrected result."}],
+            [{"type": "text", "text": "Use the corrected result."}],
+        ),
+        (
+            [
+                {
+                    "type": "image",
+                    "source": {"type": "url", "url": "https://example.com/a.png"},
+                },
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+            [{"type": "text", "text": "Use the corrected result."}],
+        ),
+        (
+            [
+                {"type": "text", "text": "First correction."},
+                {"type": "text", "text": "Second correction."},
+            ],
+            [
+                {"type": "text", "text": "First correction."},
+                {"type": "text", "text": "Second correction."},
+            ],
+        ),
+    ],
+)
+def test_translate_anthropic_messages_to_openai_preserves_midturn_system_correction(
+    system_content: object,
+    expected_content: object,
+):
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Rainy, 55°F",
+                }
+            ],
+        },
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": "Continue."},
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == [
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_01234",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Boston"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01234",
+            "content": "Rainy, 55°F",
+        },
+        {"role": "system", "content": expected_content},
+        {"role": "user", "content": "Continue."},
+    ]
+
+
+def test_translate_anthropic_messages_to_openai_preserves_midturn_system_cache_control():
+    """
+    `cache_control` on an in-sequence system text block survives, matching how the
+    hoisted top-level `system` prompt and user text blocks are already handled.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+
+def test_translate_anthropic_messages_to_openai_drops_midturn_system_cache_control_for_non_claude():
+    """
+    `cache_control` goes through the same `_add_cache_control_if_applicable` gate as the
+    hoisted top-level prompt and user text blocks, so a non-Claude *requested model name*
+    does not get it. That gate is a best-effort check of the requested name before routing
+    (behind the proxy it is often a public alias), not a guarantee about the backend that
+    ultimately serves the request.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Use the corrected result.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="gpt-4o",
+    )
+
+    assert result == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Use the corrected result."}],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "system_content",
+    [
+        "",
+        [{"type": "text", "text": ""}],
+        [
+            {
+                "type": "image",
+                "source": {"type": "url", "url": "https://example.com/a.png"},
+            }
+        ],
+        None,
+    ],
+)
+def test_translate_anthropic_messages_to_openai_drops_empty_midturn_system(
+    system_content: object,
+):
+    messages = [{"role": "system", "content": system_content}]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == []
+
+
+def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
+    """
+    Request level: the trusted top-level prompt is hoisted to index 0 exactly once and the
+    in-sequence correction keeps its own position and `role: "system"` -- no duplication of
+    either, and no reordering of the surrounding turns.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "claude-3-5-sonnet-20240620",
+            "max_tokens": 100,
+            "system": "Trusted top-level prompt.",
+            "messages": [
+                {"role": "user", "content": "First question."},
+                {"role": "assistant", "content": "First answer."},
+                {"role": "system", "content": "Use the corrected result."},
+                {"role": "user", "content": "Continue."},
+            ],
+        }
+    )
+
+    assert openai_request["messages"] == [
+        {"role": "system", "content": "Trusted top-level prompt."},
+        {"role": "user", "content": "First question."},
+        {"role": "assistant", "content": "First answer.", "thinking_blocks": None},
+        {"role": "system", "content": "Use the corrected result."},
+        {"role": "user", "content": "Continue."},
+    ]
+
+
+def _translate_with_metadata(
+    model: str, metadata: dict[str, str], custom_llm_provider: str | None
+) -> dict[str, Any]:
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": model,
+            "max_tokens": 100,
+            "metadata": metadata,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
+    return cast(dict[str, Any], openai_request)
+
+
+def test_translate_anthropic_to_openai_maps_user_id_to_prompt_cache_key_for_openai():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, "openai")
+    assert openai_request["user"] == "session-abc"
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+def test_translate_anthropic_to_openai_truncates_prompt_cache_key_but_keeps_full_user():
+    long_id = "".join(str(i % 10) for i in range(100))
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": long_id}, "openai")
+    assert openai_request["user"] == long_id
+    assert openai_request["prompt_cache_key"] == long_id[:64]
+    assert len(openai_request["prompt_cache_key"]) == 64
+
+
+@pytest.mark.parametrize("model", ["azure/my-gpt-5-deployment", "my-gpt-5-deployment"])
+def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: str):
+    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, "azure")
+    assert openai_request["prompt_cache_key"] == "session-abc"
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [
+        ("gemini/gemini-2.5-pro", "gemini"),
+        ("vertex_ai/gemini-2.5-pro", "vertex_ai"),
+        ("anthropic/claude-sonnet-4-5", "anthropic"),
+        ("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
+        ("no-such-model-lit5875", "no-such-provider-lit5875"),
+    ],
+)
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lacks_it(
+    model: str, custom_llm_provider: str
+):
+    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, custom_llm_provider)
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litellm_proxy():
+    assert "prompt_cache_key" in litellm.get_supported_openai_params(
+        model="xai", custom_llm_provider="litellm_proxy"
+    )
+    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": "session-abc"}, "litellm_proxy")
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_without_provider():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, None)
+    assert openai_request["user"] == "session-abc"
+    assert "prompt_cache_key" not in openai_request
+
+
+@pytest.mark.parametrize("user_id", ["", None])
+def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_empty_or_null_user_id(user_id: str | None):
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": user_id}, "openai")
+    assert openai_request["user"] == user_id
+    assert "prompt_cache_key" not in openai_request
+
+
+def test_translate_anthropic_to_openai_without_metadata_sets_neither_user_nor_prompt_cache_key():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "openai/gpt-5.6-luna",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        custom_llm_provider="openai",
+    )
+    assert "user" not in openai_request
+    assert "prompt_cache_key" not in openai_request
 
 
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
@@ -659,7 +1012,7 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     assert result[1]["data"] == "REDACTED"
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
+def test_translate_streaming_openai_chunk_to_anthropic_thinking_delta():
     choices = [
         StreamingChoices(
             finish_reason=None,
@@ -943,10 +1296,12 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_base64_image():
             break
 
     assert tool_message is not None, "Tool message not found in result"
-    # Tool messages in OpenAI format have string content (data URL), not list
-    assert isinstance(tool_message["content"], str)
-    assert tool_message["content"].startswith("data:image/jpeg;base64,")
-    assert "/9j/4AAQSkZJRgABAQAAAQABAAD" in tool_message["content"]
+    assert isinstance(tool_message["content"], list)
+    assert len(tool_message["content"]) == 1
+    image_part = tool_message["content"][0]
+    assert image_part["type"] == "image_url"
+    assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert "/9j/4AAQSkZJRgABAQAAAQABAAD" in image_part["image_url"]["url"]
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
@@ -999,10 +1354,12 @@ def test_translate_anthropic_messages_to_openai_tool_result_with_url_image():
             break
 
     assert tool_message is not None, "Tool message not found in result"
-    # Tool messages in OpenAI format have string content (URL), not list
-    assert isinstance(tool_message["content"], str)
+    assert isinstance(tool_message["content"], list)
+    assert len(tool_message["content"]) == 1
+    image_part = tool_message["content"][0]
+    assert image_part["type"] == "image_url"
     assert (
-        tool_message["content"]
+        image_part["image_url"]["url"]
         == "https://i0.wp.com/picjumbo.com/wp-content/uploads/amazing-stone-path-in-forest-free-image.jpg"
     )
 
@@ -1580,6 +1937,149 @@ def test_thinking_still_translated_to_reasoning_effort_for_non_claude_model():
 
     assert "thinking" not in new_kwargs
     assert new_kwargs["reasoning_effort"] == "low"
+
+
+def test_thinking_disabled_translated_to_reasoning_effort_none_for_non_claude_model():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    thinking = {"type": "disabled"}
+
+    new_kwargs = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+    adapter._translate_thinking_to_openai(cast(Any, {"thinking": thinking}), cast(Any, new_kwargs))
+
+    assert "thinking" not in new_kwargs
+    assert new_kwargs["reasoning_effort"] == "none"
+
+
+def test_thinking_disabled_stays_plain_string_when_auto_summary_enabled():
+    import litellm
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    thinking = {"type": "disabled"}
+
+    original = litellm.reasoning_auto_summary
+    try:
+        litellm.reasoning_auto_summary = True
+        new_kwargs = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+        adapter._translate_thinking_to_openai(cast(Any, {"thinking": thinking}), cast(Any, new_kwargs))
+    finally:
+        litellm.reasoning_auto_summary = original
+
+    assert new_kwargs["reasoning_effort"] == "none"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # SDK-style model with the provider prefix intact
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        # what the bridge actually sees in the proxy: get_llm_provider has
+        # already stripped the `bedrock/` prefix by the time it translates
+        "converse/us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_adaptive_thinking_output_config_effort_preserved_for_claude_model(model):
+    """
+    Regression: Claude Code drives adaptive thinking as `thinking: {"type": "adaptive"}`
+    plus `output_config: {"effort": "max"}`. The Claude branch of the thinking translator
+    forwarded `thinking` verbatim but returned early without reading `output_config`, and
+    the handler strips the raw key from extra_kwargs, so the effort tier never reached the
+    backend. On Bedrock Converse, adaptive thinking without effort streams zero reasoning
+    blocks. The `format` subkey must still be excluded (it is translated to
+    `response_format` separately).
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model=model,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "adaptive"},
+        output_config={
+            "effort": "max",
+            "format": {"type": "json_schema", "schema": {"type": "object", "properties": {}}},
+        },
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert openai_request["output_config"] == {"effort": "max"}
+    assert "response_format" in openai_request
+
+
+def test_adaptive_thinking_format_only_output_config_not_forwarded_for_claude_model():
+    """When `output_config` carries only `format`, nothing effort-bearing remains, so the
+    translator must not forward an empty `output_config` dict."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "adaptive"},
+        output_config={"format": {"type": "json_schema", "schema": {"type": "object", "properties": {}}}},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert "output_config" not in openai_request
+
+
+def test_adaptive_thinking_output_config_not_forwarded_for_non_bedrock_claude_model():
+    """`output_config` is forwarded only for Bedrock-destined Claude models. Other
+    Claude-through-bridge providers (e.g. openrouter) accept `thinking` but reject a raw
+    `output_config` param with UnsupportedParamsError when drop_params is off."""
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="openrouter/anthropic/claude-opus-4-7",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        thinking={"type": "adaptive"},
+        output_config={"effort": "max"},
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request["thinking"] == {"type": "adaptive"}
+    assert "output_config" not in openai_request
+
+
+def test_stop_sequences_translated_to_stop_for_non_claude_model():
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model=CACHE_CONTROL_NON_ANTHROPIC_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        stop_sequences=["</block>"],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert openai_request["stop"] == ["</block>"]
+    assert "stop_sequences" not in openai_request
+
+
+def test_empty_stop_sequences_does_not_set_stop():
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model=CACHE_CONTROL_NON_ANTHROPIC_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "hi"}],
+        stop_sequences=[],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, _ = adapter.translate_anthropic_to_openai(anthropic_message_request=anthropic_request)
+
+    assert "stop" not in openai_request
 
 
 def test_cache_control_preserved_in_image_content_for_claude():
@@ -3147,3 +3647,448 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     params = new_tools[0]["function"]["parameters"]
     assert params["type"] == "object"
     assert new_tools[0]["type"] == "function"
+
+
+def test_translate_anthropic_tools_to_openai_maps_strict_onto_function_not_parameters():
+    """A tool-level `strict` lands on the OpenAI function, leaving the caller's `input_schema` untouched."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    input_schema = {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    tools = [{"type": "custom", "name": "get_weather", "strict": True, "input_schema": input_schema}]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    function = new_tools[0]["function"]
+    assert function["strict"] is True
+    assert "strict" not in function["parameters"]
+    assert input_schema == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+
+
+def test_translate_anthropic_tools_to_openai_omits_unset_strict():
+    """Chat Completions already defaults to non-strict, so an unset `strict` stays unset."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    tools = [
+        {
+            "type": "custom",
+            "name": "search",
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}, "cursor": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    function = new_tools[0]["function"]
+    assert "strict" not in function
+    assert "strict" not in function["parameters"]
+    assert function["parameters"]["required"] == ["query"]
+
+
+TOOL_RESULT_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+TOOL_RESULT_IMAGE_URL = "https://example.com/screenshot.png"
+
+
+def _anthropic_tool_use_turn(*tool_use_ids):
+    return AnthopicMessagesAssistantMessageParam(
+        role="assistant",
+        content=[
+            {"type": "tool_use", "id": tid, "name": "read_file", "input": {"path": "img.png"}}
+            for tid in tool_use_ids
+        ],
+    )
+
+
+def _anthropic_tool_result_turn(blocks_by_tool_use_id):
+    return AnthropicMessagesUserMessageParam(
+        role="user",
+        content=[
+            {"type": "tool_result", "tool_use_id": tid, "content": blocks}
+            for tid, blocks in blocks_by_tool_use_id.items()
+        ],
+    )
+
+
+def _base64_image_block():
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": TOOL_RESULT_IMAGE_B64},
+    }
+
+
+def _url_image_block():
+    return {"type": "image", "source": {"type": "url", "url": TOOL_RESULT_IMAGE_URL}}
+
+
+def _run_chat_completions_pipeline(anthropic_messages):
+    """Anthropic /v1/messages input -> chat adapter -> the OpenAI-compatible
+    request transformation every OpenAIGPTConfig-based provider runs."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+    request = OpenAIGPTConfig().transform_request(
+        model="gpt-5.4-mini", messages=translated, optional_params={}, litellm_params={}, headers={}
+    )
+    return request["messages"]
+
+
+def _images_in_tool_messages(messages):
+    found = []
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.startswith("data:image"):
+            found.append(content)
+        elif isinstance(content, list):
+            found.extend(p for p in content if isinstance(p, dict) and p.get("type") == "image_url")
+    return found
+
+
+def _image_urls_in_user_messages(messages):
+    return [
+        part["image_url"]["url"]
+        for message in messages
+        if message.get("role") == "user" and isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    ]
+
+
+@pytest.mark.parametrize(
+    "image_block,expected_url_prefix",
+    [
+        (_base64_image_block(), "data:image/png;base64,"),
+        (_url_image_block(), TOOL_RESULT_IMAGE_URL),
+    ],
+    ids=["base64_source", "url_source"],
+)
+def test_tool_result_single_image_visible_after_openai_transform(image_block, expected_url_prefix):
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [image_block]}),
+        ]
+    )
+
+    assert _images_in_tool_messages(result) == []
+    user_image_urls = _image_urls_in_user_messages(result)
+    assert len(user_image_urls) == 1
+    assert user_image_urls[0].startswith(expected_url_prefix)
+
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "toolu_01"
+    assert tool_messages[0]["content"] == TOOL_RESULT_IMAGE_PLACEHOLDER
+
+
+def test_tool_result_text_and_image_visible_after_openai_transform():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {"toolu_01": [{"type": "text", "text": "screenshot saved"}, _base64_image_block()]}
+            ),
+        ]
+    )
+
+    assert _images_in_tool_messages(result) == []
+    assert len(_image_urls_in_user_messages(result)) == 1
+
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert tool_messages[0]["content"] == [{"type": "text", "text": "screenshot saved"}]
+
+
+def test_tool_result_two_images_visible_after_openai_transform():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_base64_image_block(), _base64_image_block()]}),
+        ]
+    )
+
+    assert _images_in_tool_messages(result) == []
+    assert len(_image_urls_in_user_messages(result)) == 2
+
+
+def test_tool_result_parallel_tool_calls_keep_tool_message_adjacency():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01", "toolu_02"),
+            _anthropic_tool_result_turn(
+                {"toolu_01": [_base64_image_block()], "toolu_02": [_url_image_block()]}
+            ),
+        ]
+    )
+
+    roles = [m.get("role") for m in result]
+    assert roles == ["assistant", "tool", "tool", "user"]
+    assert _images_in_tool_messages(result) == []
+    assert len(_image_urls_in_user_messages(result)) == 2
+
+
+@pytest.mark.parametrize(
+    "image_block",
+    [
+        {"type": "image", "source": {"type": "unsupported"}},
+        {"type": "image"},
+        {"type": "image", "source": "https://example.com/screenshot.png"},
+    ],
+    ids=["untranslatable_source", "missing_source", "non_dict_source"],
+)
+def test_tool_result_malformed_image_source_keeps_empty_tool_content(image_block):
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [image_block]}),
+        ]
+    )
+
+    tool_messages = [m for m in translated if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == ""
+
+
+def test_tool_result_plain_text_unchanged_by_openai_transform():
+    result = _run_chat_completions_pipeline(
+        [
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [{"type": "text", "text": "42 files found"}]}),
+        ]
+    )
+
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == "42 files found"
+    assert _image_urls_in_user_messages(result) == []
+
+
+TOOL_RESULT_PDF_B64 = base64.b64encode(b"%PDF-1.4 minimal regression fixture").decode()
+
+
+def _base64_pdf_block():
+    return {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": TOOL_RESULT_PDF_B64},
+    }
+
+
+def test_tool_result_single_document_kept_as_pdf_data_url():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_base64_pdf_block()]}),
+        ]
+    )
+
+    tool_messages = [m for m in translated if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["content"] == [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:application/pdf;base64,{TOOL_RESULT_PDF_B64}"},
+        }
+    ]
+
+
+def test_tool_result_text_and_document_reach_bedrock_converse_tool_result():
+    """Claude Code >= 2.1.245 sends Read-tool PDF output as a document block inside
+    tool_result; dropping it left bedrock converse models blind to the PDF content."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    translated = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            AnthropicMessagesUserMessageParam(role="user", content="Read pong.pdf"),
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {
+                    "toolu_01": [
+                        {"type": "text", "text": "PDF file read: pong.pdf (579 bytes)"},
+                        _base64_pdf_block(),
+                    ]
+                }
+            ),
+        ]
+    )
+
+    converse_messages = _bedrock_converse_messages_pt(
+        messages=translated,
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    tool_results = [
+        block["toolResult"]
+        for message in converse_messages
+        for block in message["content"]
+        if "toolResult" in block
+    ]
+    assert len(tool_results) == 1
+    documents = [part["document"] for part in tool_results[0]["content"] if "document" in part]
+    assert len(documents) == 1
+    assert documents[0]["format"] == "pdf"
+    assert documents[0]["source"]["bytes"] == TOOL_RESULT_PDF_B64
+    texts = [part["text"] for part in tool_results[0]["content"] if "text" in part]
+    assert texts == ["PDF file read: pong.pdf (579 bytes)"]
+
+
+def test_translate_anthropic_to_openai_carries_prompt_cache_breakpoint_on_system_and_user_blocks():
+    explicit = {"mode": "explicit"}
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "gpt-5.6",
+            "max_tokens": 64,
+            "system": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": explicit}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hi", "prompt_cache_breakpoint": explicit},
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/a.png"},
+                            "prompt_cache_breakpoint": explicit,
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    assert openai_request["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": explicit}],
+    }
+    user_content = openai_request["messages"][1]["content"]
+    assert user_content[0] == {"type": "text", "text": "hi", "prompt_cache_breakpoint": explicit}
+    assert user_content[1]["type"] == "image_url"
+    assert user_content[1]["prompt_cache_breakpoint"] == explicit
+
+
+def test_translate_anthropic_to_openai_without_prompt_cache_breakpoint_adds_nothing():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "gpt-5.6",
+            "max_tokens": 64,
+            "system": [{"type": "text", "text": "sys"}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+    )
+    assert openai_request["messages"][0] == {"role": "system", "content": [{"type": "text", "text": "sys"}]}
+    assert openai_request["messages"][1]["content"] == [{"type": "text", "text": "hi"}]
+
+
+def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_cache_breakpoint():
+    explicit = {"mode": "explicit"}
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[{"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}],
+        model="gpt-5.6",
+    )
+    assert result == [
+        {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
+    ]
+
+
+def _openai_response_with_usage(usage: Usage) -> ModelResponse:
+    return ModelResponse(
+        id="resp_web_search",
+        model="gemini-3-flash-preview",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content="searched"),
+            )
+        ],
+        usage=usage,
+    )
+
+
+def test_translate_openai_response_to_anthropic_maps_gemini_web_search_usage():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    usage = Usage(
+        prompt_tokens=385,
+        completion_tokens=566,
+        total_tokens=951,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=385, web_search_requests=2),
+    )
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(usage)
+    )
+
+    assert anthropic_response["usage"]["server_tool_use"] == {"web_search_requests": 2}
+
+
+def test_translate_openai_response_to_anthropic_maps_server_tool_use_web_search_usage():
+    from litellm.types.utils import ServerToolUse
+
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=40,
+        total_tokens=140,
+        server_tool_use=ServerToolUse(web_search_requests=3),
+    )
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(usage)
+    )
+
+    assert anthropic_response["usage"]["server_tool_use"] == {"web_search_requests": 3}
+
+
+def test_translate_openai_response_to_anthropic_omits_server_tool_use_without_web_search():
+    usage = Usage(prompt_tokens=100, completion_tokens=40, total_tokens=140)
+
+    anthropic_response = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(usage)
+    )
+
+    assert "server_tool_use" not in anthropic_response["usage"]
+
+
+def test_completion_cost_on_translated_anthropic_response_includes_web_search():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    with_search = adapter.translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(
+            Usage(
+                prompt_tokens=385,
+                completion_tokens=566,
+                total_tokens=951,
+                prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=385, web_search_requests=2),
+            )
+        )
+    )
+    without_search = adapter.translate_openai_response_to_anthropic(
+        response=_openai_response_with_usage(Usage(prompt_tokens=385, completion_tokens=566, total_tokens=951))
+    )
+
+    cost_with_search = litellm.completion_cost(
+        completion_response=with_search,
+        model="gemini/gemini-3-flash-preview",
+        call_type="anthropic_messages",
+    )
+    cost_without_search = litellm.completion_cost(
+        completion_response=without_search,
+        model="gemini/gemini-3-flash-preview",
+        call_type="anthropic_messages",
+    )
+
+    per_query_cost = litellm.model_cost["gemini/gemini-3-flash-preview"]["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    assert per_query_cost > 0
+    assert cost_with_search - cost_without_search == pytest.approx(2 * per_query_cost)

@@ -16,7 +16,11 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import UnknownApiError, unwrap
-from guardrails_client import GuardrailsClient, OpenAIModerationParamsBody
+from guardrails_client import (
+    GuardrailsClient,
+    OpenAIModerationParamsBody,
+    poll_until_blocked,
+)
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -45,7 +49,9 @@ class TestOpenAIModerationGuardrail:
         )
         resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
-        blocked = client.chat(scoped_key, model, FLAGGED_PROMPT, guardrails=[name])
+        blocked = poll_until_blocked(
+            lambda: client.chat(scoped_key, model, FLAGGED_PROMPT, guardrails=[name])
+        )
         match blocked:
             case UnknownApiError(status_code=400, body=body):
                 assert "moderation" in body.lower(), (

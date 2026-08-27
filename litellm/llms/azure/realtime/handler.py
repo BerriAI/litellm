@@ -4,7 +4,9 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Optional, cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Final, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -25,18 +27,33 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
         while True:
             message = await backend_ws.recv()
             await client_ws.send_text(message)
-    except websockets.exceptions.ConnectionClosed:  # type: ignore
+    except websockets.exceptions.ConnectionClosed:
         pass
 
 
 class AzureOpenAIRealtime(AzureChatCompletion):
+    @staticmethod
+    def get_auth_headers(api_key: str | None, azure_ad_token: str | None) -> Mapping[str, str]:
+        """
+        Build the websocket handshake auth headers, preferring a static api-key and falling back to
+        an Azure AD (Entra ID) bearer token. Never sends both.
+        """
+        if api_key:
+            return MappingProxyType({"api-key": api_key})
+        if azure_ad_token:
+            return MappingProxyType({"Authorization": f"Bearer {azure_ad_token}"})
+        raise ValueError(
+            "Missing Azure credentials for the realtime endpoint. Set an api_key, or configure Azure AD auth "
+            "(azure_ad_token, tenant_id/client_id/client_secret, or a managed identity)"
+        )
+
     def _construct_url(
         self,
         api_base: str,
         model: str,
-        api_version: Optional[str],
-        realtime_protocol: Optional[str] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
+        api_version: str | None,
+        realtime_protocol: str | None = None,
+        query_params: RealtimeQueryParams | None = None,
     ) -> str:
         """
         Construct Azure realtime WebSocket URL.
@@ -62,11 +79,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_base = api_base.replace("https://", "wss://")
 
         # Determine path based on realtime_protocol (case-insensitive)
-        _is_ga = realtime_protocol is not None and realtime_protocol.upper() in (
+        _is_ga: Final = realtime_protocol is not None and realtime_protocol.upper() in (
             "GA",
             "V1",
         )
-        intent = (query_params or {}).get("intent")
+        intent: Final = (query_params or {}).get("intent")
 
         if _is_ga:
             path = "/openai/v1/realtime"
@@ -81,7 +98,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         if intent:
             query_parts.append(urlencode({"intent": intent}))
 
-        qs = "&".join(query_parts)
+        qs: Final = "&".join(query_parts)
         return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
 
     async def async_realtime(
@@ -89,27 +106,27 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLogging,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_version: Optional[str] = None,
-        azure_ad_token: Optional[str] = None,
-        client: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        realtime_protocol: Optional[str] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[dict] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        api_version: str | None = None,
+        azure_ad_token: str | None = None,
+        client: Any | None = None,
+        timeout: float | None = None,
+        realtime_protocol: str | None = None,
+        query_params: RealtimeQueryParams | None = None,
+        user_api_key_dict: Any | None = None,
+        litellm_metadata: dict | None = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        backend_uses_beta_protocol = realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
+        backend_uses_beta_protocol: Final = realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
         if api_version is None and backend_uses_beta_protocol:
             raise ValueError("api_version is required for Azure OpenAI calls")
 
-        url = self._construct_url(
+        url: Final = self._construct_url(
             api_base,
             model,
             api_version,
@@ -117,17 +134,17 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_params=query_params,
         )
 
+        auth_headers: Final = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
+
         try:
-            ssl_context = get_shared_realtime_ssl_context()
-            async with websockets.connect(  # type: ignore
+            ssl_context: Final = get_shared_realtime_ssl_context()
+            async with websockets.connect(
                 url,
-                additional_headers={
-                    "api-key": api_key,  # type: ignore
-                },
+                additional_headers=auth_headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:
-                realtime_streaming = RealTimeStreaming(
+                realtime_streaming: Final = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
@@ -141,8 +158,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 )
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
+        except websockets.exceptions.InvalidStatusCode as e:
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
-            pass

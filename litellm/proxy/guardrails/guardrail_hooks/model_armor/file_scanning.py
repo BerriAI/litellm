@@ -15,21 +15,22 @@ is false) rather than letting an unscanned document reach the model.
 import base64
 import binascii
 import mimetypes
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Literal, Sequence
+from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.llms.openai import AllMessageValues
 
-MODEL_ARMOR_MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024
+MODEL_ARMOR_MAX_FILE_SIZE_BYTES: Final = 4 * 1024 * 1024
 
-_REMOTE_URI_SCHEMES = ("gs://", "http://", "https://")
+_REMOTE_URI_SCHEMES: Final = ("gs://", "http://", "https://")
 
 ModelArmorByteDataType = Literal["PDF", "WORD_DOCUMENT", "EXCEL_DOCUMENT", "POWERPOINT_DOCUMENT", "CSV", "TXT"]
 
-_MIME_TO_BYTE_DATA_TYPE: tuple[tuple[str, ModelArmorByteDataType], ...] = (
+_MIME_TO_BYTE_DATA_TYPE: Final[tuple[tuple[str, ModelArmorByteDataType], ...]] = (
     ("application/pdf", "PDF"),
     # Word family: legacy, OOXML, macro-enabled, and templates all map to WORD_DOCUMENT
     ("application/msword", "WORD_DOCUMENT"),
@@ -97,7 +98,7 @@ class _DocumentBlock(BaseModel):
 
 
 _AttachmentBlock = Annotated[_FileBlock | _DocumentBlock, Field(discriminator="type")]
-_BLOCK_ADAPTER: TypeAdapter[_FileBlock | _DocumentBlock] = TypeAdapter(_AttachmentBlock)
+_BLOCK_ADAPTER: Final[TypeAdapter[_FileBlock | _DocumentBlock]] = TypeAdapter(_AttachmentBlock)
 
 
 def plan_file_scans(messages: Sequence[AllMessageValues]) -> FileScanPlan:
@@ -107,20 +108,20 @@ def plan_file_scans(messages: Sequence[AllMessageValues]) -> FileScanPlan:
     base64 fails to decode; the hook fails closed on these. Inline content of an unsupported
     type (for example an image) is neither scanned nor counted, it is simply left alone.
     """
-    classified = tuple(_classify_block(block) for message in messages for block in _content_blocks(message))
-    attachments = tuple(attachment for attachment, _ in classified if attachment is not None)
+    classified: Final = tuple(_classify_block(block) for message in messages for block in _content_blocks(message))
+    attachments: Final = tuple(attachment for attachment, _ in classified if attachment is not None)
     unscannable_count = sum(1 for attachment, is_unscannable in classified if attachment is None and is_unscannable)
     return FileScanPlan(attachments=attachments, unscannable_count=unscannable_count)
 
 
 def _content_blocks(message: AllMessageValues) -> tuple[object, ...]:
-    content = message.get("content")
+    content: Final = message.get("content")
     return tuple(content) if isinstance(content, list) else ()
 
 
 def _classify_block(block: object) -> tuple[ModelArmorFileAttachment | None, bool]:
     """Return (attachment, is_unscannable). At most one is meaningful; (None, False) means skip."""
-    parsed = _parse_block(block)
+    parsed: Final = _parse_block(block)
     if parsed is None:
         return None, False
     if _is_reference(parsed):
@@ -133,7 +134,7 @@ def _classify_block(block: object) -> tuple[ModelArmorFileAttachment | None, boo
         # Recognized inline content of a type Model Armor's byte API does not scan (e.g. an image).
         return None, False
 
-    decoded = _safe_b64decode(data)
+    decoded: Final = _safe_b64decode(data)
     if decoded is None:
         # A supported document whose base64 will not decode cannot be scanned, so fail closed.
         return None, True
@@ -144,7 +145,7 @@ def _classify_block(block: object) -> tuple[ModelArmorFileAttachment | None, boo
 def _is_reference(block: _FileBlock | _DocumentBlock) -> bool:
     if isinstance(block, _DocumentBlock):
         return not block.source.data
-    raw = block.file.file_data
+    raw: Final = block.file.file_data
     return not raw or _is_remote_uri(raw)
 
 
@@ -161,7 +162,7 @@ def _block_byte_data_type_and_data(
     if isinstance(block, _DocumentBlock):
         return _mime_to_byte_data_type(block.source.media_type), block.source.data
 
-    raw = block.file.file_data
+    raw: Final = block.file.file_data
     if not raw:
         return None, None
     uri_mime, data = _parse_data_uri(raw)
@@ -171,8 +172,8 @@ def _block_byte_data_type_and_data(
     # or mislabeled (text/plain for a PDF). Prefer the explicit format and filename, falling back to
     # the header only when neither resolves, and warn rather than let a conflicting header downgrade a
     # recognized document to the wrong filter.
-    declared = _first_supported_byte_data_type((block.file.format, _mime_from_filename(block.file.filename)))
-    header = _mime_to_byte_data_type(uri_mime)
+    declared: Final = _first_supported_byte_data_type((block.file.format, _mime_from_filename(block.file.filename)))
+    header: Final = _mime_to_byte_data_type(uri_mime)
     if declared is None:
         return header, data
     if header is not None and header != declared:
@@ -205,7 +206,7 @@ def _parse_data_uri(raw: str) -> tuple[str | None, str | None]:
 def _mime_to_byte_data_type(mime: str | None) -> ModelArmorByteDataType | None:
     if mime is None:
         return None
-    normalized = mime.split(";")[0].strip().lower()
+    normalized: Final = mime.split(";")[0].strip().lower()
     return next(
         (byte_data_type for candidate, byte_data_type in _MIME_TO_BYTE_DATA_TYPE if candidate == normalized), None
     )

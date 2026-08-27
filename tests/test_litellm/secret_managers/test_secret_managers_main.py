@@ -1,10 +1,20 @@
+import base64
+import json
 import logging
 import os
+import time
 from unittest.mock import Mock, patch
 
 import pytest
 
-from litellm.secret_managers.main import get_secret, normalize_nonempty_secret_str
+import litellm
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.secret_managers.main import (
+    get_secret,
+    normalize_nonempty_secret_str,
+    secret_manager_would_be_consulted,
+)
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -93,6 +103,100 @@ def test_oidc_google_cached():
     assert result == "cached_token", f"Expected cached token, got {result}"
     mock_oidc_cache.get_cache.assert_called_with(key=secret_name)
     mock_get_http_handler.assert_not_called()
+
+
+def _jwt_with_exp(exp: int) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256"}).encode()).rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).rstrip(b"=").decode()
+    return f"{header}.{payload}.signature"
+
+
+def test_oidc_google_cache_ttl_capped_by_token_exp():
+    """A token the metadata server returns near its expiry must not be cached past
+    its exp claim; the cached-entry TTL is exp - now - 60s, not the 59m default."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_handler.text = _jwt_with_exp(int(time.time()) + 300)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == mock_handler.text
+    mock_oidc_cache.set_cache.assert_called_once()
+    ttl = mock_oidc_cache.set_cache.call_args.kwargs["ttl"]
+    assert 0 < ttl <= 240
+
+
+def test_oidc_google_expired_token_not_cached():
+    """An already-expired token is returned (STS gives the authoritative error) but
+    never cached, so the next call fetches a fresh token instead of replaying it."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_handler.text = _jwt_with_exp(int(time.time()) - 10)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == mock_handler.text
+    mock_oidc_cache.set_cache.assert_not_called()
+
+
+def test_oidc_google_long_lived_token_still_capped_at_default_ttl():
+    """A token expiring far in the future must not extend the cache past the
+    59m policy ceiling; exp only ever shortens the TTL."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_handler.text = _jwt_with_exp(int(time.time()) + 7200)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == mock_handler.text
+    mock_oidc_cache.set_cache.assert_called_once_with(
+        key=secret_name, value=mock_handler.text, ttl=3540
+    )
+
+
+def test_oidc_google_non_jwt_token_keeps_default_ttl():
+    """A token without a readable exp claim falls back to the 59m default TTL."""
+    secret_name = "oidc/google/https://example.com/api"
+    mock_handler = MockHTTPHandler(timeout=600.0)
+    mock_get_http_handler = Mock(return_value=mock_handler)
+    mock_oidc_cache = Mock()
+    mock_oidc_cache.get_cache.return_value = None
+
+    with patch("litellm.secret_managers.main.oidc_cache", mock_oidc_cache):
+        with patch(
+            "litellm.secret_managers.main._get_oidc_http_handler",
+            mock_get_http_handler,
+        ):
+            result = get_secret(secret_name)
+
+    assert result == "mocked_token"
+    mock_oidc_cache.set_cache.assert_called_once_with(
+        key=secret_name, value="mocked_token", ttl=3540
+    )
 
 
 def test_oidc_google_failure():
@@ -267,3 +371,63 @@ def test_unsupported_oidc_provider():
 )
 def test_normalize_nonempty_secret_str(raw, expected):
     assert normalize_nonempty_secret_str(raw) == expected
+
+
+class _SpySecretManager(CustomSecretManager):
+    """Records every name the manager is actually asked for."""
+
+    def __init__(self, asked):
+        self.asked = asked
+
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self.asked.append(secret_name)
+        return "a-value"
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
+        self.asked.append(secret_name)
+        return "a-value"
+
+
+@pytest.mark.parametrize(
+    ("access_mode", "hosted_keys", "secret_name", "expected"),
+    [
+        ("read_only", None, "ANY_NAME", True),
+        ("read_only", ["ALLOWED"], "ALLOWED", True),
+        ("read_only", ["ALLOWED"], "NOT_ALLOWED", False),
+        ("read_and_write", ["ALLOWED"], "ALLOWED", True),
+        ("write_only", None, "ANY_NAME", False),
+        ("write_only", ["ALLOWED"], "ALLOWED", False),
+    ],
+)
+def test_secret_manager_would_be_consulted_matches_get_secret(
+    monkeypatch, access_mode, hosted_keys, secret_name, expected
+):
+    """The predicate must agree with what get_secret actually does, not with a reading of it.
+
+    Callers use it to tell "the manager does not have this key" apart from "the manager was
+    never asked", so a predicate that drifts from get_secret's gating makes them state a
+    lookup that never happened.
+    """
+    asked = []
+    monkeypatch.setattr(litellm, "secret_manager_client", _SpySecretManager(asked))
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(access_mode=access_mode, hosted_keys=hosted_keys),
+    )
+    monkeypatch.delenv(secret_name, raising=False)
+
+    predicted = secret_manager_would_be_consulted(f"os.environ/{secret_name}")
+    get_secret(f"os.environ/{secret_name}")
+
+    assert {"predicted": predicted, "actually_consulted": bool(asked)} == {
+        "predicted": expected,
+        "actually_consulted": expected,
+    }
+
+
+def test_secret_manager_would_be_consulted_is_false_without_a_client(monkeypatch):
+    monkeypatch.setattr(litellm, "secret_manager_client", None)
+
+    assert secret_manager_would_be_consulted("os.environ/ANY_NAME") is False

@@ -10,7 +10,7 @@ be of type Object`.
 Reference: https://docs.cohere.com/v2/reference/embed
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -37,7 +37,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["encoding_format", "dimensions", "input_type"]
 
     def map_openai_params(
@@ -55,7 +55,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
             optional_params["input_type"] = non_default_params["input_type"]
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def transform_embedding_request(
@@ -69,11 +69,11 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         Transform embedding request for Cohere models on SageMaker
         """
         if isinstance(input, str):
-            input_list: List[str] = [input]
+            input_list: list[str] = [input]
         elif isinstance(input, list):
             if input and (isinstance(input[0], list) or isinstance(input[0], int)):
                 raise ValueError("Input must be a list of strings")
-            input_list = cast(List[str], input)
+            input_list = cast(list[str], input)
         else:
             input_list = [str(input)]
 
@@ -91,7 +91,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: Response,
         model_response: "EmbeddingResponse",
         logging_obj: Any,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -122,11 +122,11 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment for SageMaker Cohere embeddings

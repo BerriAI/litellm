@@ -1,5 +1,3 @@
-import os
-import sys
 import traceback
 from litellm._uuid import uuid
 import datetime as dt
@@ -11,19 +9,15 @@ from fastapi.routing import APIRoute
 
 load_dotenv()
 import io
-import os
 import time
 
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import logging
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 import pytest
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Dict, List, Optional
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
@@ -28,7 +28,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> DBSpendUpdateTransactions:
         """Flush all updates from the queue and return all updates aggregated by entity type."""
-        updates = await self.flush_all_updates_from_in_memory_queue()
+        updates: Final = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d spend update items from in-memory queue",
@@ -51,15 +51,14 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
     async def aggregate_queue_updates(self):
         """Concatenate all updates in the queue to reduce the size of in-memory queue"""
-        updates: List[SpendUpdateQueueItem] = await self.flush_all_updates_from_in_memory_queue()
-        aggregated_updates = self._get_aggregated_spend_update_queue_item(updates)
+        updates: Final[list[SpendUpdateQueueItem]] = await self.flush_all_updates_from_in_memory_queue()
+        aggregated_updates: Final = self._get_aggregated_spend_update_queue_item(updates)
         for update in aggregated_updates:
             await self.update_queue.put(update)
-        return
 
     def _get_aggregated_spend_update_queue_item(
-        self, updates: List[SpendUpdateQueueItem]
-    ) -> List[SpendUpdateQueueItem]:
+        self, updates: list[SpendUpdateQueueItem]
+    ) -> list[SpendUpdateQueueItem]:
         """
         This is used to reduce the size of the in-memory queue by aggregating updates by entity type + id
 
@@ -102,9 +101,9 @@ class SpendUpdateQueue(BaseUpdateQueue):
             "Aggregating spend updates, current queue size: %s",
             self.update_queue.qsize(),
         )
-        aggregated_spend_updates: List[SpendUpdateQueueItem] = []
+        aggregated_spend_updates: Final[list[SpendUpdateQueueItem]] = []
 
-        _in_memory_map: Dict[str, SpendUpdateQueueItem] = {}
+        _in_memory_map: Final[dict[str, SpendUpdateQueueItem]] = {}
         """
         Used for combining several updates into a single update
         Key=entity_type:entity_id
@@ -127,11 +126,11 @@ class SpendUpdateQueue(BaseUpdateQueue):
         return aggregated_spend_updates
 
     def get_aggregated_db_spend_update_transactions(
-        self, updates: List[SpendUpdateQueueItem]
+        self, updates: list[SpendUpdateQueueItem]
     ) -> DBSpendUpdateTransactions:
         """Aggregate updates by entity type."""
         # Initialize all transaction lists as empty dicts
-        db_spend_update_transactions = DBSpendUpdateTransactions(
+        db_spend_update_transactions: Final = DBSpendUpdateTransactions(
             user_list_transactions={},
             end_user_list_transactions={},
             key_list_transactions={},
@@ -143,7 +142,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
         )
 
         # Map entity types to their corresponding transaction dictionary keys
-        entity_type_to_dict_key = {
+        entity_type_to_dict_key: Final = {
             Litellm_EntityType.USER: "user_list_transactions",
             Litellm_EntityType.END_USER: "end_user_list_transactions",
             Litellm_EntityType.KEY: "key_list_transactions",
@@ -198,7 +197,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict = {}
 
                 # type ignore: dict_key is guaranteed to be one of "one of ("user_list_transactions", "end_user_list_transactions", "key_list_transactions", "team_list_transactions", "team_member_list_transactions", "org_list_transactions")"
-                db_spend_update_transactions[dict_key] = transactions_dict  # type: ignore
+                db_spend_update_transactions[dict_key] = transactions_dict
 
             if entity_id not in transactions_dict:
                 transactions_dict[entity_id] = 0
@@ -209,7 +208,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
 
     async def _emit_new_item_added_to_queue_event(
         self,
-        queue_size: Optional[int] = None,
+        queue_size: int | None = None,
     ):
         asyncio.create_task(
             service_logger_obj.async_service_success_hook(

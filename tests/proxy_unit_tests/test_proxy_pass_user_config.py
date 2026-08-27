@@ -3,13 +3,10 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import io
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -24,7 +21,6 @@ logging.basicConfig(
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
-import os
 from litellm.proxy.proxy_server import (
     router,
     save_worker_config,

@@ -1,4 +1,4 @@
-from typing import List, Union, cast
+from typing import Final, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -10,7 +10,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def is_tokens_or_list_of_tokens(value: List):
+def is_tokens_or_list_of_tokens(value: list):
     # Check if it's a list of integers (tokens)
     if isinstance(value, list) and all(isinstance(item, int) for item in value):
         return True
@@ -23,10 +23,10 @@ def is_tokens_or_list_of_tokens(value: List):
 
 
 def _transform_prompt(
-    messages: Union[List[AllMessageValues], List[OpenAITextCompletionUserMessage]],
+    messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
 ) -> AllPromptValues:
     if len(messages) == 1:  # base case
-        message_content = messages[0].get("content")
+        message_content: Final = messages[0].get("content")
         if message_content and isinstance(message_content, list) and is_tokens_or_list_of_tokens(message_content):
             openai_prompt: AllPromptValues = cast(AllPromptValues, message_content)
         else:
@@ -34,7 +34,7 @@ def _transform_prompt(
             content = convert_content_list_to_str(cast(AllMessageValues, messages[0]))
             openai_prompt += content
     else:
-        prompt_str_list: List[str] = []
+        prompt_str_list: Final[list[str]] = []
         for m in messages:
             try:  # expect list of int/list of list of int to be a 1 message array only.
                 content = convert_content_list_to_str(cast(AllMessageValues, m))

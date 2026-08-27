@@ -6,7 +6,7 @@ Handles retrieving secrets from different secret management systems.
 
 import base64
 import os
-from typing import Any, Optional
+from typing import Any, Final
 
 import litellm
 from litellm._logging import print_verbose
@@ -27,8 +27,8 @@ def get_secret_from_manager(
     client: Any,
     key_manager: str,
     secret_name: str,
-    key_management_settings: Optional[Any] = None,
-) -> Optional[str]:
+    key_management_settings: Any | None = None,
+) -> str | None:
     """
     Get a secret from the configured secret manager.
 
@@ -59,10 +59,10 @@ def get_secret_from_manager(
         encrypted_secret: Any = os.getenv(secret_name)
         if encrypted_secret is None:
             raise ValueError("Google KMS requires the encrypted secret to be in the environment!")
-        b64_flag = _is_base64(encrypted_secret)
+        b64_flag: Final = _is_base64(encrypted_secret)
         if b64_flag is True:  # if passed in as encoded b64 string
             encrypted_secret = base64.b64decode(encrypted_secret)
-            ciphertext = encrypted_secret
+            ciphertext: Final = encrypted_secret
         else:
             raise ValueError(
                 "Google KMS requires the encrypted secret to be encoded in base64"
@@ -79,19 +79,19 @@ def get_secret_from_manager(
         """
         Only check the tokens which start with 'aws_kms/'. This prevents latency impact caused by checking all keys.
         """
-        encrypted_value = os.getenv(secret_name, None)
+        encrypted_value: Final = os.getenv(secret_name, None)
         if encrypted_value is None:
-            raise Exception("AWS KMS - Encrypted Value of Key={} is None".format(secret_name))
+            raise Exception(f"AWS KMS - Encrypted Value of Key={secret_name} is None")
         # Decode the base64 encoded ciphertext
-        ciphertext_blob = base64.b64decode(encrypted_value)
+        ciphertext_blob: Final = base64.b64decode(encrypted_value)
 
         # Set up the parameters for the decrypt call
-        params = {"CiphertextBlob": ciphertext_blob}
+        params: Final = {"CiphertextBlob": ciphertext_blob}
         # Perform the decryption
         response = client.decrypt(**params)
 
         # Extract and decode the plaintext
-        plaintext = response["Plaintext"]
+        plaintext: Final = response["Plaintext"]
         secret = plaintext.decode("utf-8")
         if isinstance(secret, str):
             secret = secret.strip()
@@ -119,7 +119,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in Google Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {str(e)}")
+            print_verbose(f"An error occurred - {e}")
             raise e
 
     elif key_manager == KeyManagementSystem.HASHICORP_VAULT.value:
@@ -128,7 +128,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in Hashicorp Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {str(e)}")
+            print_verbose(f"An error occurred - {e}")
             raise e
 
     elif key_manager == KeyManagementSystem.CYBERARK.value:
@@ -137,7 +137,7 @@ def get_secret_from_manager(
             if secret is None:
                 raise ValueError(f"No secret found in CyberArk Secret Manager for {secret_name}")
         except Exception as e:
-            print_verbose(f"An error occurred - {str(e)}")
+            print_verbose(f"An error occurred - {e}")
             raise e
 
     elif key_manager == KeyManagementSystem.CUSTOM.value:
