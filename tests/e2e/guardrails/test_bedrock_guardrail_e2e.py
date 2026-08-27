@@ -1,9 +1,12 @@
-"""Live e2e: Bedrock ApplyGuardrail pre_call blocks denied input on chat.
+"""Live e2e: Bedrock ApplyGuardrail blocks on chat, pre_call and post_call.
 
-Registers a default-on bedrock guardrail via POST /guardrails with identifier/
+pre_call registers a bedrock guardrail via POST /guardrails with identifier/
 version from env, then sends a prompt the guardrail's configured policy denies.
 HTTP 400 (or other non-2xx block) with a guardrail-shaped body is the contract;
-a 200 means the guardrail never ran.
+a 200 means the guardrail never ran. post_call scans the MODEL OUTPUT only, so
+its test makes the model echo the word the guardrail's word policy denies
+(BEDROCK_GUARDRAIL_BLOCKED_WORD, default FORBIDDENWORD) and the block must
+arrive without leaking the model's text.
 
 No AWS keys are passed: the gateway signs ApplyGuardrail with its own
 pod-identity role, since the static AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
@@ -18,7 +21,11 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import UnknownApiError
-from guardrails_client import GuardrailsClient, poll_until_blocked
+from guardrails_client import (
+    BedrockGuardrailParamsBody,
+    GuardrailsClient,
+    poll_until_blocked,
+)
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -74,4 +81,53 @@ class TestBedrockGuardrail:
             case _:
                 pytest.fail(
                     f"bedrock default-on guardrail did not block harmful prompt; got {result}"
+                )
+
+    @pytest.mark.covers(
+        "guardrail.bedrock.post_call.blocks",
+        exercised_on=["chat_completions"],
+    )
+    def test_bedrock_post_call_blocks_denied_model_output(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        identifier = os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"]
+        version = os.environ["BEDROCK_GUARDRAIL_VERSION"]
+        blocked_word = os.environ.get("BEDROCK_GUARDRAIL_BLOCKED_WORD", "FORBIDDENWORD")
+
+        name = f"e2e-bedrock-post-{unique_marker()}"
+        guardrail_id = client.register(
+            name,
+            BedrockGuardrailParamsBody(
+                mode="post_call",
+                default_on=False,
+                guardrailIdentifier=identifier,
+                guardrailVersion=version,
+            ),
+        )
+        resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        # post_call scans OUTPUT only, so the denied word has to come out of the
+        # model: ask it to echo the word verbatim. The word in the prompt itself
+        # is not scanned in this mode.
+        prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
+        result = poll_until_blocked(
+            lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
+        )
+
+        match result:
+            case UnknownApiError(status_code=status, body=body):
+                assert status in {400, 403}, (
+                    f"expected a guardrail block status, got {status}: {body[:400]}"
+                )
+                body_lower = body.lower()
+                assert any(
+                    token in body_lower
+                    for token in ("guardrail", "violated", "blocked", "intervened")
+                ), f"block body should name the guardrail reason; got: {body[:400]}"
+                assert blocked_word not in body, (
+                    f"the blocked model output must not leak into the error body; got: {body[:400]}"
+                )
+            case _:
+                pytest.fail(
+                    f"bedrock post_call guardrail did not block denied model output; got {result}"
                 )
