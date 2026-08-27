@@ -2,8 +2,11 @@ import json
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.embedding.transformation import (
@@ -84,8 +87,8 @@ def test_github_copilot_embedding_config_get_complete_url():
     )
     assert url == "https://api.enterprise.githubcopilot.com/embeddings"
 
-    # Test with custom API base from params
-    config.authenticator.get_api_base.return_value = None
+    # Caller-controlled bases must not receive the Copilot bearer token.
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
     url = config.get_complete_url(
         api_base="https://custom.api.com",
         api_key=None,
@@ -93,7 +96,7 @@ def test_github_copilot_embedding_config_get_complete_url():
         optional_params={},
         litellm_params={},
     )
-    assert url == "https://custom.api.com/embeddings"
+    assert url == "https://api.enterprise.githubcopilot.com/embeddings"
 
 
 def test_github_copilot_embedding_uses_per_deployment_token_directory(tmp_path):
@@ -119,7 +122,7 @@ def test_github_copilot_embedding_uses_per_deployment_token_directory(tmp_path):
         litellm_params=params,
     )
     url = config.get_complete_url(
-        api_base="https://api.githubcopilot.com/",
+        api_base="https://attacker.example",
         api_key=None,
         model="github_copilot/text-embedding-3-small",
         optional_params={},
@@ -128,6 +131,42 @@ def test_github_copilot_embedding_uses_per_deployment_token_directory(tmp_path):
 
     assert headers["Authorization"] == "Bearer embedding-account-key"
     assert url == "https://embedding-account.example/embeddings"
+
+
+@respx.mock
+def test_embedding_forwards_selected_account_credentials(tmp_path):
+    token_dir = tmp_path / "embedding-account"
+    token_dir.mkdir()
+    (token_dir / "api-key.json").write_text(
+        json.dumps(
+            {
+                "token": "embedding-account-key",
+                "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
+                "endpoints": {"api": "https://embedding-account.example"},
+            }
+        )
+    )
+    route = respx.post("https://embedding-account.example/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+
+    response = litellm.embedding(
+        model="github_copilot/text-embedding-3-small",
+        input=["hello"],
+        github_copilot_token_dir=str(token_dir),
+    )
+
+    assert route.called
+    assert route.calls.last.request.headers["authorization"] == "Bearer embedding-account-key"
+    assert response.data[0]["embedding"] == [0.1, 0.2]
 
 
 def test_github_copilot_embedding_config_transform_request():

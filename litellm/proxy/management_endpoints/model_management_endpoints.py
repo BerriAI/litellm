@@ -1432,6 +1432,22 @@ class ModelManagementAuthChecks:
     """
 
     @staticmethod
+    def require_proxy_admin_for_github_copilot_token_dir(
+        model_params: Deployment | updateDeployment,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Literal[True]:
+        litellm_params: Final = model_params.litellm_params
+        has_token_dir: Final = (
+            litellm_params is not None and "github_copilot_token_dir" in litellm_params.model_fields_set
+        )
+        if has_token_dir and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "Only proxy admins can configure GitHub Copilot token directories."},
+            )
+        return True
+
+    @staticmethod
     def can_user_make_team_model_call(
         team_id: str,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1461,6 +1477,10 @@ class ModelManagementAuthChecks:
         prisma_client: PrismaClient,
         premium_user: bool,
     ) -> Literal[True]:
+        ModelManagementAuthChecks.require_proxy_admin_for_github_copilot_token_dir(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+        )
         if model_params.model_info is None or model_params.model_info.team_id is None:
             return True
         if model_params.model_info.team_id is not None and premium_user is not True:
@@ -1496,6 +1516,10 @@ class ModelManagementAuthChecks:
         premium_user: bool,
         allow_missing_team: bool = False,
     ) -> Literal[True]:
+        ModelManagementAuthChecks.require_proxy_admin_for_github_copilot_token_dir(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+        )
         ## Check team model auth
         if model_params.model_info is not None and model_params.model_info.team_id is not None:
             team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(

@@ -63,12 +63,30 @@ class GithubCopilotConfig(OpenAIConfig):
                 message=str(e),
             )
         dynamic_api_base: Final = (
-            api_base
-            or authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
+            authenticator.get_api_base() or os.getenv("GITHUB_COPILOT_API_BASE") or DEFAULT_GITHUB_COPILOT_API_BASE
         )
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
+
+    def resolve_request_credentials(
+        self,
+        model: str,
+        api_key: str | None,
+        headers: Mapping[str, str] | None,
+        litellm_params: Mapping[str, object] | None,
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: OpenAI request headers are merged by callers
+        authenticator: Final = get_authenticator_for_litellm_params(
+            default_authenticator=self.authenticator,
+            litellm_params=litellm_params,
+        )
+        try:
+            resolved_api_key: Final = api_key or authenticator.get_api_key()
+        except GetAPIKeyError as e:
+            raise AuthenticationError(
+                model=model,
+                llm_provider="github_copilot",
+                message=str(e),
+            )
+        return resolved_api_key, {**get_copilot_default_headers(resolved_api_key), **dict(headers or {})}
 
     def _transform_messages(
         self,
@@ -106,22 +124,21 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        # Get base headers from parent
-        validated_headers = super().validate_environment(
-            headers, model, messages, optional_params, litellm_params, api_key, api_base
+        copilot_api_key, copilot_headers = self.resolve_request_credentials(
+            model=model,
+            api_key=api_key,
+            headers=headers,
+            litellm_params=litellm_params,
         )
-
-        # Add Copilot-specific headers (editor-version, user-agent, etc.)
-        try:
-            authenticator: Final = get_authenticator_for_litellm_params(
-                default_authenticator=self.authenticator,
-                litellm_params=litellm_params,
-            )
-            copilot_api_key: Final = api_key or authenticator.get_api_key()
-            copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
-            validated_headers = {**copilot_headers, **validated_headers}
-        except GetAPIKeyError:
-            pass  # Will be handled later in the request flow
+        validated_headers = super().validate_environment(
+            copilot_headers,
+            model,
+            messages,
+            optional_params,
+            litellm_params,
+            copilot_api_key,
+            api_base,
+        )
 
         # Add X-Initiator header based on message roles
         initiator: Final = self._determine_initiator(messages)

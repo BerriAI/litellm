@@ -24,7 +24,6 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
-    is_default_copilot_api_base,
 )
 
 if TYPE_CHECKING:
@@ -106,16 +105,8 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             default_authenticator=self.authenticator,
             litellm_params=litellm_params,
         )
-        authenticated_api_base: Final = authenticator.get_api_base()
-        # embedding() can pre-populate api_base with the generic Copilot host;
-        # prefer the endpoint bound to the selected account in that case.
         effective_api_base: Final = (
-            authenticated_api_base
-            if authenticated_api_base and is_default_copilot_api_base(api_base)
-            else api_base
-            or authenticated_api_base
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
+            authenticator.get_api_base() or os.getenv("GITHUB_COPILOT_API_BASE") or DEFAULT_GITHUB_COPILOT_API_BASE
         ).rstrip("/")
 
         # Return the embeddings endpoint

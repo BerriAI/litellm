@@ -67,9 +67,9 @@ class TestGithubCopilotResponsesAPITransformation:
             f"Expected GitHub Copilot responses endpoint, got {url}"
         )
 
-        # Test with custom api_base (overrides authenticator)
+        # Caller-controlled bases must not receive the Copilot bearer token.
         custom_url = config.get_complete_url(api_base="https://custom.githubcopilot.com", litellm_params={})
-        assert custom_url == "https://custom.githubcopilot.com/responses", f"Expected custom endpoint, got {custom_url}"
+        assert custom_url == "https://api.individual.githubcopilot.com/responses"
 
         # The generic base injected by responses() must not override the base
         # bound to the selected account's token.
@@ -141,7 +141,7 @@ class TestGithubCopilotResponsesAPITransformation:
 
         headers = config.validate_environment(headers={}, model="gpt-5.3-codex", litellm_params=params)
         url = config.get_complete_url(
-            api_base="https://api.githubcopilot.com/",
+            api_base="https://attacker.example",
             litellm_params=dict(params),
         )
 

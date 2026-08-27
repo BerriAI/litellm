@@ -79,10 +79,13 @@ class TestGetLitellmParamsKwargsExtraction:
 
         assert get_non_default_completion_params({"github_copilot_token_dir": token_dir}) == {}
         assert "github_copilot_token_dir" in all_litellm_params
-        normalized = CredentialLiteLLMParams.model_validate(
-            GenericLiteLLMParams(github_copilot_token_dir=token_dir).model_dump(exclude_none=True)
+        internal_params = GenericLiteLLMParams.model_validate(
+            {"github_copilot_token_dir": token_dir}
         ).model_dump(exclude_none=True)
-        assert normalized["github_copilot_token_dir"] == token_dir
+        public_credentials = CredentialLiteLLMParams.model_validate(internal_params).model_dump(exclude_none=True)
+
+        assert internal_params["github_copilot_token_dir"] == token_dir
+        assert "github_copilot_token_dir" not in public_credentials
 
 
 class TestGetLitellmParamsBaseModel:

@@ -182,6 +182,40 @@ class TestModelManagementAuthChecks:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_team_admin_cannot_add_github_copilot_token_directory(self):
+        model_params = Deployment(
+            model_name="copilot-pool",
+            litellm_params=LiteLLM_Params(
+                model="github_copilot/gpt-5.3-codex",
+                github_copilot_token_dir="/server/copilot/account-a",
+            ),
+            model_info={"team_id": "test_team"},
+        )
+
+        with pytest.raises(Exception, match="Only proxy admins can configure GitHub Copilot token directories"):
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=self.team_admin_user,
+                prisma_client=MockPrismaClient(team_exists=True),
+                premium_user=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_team_admin_cannot_patch_github_copilot_token_directory(self):
+        model_params = updateDeployment(
+            litellm_params={"github_copilot_token_dir": "/server/copilot/account-a"},
+            model_info={"team_id": "test_team"},
+        )
+
+        with pytest.raises(Exception, match="Only proxy admins can configure GitHub Copilot token directories"):
+            await ModelManagementAuthChecks.allow_team_model_action(
+                model_params=model_params,
+                user_api_key_dict=self.team_admin_user,
+                prisma_client=MockPrismaClient(team_exists=True),
+                premium_user=True,
+            )
+
+    @pytest.mark.asyncio
     async def test_allow_team_model_action_non_premium_fails(self):
         """Test team model action fails for non-premium users"""
         model_params = Deployment(
@@ -227,7 +261,8 @@ class TestModelManagementAuthChecks:
         model_params = Deployment(
             model_name="test_model",
             litellm_params=LiteLLM_Params(
-                model="test_model",
+                model="github_copilot/gpt-5.3-codex",
+                github_copilot_token_dir="/server/copilot/account-a",
             ),
             model_info={"team_id": "test_team"},
         )

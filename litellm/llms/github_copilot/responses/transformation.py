@@ -30,7 +30,6 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
-    is_default_copilot_api_base,
 )
 
 if TYPE_CHECKING:
@@ -264,18 +263,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             default_authenticator=self.authenticator,
             litellm_params=litellm_params,
         )
-        authenticated_api_base: Final = authenticator.get_api_base()
-        # responses() pre-populates api_base with the generic Copilot host. That
-        # must not hide the account-specific endpoint returned alongside this
-        # token (for example, the business Copilot host). Preserve genuinely
-        # custom bases for backwards compatibility.
         effective_api_base: Final = (
-            authenticated_api_base
-            if authenticated_api_base and is_default_copilot_api_base(api_base)
-            else api_base
-            or authenticated_api_base
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
+            authenticator.get_api_base() or os.getenv("GITHUB_COPILOT_API_BASE") or DEFAULT_GITHUB_COPILOT_API_BASE
         ).rstrip("/")
 
         # Return the responses endpoint
