@@ -380,10 +380,15 @@ class StraikerGuardrail(CustomGuardrail):
         call_id: Final = getattr(logging_obj, "litellm_call_id", None) if logging_obj else None
         event_id: Final = f"{call_id or 'litellm'}:{input_type}"
 
+        # On response scans this content object is the envelope's ``response``,
+        # while ``structured_messages`` carries the whole conversation; it is
+        # reported under ``request`` instead so neither side misattributes turns.
         content: Final = StraikerWebhookContent(
             texts=list(inputs.get("texts") or []),
             images=list(inputs.get("images") or []),
-            structured_messages=_opaque_dict_list(inputs.get("structured_messages")),
+            structured_messages=(
+                _opaque_dict_list(inputs.get("structured_messages")) if input_type == "request" else None
+            ),
             tools=_opaque_dict_list(inputs.get("tools")),
             tool_calls=_opaque_dict_list(inputs.get("tool_calls")),
         )

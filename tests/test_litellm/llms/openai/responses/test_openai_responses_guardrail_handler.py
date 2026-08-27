@@ -1229,3 +1229,164 @@ class TestOpenAIResponsesHandlerToolInjection:
         names = [t.get("name") for t in result["tools"]]
         assert "get_weather" in names
         assert "injected_tool" in names
+
+
+class MockInputsRecordingGuardrail(CustomGuardrail):
+    """Records the inputs of every apply_guardrail call without modifying anything."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="inputs-recording")
+        self.calls: list[tuple[str, dict]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        import copy
+
+        self.calls.append((input_type, copy.deepcopy(dict(inputs))))
+        return inputs
+
+
+class TestResponsesResponseScanConversation:
+    """Response scans receive the request conversation (input plus instructions,
+    translated to chat shape) with the model's assistant turn appended, and the
+    request's tools translated to chat-completion shape."""
+
+    def _response(self, output: list) -> ResponsesAPIResponse:
+        return ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1234567890,
+            model="gpt-4",
+            object="response",
+            status="completed",
+            output=output,
+        )
+
+    @pytest.mark.asyncio
+    async def test_response_scan_receives_conversation_and_tools(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        request_data = {
+            "model": "gpt-4",
+            "instructions": "be helpful",
+            "input": [{"role": "user", "content": "what's the weather?"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+        response = self._response(
+            [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Sunny today."}],
+                }
+            ]
+        )
+
+        await handler.process_output_response(response, guardrail, request_data=request_data)
+
+        input_type, inputs = guardrail.calls[-1]
+        assert input_type == "response"
+        conversation = inputs["structured_messages"]
+        expected_request_conversation = handler.get_structured_messages(request_data)
+        assert conversation[:-1] == expected_request_conversation
+        assert conversation[0]["role"] == "system"
+        assert "be helpful" in str(conversation[0]["content"])
+        assert conversation[-1] == {"role": "assistant", "content": "Sunny today."}
+        assert inputs["tools"][0]["function"]["name"] == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_response_scan_appends_tool_call_turn(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        request_data = {
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "look it up"}],
+        }
+        response = self._response(
+            [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                    "status": "completed",
+                }
+            ]
+        )
+
+        await handler.process_output_response(response, guardrail, request_data=request_data)
+
+        _, inputs = guardrail.calls[-1]
+        assistant_turn = inputs["structured_messages"][-1]
+        assert assistant_turn["role"] == "assistant"
+        assert assistant_turn["tool_calls"][0]["function"]["name"] == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_response_scan_without_request_data_sends_no_conversation(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        response = self._response(
+            [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello."}],
+                }
+            ]
+        )
+
+        await handler.process_output_response(response, guardrail, request_data=None)
+
+        _, inputs = guardrail.calls[-1]
+        assert "structured_messages" not in inputs
+        assert inputs["texts"] == ["Hello."]
+
+    @pytest.mark.asyncio
+    async def test_streaming_completed_event_receives_conversation(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockInputsRecordingGuardrail()
+        request_data = {
+            "model": "gpt-4",
+            "input": [{"role": "user", "content": "say hi"}],
+        }
+        final_chunk = {
+            "type": "response.completed",
+            "response": {
+                "model": "gpt-4",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "hi there"}],
+                    }
+                ],
+            },
+        }
+
+        await handler.process_output_streaming_response(
+            responses_so_far=[final_chunk],
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        _, inputs = guardrail.calls[-1]
+        conversation = inputs["structured_messages"]
+        assert conversation[-1] == {"role": "assistant", "content": "hi there"}
+        assert conversation[:-1] == handler.get_structured_messages(request_data)

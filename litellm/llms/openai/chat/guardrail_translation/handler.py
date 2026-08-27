@@ -33,7 +33,11 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     scoped_structured_message_indices,
 )
 from litellm.main import stream_chunk_builder
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionToolParam,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     coerce_stream_holdback_value,
 )
@@ -396,6 +400,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
 
+            self.attach_response_scan_context(
+                inputs, request_data, guardrail_to_apply, self._build_response_turns(response)
+            )
+
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -566,6 +574,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # Include model information from the first response if available
             if responses_so_far and hasattr(responses_so_far[0], "model") and responses_so_far[0].model:
                 inputs["model"] = responses_so_far[0].model
+            self.attach_response_scan_context(
+                inputs, request_data, guardrail_to_apply, self.assistant_turn_from_extraction(texts_to_check)
+            )
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -660,6 +671,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if responses_so_far and getattr(responses_so_far[0], "model", None):
             inputs["model"] = responses_so_far[0].model
+        self.attach_response_scan_context(
+            inputs,
+            request_data,
+            guardrail_to_apply,
+            tuple(turn for index in indices if (turn := self.assistant_turn(raw_by_index[index], ())) is not None),
+        )
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
@@ -831,6 +848,32 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if tool_call_dict:
                     tool_calls_to_check.append(tool_call_dict)
                     tool_call_task_mappings.append((choice_idx, int(tool_call_idx)))
+
+    def request_tools_for_guardrail(
+        self,
+        request_data: dict,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> tuple[ChatCompletionToolParam, ...] | None:
+        if effective_scan_only_tool_results_for_guardrail(guardrail_to_apply):
+            return None
+        tools: Final = request_data.get("tools")
+        return tuple(tools) if tools else None
+
+    def _build_response_turns(self, response: "ModelResponse") -> tuple[ChatCompletionAssistantMessage, ...]:
+        """Assistant turns for the response-scan conversation, one per choice."""
+        return tuple(turn for choice in response.choices if (turn := self._choice_assistant_turn(choice)) is not None)
+
+    def _choice_assistant_turn(self, choice: Choices) -> ChatCompletionAssistantMessage | None:
+        tool_calls: Final = tuple(
+            self.assistant_tool_call(
+                tool_call_id=converted.get("id"),
+                name=(converted.get("function") or {}).get("name"),
+                arguments=(converted.get("function") or {}).get("arguments") or "",
+            )
+            for tool_call in choice.message.tool_calls or ()
+            if (converted := self._convert_tool_call_to_dict(tool_call)) is not None and converted.get("function")
+        )
+        return self.assistant_turn(choice.message.content, tool_calls)
 
     def _convert_tool_call_to_dict(self, tool_call: dict[str, Any] | Any) -> dict[str, Any] | None:
         """

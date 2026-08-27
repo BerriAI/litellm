@@ -424,8 +424,10 @@ class QualifireGuardrail(CustomGuardrail):
         # Get dynamic params from request body (allows runtime overrides)
         dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
 
-        # Extract messages from structured_messages or request_data
-        messages: list[AllMessageValues] | None = inputs.get("structured_messages")
+        # Extract messages from structured_messages or request_data. Response
+        # scans keep the request_data path: their structured_messages carry the
+        # model's answer too, which would land in `messages` on top of `output`.
+        messages: list[AllMessageValues] | None = inputs.get("structured_messages") if input_type == "request" else None
         if not messages:
             messages = request_data.get("messages")
 
