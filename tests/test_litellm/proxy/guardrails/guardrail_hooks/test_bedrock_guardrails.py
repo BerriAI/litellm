@@ -5623,6 +5623,35 @@ class TestBedrockGuardrailImageInput:
         assert len(request["content"]) < 200, "every url was kept despite the budget"
         assert request["content"], "the budget swallowed the whole request"
 
+    @pytest.mark.asyncio
+    async def test_an_oversized_remote_image_is_dropped_under_the_allow_policy(self):
+        """The transfer is cut off, and then the request has to carry on.
+
+        `block` raises out of the size rejection, so this is the only path that
+        reaches its fall-through. An operator who set `allow` asked for the image to
+        go unscanned, not for the whole request to die on it.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look"},
+                    {"type": "image_url", "image_url": {"url": self._REMOTE_IMAGE_URL}},
+                ],
+            }
+        ]
+        served: list[int] = []
+        chunks: list[bytes] = [b"\0" * (1024 * 1024) for _ in range(8)]
+
+        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream(chunks, served)):
+            request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
+                source="INPUT", messages=messages
+            )
+
+        assert request["content"] == [{"text": {"text": "look"}}]
+        assert served, "the capped stream path did not run"
+        assert len(served) < len(chunks), "the whole body was pulled before dropping it"
+
     def test_the_budget_grants_a_whole_image_or_nothing(self):
         """A partial grant would cap a fetch below the per-image limit.
 
