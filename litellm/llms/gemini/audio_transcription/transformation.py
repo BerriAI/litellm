@@ -223,7 +223,7 @@ def _language_config(language: object) -> GeminiTranscriptionConfig:
 def _timestamp_config(timestamp_granularities: object, response_format: object) -> GeminiTranscriptionConfig:
     wants_word_timestamps: Final = (
         isinstance(timestamp_granularities, list) and "word" in timestamp_granularities
-    ) or response_format in SUBTITLE_RESPONSE_FORMATS
+    ) or (isinstance(response_format, str) and response_format in SUBTITLE_RESPONSE_FORMATS)
     return _WORD_TIMESTAMP_CONFIG if wants_word_timestamps else _EMPTY_TRANSCRIPTION_CONFIG
 
 
