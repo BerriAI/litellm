@@ -2,9 +2,11 @@
 
 import os
 import time
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi import HTTPException
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -25,6 +27,14 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GRAYSWAN_BLOCK_ERROR_MSG: Final = "Blocked by Gray Swan Guardrail"
+
+
+class MonitorTurn(TypedDict):
+    """One conversation turn in the monitor payload."""
+
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+    tool_calls: NotRequired[ReadOnly[tuple[Mapping[str, Any], ...]]]
 
 
 class GraySwanGuardrailMissingSecrets(Exception):
@@ -113,12 +123,6 @@ class GraySwanGuardrail(CustomGuardrail):
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
         self.streaming_sampling_rate = streaming_sampling_rate
 
-        verbose_proxy_logger.debug(
-            "GraySwan __init__: streaming_end_of_stream_only=%s, streaming_sampling_rate=%s",
-            streaming_end_of_stream_only,
-            streaming_sampling_rate,
-        )
-
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=list(self.get_supported_event_hooks()),
@@ -134,25 +138,6 @@ class GraySwanGuardrail(CustomGuardrail):
         ]
 
     # ------------------------------------------------------------------
-    # Debug override to trace post_call issues
-    # ------------------------------------------------------------------
-
-    def should_run_guardrail(self, data, event_type) -> bool:
-        """Override to add debug logging."""
-        result: Final = super().should_run_guardrail(data, event_type)
-        # Check if apply_guardrail is in __dict__
-        has_apply_guardrail: Final = "apply_guardrail" in type(self).__dict__
-        verbose_proxy_logger.debug(
-            "GraySwan DEBUG: should_run_guardrail event_type=%s, result=%s, event_hook=%s, has_apply_guardrail=%s, class=%s",
-            event_type,
-            result,
-            self.event_hook,
-            has_apply_guardrail,
-            type(self).__name__,
-        )
-        return result
-
-    # ------------------------------------------------------------------
     # Unified Guardrail Interface (works with ALL endpoints automatically)
     # ------------------------------------------------------------------
 
@@ -165,16 +150,19 @@ class GraySwanGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """
-        Apply Gray Swan guardrail to extracted text content.
+        Apply Gray Swan guardrail to the conversation the translation layer produced.
 
-        This method is called by the unified guardrail system which handles
-        extracting text from any request format (OpenAI, Anthropic, etc.).
+        This method is called by the unified guardrail system, which normalizes any
+        request format (OpenAI, Anthropic, etc.) and applies operator scoping flags.
 
         Args:
             inputs: Dictionary containing:
-                - texts: List of texts to scan
+                - texts: List of extracted texts (fallback scan content)
+                - structured_messages: Normalized, scoped conversation (response
+                  scans carry the request conversation plus the response turns)
+                - tools: Scoped tool definitions
+                - tool_calls: Tool calls emitted by the model (response scans)
                 - images: Optional list of images (not currently used by GraySwan)
-                - tool_calls: Optional list of tool calls (not currently used)
             request_data: The original request data
             input_type: "request" for pre-call, "response" for post-call
             logging_obj: Optional logging object
@@ -186,41 +174,30 @@ class GraySwanGuardrail(CustomGuardrail):
             HTTPException: If content is blocked (block mode)
             Exception: If guardrail check fails
         """
-        # DEBUG: Log when apply_guardrail is called
-        verbose_proxy_logger.debug(
-            "GraySwan DEBUG: apply_guardrail called with input_type=%s, texts=%s",
-            input_type,
-            inputs.get("texts", [])[:100] if inputs.get("texts") else "NONE",
-        )
-
-        texts: Final = inputs.get("texts", [])
-        if not texts:
-            verbose_proxy_logger.debug("Gray Swan Guardrail: No texts to scan")
-            return inputs
-
-        verbose_proxy_logger.debug(
-            "Gray Swan Guardrail: Scanning %d text(s) for %s",
-            len(texts),
-            input_type,
-        )
-
-        # Convert texts to messages format for GraySwan API
-        # Use "user" role for request content, "assistant" for response content
-        role: Final = "assistant" if input_type == "response" else "user"
-        messages: Final = [{"role": role, "content": text} for text in texts]
-
-        # Get dynamic params from request metadata
-        dynamic_body: Final = self.get_guardrail_dynamic_request_body_params(request_data) or {}
-        if dynamic_body:
-            verbose_proxy_logger.debug("Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body))
-
-        # Prepare and send payload
-        payload: Final = self._prepare_payload(messages, dynamic_body, request_data, logging_obj)
-        if payload is None:
-            return inputs
-
         start_time: Final = time.time()
         try:
+            messages, tools = self._build_monitor_input(inputs, input_type)
+            if not messages:
+                verbose_proxy_logger.debug("Gray Swan Guardrail: No content to scan")
+                return inputs
+
+            verbose_proxy_logger.debug(
+                "Gray Swan Guardrail: Scanning %d message(s) for %s",
+                len(messages),
+                input_type,
+            )
+
+            dynamic_body: Final = (
+                self.get_guardrail_dynamic_request_body_params(request_data)
+                or {}  # mutable-ok: empty fallback when the client sent a null extra_body
+            )
+            if dynamic_body:
+                verbose_proxy_logger.debug("Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body))
+
+            payload: Final = self._prepare_payload(messages, dynamic_body, request_data, logging_obj, tools=tools)
+            if payload is None:
+                return inputs
+
             response_json: Final = await self._call_grayswan_api(payload)
             is_output: Final = input_type == "response"
             result: Final = self._process_response_internal(
@@ -528,14 +505,69 @@ class GraySwanGuardrail(CustomGuardrail):
                 forwarded_headers[str(key)] = str(value)
         return forwarded_headers or None
 
+    def _build_monitor_input(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
+    ) -> tuple[tuple[Mapping[str, Any], ...], tuple[Mapping[str, Any], ...] | None]:
+        """Build the monitor conversation from the translation layer's scoped view.
+
+        Both scan types send `structured_messages` and `tools` exactly as the
+        unified guardrail system produced them (normalized per API surface,
+        operator scoping flags applied; response scans carry the request
+        conversation with the response turns appended). Without a structured
+        view, request scans keep the pre-existing texts-only wrapping and
+        response scans send context-free assistant turns (the SDK/direct-call
+        path, where no request conversation exists).
+        """
+        conversation: Final = self._sanitize_json_list(inputs.get("structured_messages"))
+        if conversation:
+            return conversation, self._sanitize_json_list(inputs.get("tools"))
+        if input_type == "request":
+            return self._texts_fallback(inputs), None
+        return self._build_response_turns(inputs), None
+
+    def _build_response_turns(self, inputs: GenericGuardrailAPIInputs) -> tuple[Mapping[str, Any], ...]:
+        tool_calls: Final = self._sanitize_json_list(inputs.get("tool_calls"))
+        text_turns: Final = tuple(self._turn("assistant", text) for text in inputs.get("texts", ()) if text)
+        if not tool_calls:
+            return text_turns
+        base: Final = text_turns or (self._turn("assistant", ""),)
+        final_turn: Final[MonitorTurn] = {**base[-1], "tool_calls": tool_calls}
+        return (*base[:-1], final_turn)
+
+    def _texts_fallback(self, inputs: GenericGuardrailAPIInputs) -> tuple[MonitorTurn, ...]:
+        return tuple(self._turn("user", text) for text in inputs.get("texts", ()))
+
+    def _turn(self, role: str, content: str) -> MonitorTurn:
+        turn: Final[MonitorTurn] = {"role": role, "content": content}
+        return turn
+
+    def _sanitize_json_list(self, value: object) -> tuple[Mapping[str, Any], ...] | None:
+        if not isinstance(value, list) or not value:
+            return None
+        sanitized: Final = safe_json_loads(safe_dumps(value), default=None)
+        if not isinstance(sanitized, list):
+            return None
+        items: Final = tuple(item for item in sanitized if isinstance(item, dict))
+        if len(items) != len(sanitized):
+            verbose_proxy_logger.debug(
+                "Gray Swan Guardrail: dropped %d non-dict conversation item(s)",
+                len(sanitized) - len(items),
+            )
+        return items or None
+
     def _prepare_payload(
         self,
-        messages: list[dict[str, str]],
+        messages: Sequence[Mapping[str, Any]],
         dynamic_body: dict,
         request_data: dict,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         payload: Final[dict[str, Any]] = {"messages": messages}
+        if tools:
+            payload["tools"] = tools
 
         categories: Final = dynamic_body.get("categories") or self.categories
         if categories:

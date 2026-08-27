@@ -1088,3 +1088,37 @@ class TestHiddenlayerGuardrailV2:
         config_model = HiddenlayerGuardrailV2.get_config_model()
         assert config_model is not None
         assert config_model.__name__ == "HiddenlayerGuardrailConfigModel"
+
+
+class TestHiddenlayerResponseScanConversation:
+    @pytest.mark.asyncio
+    async def test_response_scan_ignores_structured_messages(self, monkeypatch):
+        """Response scans now carry the conversation in structured_messages; the
+        v1 guardrail must keep scanning texts instead of str()-coercing the last
+        conversation turn (a tool-call-only turn has content None, and scanning
+        the literal string 'None' would produce junk verdicts)."""
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
+        guardrail = HiddenlayerGuardrail(
+            guardrail_name="hiddenlayer", event_hook="post_call", default_on=True
+        )
+
+        async def scan(project_id, metadata, payload, input_type):
+            if payload["messages"][-1]["content"] == "None":
+                return {"evaluation": {"action": "BLOCK"}, "analysis": []}
+            return {}
+
+        inputs = GenericGuardrailAPIInputs(
+            structured_messages=[
+                {"role": "user", "content": "look this up"},
+                {"role": "assistant", "content": None},
+            ]
+        )
+
+        with patch.object(guardrail, "_call_hiddenlayer", side_effect=scan):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+
+        assert result is inputs

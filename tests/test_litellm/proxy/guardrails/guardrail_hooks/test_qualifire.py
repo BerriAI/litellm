@@ -679,3 +679,49 @@ class TestQualifireGuardrailRegistry:
 
         assert "qualifire" in guardrail_class_registry
         assert guardrail_class_registry["qualifire"] == QualifireGuardrail
+
+
+class TestQualifireResponseScanConversation:
+    @pytest.mark.asyncio
+    async def test_response_scan_keeps_request_messages_out_of_conversation(self):
+        """Response scans now receive the whole conversation in structured_messages;
+        Qualifire must keep sending the request messages plus a separate output,
+        not a conversation that already embeds the model's answer."""
+        from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import (
+            QualifireGuardrail,
+        )
+
+        guardrail = QualifireGuardrail(
+            api_key="test_key",
+            prompt_injections=True,
+            guardrail_name="test_guardrail",
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "score": 100,
+            "status": "completed",
+            "evaluationResults": [],
+        }
+        mock_response.raise_for_status = MagicMock()
+        guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+        request_messages = [{"role": "user", "content": "what's my balance?"}]
+        inputs = {
+            "texts": ["Your balance is $5"],
+            "structured_messages": request_messages
+            + [{"role": "assistant", "content": "Your balance is $5"}],
+        }
+
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"messages": request_messages},
+            input_type="response",
+        )
+
+        assert result is inputs
+        payload = guardrail.async_handler.post.call_args[1]["json"]
+        assert all(m.get("role") != "assistant" for m in payload["messages"]), (
+            "the model's answer belongs in `output`, not in the conversation"
+        )
+        assert payload["output"] == "Your balance is $5"

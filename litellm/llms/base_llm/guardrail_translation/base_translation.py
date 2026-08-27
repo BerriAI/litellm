@@ -1,6 +1,19 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Optional
+
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+    scoped_structured_message_indices,
+)
+from litellm.types.llms.openai import (
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionToolCallFunctionChunk,
+)
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import (
@@ -9,7 +22,12 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.llms.openai import (
+        AllMessageValues,
+        ChatCompletionToolCallChunk,
+        ChatCompletionToolParam,
+    )
+    from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 @dataclass(slots=True)
@@ -156,6 +174,129 @@ class BaseTranslation(ABC):
         Returns None if no convertible content is found.
         """
         return None
+
+    def scoped_request_conversation(
+        self,
+        request_data: dict,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> tuple["AllMessageValues", ...] | None:
+        """
+        The request conversation as the guardrail's request scan saw it: the
+        handler's structured messages with the operator scoping flags applied.
+
+        Override when the request scan scopes differently (e.g. Anthropic's
+        top-level system prompt hoisting).
+        """
+        structured_messages: Final = self.get_structured_messages(request_data)
+        if not structured_messages:
+            return None
+        scoped_indices: Final = scoped_structured_message_indices(
+            structured_messages,
+            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+            skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+        )
+        return tuple(structured_messages[index] for index in scoped_indices) or None
+
+    def response_scan_conversation(
+        self,
+        request_data: dict | None,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+        response_turns: Sequence["AllMessageValues"],
+    ) -> tuple["AllMessageValues", ...] | None:
+        """
+        Full conversation for a response scan: the scoped request conversation
+        with the model's response turns appended.
+
+        Returns None when the request context is unavailable (SDK/direct-call
+        path fabricates request_data without messages) or when nothing was
+        extracted from the response; guardrails then fall back to scanning the
+        extracted texts and tool calls, which must not be shadowed by a
+        conversation that lacks a response turn.
+        """
+        if request_data is None or not response_turns:
+            return None
+        request_conversation: Final = self.scoped_request_conversation(request_data, guardrail_to_apply)
+        if request_conversation is None:
+            return None
+        return (*request_conversation, *response_turns)
+
+    def attach_response_scan_context(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict | None,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+        response_turns: Sequence["AllMessageValues"],
+    ) -> None:
+        """
+        Put the response-scan conversation and the request's tools on ``inputs``
+        when the request context allows building them; no-op otherwise.
+        """
+        structured_conversation: Final = self.response_scan_conversation(
+            request_data, guardrail_to_apply, response_turns
+        )
+        if structured_conversation is None or request_data is None:
+            return
+        inputs["structured_messages"] = list(structured_conversation)  # rebind-ok: out-param; field type is list
+        response_scan_tools: Final = self.request_tools_for_guardrail(request_data, guardrail_to_apply)
+        if response_scan_tools:
+            inputs["tools"] = list(response_scan_tools)  # rebind-ok: out-parameter; the field type is a list
+
+    def request_tools_for_guardrail(
+        self,
+        request_data: dict,  # mutable-ok: API request payload
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> tuple["ChatCompletionToolParam", ...] | None:
+        """
+        The request's tool definitions in the shape the request scan sends them.
+
+        Override in tool-capable handlers; default returns None.
+        """
+        return None
+
+    @staticmethod
+    def assistant_tool_call(
+        tool_call_id: str | None,
+        name: str | None,
+        arguments: str,
+    ) -> ChatCompletionAssistantToolCall:
+        """One assistant-message tool call in the OpenAI wire shape."""
+        return ChatCompletionAssistantToolCall(
+            id=tool_call_id,
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments),
+        )
+
+    @staticmethod
+    def assistant_turn_from_extraction(
+        texts: Sequence[str],
+        tool_calls: Sequence["ChatCompletionAssistantToolCall | ChatCompletionToolCallChunk"] | None = None,
+    ) -> tuple["ChatCompletionAssistantMessage", ...]:
+        """
+        One OpenAI-shape assistant turn built from the texts and tool calls a
+        handler's response extraction collected; empty when there is nothing.
+        Tool calls are normalized to the assistant-message shape, dropping
+        extraction-only fields such as ``index``.
+        """
+        tool_call_items: Final = tuple(
+            BaseTranslation.assistant_tool_call(
+                tool_call_id=item.get("id"),
+                name=item["function"].get("name"),
+                arguments=item["function"].get("arguments") or "",
+            )
+            for item in tool_calls or ()
+        )
+        if not texts and not tool_call_items:
+            return ()
+        if tool_call_items:
+            turn_with_tools: Final[ChatCompletionAssistantMessage] = {
+                "role": "assistant",
+                "content": "\n".join(texts),
+                "tool_calls": list(tool_call_items),  # mutable-ok: the message field type is a list
+            }
+            return (turn_with_tools,)
+        turn: Final[ChatCompletionAssistantMessage] = {"role": "assistant", "content": "\n".join(texts)}
+        return (turn,)
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """
