@@ -51188,5 +51188,71 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "vertex_ai/gemini-live-2.5-flash-native-audio": {
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_tokens": 65535,
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2e-06,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supported_endpoints": [
+            "/vertex_ai/live",
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "gemini_native_audio": true
+    },
+    "vertex_ai/chirp-3": {
+        "input_cost_per_second": 0.00026667,
+        "litellm_provider": "vertex_ai",
+        "metadata": {
+            "calculation": "$0.016/60 seconds = $0.00026667 per second",
+            "original_pricing_per_minute": 0.016
+        },
+        "mode": "audio_transcription",
+        "source": "https://cloud.google.com/speech-to-text/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "vertex_ai/veo-3.1-lite-generate-001": {
+        "litellm_provider": "vertex_ai-video-models",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
