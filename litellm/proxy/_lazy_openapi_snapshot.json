@@ -6091,6 +6091,109 @@
           "title": "ConfigOverrideSettingsResponse",
           "type": "object"
         },
+        "CyberArkConfig": {
+          "description": "Configuration for CyberArk Conjur secret manager integration.",
+          "properties": {
+            "client_cert": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Path to the client TLS certificate for certificate-based authentication",
+              "title": "Client Cert"
+            },
+            "client_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Path to the client TLS private key for certificate-based authentication",
+              "title": "Client Key"
+            },
+            "cyberark_account": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Conjur organization account name",
+              "title": "Cyberark Account"
+            },
+            "cyberark_api_base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The address of the CyberArk Conjur server (e.g., https://conjur.example.com)",
+              "title": "Cyberark Api Base"
+            },
+            "cyberark_api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "API key for Conjur API-key authentication",
+              "title": "Cyberark Api Key"
+            },
+            "cyberark_username": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Conjur username (login) to authenticate as",
+              "title": "Cyberark Username"
+            },
+            "refresh_interval": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Auth token cache TTL in seconds (default: 300)",
+              "title": "Refresh Interval"
+            },
+            "ssl_verify": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Set to false to disable SSL verification (e.g., for self-signed certificates)",
+              "title": "Ssl Verify"
+            }
+          },
+          "title": "CyberArkConfig",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -6245,6 +6348,13 @@
         },
         "ValidationError": {
           "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
             "loc": {
               "items": {
                 "anyOf": [
@@ -6279,10 +6389,30 @@
       }
     },
     "paths": {
-      "/config_overrides/hashicorp_vault": {
+      "/config_overrides/cyberark": {
         "delete": {
-          "description": "Delete Hashicorp Vault configuration. Idempotent.",
-          "operationId": "delete_hashicorp_vault_config_config_overrides_hashicorp_vault_delete",
+          "description": "Delete CyberArk Conjur configuration. Idempotent.",
+          "operationId": "delete_cyberark_config_config_overrides_cyberark_delete",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -6291,6 +6421,184 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        },
+        "get": {
+          "description": "Get current CyberArk Conjur configuration.\nReturns decrypted values from DB, or falls back to current env vars.\nSensitive fields are masked before leaving the server.",
+          "operationId": "get_cyberark_config_config_overrides_cyberark_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ConfigOverrideSettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        },
+        "post": {
+          "description": "Update CyberArk Conjur secret manager configuration.\nSets environment variables, encrypts sensitive fields, and stores in DB.\nReinitializes the secret manager on this pod.",
+          "operationId": "update_cyberark_config_config_overrides_cyberark_post",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CyberArkConfig"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        }
+      },
+      "/config_overrides/cyberark/test_connection": {
+        "post": {
+          "description": "Test the connection to the currently configured CyberArk Conjur server.\nUses the already-initialized secret manager client. Does not modify any state.",
+          "operationId": "test_cyberark_connection_config_overrides_cyberark_test_connection_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Test Cyberark Connection",
+          "tags": [
+            "config_overrides"
+          ]
+        }
+      },
+      "/config_overrides/hashicorp_vault": {
+        "delete": {
+          "description": "Delete Hashicorp Vault configuration. Idempotent.",
+          "operationId": "delete_hashicorp_vault_config_config_overrides_hashicorp_vault_delete",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "security": [
@@ -6331,6 +6639,26 @@
         "post": {
           "description": "Update Hashicorp Vault secret manager configuration.\nSets environment variables, encrypts sensitive fields, and stores in DB.\nReinitializes the secret manager on this pod.",
           "operationId": "update_hashicorp_vault_config_config_overrides_hashicorp_vault_post",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
           "requestBody": {
             "content": {
               "application/json": {
