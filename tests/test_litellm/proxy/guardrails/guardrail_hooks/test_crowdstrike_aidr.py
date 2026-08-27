@@ -80,6 +80,36 @@ def test_crowdstrike_aidr_guardrail_config_no_api_base(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_fails_open_on_4xx() -> None:
+    guardrail = CrowdStrikeAIDRHandler(
+        mode="post_call",
+        guardrail_name="crowdstrike-aidr-guard",
+        api_key="pts_crowdstrike_tokenid",
+        api_base="https://api.crowdstrike.com/aidr/aiguard",
+        fail_on_error=False,
+    )
+    inputs: GenericGuardrailAPIInputs = {
+        "texts": ["core dump: \x00\x01 raw bytes"],
+        "structured_messages": [{"role": "user", "content": "core dump: raw bytes"}],
+    }
+    request_data = {"messages": inputs["structured_messages"]}
+
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(status_code=400, json={"error": "guard api error"}, request=request)
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        await guardrail.async_handler.close()
+        guardrail.async_handler.client = client
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result == inputs
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_request_blocked(
     crowdstrike_aidr_guardrail: CrowdStrikeAIDRHandler,
 ) -> None:
