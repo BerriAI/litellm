@@ -734,7 +734,7 @@ async def test_update_key_personal_non_admin_denied_vector_stores(monkeypatch):
 async def test_update_key_grandfathers_existing_mcp_servers(monkeypatch):
     """/key/update on a team key that already holds MCP servers outside the
     team allowlist must accept re-sent or shrunk grants (LIT-6062). The wrapper
-    must pass the existing key's object_permission_id into the validator when
+    must pass the existing key's object_permission row into the validator when
     the team is unchanged."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -750,9 +750,6 @@ async def test_update_key_grandfathers_existing_mcp_servers(monkeypatch):
     existing_row.mcp_servers = ["server-a", "server-b"]
     existing_row.mcp_tool_permissions = {}
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=existing_row
-    )
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
     team_obj = MagicMock()
@@ -762,6 +759,7 @@ async def test_update_key_grandfathers_existing_mcp_servers(monkeypatch):
     existing_key_row = MagicMock(
         team_id="team-1",
         object_permission_id="perm-1",
+        object_permission=existing_row,
     )
 
     mock_server_a = MagicMock()
@@ -6616,7 +6614,7 @@ async def test_get_and_validate_existing_key():
 
     assert result == mock_key
     mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_called_once_with(
-        where={"token": "hashed-test-key-123"}
+        where={"token": "hashed-test-key-123"}, include={"object_permission": True}
     )
 
     # Test Case 2: Key not found raises ProxyException

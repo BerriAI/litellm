@@ -1216,17 +1216,14 @@ async def test_empty_object_permission_passes_for_personal_non_admin():
 # ---- Tests for grandfathering existing key MCP servers on /key/update (LIT-6062) ----
 
 
-def _make_grandfather_prisma(mcp_servers=None, mcp_tool_permissions=None):
-    """Mock prisma client whose object permission table returns the key's existing row."""
+def _make_grandfather_fixtures(mcp_servers=None, mcp_tool_permissions=None):
+    """Mock prisma client plus the key's existing object permission row."""
     existing_row = MagicMock()
     existing_row.mcp_servers = mcp_servers or []
     existing_row.mcp_tool_permissions = mcp_tool_permissions or {}
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=existing_row
-    )
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
-    return mock_prisma
+    return mock_prisma, existing_row
 
 
 def _patch_grandfather_env(monkeypatch, mock_mgr):
@@ -1246,19 +1243,19 @@ async def test_validate_key_update_grandfathers_existing_servers(monkeypatch):
     shrink those grants on /key/update without a 403 (LIT-6062)."""
     _patch_grandfather_env(monkeypatch, _make_mock_mcp_manager("server-a", "server-b"))
     team_obj = _make_team_obj(mcp_servers=[])
-    mock_prisma = _make_grandfather_prisma(mcp_servers=["server-a", "server-b"])
+    mock_prisma, existing_row = _make_grandfather_fixtures(mcp_servers=["server-a", "server-b"])
     resend = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["server-a", "server-b"]},
         team_obj=team_obj,
         prisma_client=mock_prisma,
-        existing_key_object_permission_id="perm-1",
+        existing_key_object_permission=existing_row,
     )
     assert sorted(resend["mcp_servers"]) == ["server-a", "server-b"]
     shrink = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["server-a"]},
         team_obj=team_obj,
         prisma_client=mock_prisma,
-        existing_key_object_permission_id="perm-1",
+        existing_key_object_permission=existing_row,
     )
     assert shrink["mcp_servers"] == ["server-a"]
 
@@ -1269,13 +1266,13 @@ async def test_validate_key_update_grandfather_does_not_allow_new_servers(monkey
     server outside the team allowlist still raises 403."""
     _patch_grandfather_env(monkeypatch, _make_mock_mcp_manager("server-a", "server-new"))
     team_obj = _make_team_obj(mcp_servers=[])
-    mock_prisma = _make_grandfather_prisma(mcp_servers=["server-a"])
+    mock_prisma, existing_row = _make_grandfather_fixtures(mcp_servers=["server-a"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
             object_permission={"mcp_servers": ["server-a", "server-new"]},
             team_obj=team_obj,
             prisma_client=mock_prisma,
-            existing_key_object_permission_id="perm-1",
+            existing_key_object_permission=existing_row,
         )
     assert exc_info.value.status_code == 403
     assert "server-new" in str(exc_info.value.detail)
@@ -1283,17 +1280,17 @@ async def test_validate_key_update_grandfather_does_not_allow_new_servers(monkey
 
 @pytest.mark.asyncio
 async def test_validate_key_update_without_existing_permission_still_raises(monkeypatch):
-    """Without an existing permission row id (new grants or team change) the
+    """Without an existing permission row (new grants or team change) the
     subset check stays strict."""
     _patch_grandfather_env(monkeypatch, _make_mock_mcp_manager("server-a"))
     team_obj = _make_team_obj(mcp_servers=[])
-    mock_prisma = _make_grandfather_prisma(mcp_servers=["server-a"])
+    mock_prisma, _ = _make_grandfather_fixtures(mcp_servers=["server-a"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
             object_permission={"mcp_servers": ["server-a"]},
             team_obj=team_obj,
             prisma_client=mock_prisma,
-            existing_key_object_permission_id=None,
+            existing_key_object_permission=None,
         )
     assert exc_info.value.status_code == 403
 
@@ -1304,14 +1301,14 @@ async def test_validate_key_update_grandfathers_tool_permission_keys(monkeypatch
     (stored as a JSON string) are grandfathered too."""
     _patch_grandfather_env(monkeypatch, _make_mock_mcp_manager("server-a"))
     team_obj = _make_team_obj(mcp_servers=[])
-    mock_prisma = _make_grandfather_prisma(
+    mock_prisma, existing_row = _make_grandfather_fixtures(
         mcp_tool_permissions=json.dumps({"server-a": ["tool1"]})
     )
     result = await validate_key_mcp_servers_against_team(
         object_permission={"mcp_servers": ["server-a"]},
         team_obj=team_obj,
         prisma_client=mock_prisma,
-        existing_key_object_permission_id="perm-1",
+        existing_key_object_permission=existing_row,
     )
     assert result["mcp_servers"] == ["server-a"]
 
@@ -1321,7 +1318,7 @@ async def test_validate_key_update_sentinels_do_not_grandfather(monkeypatch):
     """Sentinels stored on the existing row must not grandfather anything."""
     _patch_grandfather_env(monkeypatch, _make_mock_mcp_manager("server-a"))
     team_obj = _make_team_obj(mcp_servers=[])
-    mock_prisma = _make_grandfather_prisma(
+    mock_prisma, existing_row = _make_grandfather_fixtures(
         mcp_servers=[SpecialMCPServerName.all_proxy_servers.value, "no-mcp-servers"]
     )
     with pytest.raises(HTTPException) as exc_info:
@@ -1329,7 +1326,7 @@ async def test_validate_key_update_sentinels_do_not_grandfather(monkeypatch):
             object_permission={"mcp_servers": ["server-a"]},
             team_obj=team_obj,
             prisma_client=mock_prisma,
-            existing_key_object_permission_id="perm-1",
+            existing_key_object_permission=existing_row,
         )
     assert exc_info.value.status_code == 403
 
