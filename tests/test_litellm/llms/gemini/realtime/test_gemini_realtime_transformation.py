@@ -2119,3 +2119,27 @@ def test_non_transcription_live_model_completed_event_has_no_usage(patch_gemini_
     )
     assert len(completed) == 1
     assert "usage" not in completed[0]
+
+
+def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_transcribe_live_cost_map_entry):
+    """Audio appended after the last transcript frame is still unbilled when the
+    session closes; the session-close hook must hand back the estimate exactly once
+    so the streaming layer can bill it (144000 pcm16 bytes = 3s -> 75 in / 9 out)."""
+    from typing import Final
+
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(144000), "gemini-3.5-transcribe-live")
+
+    usage: Final = config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live")
+
+    expected: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 75,
+        "output_tokens": 9,
+        "total_tokens": 84,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 75},
+    }
+    assert usage == expected
+    assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
