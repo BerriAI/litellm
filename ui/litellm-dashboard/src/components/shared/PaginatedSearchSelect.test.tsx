@@ -276,6 +276,34 @@ describe("PaginatedSearchSelect", () => {
     await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("gamma"));
   });
 
+  it("commits the first server-filtered match on Enter when autoHighlight is always", async () => {
+    const user = userEvent.setup();
+
+    function ServerBacked() {
+      const [search, setSearch] = useState("");
+      const [value, setValue] = useState("");
+      return (
+        <PaginatedSearchSelect
+          options={OPTIONS.filter((option) => option.label.includes(search))}
+          value={value}
+          onValueChange={setValue}
+          onSearchChange={setSearch}
+          onLoadMore={vi.fn()}
+          autoHighlight="always"
+        />
+      );
+    }
+    render(<ServerBacked />);
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(screen.queryByText("alias-alpha")).not.toBeInTheDocument());
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(input).toHaveValue("gamma-key"));
+  });
+
   it("highlights the picked label on focus so typing starts over", async () => {
     const user = userEvent.setup();
     renderSelect({ value: "alias-alpha" });

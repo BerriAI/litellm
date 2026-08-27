@@ -224,6 +224,33 @@ describe("PaginatedMultiSelect", () => {
     expect(within(chips).queryByText("hash-alpha")).not.toBeInTheDocument();
   });
 
+  it("clears every selection through the clear-all control when a label is provided", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    renderSelect({ value: ["alias-alpha", "alias-beta"], onValueChange, clearAllLabel: "Clear all" });
+
+    await user.click(screen.getByLabelText("Clear all"));
+
+    expect(onValueChange).toHaveBeenCalledWith([]);
+  });
+
+  it("shows no clear-all control without a label or without selections", () => {
+    const { unmount } = render(
+      <PaginatedMultiSelect
+        options={OPTIONS}
+        value={["alias-alpha"]}
+        onValueChange={vi.fn()}
+        onSearchChange={vi.fn()}
+        onLoadMore={vi.fn()}
+      />,
+    );
+    expect(document.querySelector('[data-slot="combobox-clear"]')).not.toBeInTheDocument();
+    unmount();
+
+    renderSelect({ value: [], clearAllLabel: "Clear all" });
+    expect(document.querySelector('[data-slot="combobox-clear"]')).not.toBeInTheDocument();
+  });
+
   it("anchors the dropdown to the chips container so it tracks the growing chip box", async () => {
     const user = userEvent.setup();
     renderSelect({});
