@@ -5469,6 +5469,69 @@ class TestBedrockGuardrailImageInput:
         assert request["content"] == []
 
     @pytest.mark.asyncio
+    async def test_incremental_scan_does_not_skip_a_request_carrying_an_image(self):
+        """`only_scan_new_messages` decides what to scan from `texts` alone.
+
+        With a session id and every text segment already seen, the incremental path
+        returns before the image-aware code runs, so benign text plus a violating
+        image is never scanned -- and the proxy still reports the guardrail as run.
+        Nothing caches images either, so "already seen" cannot cover them.
+        """
+        g = self._guardrail(only_scan_new_messages=True)
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(await g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        # Every text is already in the session cache: the exact state that made the
+        # incremental path return early.
+        with (
+            patch.object(g, "filter_new_texts_for_session", new=AsyncMock(return_value=[])),
+            patch.object(g, "make_bedrock_api_request", new=spy),
+        ):
+            await g.apply_guardrail(
+                inputs={"texts": ["look at this"], "images": [self._PNG_DATA_URI]},
+                request_data={"litellm_session_id": "sess-1"},
+                input_type="request",
+            )
+
+        assert sent, "image-carrying request was skipped entirely by the incremental path"
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_latest_message_only_does_not_skip_an_image_only_message(self):
+        """`experimental_use_latest_role_message_only` skips a latest message with no text.
+
+        An image-only user message is exactly that shape, so the whole request was
+        dropped from the scan.
+        """
+        g = self._guardrail(experimental_use_latest_role_message_only=True)
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(await g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={
+                    "texts": [],
+                    "images": [self._PNG_DATA_URI],
+                    "structured_messages": [
+                        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}}]}
+                    ],
+                },
+                request_data={},
+                input_type="request",
+            )
+
+        assert sent, "image-only latest message was skipped entirely"
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_scans_images_from_inputs(self):
         """The proxy reaches BedrockGuardrail through `apply_guardrail`, not the native hook.
 

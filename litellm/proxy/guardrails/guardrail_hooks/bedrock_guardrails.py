@@ -3299,7 +3299,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 "Bedrock Guardrail: Applying guardrail to %s text(s) and %s image(s)", len(texts), len(image_urls)
             )
 
-            if input_type == "request":
+            # Both of the optimizations below decide what to scan by looking at
+            # `texts` alone, so an image rides along unscanned and the proxy still
+            # reports the guardrail as run. Neither tracks images in its session
+            # cache either, so "already seen" cannot be established for them.
+            # Presence of an image therefore forces the full image-aware path:
+            # correctness over the optimization, and it fails closed.
+            if input_type == "request" and not image_urls:
                 incremental_result: Final = await self._apply_incremental_request_scan(
                     texts=texts,
                     inputs=inputs,
@@ -3316,7 +3322,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
                 input_type=input_type,
             )
-            if selection.skip_scan:
+            # `experimental_use_latest_role_message_only` marks a latest message with
+            # no text as skip_scan; an image-only message is exactly that shape.
+            if selection.skip_scan and not image_urls:
                 return inputs
             filtered_messages: Final = selection.filtered_messages
             scanned_slice: Final = selection.scanned_slice
