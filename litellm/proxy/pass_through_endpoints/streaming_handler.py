@@ -248,7 +248,7 @@ class PassThroughStreamingHandler:
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.GEMINI:
             gemini_passthrough_logging_handler_result: Final = (
-                GeminiPassthroughLoggingHandler._handle_logging_gemini_collected_chunks(
+                GeminiPassthroughLoggingHandler._handle_logging_gemini_collected_chunks(  # pyright: ignore[reportPrivateUsage]  # mirrors sibling handler dispatch
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
                     url_route=url_route,
@@ -260,8 +260,12 @@ class PassThroughStreamingHandler:
                     model=model,
                 )
             )
-            standard_logging_response_object = gemini_passthrough_logging_handler_result["result"]
-            kwargs = gemini_passthrough_logging_handler_result["kwargs"]
+            standard_logging_response_object = (  # rebind-ok: branch bind in shared if/elif dispatch
+                gemini_passthrough_logging_handler_result["result"]
+            )
+            kwargs = (  # rebind-ok: branch bind in shared if/elif dispatch
+                gemini_passthrough_logging_handler_result["kwargs"]
+            )
         elif endpoint_type == EndpointType.OPENAI:
             openai_passthrough_logging_handler_result: Final = (
                 OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
