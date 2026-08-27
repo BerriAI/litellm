@@ -274,6 +274,39 @@ async def test_filter_deployments_reads_metadata_when_litellm_metadata_is_presen
         )
 
 
+@pytest.mark.asyncio
+async def test_filter_deployments_ignores_a_forged_populated_litellm_metadata_key(time_controller):
+    """
+    Bugbot finding on the fix above: requiring litellm_metadata to be merely
+    non-empty is still forgeable -- a caller can populate it with its own,
+    unrelated keys on an ordinary route, which is non-empty but carries none
+    of the real identity the proxy wrote into "metadata". Only
+    add_litellm_data_to_request's own "user_api_key_auth" marker, stripped
+    from any bucket the caller doesn't own, proves a bucket is authoritative.
+    """
+    limiter = _make_limiter(time_controller)
+    deployment = _deployment(
+        "grp",
+        "dep-1",
+        {"request_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 1, "period_seconds": 86400}]}},
+    )
+    router = litellm.Router(model_list=[deployment])
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    request_kwargs = {
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "litellm_metadata": {"x": 1},
+    }
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+
 # ---------------------------------------------------------------------------
 # TagRateLimitEntry -- limit validation
 # ---------------------------------------------------------------------------
@@ -1439,6 +1472,54 @@ async def test_log_success_event_accounts_when_litellm_params_carries_a_null_lit
 
 
 @pytest.mark.asyncio
+async def test_log_success_event_ignores_a_forged_populated_litellm_metadata_key(time_controller):
+    """
+    Same misresolution as the null-key case above, but with a populated
+    (not merely present) forged litellm_metadata -- a caller-supplied dict
+    with unrelated keys is still not the field the proxy wrote identity
+    into. Only the unconditionally-stamped "user_api_key_auth" marker,
+    which litellm_pre_call_utils.py strips from any bucket a caller doesn't
+    own, proves a bucket is authoritative.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "token_limits": {
+                        "limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+
+    kwargs = {
+        "litellm_params": {
+            "litellm_metadata": {"x": 1},
+            "metadata": {"tags": ["end_user_id:u1"]},
+        },
+        "standard_logging_object": {
+            "model_group": "grp",
+            "model_id": "dep-1",
+            "total_tokens": 42,
+            "response_cost": 0.01,
+        },
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500000)
+    assert (
+        float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None)) == 42.0
+    )
+
+
+@pytest.mark.asyncio
 async def test_log_success_event_accounts_the_key_backed_tag_not_a_caller_forged_one(time_controller):
     """
     Bugbot finding: admission (async_filter_deployments) sees a flat
@@ -1523,7 +1604,7 @@ async def test_log_success_event_reads_nested_litellm_metadata_when_that_is_auth
     kwargs = {
         "litellm_params": {
             "metadata": {"tags": []},
-            "litellm_metadata": {"tags": ["end_user_id:u1"]},
+            "litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_auth": {}},
         },
         "standard_logging_object": {
             "model_group": "grp",
@@ -1923,7 +2004,9 @@ async def test_log_success_event_accounts_against_the_team_id_admission_checked(
 
     # LITELLM_METADATA_ROUTES shape: litellm_metadata is the authoritative
     # field, and team-alias resolution requires the real team_id from it.
-    request_kwargs = {"litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}}
+    request_kwargs = {
+        "litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1", "user_api_key_auth": {}}
+    }
     result = await limiter.async_filter_deployments(
         model="team-alias-name", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
@@ -1933,7 +2016,9 @@ async def test_log_success_event_accounts_against_the_team_id_admission_checked(
     # real one in litellm_params.litellm_metadata, simulating litellm_logging.py
     # resolving a different field than the one admission used.
     kwargs = {
-        "litellm_params": {"litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1"}},
+        "litellm_params": {
+            "litellm_metadata": {"tags": ["end_user_id:u1"], "user_api_key_team_id": "team-1", "user_api_key_auth": {}}
+        },
         "standard_logging_object": {
             "model_group": "team-alias-name",
             "model_id": "dep-1",
@@ -2829,6 +2914,48 @@ async def test_next_hops_admission_releases_a_prior_hops_leaked_reservation(time
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
     assert result == healthy
+
+
+@pytest.mark.asyncio
+async def test_concurrent_batch_siblings_do_not_bypass_a_concurrency_limit(time_controller):
+    """
+    Veria AI finding: Router.abatch_completion's comma-separated multi-model
+    dispatch runs each model concurrently as its own asyncio.Task, but every
+    branch is handed the identical litellm_logging_obj (the proxy attaches
+    one to the request before the comma-split), so two genuinely concurrent
+    branches share one model_call_details. Before the fix, a second branch's
+    admission-time stale-reservation cleanup couldn't tell that apart from
+    an earlier, already-failed hop of its own retry chain, so it released
+    the first branch's still-live reservation and let both branches through
+    a concurrency limit of 1.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
+    first_admitted = asyncio.Event()
+
+    async def _branch_one() -> None:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+        first_admitted.set()
+        # Held "in flight" while the second branch's admission runs, exactly
+        # like two concurrently in-flight provider calls.
+        await asyncio.sleep(0.05)
+
+    async def _branch_two() -> None:
+        await first_admitted.wait()
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    results = await asyncio.gather(
+        asyncio.create_task(_branch_one()), asyncio.create_task(_branch_two()), return_exceptions=True
+    )
+    rejections = [result for result in results if isinstance(result, ProxyRateLimitError)]
+    assert len(rejections) == 1
 
 
 def _request_limit_router(limit: int) -> "litellm.Router":
@@ -3985,13 +4112,16 @@ def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
 @pytest.mark.asyncio
 async def test_release_in_a_forked_task_is_visible_to_the_parent_context(time_controller):
     limiter = _make_limiter(time_controller)
-    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
+    # Entries are (key, partition_key, queueing_task) triples in production
+    # (see _queue_pending_reservations); the task is irrelevant to this
+    # specific release path (only_current_task defaults False here).
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("key1", None, None)]}
 
     async def detached_release():
         return await limiter._pop_pending_concurrency_keys(model_call_details)
 
     released = await asyncio.create_task(detached_release())
-    assert released == ("key1",)
+    assert released == (("key1", None),)
 
     # The parent's own view of the same dict must see the release too.
     assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == []
@@ -4000,29 +4130,54 @@ async def test_release_in_a_forked_task_is_visible_to_the_parent_context(time_co
 @pytest.mark.asyncio
 async def test_release_does_not_sweep_up_a_key_appended_after_its_snapshot(time_controller):
     limiter = _make_limiter(time_controller)
-    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("key1", None, None)]}
 
     async def detached_release_then_sibling_admits():
         released = await limiter._pop_pending_concurrency_keys(model_call_details)
         # A sibling hop's admission, appending to the same shared dict,
         # interleaved right after this release's snapshot was taken.
-        model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD].append("key2")
+        model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD].append(("key2", None, None))
         return released
 
     released = await asyncio.create_task(detached_release_then_sibling_admits())
-    assert released == ("key1",)
+    assert released == (("key1", None),)
     # key2 must still be pending for its own hop's eventual release.
-    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == ["key2"]
+    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [("key2", None, None)]
 
 
 @pytest.mark.asyncio
 async def test_release_is_not_repeated_for_the_same_snapshot(time_controller):
     limiter = _make_limiter(time_controller)
-    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: ["key1"]}
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("key1", None, None)]}
     first = await limiter._pop_pending_concurrency_keys(model_call_details)
     second = await limiter._pop_pending_concurrency_keys(model_call_details)
-    assert first == ("key1",)
+    assert first == (("key1", None),)
     assert second == ()
+
+
+@pytest.mark.asyncio
+async def test_release_only_current_task_leaves_a_concurrent_siblings_reservation_alone(time_controller):
+    """
+    Veria AI finding: Router.abatch_completion's comma-separated multi-model
+    dispatch runs each model concurrently as its own asyncio.Task, but every
+    branch shares one litellm_logging_obj (the proxy attaches it to the
+    request before the comma-split), so a new hop's admission could see a
+    still-live sibling branch's own reservation sitting in the same
+    model_call_details and wrongly sweep it up as "stale". only_current_task
+    must leave a differently-tasked entry untouched.
+    """
+    limiter = _make_limiter(time_controller)
+
+    async def _reserve_as_a_separate_task() -> None:
+        pass  # the task object itself is the fixture; body is irrelevant
+
+    sibling_task = asyncio.create_task(_reserve_as_a_separate_task())
+    await sibling_task
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("sibling-key", None, sibling_task)]}
+
+    released = await limiter._pop_pending_concurrency_keys(model_call_details, only_current_task=True)
+    assert released == ()
+    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [("sibling-key", None, sibling_task)]
 
 
 # ---------------------------------------------------------------------------

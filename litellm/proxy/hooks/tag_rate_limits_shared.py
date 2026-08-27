@@ -234,16 +234,15 @@ def resolve_authoritative_metadata_variable_name(
     silently reading no tags/identity at all and admitting the request against
     every configured limit.
 
-    A plain truthiness check on `litellm_metadata` isn't enough either: a
-    caller can populate it with unrelated, non-empty content on a route where
-    `metadata` is the field the proxy actually wrote identity into, and
-    truthiness alone would still misresolve to the caller-controlled bucket.
-    `add_user_api_key_auth_to_request_metadata` (litellm_pre_call_utils.py)
-    unconditionally stamps a `user_api_key_auth` key into whichever bucket it
-    resolved as authoritative, overwriting anything a caller pre-populated
-    there -- so requiring that marker's presence, not mere truthiness, only
-    ever prefers `litellm_metadata` when it is genuinely the field the proxy
-    wrote identity/tags into."""
+    Merely requiring the value to be a non-empty dict is not enough either: a
+    caller can populate its own, unrelated keys on the non-authoritative
+    bucket (e.g. `{"litellm_metadata": {"x": 1}}` on an ordinary route), which
+    is non-empty but still not the field the proxy wrote identity into.
+    `add_litellm_data_to_request` unconditionally stamps `user_api_key_auth`
+    into whichever bucket the route actually resolved as authoritative, and
+    strips any `user_api_key_`-prefixed key a caller pre-populates on the
+    other bucket -- so requiring that marker's presence, not mere
+    truthiness, can't be forged onto the wrong side."""
     litellm_metadata: Final = metadata_source.get("litellm_metadata")
     if isinstance(litellm_metadata, Mapping) and "user_api_key_auth" in litellm_metadata:
         return "litellm_metadata"
