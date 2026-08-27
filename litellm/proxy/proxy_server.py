@@ -2951,10 +2951,34 @@ async def _ensure_spend_counter_initialized(
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
-            # Re-check after the awaits above: a concurrent task may have
-            # seeded the counter; incrementing then would double-count.
-            if base_spend > 0 and spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None:
-                await _increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+            if base_spend > 0:
+                await _seed_spend_counter_if_absent(counter_key=counter_key, base_spend=base_spend)
+
+
+async def _seed_spend_counter_if_absent(counter_key: str, base_spend: float):
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
+                key=counter_key,
+                value=base_spend,
+                nx=True,
+            )
+            cached: Final = (
+                base_spend if seeded else await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
+            )
+            spend_counter_cache.in_memory_cache.set_cache(
+                key=counter_key,
+                value=float(cached) if cached is not None else base_spend,
+            )
+            return
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Unable to seed Redis spend counter %s, falling back to in-memory",
+                counter_key,
+                exc_info=True,
+            )
+    if spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None:
+        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=base_spend)
 
 
 async def _get_source_cache_base_spend(
