@@ -136,6 +136,9 @@ class GenAIMapper:
         LiteLLM.GUARDRAIL_ID: lambda d: d.guardrail_id,
         LiteLLM.GUARDRAIL_POLICY_TEMPLATE: lambda d: d.policy_template,
         LiteLLM.GUARDRAIL_DETECTION_METHOD: lambda d: d.detection_method,
+        LiteLLM.GUARDRAIL_USAGE: lambda d: d.usage_json,
+        LiteLLM.GUARDRAIL_COST: lambda d: d.cost,
+        LiteLLM.GUARDRAIL_COST_IN_SPEND: lambda d: d.cost_in_spend,
     }
 
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {

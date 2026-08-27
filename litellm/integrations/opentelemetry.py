@@ -2049,6 +2049,26 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 # serialise to JSON once so set_attribute never coerces.
                 guardrail_span.set_attribute("guardrail_violation_categories", safe_dumps(violation_categories))
 
+            # Billable usage counters and USD cost stamped by the provider hook
+            # (e.g. Azure Prompt Shield text records, Bedrock policy units).
+            guardrail_usage = guardrail_information.get("guardrail_usage")
+            if guardrail_usage is not None:
+                guardrail_span.set_attribute("guardrail_usage", safe_dumps(guardrail_usage))
+            guardrail_cost = guardrail_information.get("guardrail_cost")
+            if guardrail_cost is not None:
+                self.safe_set_attribute(
+                    span=guardrail_span,
+                    key="guardrail_cost",
+                    value=guardrail_cost,
+                )
+            guardrail_cost_in_spend = guardrail_information.get("guardrail_cost_in_spend")
+            if isinstance(guardrail_cost_in_spend, bool):
+                self.safe_set_attribute(
+                    span=guardrail_span,
+                    key="guardrail_cost_in_spend",
+                    value=guardrail_cost_in_spend,
+                )
+
             self._set_team_attributes_from_kwargs(guardrail_span, kwargs)
 
             guardrail_span.end(end_time=self._to_ns(end_time_datetime))
