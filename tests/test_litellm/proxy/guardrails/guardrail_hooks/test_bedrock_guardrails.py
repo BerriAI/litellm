@@ -24,6 +24,7 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentChunkResult,
     BedrockGuardrail,
     _redact_pii_matches,
+    _retained_image_bytes,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
@@ -5639,6 +5640,111 @@ class TestBedrockGuardrailImageInput:
         request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
         assert len(request["content"]) == 40
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(None, id="no content"),
+            pytest.param(123, id="content is not a list"),
+            pytest.param([123], id="part is not a mapping"),
+            pytest.param([{"type": "image_url"}], id="image part with no url"),
+            pytest.param([{"type": "image_url", "image_url": 123}], id="url is not a string or mapping"),
+            pytest.param([{"type": "image_url", "image_url": {"url": 123}}], id="url value is not a string"),
+            pytest.param([{"type": "input_audio"}], id="part carries neither image nor text"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_malformed_part_never_becomes_scannable_content(self, content):
+        """Default-deny is the point of this PR, so pin it rather than trust it.
+
+        Each shape below is one a caller can put on the wire. None of them may turn
+        into a content item: an unrecognised part that fell through to the text
+        branch would be reported to the operator as scanned when it was not.
+        """
+        request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
+            source="INPUT", messages=[{"role": "user", "content": content}]
+        )
+
+        assert request["content"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_bare_string_part_is_scanned_as_text(self):
+        """A content list may hold plain strings, not only typed parts."""
+        request = await self._guardrail().convert_to_bedrock_format(
+            source="INPUT", messages=[{"role": "user", "content": ["just text"]}]
+        )
+
+        assert request["content"] == [{"text": {"text": "just text"}}]
+
+    @pytest.mark.asyncio
+    async def test_image_url_given_as_a_plain_string_is_accepted(self):
+        """OpenAI accepts `image_url` as a bare string as well as `{"url": ...}`.
+
+        Both reach the model as an image, so both have to reach the scan.
+        """
+        request = await self._guardrail().convert_to_bedrock_format(
+            source="INPUT",
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": self._PNG_DATA_URI}]}],
+        )
+
+        kinds = [k for item in request["content"] for k in item]
+        assert kinds == ["image"]
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognized_payload_is_left_to_the_unscannable_policy(self):
+        """_normalize_image_input sniffs png and jpeg out of bare base64.
+
+        Anything else is handed to the decoder as-is rather than guessed at, so the
+        rejection comes from on_unscannable_image and not from a helper deciding
+        quietly on its own.
+        """
+        # Reached through apply_guardrail: bare base64 arrives in inputs["images"],
+        # which is the only caller that normalizes before decoding.
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().apply_guardrail(
+                inputs={"texts": [], "images": ["R0lGODlhAQABAAAAACw="]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert "could not be read" in str(exc_info.value.detail) or "not a png/jpeg" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_an_oversized_inline_image_is_dropped_under_the_allow_policy(self):
+        """The allow policy has to survive the size rejection, not just the format one.
+
+        Under `block` the oversized branch raises and never returns, so this is the
+        only path that reaches its fall-through.
+        """
+        oversized_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (5 * 1024 * 1024)).decode()
+
+        request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
+            source="INPUT",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look"},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{oversized_png}"}},
+                    ],
+                }
+            ],
+        )
+
+        assert request["content"] == [{"text": {"text": "look"}}]
+
+    def test_the_url_and_budget_helpers_guard_their_own_inputs(self):
+        """Both are reached only through callers that already checked the shape.
+
+        Exercised directly so the guards are not silently dropped in a refactor that
+        gives either one a second caller.
+        """
+        assert BedrockGuardrail._get_image_url(item={"type": "text", "text": "hi"}) is None
+
+        assert _retained_image_bytes(None) == 0
+        assert _retained_image_bytes({"text": {"text": "not an image"}}) == 0
+        assert _retained_image_bytes({"image": {"format": "png", "source": {"bytes": 123}}}) == 0
+        assert _retained_image_bytes({"image": {"format": "png", "source": {"bytes": "AAAA"}}}) == 3
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_scans_images_from_inputs(self):
