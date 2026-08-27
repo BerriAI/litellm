@@ -38,6 +38,23 @@ async def test_is_model_authorized_for_token_follows_the_key_access_groups():
     assert await is_model_authorized_for_token(model="secret-model", valid_token=token, llm_router=router) is False
 
 
+class _RouterWithBrokenAccessGroupLookup(Router):
+    def get_model_access_groups(self, *args, **kwargs):
+        raise RuntimeError("access group store unavailable")
+
+
+@pytest.mark.asyncio
+async def test_is_model_authorized_for_token_fails_closed_when_the_lookup_breaks():
+    router = _RouterWithBrokenAccessGroupLookup(model_list=_router().model_list)
+
+    assert (
+        await is_model_authorized_for_token(
+            model="open-model", valid_token=_key_limited_to("open-group"), llm_router=router
+        )
+        is False
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
 async def test_router_fallback_access_check_authorizes_the_key_carried_in_request_metadata(metadata_field: str):
