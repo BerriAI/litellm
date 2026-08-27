@@ -233,7 +233,7 @@ def test_langflow_extra_body_cannot_inject_tweaks_into_run_payload():
         return resp
 
     with patch.object(HTTPHandler, "post", side_effect=fake_post):
-        with pytest.raises(litellm.APIConnectionError):
+        with pytest.raises(litellm.BadRequestError):
             litellm.completion(
                 model="langflow/my-flow",
                 messages=[{"role": "user", "content": "hello"}],

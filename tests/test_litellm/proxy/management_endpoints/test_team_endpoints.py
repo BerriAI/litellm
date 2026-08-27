@@ -3,7 +3,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Optional, cast
+from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import pytest
@@ -2205,6 +2205,100 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name",
+    ["team_model_add", "team_model_delete", "update_team_member_permissions"],
+)
+async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
+    """A team deleted between the read and the write must 404.
+
+    Prisma's `update` returns None when no row matches `where`, and the team
+    row can be deleted between the read these endpoints do first and the
+    update that follows it. Without the guard, `team_model_add` /
+    `team_model_delete` hand that None to `_refresh_cached_team` (which
+    reads `team_row.team_id`) and `/team/permissions_update` returns None
+    out of a route declared to return a team, so a plain race turns into a
+    500 instead of the 404 every other not-found path in this file raises.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        TeamModelAddRequest,
+        TeamModelDeleteRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        team_model_add,
+        team_model_delete,
+        update_team_member_permissions,
+    )
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    existing_team = MagicMock()
+    existing_team.team_id = "team-1234"
+    existing_team.model_dump.return_value = {
+        "team_id": "team-1234",
+        "models": ["bedrock-claude-sonnet-4", "openai/*"],
+        "team_member_permissions": [],
+        "spend": 0.0,
+    }
+
+    call_endpoint_under_test: Final = {
+        "team_model_add": lambda: team_model_add(
+            data=TeamModelAddRequest(team_id="team-1234", models=["team-byok-1"]),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "team_model_delete": lambda: team_model_delete(
+            data=TeamModelDeleteRequest(team_id="team-1234", models=["openai/*"]),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "update_team_member_permissions": lambda: update_team_member_permissions(
+            data=UpdateTeamMemberPermissionsRequest(
+                team_id="team-1234",
+                team_member_permissions=["/key/generate"],
+            ),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+    }[endpoint_name]
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: stubs the cache write so the test observes only the DB result handling
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: stubs the collaborator so the test pins the endpoint's own error contract
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=existing_team,
+        ),
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=existing_team
+        )
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await call_endpoint_under_test()
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": "Team not found, passed team_id=team-1234"}
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_member_budget_not_passed_to_db(
     disable_audit_logging_for_mocked_team,
 ):
@@ -2272,6 +2366,7 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            explicitly_set_fields=frozenset(),
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -2645,6 +2740,138 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
 
 @pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_db_client):
+    """
+    A request that keeps team_member_budget but explicitly nulls
+    team_member_budget_duration must clear the reset period and its reset time.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {"team_member_budget_id": "existing_budget_123"}
+
+    mock_db_client.db.litellm_budgettable.update = AsyncMock(
+        side_effect=lambda where, data: SimpleNamespace(**data)
+    )
+
+    result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+        team_table=team_table,
+        user_api_key_dict=mock_user_api_key_dict,
+        updated_kv={
+            "team_id": "test_team_id",
+            "team_member_budget": 100.0,
+            "team_member_budget_duration": None,
+        },
+        team_member_budget=100.0,
+        team_member_budget_duration=None,
+        explicitly_set_fields={
+            "team_member_budget",
+            "team_member_budget_duration",
+        },
+    )
+
+    written = mock_db_client.db.litellm_budgettable.update.call_args.kwargs["data"]
+    assert written["max_budget"] == 100.0
+    assert written["budget_duration"] is None
+    assert written["budget_reset_at"] is None
+    assert "rpm_limit" not in written
+    assert "tpm_limit" not in written
+    assert result["metadata"]["team_member_budget_id"] == "existing_budget_123"
+    assert "team_member_budget" not in result
+    assert "team_member_budget_duration" not in result
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_explicit_null_duration_does_not_inherit_team_duration(
+    mock_db_client,
+):
+    """
+    A first-time member budget with an explicitly null duration must never
+    reset, even when the team itself has a reset period.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = "30d"
+
+    mock_db_client.db.litellm_budgettable.create = AsyncMock(
+        side_effect=lambda data: SimpleNamespace(**data)
+    )
+
+    result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+        data=team_table,
+        new_team_data_json={"team_id": "test_team_id"},
+        user_api_key_dict=mock_user_api_key_dict,
+        team_member_budget=100.0,
+        team_member_budget_duration=None,
+        explicitly_set_fields={
+            "team_member_budget",
+            "team_member_budget_duration",
+        },
+    )
+
+    written = mock_db_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    assert written["max_budget"] == 100.0
+    assert "budget_duration" not in written
+    assert "budget_reset_at" not in written
+    assert result["metadata"]["team_member_budget_id"] == written["budget_id"]
+    assert "team_member_budget" not in result
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_inherits_team_duration_when_duration_omitted(
+    mock_db_client,
+):
+    """
+    Omitting team_member_budget_duration keeps the existing inheritance of the
+    team's own reset period.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = "30d"
+
+    mock_db_client.db.litellm_budgettable.create = AsyncMock(
+        side_effect=lambda data: SimpleNamespace(**data)
+    )
+
+    result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+        data=team_table,
+        new_team_data_json={"team_id": "test_team_id"},
+        user_api_key_dict=mock_user_api_key_dict,
+        team_member_budget=100.0,
+        explicitly_set_fields={"team_member_budget"},
+    )
+
+    written = mock_db_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    assert written["budget_duration"] == "30d"
+    assert written["budget_reset_at"] is not None
+    assert result["metadata"]["team_member_budget_id"] == written["budget_id"]
+
+
+@pytest.mark.asyncio
 async def test_update_team_with_team_member_budget_duration(
     disable_audit_logging_for_mocked_team,
 ):
@@ -2705,6 +2932,7 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            explicitly_set_fields=frozenset(),
         ):
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)

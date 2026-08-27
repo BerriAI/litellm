@@ -330,6 +330,24 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
+    def _flush_unbilled_transcription_usage(self) -> None:
+        if self.provider_config is None:
+            return
+        usage: Final = self.provider_config.unbilled_usage_on_session_close(self.model)
+        if usage is None:
+            return
+        flush_event: Final = (
+            cast(  # cast-ok: usage-only partial event, the same shape _capture_transcription_usage logs
+                OpenAIRealtimeEvents,
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": usage,
+                },
+            )
+        )
+        self.store_message(flush_event)
+        self._capture_transcription_usage(flush_event)
+
     def _collect_tool_calls_from_response_done(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
@@ -955,6 +973,7 @@ class RealTimeStreaming:
                 transcript = event.get("transcript", "")
                 self._collect_user_input_from_backend_event(cast(dict, event))
                 self.store_message(event_str)
+                self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
@@ -1068,6 +1087,7 @@ class RealTimeStreaming:
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
         finally:
+            self._flush_unbilled_transcription_usage()
             await self.log_messages()
 
     @staticmethod

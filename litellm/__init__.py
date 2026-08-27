@@ -445,6 +445,7 @@ max_ui_session_budget: Optional[float] = (
     1.0  # USD budget for each dashboard login session (playground, test connection)
 )
 internal_user_budget_duration: Optional[str] = None
+budget_rollover: bool = False  # carry spend beyond max_budget into the next window instead of zeroing it
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
@@ -464,6 +465,11 @@ prometheus_metrics_config: Optional[List] = None
 prometheus_exclude_metrics: Optional[List[str]] = None
 prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
+prometheus_deployment_and_latency_caller_identity: Literal[
+    "api_key_alias",
+    "user_email",
+    "both",
+] = "api_key_alias"
 # Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
 # `litellm_proxy_failed_requests_metric`. Off by default to preserve the
 # pre-unification label set so existing dashboards / recording rules keyed on
