@@ -274,11 +274,17 @@ def _restore_cyberark_runtime(proxy_config: "ProxyConfig", env_values: Mapping[s
             verbose_proxy_logger.exception("Failed to restore previous CyberArk configuration")
         else:
             return
-    if litellm._key_management_system == KeyManagementSystem.CYBERARK:  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
-        litellm.secret_manager_client = None
-        litellm._key_management_system = None  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
-        # Force the vault reload to re-init from its own row so no manager is stranded inactive
-        proxy_config._last_hashicorp_vault_config = None  # pyright: ignore[reportPrivateUsage]  # proxy-internal change-detection cache
+    if litellm._key_management_system != KeyManagementSystem.CYBERARK:  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
+        return
+    litellm.secret_manager_client = None
+    litellm._key_management_system = None  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
+    # Force the vault reload to re-init from its own row so no manager is stranded inactive
+    proxy_config._last_hashicorp_vault_config = None  # pyright: ignore[reportPrivateUsage]  # proxy-internal change-detection cache
+    if os.environ.get("HCP_VAULT_ADDR"):
+        try:
+            proxy_config.initialize_secret_manager(key_management_system="hashicorp_vault")
+        except Exception:  # noqa: BLE001  # restore is best-effort; the vault reload loop retries from its own row
+            verbose_proxy_logger.exception("Failed to reinitialize Hashicorp Vault after CyberArk rollback")
 
 
 def _clear_cyberark_state(proxy_config: "ProxyConfig") -> None:

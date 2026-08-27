@@ -530,6 +530,48 @@ async def test_cyberark_persist_failure_rolls_back_runtime_state(client, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_cyberark_persist_failure_restores_hashicorp_manager(client, monkeypatch):
+    """If CyberArk init displaced an env-configured Hashicorp manager and the DB
+    upsert then fails, rollback must bring the Hashicorp manager back."""
+    mock_prisma, mock_db = _make_mock_db()
+    mock_cfg = _make_mock_proxy_config()
+    mock_cfg._last_cyberark_config = None
+    mock_db.upsert = AsyncMock(side_effect=Exception("db write failed"))
+
+    def _fake_init(key_management_system):
+        litellm._key_management_system = (  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+            KeyManagementSystem.CYBERARK
+            if key_management_system == "cyberark"
+            else KeyManagementSystem.HASHICORP_VAULT
+        )
+
+    mock_cfg.initialize_secret_manager = MagicMock(side_effect=_fake_init)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+    old_client, old_kms = litellm.secret_manager_client, litellm._key_management_system
+    _set_admin()
+
+    try:
+        monkeypatch.setenv("HCP_VAULT_ADDR", "https://vault.example.com")
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+
+        r = client.post(
+            CYBERARK_URL,
+            json={"cyberark_api_base": "https://conjur.new.com", "cyberark_api_key": "new-key"},
+        )
+        assert r.status_code == 500
+        assert litellm._key_management_system == KeyManagementSystem.HASHICORP_VAULT
+        assert (
+            mock_cfg.initialize_secret_manager.call_args_list[-1].kwargs["key_management_system"] == "hashicorp_vault"
+        )
+    finally:
+        litellm.secret_manager_client = old_client  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        litellm._key_management_system = old_kms  # test-quality-ok: endpoint hot-reloads litellm globals; test must set and restore them
+        os.environ.pop("HCP_VAULT_ADDR", None)
+        _cleanup()
+
+
+@pytest.mark.asyncio
 async def test_cyberark_audit_log_redacts_values(client, monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     mock_prisma, mock_db = _make_mock_db()
