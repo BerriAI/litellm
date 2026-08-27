@@ -21,14 +21,12 @@ import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
-    AUTO_ROUTED_REQUEST_METADATA_KEY,
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
-    ROUTER_MODEL_NAME_RESPONSE_FIELD,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
@@ -2037,54 +2035,6 @@ class ProxyBaseLLMRequestProcessing:
         return None
 
     @staticmethod
-    def get_router_selected_model_name(
-        litellm_logging_obj: LiteLLMLoggingObj | None,
-    ) -> str | None:
-        """Model group an auto-routing strategy selected, or None if none fired.
-
-        The marker and ``deployment_model_name`` are written by different bucket
-        resolvers (``get_or_create_metadata_bucket`` vs
-        ``_get_router_metadata_variable_name``), so they can land in different
-        buckets on the same request. Resolve each across both.
-        """
-        litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
-        if not isinstance(litellm_params, dict):
-            return None
-        buckets: Final = tuple(
-            bucket for key in ("litellm_metadata", "metadata") if isinstance(bucket := litellm_params.get(key), dict)
-        )
-        if not any(bucket.get(AUTO_ROUTED_REQUEST_METADATA_KEY) is True for bucket in buckets):
-            return None
-        return next(
-            (
-                model_group
-                for bucket in buckets
-                if isinstance(model_group := bucket.get("deployment_model_name"), str) and model_group
-            ),
-            None,
-        )
-
-    @staticmethod
-    def set_router_selected_model_field(
-        *,
-        response_obj: object,
-        router_model_name: str | None,
-    ) -> None:
-        if not router_model_name:
-            return
-        if isinstance(response_obj, dict):
-            response_obj[ROUTER_MODEL_NAME_RESPONSE_FIELD] = router_model_name
-            return
-        try:
-            setattr(response_obj, ROUTER_MODEL_NAME_RESPONSE_FIELD, router_model_name)
-        except (AttributeError, TypeError, ValueError):
-            verbose_proxy_logger.debug(
-                "Could not set %s on response object of type %s",
-                ROUTER_MODEL_NAME_RESPONSE_FIELD,
-                type(response_obj),
-            )
-
-    @staticmethod
     def _response_cost_from_logging_obj(
         *,
         response: Any,
@@ -2582,10 +2532,6 @@ class ProxyBaseLLMRequestProcessing:
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
                 return_raw_model_name=_should_return_raw_model_name(self.data),
             )
-        self.set_router_selected_model_field(
-            response_obj=response,
-            router_model_name=self.get_router_selected_model_name(logging_obj),
-        )
 
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
