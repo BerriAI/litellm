@@ -1,5 +1,10 @@
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload  # noqa: TID251  # Any only appears in the base overload's Coroutine[Any, Any, ...]
+from typing import (  # noqa: TID251  # Any only appears in the base overload's Coroutine[Any, Any, ...]
+    Any,
+    Final,
+    Literal,
+    overload,
+)
 
 import httpx
 
