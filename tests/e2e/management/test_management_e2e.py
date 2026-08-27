@@ -24,7 +24,21 @@ from management_client import (
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, KeyUpdateBody, OrgInfoResponse, OrgNewBody, OrgUpdateBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
+from models import (
+    KeyGenerateBody,
+    KeyUpdateBody,
+    LiteLLMParamsBody,
+    ModelInfoEntry,
+    OrgInfoResponse,
+    OrgNewBody,
+    OrgUpdateBody,
+    TagListEntry,
+    TagNewBody,
+    TeamNewBody,
+    TeamUpdateBody,
+    UserNewBody,
+    UserUpdateBody,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -209,12 +223,9 @@ class TestDashboardKeyRoutes:
     are the same routes the API-surface tests cover with a different caller."""
 
     @pytest.mark.covers("mgmt.key.generate.happy_path")
-    def test_sign_in_mints_a_session_key_that_drives_the_dashboard(
+    def test_creating_a_key_from_the_dashboard_persists_and_works(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        alias = f"e2e-mgmt-uisession-{unique_marker()}"
-        _ = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias))
-
         session = client.dashboard_login(UI_USERNAME, UI_PASSWORD)
         resources.defer(lambda: client.proxy.delete_key(session.session_key))
 
@@ -222,16 +233,48 @@ class TestDashboardKeyRoutes:
             f"/v2/login reports login_method {session.claims.login_method!r} for a username/password sign-in"
         )
         assert session.claims.user_role == "proxy_admin", (
-            f"/v2/login reports user_role {session.claims.user_role!r} for the admin credentials, expected 'proxy_admin'"
+            f"/v2/login reports user_role {session.claims.user_role!r} for the admin credentials, "
+            "expected 'proxy_admin'"
         )
         assert session.redirect_url.endswith("/ui?login=success"), (
             f"/v2/login sends the browser to {session.redirect_url!r} instead of the dashboard"
         )
 
-        info = client.proxy.key_info(session.session_key)
-        assert info.team_id == DASHBOARD_SESSION_TEAM_ID, (
-            f"the minted session key reports team_id {info.team_id!r}, expected the dashboard's "
+        session_info = client.proxy.key_info(session.session_key)
+        assert session_info.team_id == DASHBOARD_SESSION_TEAM_ID, (
+            f"the minted session key reports team_id {session_info.team_id!r}, expected the dashboard's "
             f"{DASHBOARD_SESSION_TEAM_ID!r}"
+        )
+
+        alias = f"e2e-mgmt-uicreate-{unique_marker()}"
+
+        def dashboard_creates_the_key() -> str | None:
+            match client.generate_key(
+                KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=100),
+                caller_key=session.session_key,
+            ):
+                case Success(data=created):
+                    return created.key
+                case _:
+                    return None
+
+        created = _poll(
+            client,
+            dashboard_creates_the_key,
+            "the dashboard session key was never accepted on /key/generate before the deadline",
+        )
+        resources.defer(lambda: client.proxy.delete_key(created))
+
+        created_info = client.proxy.key_info(created)
+        assert created_info.key_alias == alias, (
+            f"/key/info reports key_alias {created_info.key_alias!r} for the key the dashboard created, "
+            f"expected {alias!r}"
+        )
+        assert created_info.models == ["gemini-2.5-flash"], (
+            f"/key/info reports models {created_info.models} for the key the dashboard created"
+        )
+        assert created_info.tpm_limit == 100, (
+            f"/key/info reports tpm_limit {created_info.tpm_limit} for the key the dashboard created, expected 100"
         )
 
         def dashboard_lists_the_key() -> bool | None:
@@ -247,6 +290,9 @@ class TestDashboardKeyRoutes:
             f"the session key never saw {alias!r} in /key/list before the deadline, so the dashboard "
             "would render no keys",
         )
+
+        _poll_chat_ok(client, created, "gemini-2.5-flash")
+        _assert_model_denied(client.chat_status(created, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5")
 
     @pytest.mark.covers("mgmt.key.update.happy_path")
     def test_editing_a_key_from_the_dashboard_persists_and_is_enforced(
