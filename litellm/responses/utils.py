@@ -73,6 +73,16 @@ class ResponsesAPIRequestUtils:
         return {**message, "content": shaped_content}  # mutable-ok: copy, the hook's message stays untouched
 
     @staticmethod
+    def responses_input_to_chat_messages(
+        input: str | ResponseInputParam | None,
+    ) -> list[AllMessageValues]:
+        if input is None:
+            return []
+        if isinstance(input, str):
+            return [{"role": "user", "content": input}]
+        return [item for item in input if isinstance(item, dict) and "role" in item]
+
+    @staticmethod
     def merge_prompt_management_input(
         original_input: str | ResponseInputParam,
         client_input: list[AllMessageValues],

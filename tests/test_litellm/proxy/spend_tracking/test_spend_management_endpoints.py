@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import datetime
+import hashlib
 import json
 import re
 from datetime import timezone
@@ -96,6 +97,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
         sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
         status = re.fullmatch(r"status = \$(\d+)", cond)
+        api_key_not_in = re.fullmatch(r"api_key NOT IN \(\$(\d+), \$(\d+)\)", cond)
         if gte:
             date_bounds["gte"] = _iso(params[int(gte.group(1)) - 1])
         elif lte:
@@ -112,6 +114,11 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
         elif status:
             where["status"] = {"equals": params[int(status.group(1)) - 1]}
+        elif api_key_not_in:
+            where["api_key_not_in"] = [
+                params[int(api_key_not_in.group(1)) - 1],
+                params[int(api_key_not_in.group(2)) - 1],
+            ]
         elif alias:
             metadata_conds.append(
                 {
@@ -200,6 +207,7 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
     return MockPrismaClient()
 
 
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
@@ -1256,6 +1264,140 @@ async def test_ui_view_spend_logs_with_team_id(client, monkeypatch):
         assert data["total"] == 1
         assert len(data["data"]) == 1
         assert data["data"][0]["team_id"] == "team1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+_HEALTH_CHECK_HASHED_API_KEY = hashlib.sha256(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME.encode()).hexdigest()
+
+
+def _spend_logs_with_health_check_rows():
+    now = datetime.datetime.now(timezone.utc).isoformat()
+    return [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": None,
+            "spend": 0.05,
+            "startTime": now,
+            "model": "gpt-4",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": _HEALTH_CHECK_HASHED_API_KEY,
+            "user": None,
+            "team_id": LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+            "spend": 0.0,
+            "startTime": now,
+            "model": "gpt-4",
+        },
+        {
+            "id": "log3",
+            "request_id": "req3",
+            "api_key": LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+            "user": None,
+            "team_id": LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+            "spend": 0.0,
+            "startTime": now,
+            "model": "gpt-4",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_exclude_internal_health_checks(client, monkeypatch):
+    mock_spend_logs = _spend_logs_with_health_check_rows()
+
+    def filter_health_checks(where):
+        excluded = where.get("api_key_not_in")
+        if excluded is None:
+            return mock_spend_logs
+        return [log for log in mock_spend_logs if log["api_key"] not in excluded]
+
+    observed_queries = []
+
+    def observe_query(sql_query, params):
+        if 'FROM "LiteLLM_SpendLogs"' in sql_query:
+            observed_queries.append((sql_query, params))
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_health_checks, query_observer=observe_query),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "exclude_internal_health_checks": "true",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert [row["request_id"] for row in data["data"]] == ["req1"]
+
+        page_sql, page_params = next((sql, params) for sql, params in observed_queries if "ORDER BY" in sql)
+        not_in = re.search(r"api_key NOT IN \(\$(\d+), \$(\d+)\)", page_sql)
+        assert not_in is not None
+        assert LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME not in page_sql
+        assert _HEALTH_CHECK_HASHED_API_KEY not in page_sql
+        assert {
+            page_params[int(not_in.group(1)) - 1],
+            page_params[int(not_in.group(2)) - 1],
+        } == {LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, _HEALTH_CHECK_HASHED_API_KEY}
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_includes_internal_health_checks_by_default(client, monkeypatch):
+    mock_spend_logs = _spend_logs_with_health_check_rows()
+
+    def filter_health_checks(where):
+        excluded = where.get("api_key_not_in")
+        if excluded is None:
+            return mock_spend_logs
+        return [log for log in mock_spend_logs if log["api_key"] not in excluded]
+
+    observed_queries = []
+
+    def observe_query(sql_query, params):
+        if 'FROM "LiteLLM_SpendLogs"' in sql_query:
+            observed_queries.append((sql_query, params))
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_health_checks, query_observer=observe_query),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 3
+        assert [row["request_id"] for row in data["data"]] == ["req1", "req2", "req3"]
+        assert all("NOT IN" not in sql for sql, _ in observed_queries)
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -3225,6 +3367,90 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
         assert "spend" in data[0]
         assert "users" in data[0]
         assert "models" in data[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_bounds_row_count(client, monkeypatch):
+    """Every /spend/logs read path must send take=SPEND_LOGS_PAGINATION_COUNT_CAP to Prisma (LIT-6284)."""
+    captured_find_many_kwargs = []
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.available_rows = 0
+
+        async def find_many(self, *args, **kwargs):
+            captured_find_many_kwargs.append(kwargs)
+            return [{}] * min(kwargs.get("take", 0), self.available_rows)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+        def hash_token(self, token):
+            return f"hashed-{token}"
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    start_date = (
+        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=2)
+    ).strftime("%Y-%m-%d")
+    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        response = client.get(
+            "/spend/logs",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert (
+            captured_find_many_kwargs[-1].get("take")
+            == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+        assert "x-litellm-spend-logs-truncated" not in response.headers
+
+        response = client.get(
+            "/spend/logs",
+            params={"user_id": "test-user"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert captured_find_many_kwargs[-1].get("where") == {"user": "test-user"}
+        assert (
+            captured_find_many_kwargs[-1].get("take")
+            == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "summarize": "false",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert "startTime" in captured_find_many_kwargs[-1].get("where", {})
+        assert (
+            captured_find_many_kwargs[-1].get("take")
+            == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+
+        mock_prisma_client.db.available_rows = (
+            spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+        response = client.get(
+            "/spend/logs",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(response.json()) == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        assert response.headers["x-litellm-spend-logs-truncated"] == "true"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

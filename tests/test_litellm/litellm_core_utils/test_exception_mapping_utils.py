@@ -1002,6 +1002,17 @@ def test_an_exception_without_a_status_is_still_a_connection_error(quiet_excepti
         )
 
 
+def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        exception_type(
+            model=None,
+            original_exception=ValueError("boom"),
+            custom_llm_provider=None,
+        )
+
+    assert "boom" in raised.value.message
+
+
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
 CONTENT_POLICY_MESSAGE = (
     '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'

@@ -103,6 +103,7 @@ export function useLogFilterLogic({
   columnFilters,
   activeTab,
   isLiveTail,
+  excludeInternalHealthChecks,
   startTime,
   endTime,
   pagination,
@@ -116,6 +117,7 @@ export function useLogFilterLogic({
   columnFilters: ColumnFiltersState;
   activeTab: string;
   isLiveTail: boolean;
+  excludeInternalHealthChecks: boolean;
   startTime: string;
   endTime: string;
   pagination: PaginationState;
@@ -139,6 +141,7 @@ export function useLogFilterLogic({
       columnFilters,
       sortBy,
       sortOrder,
+      excludeInternalHealthChecks,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -177,6 +180,7 @@ export function useLogFilterLogic({
           error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
           sort_by: sortBy,
           sort_order: sortOrder,
+          exclude_internal_health_checks: excludeInternalHealthChecks,
         },
       });
     },
