@@ -543,7 +543,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 # an apply_to_models entry caps an entire named chain as one unit, so
                 # retrying against a fallback model outside that list would silently
                 # defeat the very policy that just rejected this request.
-                **({"cross_model_scope": True} if entry.apply_to_models is not None else {}),
+                **(
+                    MappingProxyType({"cross_model_scope": True})
+                    if entry.apply_to_models is not None
+                    else MappingProxyType({})
+                ),
             },
             headers={"retry-after": str(entry.period_seconds)},  # mutable-ok: same as detail
             rate_limit_type=_UNIT_TO_RATE_LIMIT_TYPE[unit],
