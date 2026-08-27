@@ -75,6 +75,9 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         self.collected_chunks: list[bytes] = []
         self.model = model
         self.custom_llm_provider = custom_llm_provider
+        self.endpoint_type: Final = (
+            EndpointType.GEMINI if custom_llm_provider == litellm.LlmProviders.GEMINI.value else EndpointType.VERTEX_AI
+        )
         self._hidden_params: dict[str, Any] = hidden_params or {}
 
     async def _handle_async_streaming_logging(
@@ -86,18 +89,13 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         )
 
         end_time: Final = datetime.now()
-        endpoint_type: Final = (
-            EndpointType.GEMINI
-            if self.custom_llm_provider == litellm.LlmProviders.GEMINI.value
-            else EndpointType.VERTEX_AI
-        )
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
                 passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
                 url_route="/v1/generateContent",
                 request_body=self.request_body or {},
-                endpoint_type=endpoint_type,
+                endpoint_type=self.endpoint_type,
                 start_time=self.start_time,
                 raw_bytes=self.collected_chunks,
                 end_time=end_time,
