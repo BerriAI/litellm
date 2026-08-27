@@ -2596,6 +2596,46 @@ def _supports_factory(model: str, custom_llm_provider: str | None, key: str) -> 
         return False
 
 
+def declared_value_factory(model: str, custom_llm_provider: str | None, key: str) -> str | None:
+    """Return a string value the model map declares for *key*, or ``None`` when it says nothing.
+
+    The string-valued sibling of :func:`_supports_factory` and
+    :func:`_is_explicitly_disabled_factory`, public where those two are not because it is read
+    from the provider configs rather than from this module, sharing their
+    ``get_llm_provider`` -> ``_get_model_info_helper`` chain and their unprefixed-twin
+    fallback (#20885), so a provider-prefixed entry that omits the key still answers
+    from the bare entry that carries it.
+
+    ``None`` means "the map does not say", never "the map says no" - callers decide what
+    an unknown declaration implies, and for a capability gate that decision must be the
+    conservative one.
+    """
+    try:
+        resolved: Final = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        resolved_model: Final = resolved[0]
+        resolved_provider: Final = resolved[1]
+        model_info: Final = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider)
+        declared: Final = model_info.get(key)
+        if isinstance(declared, str):
+            return declared
+        bare_model_key: Final = _get_model_cost_key(resolved_model)
+        bare_entry: Final = litellm.model_cost.get(bare_model_key) if bare_model_key is not None else None
+        if isinstance(bare_entry, dict):
+            bare_declared: Final = bare_entry.get(key)
+            if isinstance(bare_declared, str):
+                return bare_declared
+        return None
+    except Exception as e:  # noqa: BLE001  # an unreadable map entry means "not declared", never a failed call
+        verbose_logger.debug(
+            "Model not found or error in reading %s. You passed model=%s, custom_llm_provider=%s. Error: %s",
+            key,
+            model,
+            custom_llm_provider,
+            e,
+        )
+        return None
+
+
 def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
     """Return True only when the model map explicitly sets *key* to ``False``.
 
@@ -5890,6 +5930,7 @@ def _get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
+                default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
