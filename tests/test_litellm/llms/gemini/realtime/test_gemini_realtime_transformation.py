@@ -1866,6 +1866,54 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
+def test_gemini_response_done_bills_audio_output_tokens_at_audio_rate(monkeypatch):
+    """Regression for the Gemini Live AUDIO output breakdown: responseTokensDetails
+    must survive into response.done usage and bill at output_cost_per_audio_token,
+    not the text rate."""
+    from litellm.cost_calculator import (
+        RealtimeAPITokenUsageProcessor,
+        handle_realtime_stream_cost_calculation,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    config = GeminiRealtimeConfig()
+    done_event = config.transform_response_done_event(
+        message={
+            "serverContent": {"turnComplete": True},
+            "usageMetadata": {
+                "promptTokenCount": 377,
+                "responseTokenCount": 51,
+                "totalTokenCount": 428,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 377}],
+                "responseTokensDetails": [{"modality": "AUDIO", "tokenCount": 51}],
+                "thoughtsTokenCount": 37,
+            },
+        },
+        current_response_id="resp_lit6277",
+        current_conversation_id="conv_lit6277",
+        output_items=None,
+    )
+
+    usage = done_event["response"]["usage"]
+    assert usage["output_tokens_details"]["audio_tokens"] == 51
+    assert usage["output_token_details"]["audio_tokens"] == 51
+
+    results = [done_event]
+    combined_usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+    assert combined_usage.completion_tokens_details is not None
+    assert combined_usage.completion_tokens_details.audio_tokens == 51
+
+    cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage,
+        custom_llm_provider="gemini",
+        litellm_model_name="gemini-2.5-flash-native-audio-preview-12-2025",
+    )
+    assert cost == pytest.approx(377 * 5e-07 + 51 * 1.2e-05 + 37 * 2e-06)
 @pytest.fixture(autouse=False)
 def patch_gemini_transcribe_live_cost_map_entry(monkeypatch):
     """Inject the gemini-3.5-transcribe-live registry entry locally.
@@ -2119,3 +2167,27 @@ def test_non_transcription_live_model_completed_event_has_no_usage(patch_gemini_
     )
     assert len(completed) == 1
     assert "usage" not in completed[0]
+
+
+def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_transcribe_live_cost_map_entry):
+    """Audio appended after the last transcript frame is still unbilled when the
+    session closes; the session-close hook must hand back the estimate exactly once
+    so the streaming layer can bill it (144000 pcm16 bytes = 3s -> 75 in / 9 out)."""
+    from typing import Final
+
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(144000), "gemini-3.5-transcribe-live")
+
+    usage: Final = config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live")
+
+    expected: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 75,
+        "output_tokens": 9,
+        "total_tokens": 84,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 75},
+    }
+    assert usage == expected
+    assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
