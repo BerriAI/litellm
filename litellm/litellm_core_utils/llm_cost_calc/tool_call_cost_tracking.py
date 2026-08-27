@@ -64,11 +64,17 @@ class StandardBuiltInToolCostTracking:
         """
         standard_built_in_tools_params = standard_built_in_tools_params or {}
 
+        google_maps_grounding_cost: Final = StandardBuiltInToolCostTracking._handle_google_maps_grounding_cost(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            usage=usage,
+        )
+
         # Handle web search
         if StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response_object, usage=usage
         ):
-            return StandardBuiltInToolCostTracking._handle_web_search_cost(
+            return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_web_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
@@ -78,17 +84,54 @@ class StandardBuiltInToolCostTracking:
 
         # Handle file search
         if StandardBuiltInToolCostTracking.response_object_includes_file_search_call(response_object=response_object):
-            return StandardBuiltInToolCostTracking._handle_file_search_cost(
+            return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_file_search_cost(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 standard_built_in_tools_params=standard_built_in_tools_params,
             )
 
         # Handle Azure assistant features
-        return StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
+        return google_maps_grounding_cost + StandardBuiltInToolCostTracking._handle_azure_assistant_costs(
             model=model,
             custom_llm_provider=custom_llm_provider,
             standard_built_in_tools_params=standard_built_in_tools_params,
+        )
+
+    @staticmethod
+    def _resolve_model_info(model: str, custom_llm_provider: str | None) -> tuple[ModelInfo | None, str | None]:
+        direct: Final = StandardBuiltInToolCostTracking._safe_get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if direct is not None:
+            return direct, custom_llm_provider or direct["litellm_provider"]
+        if "/" not in model:
+            return None, custom_llm_provider
+        by_prefix: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
+        if by_prefix is None:
+            return None, custom_llm_provider
+        return by_prefix, by_prefix["litellm_provider"]
+
+    @staticmethod
+    def _handle_google_maps_grounding_cost(
+        model: str,
+        custom_llm_provider: str | None,
+        usage: Usage | None,
+    ) -> float:
+        from litellm.llms import get_cost_for_google_maps_grounding_request
+        from litellm.llms.gemini.cost_calculator import google_maps_grounding_requests
+
+        if usage is None or google_maps_grounding_requests(usage) is None:
+            return 0.0
+        model_info, resolved_provider = StandardBuiltInToolCostTracking._resolve_model_info(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        if model_info is None or resolved_provider is None:
+            return 0.0
+        return (
+            get_cost_for_google_maps_grounding_request(
+                custom_llm_provider=resolved_provider, usage=usage, model_info=model_info
+            )
+            or 0.0
         )
 
     @staticmethod
@@ -102,29 +145,21 @@ class StandardBuiltInToolCostTracking:
         """Handle web search cost calculation."""
         from litellm.llms import get_cost_for_web_search_request
 
-        model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+        # A provider-prefixed model (e.g. gemini/gemini-3.1-flash-lite) may not map under the
+        # request's custom_llm_provider. _resolve_model_info re-resolves from the prefix and adopts
+        # that provider so the cost is routed and priced with the model_info that was actually
+        # resolved, instead of feeding a re-resolved model into the original provider's calculator.
+        model_info, resolved_provider = StandardBuiltInToolCostTracking._resolve_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
-
-        # A provider-prefixed model (e.g. gemini/gemini-3.1-flash-lite) may not map under the
-        # request's custom_llm_provider. Re-resolve from the prefix and adopt that provider so the
-        # cost is routed and priced with the model_info that was actually resolved, instead of
-        # feeding a re-resolved model into the original provider's calculator.
-        if model_info is None and "/" in model:
-            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(model=model)
-            if model_info is not None:
-                custom_llm_provider = model_info["litellm_provider"]
-
-        if custom_llm_provider is None and model_info is not None:
-            custom_llm_provider = model_info["litellm_provider"]
 
         resolved_usage: Final = StandardBuiltInToolCostTracking._usage_with_anthropic_web_search(
             usage=usage, response_object=response_object
         )
 
-        if model_info is not None and resolved_usage is not None and custom_llm_provider is not None:
+        if model_info is not None and resolved_usage is not None and resolved_provider is not None:
             result: Final = get_cost_for_web_search_request(
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=resolved_provider,
                 usage=resolved_usage,
                 model_info=model_info,
             )

@@ -5,6 +5,8 @@
 
 ######################################################################
 import asyncio
+import os
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -14,6 +16,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
@@ -46,6 +49,23 @@ from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
 router: Final = APIRouter()
+
+
+def _raise_not_found_when_openai_fallback_unservable(
+    requested_provider: "str | None",
+    data: Mapping[str, object],
+    not_found_message: str,
+) -> None:
+    if requested_provider is not None:
+        return
+    if data.get("api_key") or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY"):
+        return
+    raise ProxyException(
+        message=not_found_message,
+        type="invalid_request_error",
+        param=None,
+        code=404,
+    )
 
 
 async def _resolve_managed_input_file_storage_url(input_file_id: str) -> "str | None":
@@ -150,12 +170,12 @@ async def create_batch(
             router_model = data.get("model", None)
             is_router_model = is_known_model(model=router_model, llm_router=llm_router)
 
-        custom_llm_provider: Final = (
+        requested_provider: Final = (
             provider
             or data.pop("custom_llm_provider", None)
             or get_custom_llm_provider_from_request_headers(request=request)
-            or "openai"
         )
+        custom_llm_provider: Final = requested_provider or "openai"
         _create_batch_data: Final = LiteLLMBatchCreateRequest(**data)
 
         # Apply team-level batch output expiry enforcement
@@ -316,6 +336,11 @@ async def create_batch(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                     custom_llm_provider=custom_llm_provider,
+                )
+                _raise_not_found_when_openai_fallback_unservable(
+                    requested_provider=requested_provider,
+                    data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    not_found_message=f"No such File object: {input_file_id}",
                 )
                 response = await litellm.acreate_batch(
                     custom_llm_provider=custom_llm_provider,
@@ -566,17 +591,22 @@ async def retrieve_batch(
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
-            custom_llm_provider: Final = (
+            requested_provider: Final = (
                 provider
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
-                or "openai"
             )
+            custom_llm_provider: Final = requested_provider or "openai"
             apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
                 custom_llm_provider=custom_llm_provider,
+            )
+            _raise_not_found_when_openai_fallback_unservable(
+                requested_provider=requested_provider,
+                data=data,
+                not_found_message=f"No batch found with id '{batch_id}'.",
             )
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=custom_llm_provider,
@@ -682,6 +712,7 @@ async def list_batches(
 
     ```
     """
+    validate_batch_list_limit(limit)
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -970,13 +1001,13 @@ async def cancel_batch(
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
             body_custom_llm_provider = data.pop("custom_llm_provider", None)
-            custom_llm_provider: Final = (
+            requested_provider: Final = (
                 provider
                 or body_custom_llm_provider
                 or get_custom_llm_provider_from_request_headers(request=request)
                 or get_custom_llm_provider_from_request_query(request=request)
-                or "openai"
             )
+            custom_llm_provider: Final = requested_provider or "openai"
             # Extract batch_id from data to avoid "multiple values for keyword argument" error
             # data was cast from CancelBatchRequest which already contains batch_id
             data.pop("batch_id", None)
@@ -985,6 +1016,11 @@ async def cancel_batch(
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
                 custom_llm_provider=custom_llm_provider,
+            )
+            _raise_not_found_when_openai_fallback_unservable(
+                requested_provider=requested_provider,
+                data=data,
+                not_found_message=f"No batch found with id '{batch_id}'.",
             )
             _cancel_batch_data: Final = CancelBatchRequest(batch_id=batch_id, **data)
             response = await litellm.acancel_batch(

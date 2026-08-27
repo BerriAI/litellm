@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import ProviderDiscountTable from "./provider_discount_table";
@@ -159,7 +159,7 @@ describe("ProviderDiscountTable", () => {
 
     const input = screen.getByPlaceholderText("5");
     await user.clear(input);
-    await user.type(input, "10");
+    fireEvent.change(input, { target: { value: "10" } });
 
     await user.click(rowAction("save"));
 
@@ -268,7 +268,7 @@ describe("ProviderDiscountTable", () => {
     await user.click(rowAction("edit"));
     const input = screen.getByPlaceholderText("5");
     await user.clear(input);
-    await user.type(input, "150");
+    fireEvent.change(input, { target: { value: "150" } });
     await user.click(rowAction("save"));
 
     expect(onDiscountChange).not.toHaveBeenCalled();

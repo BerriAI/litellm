@@ -2,8 +2,8 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import AsyncGenerator, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
 
@@ -60,6 +60,26 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
+
+    enforces_request_content: bool = False
+    """
+    Whether this hook's ``async_pre_call_hook`` judges the request payload itself.
+
+    False for the accounting hooks, which count a request rather than read it: rate limits,
+    parallel slots, budgets, cache lookups. Those must run once per request and never once per
+    record of a batch upload, which would charge a caller once for every line of their file.
+
+    Set it to True on a hook that inspects or rejects content, so that scanning a payload which
+    is not itself a request, such as one record of a batch input file, still reaches it. A
+    ``CustomGuardrail`` does not need it; guardrails are dispatched by their own branch.
+
+    Judging content is necessary but not sufficient. A hook that also rewrites the payload for
+    routing, as the managed-files and managed-vector-store hooks do, stays False: a per-record
+    rewrite would read as a redaction and ship embedded in the record. Only the leaf class is
+    consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
+    """
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,
@@ -271,6 +291,54 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> LLMResponseTypes | None:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, object],
+        exception: Exception,
+        call_type: CallTypes | None,
+        fallback_depth: int | None = None,
+    ) -> None:
+        """
+        Called once per failed deployment attempt - attempt 1, every retry, and
+        every fallback chain step - because the router re-invokes the wrapped
+        function on each attempt, re-entering this hook's call site fresh
+        every time.
+
+        This is a DEPLOYMENT-LEVEL signal, distinct from the REQUEST-LEVEL
+        ``async_log_failure_event``, which fires once per logical client
+        request behind a dedup gate. ``request_data`` is mostly this
+        attempt's own kwargs, with one exception: it omits
+        ``attempted_targets``, the router's own bookkeeping of which fallback
+        targets this request has already tried, since that one object *is*
+        shared by reference across every hop of the live fallback walk.
+
+        Pairs with ``async_pre_call_deployment_hook`` and
+        ``async_post_call_success_deployment_hook`` to complete the
+        pre-call/success/failure lifecycle for a single deployment attempt.
+
+        ``fallback_depth`` is best-effort: ``None`` on the first attempt and on
+        any call made without a ``Router`` (a bare SDK call has no fallback
+        chain to be at a depth in), ``1`` on the first fallback hop, ``2`` on
+        the second, and so on. It reflects ``Router``'s own internal fallback
+        bookkeeping (``kwargs["fallback_depth"]``), not a value this hook
+        computes or guarantees the shape of across versions. It tracks
+        fallback hops only, not retries within the same model group - a
+        retry-only failure (no fallback yet) also reports ``None``. If an
+        override predates this field it's simply never passed, rather than
+        raising - safe to leave off an override written before it existed.
+
+        ``exception`` is a same-class snapshot, not the exact object about to
+        be re-raised to the real caller: read it freely, but setting an
+        attribute on it (e.g. ``status_code``) has no effect on what the
+        caller actually receives.
+
+        Default: no-op. Opt in by overriding. Keep overrides fast - this
+        runs on the request's exception path, so a slow implementation
+        delays error propagation to the caller. The reported failure
+        duration is captured before this hook runs, so a slow override
+        doesn't inflate that metric, but the caller still waits for it.
         """
 
     async def async_post_call_streaming_deployment_hook(

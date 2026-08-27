@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm import get_model_info, supports_reasoning, supports_vision
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
@@ -78,7 +73,13 @@ def test_validate_environment_sets_session_affinity_from_session_id():
     assert headers["x-session-affinity"] == "session-id-123"
 
 
-def test_validate_environment_sets_session_affinity_from_trace_id():
+def test_validate_environment_ignores_trace_id_for_session_affinity():
+    """A trace id must not become the session id.
+
+    litellm_trace_id defaults to a fresh uuid4 per request, so pinning
+    x-session-affinity to it sent every request to a different Fireworks node and
+    prompt caching never hit (cached_tokens stayed 0 across identical prompts).
+    """
     config = FireworksAIConfig()
 
     headers = config.validate_environment(
@@ -90,7 +91,25 @@ def test_validate_environment_sets_session_affinity_from_trace_id():
         api_key="test-key",
     )
 
-    assert headers["x-session-affinity"] == "trace-id-123"
+    assert "x-session-affinity" not in headers
+
+
+def test_validate_environment_prefers_session_id_over_trace_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "litellm_session_id": "session-123",
+            "litellm_trace_id": "trace-id-123",
+        },
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "session-123"
 
 
 def test_validate_environment_does_not_set_session_affinity_without_session_id():
@@ -478,12 +497,14 @@ def test_transform_messages_helper_strips_thinking_blocks():
             "thinking_blocks": [
                 {"type": "thinking", "thinking": "internal", "signature": ""}
             ],
+            "reasoning_content": "internal",
         },
     ]
     out = config._transform_messages_helper(
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
+    assert "reasoning_content" not in out[1]
     assert out[1]["content"] == "I can help."
 
 

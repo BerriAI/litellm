@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { $api, fetchClient } from "@/lib/http/api";
 
 import type { components } from "@/lib/http/schema";
 
 export type ShadowEvalJob = components["schemas"]["ShadowEvalJobResponse"];
+export type ShadowEvalJobKey = components["schemas"]["ShadowEvalJobKeyResponse"];
 export type ShadowEvalSlice = components["schemas"]["ShadowEvalSlice"];
 export type StartShadowEvalRequest = components["schemas"]["StartShadowEvalRequest"];
 
@@ -60,7 +61,7 @@ const useShadowEvalMutation = <TVariables>(mutationFn: (variables: TVariables) =
   return useMutation({
     mutationFn,
     onSuccess: () => invalidateShadowEval(queryClient),
-    onError: (error: unknown) => NotificationsManager.fromBackend(error),
+    onError: (error: unknown) => toast.fromError(error),
   });
 };
 

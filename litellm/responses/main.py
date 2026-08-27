@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Iterable, Mapping
+from collections.abc import Coroutine, Generator, Iterable, Mapping
+from contextlib import contextmanager
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
@@ -13,6 +14,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.constants import request_timeout
+from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -390,6 +392,60 @@ async def aresponses_api_with_mcp(
     return response
 
 
+def _bridges_to_chat_completions(
+    responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
+) -> bool:
+    """Whether the request reaches its provider as a chat completion, not a Responses call."""
+    return responses_api_provider_config is None or use_chat_completions_api is True
+
+
+def _will_bridge_to_chat_completions(
+    model: str, custom_llm_provider: str | None, use_chat_completions_api: bool
+) -> bool:
+    """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
+
+    Resolving the config is a pure lookup, so this asks the same question the dispatch
+    asks rather than restating its condition. Both callers resolve the provider before
+    this runs, so the only way to be wrong is a prompt manager that moves the model
+    across the bridge boundary, which would leave the deferred points to a pass that
+    never comes.
+    """
+    normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
+    if custom_llm_provider is None:
+        return True
+    return _bridges_to_chat_completions(
+        ProviderConfigManager.get_provider_responses_api_config(
+            model=normalized_model[0], provider=custom_llm_provider
+        ),
+        use_chat_completions_api or normalized_model[1],
+    )
+
+
+@contextmanager
+def _prompt_management_sees_a_provisional_message_list(
+    kwargs: dict[str, Any],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
+    bridged: bool,
+) -> Generator[None, None]:
+    """Tell the cache-control hook that this layer's messages are not the ones sent upstream.
+
+    A Responses request keeps its system prompt in ``instructions``, which only becomes a
+    system message when the chat-completion bridge builds one, so a role-targeted point
+    is placed by the bridge's pass rather than this one.
+
+    Only raised for a request that will be bridged. A provider serving Responses natively
+    gets no second pass, so this layer is the last one that can place anything and handing
+    a point forward there drops it.
+    """
+    if not bridged:
+        yield
+        return
+    kwargs[CARRY_UNMATCHED_MESSAGE_POINTS] = True
+    try:
+        yield
+    finally:
+        kwargs.pop(CARRY_UNMATCHED_MESSAGE_POINTS, None)
+
+
 @client
 async def aresponses(
     input: str | ResponseInputParam,
@@ -467,19 +523,25 @@ async def aresponses(
                 client_input: list[AllMessageValues] = [{"role": "user", "content": input}]
             else:
                 client_input = [item for item in input if isinstance(item, dict) and "role" in item]
-            (
-                model,
-                merged_input,
-                merged_optional_params,
-            ) = await litellm_logging_obj.async_get_chat_completion_prompt(
-                model=model,
-                messages=client_input,
-                non_default_params=kwargs,
-                prompt_id=prompt_id,
-                prompt_variables=prompt_variables,
-                prompt_label=kwargs.get("prompt_label", None),
-                prompt_version=kwargs.get("prompt_version", None),
-            )
+            with _prompt_management_sees_a_provisional_message_list(
+                kwargs,
+                bridged=_will_bridge_to_chat_completions(
+                    model, custom_llm_provider, bool(kwargs.get("use_chat_completions_api"))
+                ),
+            ):
+                (
+                    model,
+                    merged_input,
+                    merged_optional_params,
+                ) = await litellm_logging_obj.async_get_chat_completion_prompt(
+                    model=model,
+                    messages=client_input,
+                    non_default_params=kwargs,
+                    prompt_id=prompt_id,
+                    prompt_variables=prompt_variables,
+                    prompt_label=kwargs.get("prompt_label", None),
+                    prompt_version=kwargs.get("prompt_version", None),
+                )
             input = cast(
                 str | ResponseInputParam,
                 ResponsesAPIRequestUtils.merge_prompt_management_input(
@@ -566,6 +628,7 @@ def _apply_prompt_management_to_responses_call(
     litellm_logging_obj: LiteLLMLoggingObj | None,
     kwargs: dict[str, Any],
     local_vars: dict[str, object],
+    use_chat_completions_api: bool,
 ) -> tuple[str | ResponseInputParam, str, str | None]:
     async_merged: Final[Mapping[str, object] | None] = kwargs.pop("_async_prompt_merged_params", None)
     if async_merged is not None:
@@ -585,19 +648,23 @@ def _apply_prompt_management_to_responses_call(
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and litellm_logging_obj.should_run_prompt_management_hooks(
         prompt_id=prompt_id, non_default_params=kwargs
     ):
-        (
-            model,
-            merged_input,
-            merged_optional_params,
-        ) = litellm_logging_obj.get_chat_completion_prompt(
-            model=model,
-            messages=client_input,
-            non_default_params=kwargs,
-            prompt_id=prompt_id,
-            prompt_variables=prompt_variables,
-            prompt_label=kwargs.get("prompt_label", None),
-            prompt_version=kwargs.get("prompt_version", None),
-        )
+        with _prompt_management_sees_a_provisional_message_list(
+            kwargs,
+            bridged=_will_bridge_to_chat_completions(model, custom_llm_provider, use_chat_completions_api),
+        ):
+            (
+                model,
+                merged_input,
+                merged_optional_params,
+            ) = litellm_logging_obj.get_chat_completion_prompt(
+                model=model,
+                messages=client_input,
+                non_default_params=kwargs,
+                prompt_id=prompt_id,
+                prompt_variables=prompt_variables,
+                prompt_label=kwargs.get("prompt_label", None),
+                prompt_version=kwargs.get("prompt_version", None),
+            )
         input = cast(
             str | ResponseInputParam,
             ResponsesAPIRequestUtils.merge_prompt_management_input(
@@ -640,6 +707,15 @@ def _pop_use_chat_completions_api_kw(kwargs: dict[str, object]) -> bool:
     return bool(use_cc)
 
 
+_RESPONSES_ROUTING_PREFIX: Final = "responses/"
+
+
+def _strip_responses_routing_prefix(model: str) -> str:
+    if not model.startswith(_RESPONSES_ROUTING_PREFIX):
+        return model
+    return model[len(_RESPONSES_ROUTING_PREFIX) :]
+
+
 def _resolve_model_provider_for_responses(
     model: str,
     custom_llm_provider: str | None,
@@ -649,20 +725,20 @@ def _resolve_model_provider_for_responses(
     if custom_llm_provider is not None and not litellm_params.custom_llm_provider:
         litellm_params.custom_llm_provider = custom_llm_provider
     (
-        model,
-        custom_llm_provider,
+        provider_model,
+        resolved_provider,
         dynamic_api_key,
         dynamic_api_base,
     ) = litellm.get_llm_provider(
         model=model,
         litellm_params=litellm_params,
     )
-    local_vars["custom_llm_provider"] = custom_llm_provider
+    local_vars["custom_llm_provider"] = resolved_provider
     if dynamic_api_key is not None:
         litellm_params.api_key = dynamic_api_key
     if dynamic_api_base is not None:
         litellm_params.api_base = dynamic_api_base
-    return model, custom_llm_provider
+    return _strip_responses_routing_prefix(provider_model), resolved_provider
 
 
 def _apply_managed_file_id_mapping(
@@ -688,7 +764,7 @@ def _apply_managed_file_id_mapping(
         tools = cast(
             Iterable[ToolParam] | None,
             update_responses_tools_with_model_file_ids(
-                tools=cast(list[dict[str, Any]] | None, tools),
+                tools=cast(list[dict[str, object]] | None, tools),
                 model_id=model_info_id,
                 model_file_id_mapping=model_file_id_mapping,
             ),
@@ -725,7 +801,7 @@ def _responses_try_dispatch_mcp_gateway(
     extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
     _is_async: bool,
 ) -> Any | None:
     """Return a response when MCP gateway handles the call; otherwise None."""
@@ -801,7 +877,7 @@ def _responses_try_dispatch_emulated_file_search(
     extra_body: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
     _is_async: bool,
 ) -> ResponsesAPIResponse | Coroutine[object, object, ResponsesAPIResponse] | None:
     """Return a response when emulated file_search handles the call; otherwise None."""
@@ -952,6 +1028,7 @@ def responses(
             litellm_logging_obj=litellm_logging_obj,
             kwargs=kwargs,
             local_vars=local_vars,
+            use_chat_completions_api=use_chat_completions_api,
         )
 
         #########################################################
@@ -1054,7 +1131,7 @@ def responses(
         if _file_search_dispatch is not None:
             return _file_search_dispatch
 
-        if responses_api_provider_config is None or use_chat_completions_api is True:
+        if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
@@ -1997,7 +2074,7 @@ async def _aresponses_websocket(
     litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     (
-        model,
+        provider_model,
         _custom_llm_provider,
         dynamic_api_key,
         dynamic_api_base,
@@ -2006,6 +2083,7 @@ async def _aresponses_websocket(
         api_base=api_base,
         api_key=api_key,
     )
+    resolved_model: Final = _strip_responses_routing_prefix(provider_model)
 
     litellm_params_dict["data_residency"] = infer_openai_data_residency(
         _custom_llm_provider,
@@ -2014,7 +2092,7 @@ async def _aresponses_websocket(
 
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
-        model=model,
+        model=resolved_model,
         user=user,
         optional_params={},
         litellm_params=litellm_params_dict,
@@ -2024,7 +2102,7 @@ async def _aresponses_websocket(
     responses_api_provider_config: BaseResponsesAPIConfig | None = None
     if _custom_llm_provider is not None:
         responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
-            model=model,
+            model=resolved_model,
             provider=litellm.LlmProviders(_custom_llm_provider),
         )
 
@@ -2052,7 +2130,7 @@ async def _aresponses_websocket(
     remaining_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
 
     await base_llm_http_handler.async_responses_websocket(
-        model=model,
+        model=resolved_model,
         websocket=websocket,
         logging_obj=litellm_logging_obj,
         responses_api_provider_config=responses_api_provider_config,

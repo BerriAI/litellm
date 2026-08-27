@@ -1,12 +1,10 @@
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import router
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry

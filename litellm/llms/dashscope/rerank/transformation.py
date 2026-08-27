@@ -22,6 +22,7 @@ as supported only for gte-rerank-v2 / qwen3-vl-rerank.
 Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -85,6 +86,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             api_key = get_secret_str("DASHSCOPE_API_KEY")

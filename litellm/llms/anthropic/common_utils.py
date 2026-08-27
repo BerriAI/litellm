@@ -4,7 +4,7 @@ This file contains common utils for anthropic calls.
 
 import copy
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal
@@ -31,6 +31,27 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
+
+DROP_DISABLED_THINKING_WARNING: Final = (
+    "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
+    "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
+    "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+
+# Anthropic error `type` (both the JSON error body and SSE `event: error`
+# payloads use this field) mapped to the HTTP status code it corresponds to.
+ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
+    {
+        "invalid_request_error": 400,
+        "authentication_error": 401,
+        "permission_error": 403,
+        "not_found_error": 404,
+        "rate_limit_error": 429,
+        "api_error": 500,
+        "overloaded_error": 503,
+        "timeout_error": 504,
+    }
+)
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
@@ -72,8 +93,8 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     """
     Handle Anthropic OAuth token detection and header setup.
 
-    If an OAuth token is detected in the Authorization header, extracts it
-    and sets the required OAuth headers.
+    If an OAuth token is detected in the Authorization header (any casing),
+    extracts it and sets the required OAuth headers.
 
     Args:
         headers: Request headers dict
@@ -83,16 +104,21 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
         Tuple of (updated headers, api_key)
     """
     # Check Authorization header (passthrough / forwarded requests)
-    auth_header: Final = headers.get("authorization", "")
-    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.replace("Bearer ", "")
-        headers.pop("x-api-key", None)
+    auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
+    if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.removeprefix("Bearer ")
+        for name in tuple(
+            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+        ):
+            headers.pop(name)
+        headers["authorization"] = auth_header
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
-        headers.pop("x-api-key", None)
+        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+            headers.pop(name)
         headers["authorization"] = f"Bearer {api_key}"
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
@@ -424,6 +450,45 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         in that declarative rule, not here.
         """
         return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
+
+    @staticmethod
+    def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` always thinks and rejects ``thinking.type=disabled``
+        (Fable 5 / Mythos 5 generation). The model cost map is authoritative: an
+        explicit ``thinking_always_on`` entry resolved under ``custom_llm_provider``,
+        or a ``fallback_generalizations`` rule for unmapped ids of those families.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
+
+    @staticmethod
+    def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` is an adaptive-thinking model that still accepts legacy
+        ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
+        The model cost map is authoritative: an explicit ``supports_legacy_thinking``
+        entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
+        rule for unmapped 4.6 ids. Absent flag means the model rejects the legacy shape.
+        """
+        return AnthropicModelInfo._supports_model_capability(model, "supports_legacy_thinking", custom_llm_provider)
+
+    @staticmethod
+    def maybe_drop_disabled_thinking(
+        model: str,
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
+        custom_llm_provider: str,
+    ) -> None:
+        """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
+        (Fable 5 / Mythos 5), which 400 on it; omission is the API-documented
+        remedy and yields the model's default adaptive thinking."""
+        thinking: Final = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "disabled":
+            return
+        if not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+            return
+        litellm.verbose_logger.warning(
+            DROP_DISABLED_THINKING_WARNING,
+            model,
+        )
+        optional_params.pop("thinking", None)
 
     def is_effort_used(
         self,

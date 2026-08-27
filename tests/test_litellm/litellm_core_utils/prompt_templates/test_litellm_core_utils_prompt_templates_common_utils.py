@@ -1,13 +1,9 @@
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -23,9 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 
 
 def test_get_format_from_file_id():
-    unified_file_id = (
-        "litellm_proxy:application/pdf;unified_id,cbbe3534-8bf8-4386-af00-f5f6b7e370bf"
-    )
+    unified_file_id = "litellm_proxy:application/pdf;unified_id,cbbe3534-8bf8-4386-af00-f5f6b7e370bf"
 
     format = get_format_from_file_id(unified_file_id)
 
@@ -52,9 +46,7 @@ def test_update_messages_with_model_file_ids():
 
     model_file_id_mapping = {file_id: {"my_model_id": "provider_file_id"}}
 
-    updated_messages = update_messages_with_model_file_ids(
-        messages, model_id, model_file_id_mapping
-    )
+    updated_messages = update_messages_with_model_file_ids(messages, model_id, model_file_id_mapping)
 
     assert updated_messages == [
         {
@@ -147,9 +139,7 @@ def test_add_system_prompt_to_messages_merge_with_first_system():
         {"role": "system", "content": "Existing system prompt."},
         {"role": "user", "content": "Hello"},
     ]
-    result = add_system_prompt_to_messages(
-        messages, "You are helpful.", merge_with_first_system=True
-    )
+    result = add_system_prompt_to_messages(messages, "You are helpful.", merge_with_first_system=True)
     assert result == [
         {"role": "system", "content": "You are helpful.\n\nExisting system prompt."},
         {"role": "user", "content": "Hello"},
@@ -159,9 +149,7 @@ def test_add_system_prompt_to_messages_merge_with_first_system():
 def test_add_system_prompt_to_messages_merge_with_first_system_adds_new_when_no_system():
     """When merge_with_first_system=True but no system message, adds new one at start."""
     messages = [{"role": "user", "content": "Hello"}]
-    result = add_system_prompt_to_messages(
-        messages, "You are helpful.", merge_with_first_system=True
-    )
+    result = add_system_prompt_to_messages(messages, "You are helpful.", merge_with_first_system=True)
     assert result == [
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hello"},
@@ -241,10 +229,32 @@ def test_split_concatenated_json_non_dict_value():
     assert result == [{}]
 
 
-def test_split_concatenated_json_invalid_raises():
-    """Completely invalid JSON raises JSONDecodeError."""
-    with pytest.raises(json.JSONDecodeError):
-        split_concatenated_json_objects("not json at all")
+def test_split_concatenated_json_wholly_invalid_returns_empty():
+    """
+    Wholly unparseable JSON degrades to an empty list instead of raising.
+
+    Regression for https://github.com/BerriAI/litellm/issues/18667: a raise
+    here propagated out of `_convert_to_bedrock_tool_call_invoke` and turned
+    every replayed conversation into a 500.
+    """
+    assert split_concatenated_json_objects("not json at all") == []
+
+
+def test_split_concatenated_json_malformed_object_returns_empty():
+    """
+    A single malformed object (missing comma between keys) degrades to an
+    empty list rather than raising `Expecting ',' delimiter`.
+    """
+    assert split_concatenated_json_objects('{"location": "Boston" "unit": "celsius"}') == []
+
+
+def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
+    """
+    Complete objects parsed before an unparseable/truncated tail are kept;
+    only the bad tail is discarded.
+    """
+    result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
+    assert result == [{"a": 1}, {"b": 2}]
 
 
 # ---------------------------------------------------------------------------
@@ -474,14 +484,8 @@ def test_update_messages_with_model_file_ids_tolerates_non_dict_content_items():
     messages_token_ids_batch = [{"role": "user", "content": [[15496, 995], [9906, 0]]}]
 
     # Both should pass through unchanged without raising.
-    assert (
-        update_messages_with_model_file_ids(messages_token_ids, "model-A", {})
-        == messages_token_ids
-    )
-    assert (
-        update_messages_with_model_file_ids(messages_token_ids_batch, "model-A", {})
-        == messages_token_ids_batch
-    )
+    assert update_messages_with_model_file_ids(messages_token_ids, "model-A", {}) == messages_token_ids
+    assert update_messages_with_model_file_ids(messages_token_ids_batch, "model-A", {}) == messages_token_ids_batch
 
 
 class TestExtractFileDataBareStr:
@@ -627,9 +631,7 @@ class TestUnpackLegacyDefs:
         definitions = {
             f"L{i}": {
                 "type": "object",
-                "properties": {
-                    f"x{j}": {"$ref": f"#/definitions/L{i + 1}"} for j in range(fanout)
-                },
+                "properties": {f"x{j}": {"$ref": f"#/definitions/L{i + 1}"} for j in range(fanout)},
             }
             for i in range(depth)
         }
@@ -694,9 +696,7 @@ class TestUnpackLegacyDefs:
 
         schema = {
             "type": "object",
-            "properties": {
-                f"r{i}": {"$ref": f"#/components/schemas/T{i}"} for i in range(50)
-            },
+            "properties": {f"r{i}": {"$ref": f"#/components/schemas/T{i}"} for i in range(50)},
             "components": {
                 "schemas": {
                     f"T{i}": {
@@ -721,9 +721,7 @@ class TestTextCompletionPromptToMessages:
             text_completion_prompt_to_messages,
         )
 
-        assert text_completion_prompt_to_messages("summarize this") == (
-            {"role": "user", "content": "summarize this"},
-        )
+        assert text_completion_prompt_to_messages("summarize this") == ({"role": "user", "content": "summarize this"},)
 
     def test_list_of_strings_becomes_one_message_each(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -952,3 +950,80 @@ class TestCustomToolFormatShapeConversion:
         for weird in ({}, {"type": "grammar"}, {"type": "future_format", "x": 1}):
             assert convert_custom_tool_format_to_chat_shape(dict(weird)) in (weird, {"type": "grammar", "grammar": {}})
             assert convert_custom_tool_format_to_responses_shape(dict(weird)) == weird
+
+
+# --- x-litellm-model upload-path decoding (litellm #29830) -------------------
+
+
+def _xlitellm_encoded(raw_id: str, model: str) -> str:
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_file_id_with_model,
+    )
+
+    return encode_file_id_with_model(raw_id, model)
+
+
+def test_update_messages_with_model_file_ids_decodes_xlitellm_encoded_id():
+    """x-litellm-model upload returns `file-<b64(litellm:<raw>;model,<m>)>`.
+    Without decoding, the encoded id leaks to upstream OpenAI and errors as
+    'Files [...] were not found'. Decode it back to raw provider id."""
+    raw_id = "file-ExTuCawUqxEMjVFK6xwR9B"
+    encoded_id = _xlitellm_encoded(raw_id, "gpt-5.1")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this."},
+                {"type": "file", "file": {"file_id": encoded_id}},
+            ],
+        }
+    ]
+
+    updated = update_messages_with_model_file_ids(messages, "model-A", {})
+
+    assert updated[0]["content"][1]["file"]["file_id"] == raw_id
+
+
+def test_update_responses_input_with_model_file_ids_decodes_xlitellm_encoded_id():
+    """Same bug on /v1/responses path. Without decoding the encoded id (>64
+    chars), OpenAI rejects with 'string too long. Expected ... maximum length
+    64'."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        update_responses_input_with_model_file_ids,
+    )
+
+    raw_id = "file-ExTuCawUqxEMjVFK6xwR9B"
+    encoded_id = _xlitellm_encoded(raw_id, "gpt-5.1")
+    input_items = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize."},
+                {"type": "input_file", "file_id": encoded_id},
+            ],
+        }
+    ]
+
+    updated = update_responses_input_with_model_file_ids(input_items)
+
+    assert updated[0]["content"][1]["file_id"] == raw_id
+
+
+def test_update_messages_xlitellm_decode_does_not_override_mapping():
+    """If the call-site already resolved a provider id via the mapping, that
+    wins. The new decode fallback runs only when no mapping match."""
+    raw_id = "file-ExTuCawUqxEMjVFK6xwR9B"
+    encoded_id = _xlitellm_encoded(raw_id, "gpt-5.1")
+    mapping = {encoded_id: {"model-A": "provider-explicit-id"}}
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "file", "file": {"file_id": encoded_id}},
+            ],
+        }
+    ]
+
+    updated = update_messages_with_model_file_ids(messages, "model-A", mapping)
+
+    assert updated[0]["content"][0]["file"]["file_id"] == "provider-explicit-id"

@@ -11349,6 +11349,40 @@
           "title": "UpdateGuardrailRequest",
           "type": "object"
         },
+        "UsageChartPoint": {
+          "properties": {
+            "blocked": {
+              "title": "Blocked",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "passed": {
+              "title": "Passed",
+              "type": "integer"
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Score"
+            }
+          },
+          "required": [
+            "date",
+            "passed",
+            "blocked"
+          ],
+          "title": "UsageChartPoint",
+          "type": "object"
+        },
         "UsageDetailResponse": {
           "properties": {
             "avgLatency": {
@@ -11410,8 +11444,7 @@
             },
             "time_series": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Time Series",
               "type": "array"
@@ -11423,6 +11456,40 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usage_units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usage Units",
+              "type": "object"
+            },
+            "usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Usage Units By Key",
+              "type": "object"
+            },
+            "usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Usage Units By Team",
+              "type": "object"
+            },
+            "usage_units_daily": {
+              "items": {
+                "$ref": "#/components/schemas/UsageUnitsDailyPoint"
+              },
+              "title": "Usage Units Daily",
+              "type": "array"
             }
           },
           "required": [
@@ -11437,7 +11504,11 @@
             "status",
             "trend",
             "description",
-            "time_series"
+            "time_series",
+            "usage_units",
+            "usage_units_daily",
+            "usage_units_by_team",
+            "usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -11572,8 +11643,7 @@
           "properties": {
             "chart": {
               "items": {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/UsageChartPoint"
               },
               "title": "Chart",
               "type": "array"
@@ -11596,6 +11666,13 @@
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totalusageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -11603,7 +11680,8 @@
             "chart",
             "totalRequests",
             "totalBlocked",
-            "passRate"
+            "passRate",
+            "totalUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -11663,6 +11741,13 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -11675,9 +11760,31 @@
             "avgScore",
             "avgLatency",
             "status",
-            "trend"
+            "trend",
+            "usageUnits"
           ],
           "title": "UsageOverviewRow",
+          "type": "object"
+        },
+        "UsageUnitsDailyPoint": {
+          "properties": {
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Units",
+              "type": "object"
+            }
+          },
+          "required": [
+            "date",
+            "units"
+          ],
+          "title": "UsageUnitsDailyPoint",
           "type": "object"
         },
         "ValidationError": {
@@ -21477,6 +21584,13 @@
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totalusageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -21484,7 +21598,8 @@
             "chart",
             "totalRequests",
             "totalBlocked",
-            "passRate"
+            "passRate",
+            "totalUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -21544,6 +21659,13 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "usageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Usageunits",
+              "type": "object"
             }
           },
           "required": [
@@ -21556,7 +21678,8 @@
             "avgScore",
             "avgLatency",
             "status",
-            "trend"
+            "trend",
+            "usageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
@@ -23415,7 +23538,7 @@
     "paths": {
       "/prompts": {
         "post": {
-          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"json_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED\n            \"prompt_directory\": \"/path/to/dotprompt/folder\",\n            \"prompt_data\": {\"json_prompt\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
+          "description": "Create a new prompt\n\n\ud83d\udc49 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/prompts\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"prompt_id\": \"my_prompt\",\n        \"litellm_params\": {\n            \"prompt_id\": \"my_prompt\",\n            \"prompt_integration\": \"dotprompt\",\n            \"prompt_data\": {\"content\": \"This is a prompt\", \"metadata\": {\"model\": \"gpt-4\"}}\n        },\n        \"prompt_info\": {\n            \"prompt_type\": \"config\"\n        }\n    }'\n```",
           "operationId": "create_prompt_prompts_post",
           "requestBody": {
             "content": {

@@ -3,23 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchToolTester } from "./SearchToolTester";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   searchToolQueryCall: vi.fn(),
 }));
-
-vi.mock("antd", async () => {
-  const actual = await vi.importActual("antd");
-  return {
-    ...actual,
-    message: {
-      warning: vi.fn(),
-      success: vi.fn(),
-      error: vi.fn(),
-    },
-  };
-});
 
 const mockSearchResults = {
   results: [
@@ -123,6 +111,8 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     expect(screen.getByText("Searching...")).toBeInTheDocument();
+
+    expect(await screen.findByText("Test Result 1")).toBeInTheDocument();
   });
 
   it("should display search results after successful search", async () => {
@@ -291,7 +281,7 @@ describe("SearchToolTester", () => {
     const searchButton = screen.getByRole("button", { name: /search/i });
     await user.click(searchButton);
     await waitFor(() => {
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to query search tool");
+      expect(toast.fromError).toHaveBeenCalledWith("Failed to query search tool");
     });
     consoleSpy.mockRestore();
   });
@@ -358,7 +348,7 @@ describe("SearchToolTester", () => {
     });
     const clearButton = screen.getByRole("button", { name: /clear all/i });
     await user.click(clearButton);
-    expect(NotificationsManager.success).toHaveBeenCalledWith("Search history cleared");
+    expect(toast.success).toHaveBeenCalledWith("Search history cleared");
     expect(screen.queryByText("Previous Searches")).not.toBeInTheDocument();
   });
 
@@ -407,6 +397,8 @@ describe("SearchToolTester", () => {
     await user.click(searchButton);
     expect(input).toBeDisabled();
     expect(searchButton).toBeDisabled();
+
+    await waitFor(() => expect(searchButton).toBeEnabled());
   });
 
   it("should display result links that open in new tab", async () => {

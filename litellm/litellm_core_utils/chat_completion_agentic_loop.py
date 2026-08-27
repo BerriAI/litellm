@@ -5,6 +5,10 @@ from typing import Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.agentic_loop_settings import (
+    DEFAULT_MAX_AGENTIC_LOOPS,
+    validated_max_agentic_loops,
+)
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -52,7 +56,10 @@ def _coerce_int(value: object, default: int) -> int:
 
 def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[str]]:
     depth: Final = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
-    max_loops: Final = max(_coerce_int(kwargs.get("max_agentic_loops"), 3), 1)
+    configured: Final = validated_max_agentic_loops(
+        kwargs.get("max_agentic_loops"), field="litellm_params.max_agentic_loops"
+    )
+    max_loops: Final = DEFAULT_MAX_AGENTIC_LOOPS if configured is None else configured
     raw_fingerprints: Final = kwargs.get("_agentic_loop_fingerprints")
     fingerprints: Final = [str(fp) for fp in raw_fingerprints] if isinstance(raw_fingerprints, list) else []
     return depth, max_loops, fingerprints

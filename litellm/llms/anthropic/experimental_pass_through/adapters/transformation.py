@@ -2,10 +2,12 @@ import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+import litellm
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    prompt_cache_key_from_user_id,
 )
 
 # OpenAI has a 64-character limit for function/tool names
@@ -13,6 +15,7 @@ from litellm.llms.anthropic.experimental_pass_through.utils import (
 OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
 TOOL_NAME_HASH_LENGTH: Final = 8
 TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
+PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 
 
 def truncate_tool_name(name: str) -> str:
@@ -61,6 +64,8 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
+    reasoning_content_from_thinking_blocks,
+    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -148,7 +153,7 @@ class AnthropicAdapter:
         return result
 
     def translate_completion_input_params_with_tool_mapping(
-        self, kwargs
+        self, kwargs, *, custom_llm_provider: str | None = None
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -179,7 +184,10 @@ class AnthropicAdapter:
         (
             translated_body,
             tool_name_mapping,
-        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(anthropic_message_request=request_body)
+        ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+            anthropic_message_request=request_body,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         return translated_body, tool_name_mapping
 
@@ -245,6 +253,9 @@ class AnthropicAdapter:
         return anthropic_wrapper.anthropic_sse_wrapper()
 
 
+_BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
+
+
 class LiteLLMAnthropicMessagesAdapter:
     def __init__(self):
         pass
@@ -308,6 +319,12 @@ class LiteLLMAnthropicMessagesAdapter:
                 # Fallback for non-dict objects (shouldn't happen in practice)
                 cast(dict[str, object], target)["cache_control"] = cache_control
 
+    @staticmethod
+    def _add_prompt_cache_breakpoint_if_present(source: object, target: _BlockT) -> _BlockT:
+        if isinstance(source, dict) and "prompt_cache_breakpoint" in source:
+            return with_prompt_cache_breakpoint(target, source["prompt_cache_breakpoint"])
+        return target
+
     def translatable_anthropic_params(self) -> list[str]:
         """
         Which anthropic params, we need to translate to the openai format.
@@ -368,7 +385,9 @@ class LiteLLMAnthropicMessagesAdapter:
                         if content.get("type") == "text":
                             text_obj = ChatCompletionTextObject(type="text", text=content.get("text", ""))
                             self._add_cache_control_if_applicable(content, text_obj, model)
-                            new_user_content_list.append(text_obj)
+                            new_user_content_list.append(
+                                self._add_prompt_cache_breakpoint_if_present(content, text_obj)
+                            )
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
                             source = content.get("source", {})
@@ -378,7 +397,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
                                 image_obj = ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
                                 self._add_cache_control_if_applicable(content, image_obj, model)
-                                new_user_content_list.append(image_obj)
+                                new_user_content_list.append(
+                                    self._add_prompt_cache_breakpoint_if_present(content, image_obj)
+                                )
                         elif content.get("type") == "document":
                             # Convert Anthropic document format (PDF, etc.) to OpenAI format
                             source = content.get("source", {})
@@ -413,7 +434,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 content_items = list(content.get("content", []))
 
                                 # Single-item text keeps the backward-compatible string format; a single
-                                # image becomes a structured image_url part
+                                # image or document becomes a structured image_url part
                                 if len(content_items) == 1:
                                     c = content_items[0]
                                     if isinstance(c, str):
@@ -433,7 +454,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                             )
                                             self._add_cache_control_if_applicable(content, tool_result, model)
                                             tool_message_list.append(tool_result)
-                                        elif c.get("type") == "image":
+                                        elif c.get("type") in ("image", "document"):
                                             image_part = self._tool_result_image_part(c.get("source"))
                                             tool_result = ChatCompletionToolMessage(
                                                 role="tool",
@@ -461,7 +482,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                                         text=c.get("text", ""),
                                                     )
                                                 )
-                                            elif c.get("type") == "image":
+                                            elif c.get("type") in ("image", "document"):
                                                 image_part = self._tool_result_image_part(c.get("source"))
                                                 if image_part:
                                                     combined_content_parts.append(image_part)
@@ -572,6 +593,9 @@ class LiteLLMAnthropicMessagesAdapter:
                     assistant_message["tool_calls"] = tool_calls
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks
+                reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
+                if reasoning_content:
+                    assistant_message["reasoning_content"] = reasoning_content
                 new_messages.append(assistant_message)
 
         return new_messages
@@ -869,7 +893,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 continue
             text_obj = ChatCompletionTextObject(type="text", text=text)
             self._add_cache_control_if_applicable(block, text_obj, model)
-            text_parts.append(text_obj)
+            text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
         return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
 
     def _add_system_message_to_messages(
@@ -900,23 +924,41 @@ class LiteLLMAnthropicMessagesAdapter:
                         "text": block.get("text", ""),
                     }
                     self._add_cache_control_if_applicable(block, text_block, model_name)
-                    openai_system_content.append(text_block)
+                    openai_system_content.append(self._add_prompt_cache_breakpoint_if_present(block, text_block))
             if openai_system_content:
                 new_messages.insert(
                     0,
                     ChatCompletionSystemMessage(role="system", content=openai_system_content),
                 )
 
+    @staticmethod
+    def _supports_prompt_cache_key(model: str | None, custom_llm_provider: str | None) -> bool:
+        if not model or not custom_llm_provider:
+            return False
+        if custom_llm_provider in PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND:
+            return False
+        supported_params: Final = litellm.get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        return "prompt_cache_key" in (supported_params or ())
+
     def _translate_metadata_to_openai(
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        *,
+        custom_llm_provider: str | None = None,
     ) -> None:
         """Translate metadata fields from Anthropic request to OpenAI request."""
         if "metadata" in anthropic_message_request:
             metadata: Final = anthropic_message_request["metadata"]
             if metadata and "user_id" in metadata:
                 new_kwargs["user"] = metadata["user_id"]
+                prompt_cache_key: Final = prompt_cache_key_from_user_id(metadata["user_id"])
+                if prompt_cache_key is not None and self._supports_prompt_cache_key(
+                    anthropic_message_request.get("model"), custom_llm_provider
+                ):
+                    new_kwargs["prompt_cache_key"] = prompt_cache_key
 
         if "litellm_metadata" in anthropic_message_request:
             # metadata will be passed to litellm.acompletion(), it's a litellm_param
@@ -1069,7 +1111,10 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_kwargs[k] = v
 
     def translate_anthropic_to_openai(
-        self, anthropic_message_request: AnthropicMessagesRequest
+        self,
+        anthropic_message_request: AnthropicMessagesRequest,
+        *,
+        custom_llm_provider: str | None = None,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1103,6 +1148,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._translate_metadata_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            custom_llm_provider=custom_llm_provider,
         )
         ## CONVERT TOOL CHOICE
         self._translate_tool_choice_to_openai(

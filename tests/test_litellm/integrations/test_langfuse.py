@@ -1,6 +1,5 @@
 import datetime
 import json
-import os
 import sys
 import types
 import unittest
@@ -13,8 +12,6 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-sys.path.insert(0, os.path.abspath("../.."))
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
@@ -1163,7 +1160,7 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
         # Third client should fail with exception
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Max langfuse clients reached') as exc_info:
             logger3 = LangFuseLogger(
                 langfuse_public_key="test_key_3",
                 langfuse_secret="test_secret_3",
@@ -1182,6 +1179,14 @@ def test_max_langfuse_clients_limit():
 class _RecordingLangfuse:
     last_parameters: Optional[dict] = None
 
+    def __init__(self, environment=None, **parameters):
+        type(self).last_parameters = {"environment": environment, **parameters}
+        self.client = MagicMock()
+
+
+class _RecordingLangfuseWithoutEnvironment:
+    last_parameters: Optional[dict] = None
+
     def __init__(self, **parameters):
         type(self).last_parameters = parameters
         self.client = MagicMock()
@@ -1196,6 +1201,62 @@ def _build_langfuse_logger(monkeypatch) -> LangFuseLogger:
             langfuse_secret="sk-lit5228",
             langfuse_host="https://test.langfuse.com",
         )
+
+
+def test_langfuse_environment_is_passed_to_sdk_client(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="staging",
+        )
+    assert logger.langfuse_environment == "staging"
+    assert _RecordingLangfuse.last_parameters["environment"] == "staging"
+
+
+def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "deployment-wide")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+        )
+    assert logger.langfuse_environment == "deployment-wide"
+    assert _RecordingLangfuse.last_parameters["environment"] == "deployment-wide"
+
+
+def test_langfuse_environment_omitted_for_old_sdk_versions(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuseWithoutEnvironment):
+        LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="staging",
+        )
+    assert "environment" not in _RecordingLangfuseWithoutEnvironment.last_parameters
+
+
+def test_dynamic_langfuse_environment_triggers_dynamic_logger():
+    from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    params = StandardCallbackDynamicParams(langfuse_environment="team-a-env")
+
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True
+
+    config = LangFuseHandler.get_dynamic_langfuse_logging_config(
+        standard_callback_dynamic_params=params
+    )
+    assert config["langfuse_environment"] == "team-a-env"
 
 
 def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
@@ -1411,3 +1472,52 @@ def test_update_trace_keys_matches_whole_keys_not_substrings():
     )
 
     assert "input" not in trace_params
+
+
+def test_langfuse_environment_is_coerced_and_validated(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment=123,  # non-string: must coerce, not crash
+        )
+    assert logger.langfuse_environment == "123"
+
+    with pytest.raises(ValueError, match="langfuse_environment"):
+        LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="Production",
+        )
+
+
+def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
+    from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
+
+    # '' falls back to the deployment env var at init
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="",
+        )
+    assert logger.langfuse_environment == "production"
+
+    # env-only params that add nothing do not select a dynamic logger
+    for redundant in ["", "  ", "production"]:
+        params = StandardCallbackDynamicParams(langfuse_environment=redundant)
+        assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is False
+
+    params = StandardCallbackDynamicParams(langfuse_environment="team-a-prod")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True

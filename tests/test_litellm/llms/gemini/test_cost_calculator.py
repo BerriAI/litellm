@@ -3,7 +3,10 @@ import os
 import pytest
 
 import litellm
-from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
+from litellm.llms.gemini.cost_calculator import (
+    cost_per_google_maps_grounding_request,
+    cost_per_web_search_request,
+)
 from litellm.llms.gemini.image_edit.cost_calculator import (
     cost_calculator as gemini_image_edit_cost_calculator,
 )
@@ -81,8 +84,65 @@ def test_no_usage_details():
     assert cost == 0.0
 
 
-def test_gemini_image_edit_cost_prefers_token_usage_metadata():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def _make_maps_usage(google_maps_grounding_requests: int) -> Usage:
+    return Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            google_maps_grounding_requests=google_maps_grounding_requests,
+        ),
+    )
+
+
+def test_maps_per_query_billing():
+    """web_search_billing_unit=per_query charges per Maps query."""
+    model_info = {
+        "key": "gemini/gemini-3.5-flash",
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014,
+    }
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(3), model_info=model_info)
+    assert cost == pytest.approx(0.014 * 3)
+
+
+def test_maps_per_prompt_billing_clamps_to_one():
+    """Without web_search_billing_unit, Maps grounding is one flat fee per grounded prompt."""
+    model_info = {
+        "key": "gemini/gemini-2.5-flash",
+        "google_maps_grounding_cost_per_query": 0.025,
+    }
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(3), model_info=model_info)
+    assert cost == pytest.approx(0.025)
+
+
+def test_maps_default_rate_per_query():
+    """A per_query model missing the pricing key falls back to Google's $14/1K queries."""
+    model_info = {"key": "gemini/gemini-3.9-flash", "web_search_billing_unit": "per_query"}
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(2), model_info=model_info)
+    assert cost == pytest.approx(0.014 * 2)
+
+
+def test_maps_default_rate_per_prompt():
+    """A per_prompt model missing the pricing key falls back to Google's $25/1K grounded prompts."""
+    model_info = {"key": "gemini/gemini-2.6-flash"}
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(2), model_info=model_info)
+    assert cost == pytest.approx(0.025)
+
+
+def test_maps_zero_requests():
+    model_info = {"key": "gemini/gemini-3.5-flash", "web_search_billing_unit": "per_query"}
+    assert cost_per_google_maps_grounding_request(usage=_make_maps_usage(0), model_info=model_info) == 0.0
+
+
+def test_maps_no_usage_details():
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    model_info = {"key": "gemini/gemini-3.5-flash"}
+    assert cost_per_google_maps_grounding_request(usage=usage, model_info=model_info) == 0.0
+
+
+def test_gemini_image_edit_cost_prefers_token_usage_metadata(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -120,8 +180,8 @@ def test_gemini_image_edit_cost_prefers_token_usage_metadata():
     assert cost != flat_image_cost
 
 
-def test_gemini_image_edit_cost_uses_output_token_details():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_edit_cost_uses_output_token_details(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -176,8 +236,8 @@ def test_gemini_image_edit_cost_uses_output_token_details():
     assert cost != all_output_as_image_cost
 
 
-def test_gemini_image_generation_cost_uses_output_token_details():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_generation_cost_uses_output_token_details(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -232,8 +292,8 @@ def test_gemini_image_generation_cost_uses_output_token_details():
     assert cost != all_output_as_image_cost
 
 
-def test_gemini_image_edit_cost_falls_back_to_flat_image_pricing():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_edit_cost_falls_back_to_flat_image_pricing(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -264,8 +324,8 @@ def _image_response_with_web_search(web_search_requests):
     return ImageResponse(data=[ImageObject(b64_json="img1")], usage=usage)
 
 
-def test_gemini_image_generation_cost_adds_web_search_grounding():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_generation_cost_adds_web_search_grounding(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
     model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
@@ -286,8 +346,8 @@ def test_gemini_image_generation_cost_adds_web_search_grounding():
     assert round(grounded - ungrounded, 10) == round(expected_web_search_cost, 10)
 
 
-def test_gemini_image_generation_cost_no_web_search_when_absent():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model = "gemini/gemini-3-pro-image-preview"
 
@@ -301,3 +361,82 @@ def test_gemini_image_generation_cost_no_web_search_when_absent():
     )
 
     assert cost_zero == cost_none
+
+
+@pytest.mark.parametrize(
+    "traffic_type, expected_service_tier",
+    [
+        ("ON_DEMAND", None),
+        ("ON_DEMAND_PRIORITY", "priority"),
+        ("FLEX", "flex"),
+        ("BATCH", "flex"),
+        # Vertex AI reports flex/shared-capacity traffic as ON_DEMAND_FLEX.
+        ("ON_DEMAND_FLEX", "flex"),
+        # trafficType is matched case-insensitively.
+        ("on_demand_flex", "flex"),
+        (None, None),
+        ("SOMETHING_UNKNOWN", None),
+    ],
+)
+def test_map_traffic_type_to_service_tier(
+    traffic_type: str | None, expected_service_tier: str | None
+):
+    """
+    Gemini/Vertex usageMetadata.trafficType maps to the LiteLLM service_tier
+    that selects flex/priority cost keys. ON_DEMAND_FLEX (Vertex's flex opt-in
+    value) must map to "flex" so flex-tier requests are not billed as standard.
+    """
+    from litellm.cost_calculator import _map_traffic_type_to_service_tier
+
+    assert (
+        _map_traffic_type_to_service_tier(traffic_type) == expected_service_tier
+    )
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,expected_cache_read_cost",
+    [
+        ("gemini/gemini-flash-latest", "gemini", 3e-08),
+        ("gemini/gemini-flash-lite-latest", "gemini", 1e-08),
+        ("gemini/gemini-2.5-flash-preview-09-2025", "gemini", 3e-08),
+        ("gemini/gemini-2.5-flash-lite-preview-06-17", "gemini", 1e-08),
+        ("vertex_ai/gemini-2.5-flash-preview-09-2025", "vertex_ai", 3e-08),
+        ("vertex_ai/gemini-2.5-flash-lite-preview-06-17", "vertex_ai", 1e-08),
+    ],
+)
+def test_flash_alias_cache_read_is_ten_percent_of_input(
+    monkeypatch, model, custom_llm_provider, expected_cache_read_cost
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model_info = litellm.get_model_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    assert model_info["cache_read_input_token_cost"] == expected_cache_read_cost
+    assert model_info["cache_read_input_token_cost"] == pytest.approx(
+        0.10 * model_info["input_cost_per_token"]
+    )
+
+
+@pytest.mark.parametrize(
+    "prefixed,bare",
+    [
+        ("gemini/gemini-flash-latest", "gemini-flash-latest"),
+        ("gemini/gemini-flash-lite-latest", "gemini-flash-lite-latest"),
+    ],
+)
+def test_flash_latest_alias_spellings_price_identically(monkeypatch, prefixed, bare):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prefixed_entry = litellm.model_cost[prefixed]
+    bare_entry = litellm.model_cost[bare]
+
+    for cost_key in (
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+    ):
+        assert prefixed_entry[cost_key] == bare_entry[cost_key]

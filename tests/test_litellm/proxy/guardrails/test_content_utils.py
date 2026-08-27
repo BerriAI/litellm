@@ -149,6 +149,22 @@ def test_iter_message_text_responses_api_tool_call_taxonomy():
     assert list(iter_message_text(data)) == ["hello", "sunny"]
 
 
+def test_iter_message_text_inspects_reasoning_content_and_summary():
+    """VERIA: reasoning items forwarded as ``reasoning_content`` must be
+    inspected, including ``summary`` blocks the bridge reads as a fallback."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "content secret"}],
+                "summary": [{"type": "summary_text", "text": "summary secret"}],
+            }
+        ]
+    }
+    assert list(iter_message_text(data)) == ["content secret", "summary secret"]
+
+
 # ── walk_user_text ────────────────────────────────────────────────────────────
 
 
@@ -308,6 +324,27 @@ def test_walk_user_text_redacts_mixed_list_input():
     assert data["input"][2] == {"type": "image_url", "image_url": {"url": "..."}}
 
 
+def test_walk_user_text_redacts_reasoning_content_and_summary():
+    """VERIA: in-place redaction must cover both plaintext shapes the bridge
+    forwards from a reasoning item."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "AKIAEXAMPLE content"}],
+                "summary": [{"type": "summary_text", "text": "AKIAEXAMPLE summary"}],
+            }
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    item = data["input"][0]
+    assert item["content"][0]["text"] == "[REDACTED] content"
+    assert item["summary"][0]["text"] == "[REDACTED] summary"
+    assert item["id"] == "rs_1"
+
+
 # ── build_inspection_messages ─────────────────────────────────────────────────
 
 
@@ -460,6 +497,23 @@ def test_build_inspection_messages_empty_data():
     assert build_inspection_messages({}) == []
     assert build_inspection_messages({"messages": []}) == []
     assert build_inspection_messages({"input": ""}) == []
+
+
+def test_build_inspection_messages_includes_reasoning_summary():
+    """VERIA: remote guardrail APIs must see reasoning summaries even when
+    the reasoning item has no ``content`` field."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "secret summary"}],
+            }
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "assistant", "content": "secret summary"}
+    ]
 
 
 # ── has_non_string_content ────────────────────────────────────────────────────

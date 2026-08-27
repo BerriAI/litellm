@@ -42,14 +42,18 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 # Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
 # request in the cost-calc path, so the f-strings are built once here instead
-# of being rebuilt for every model_info key on every call.
-_SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(f"_{st.value}" for st in ServiceTier)
+# of being rebuilt for every model_info key on every call. Longest-first so a
+# substring match resolves "_ultrafast" before "_fast".
+_SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
+    sorted((f"_{st.value}" for st in ServiceTier), key=len, reverse=True)
+)
 
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     {
         ServiceTier.FLEX.value: ServiceTier.FLEX.value,
         ServiceTier.PRIORITY.value: ServiceTier.PRIORITY.value,
         ServiceTier.FAST.value: ServiceTier.PRIORITY.value,
+        ServiceTier.ULTRAFAST.value: ServiceTier.ULTRAFAST.value,
     }
 )
 
@@ -191,7 +195,7 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
 
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
-        service_tier: The service tier ("flex", "priority", "fast", or None for standard)
+        service_tier: The service tier ("flex", "priority", "fast", "ultrafast", or None for standard)
 
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")
@@ -753,6 +757,33 @@ def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str |
         return 1.0
 
 
+def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
+    """
+    Resolve the per-model uplift multiplier for Vertex AI non-global (regional and
+    multi-region) endpoints.
+
+    Google prices every non-global endpoint at a flat premium over the global
+    endpoint (e.g. 1.10 = +10%) on all token types for the models that carry
+    regional pricing. The multiplier is stored on the model entry as
+    ``regional_endpoint_uplift_multiplier``.
+
+    Returns 1.0 (no uplift) when ``vertex_location`` is ``None`` or ``"global"``,
+    or when the model has no multiplier configured.
+    """
+    if vertex_location is None or vertex_location.lower() == "global":
+        return 1.0
+    multiplier: Final = model_info.get("regional_endpoint_uplift_multiplier")
+    if multiplier is None:
+        return 1.0
+    try:
+        return float(cast(float, multiplier))
+    except (TypeError, ValueError):
+        verbose_logger.exception(
+            "Invalid regional_endpoint_uplift_multiplier for model; defaulting to 1.0",
+        )
+        return 1.0
+
+
 def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) -> float:
     """
     Resolve the provider-specific regional pricing multiplier for the geo the
@@ -794,6 +825,7 @@ def generic_cost_per_token(
     service_tier: str | None = None,
     data_residency: str | None = None,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -805,6 +837,9 @@ def generic_cost_per_token(
         - usage: LiteLLM Usage block, containing anthropic caching information
         - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
           used to apply the per-model regional-processing uplift multiplier.
+        - vertex_location: optional Vertex AI location the request was served from
+          (e.g. "us-east5", "global"), used to apply the per-model
+          regional-endpoint uplift multiplier when non-global.
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -975,6 +1010,11 @@ def generic_cost_per_token(
         prompt_cost *= uplift
         completion_cost *= uplift
 
+    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    if vertex_uplift != 1.0:
+        prompt_cost *= vertex_uplift
+        completion_cost *= vertex_uplift
+
     return prompt_cost, completion_cost
 
 
@@ -995,6 +1035,7 @@ def get_token_type_cost_breakdown(
     usage: Usage,
     service_tier: str | None = None,
     data_residency: str | None = None,
+    vertex_location: str | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1075,6 +1116,12 @@ def get_token_type_cost_breakdown(
         reasoning_cost *= uplift
         cache_read_cost *= uplift
         cache_creation_cost *= uplift
+
+    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    if vertex_uplift != 1.0:
+        reasoning_cost *= vertex_uplift
+        cache_read_cost *= vertex_uplift
+        cache_creation_cost *= vertex_uplift
 
     # Mirror the provider-specific geo uplift (e.g. Anthropic us: 1.1) the totals
     # apply, so cache and reasoning line items stay reconciled with them.
@@ -1335,6 +1382,7 @@ class CostCalculatorUtils:
             return fal_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
             from litellm.llms.runwayml.cost_calculator import (

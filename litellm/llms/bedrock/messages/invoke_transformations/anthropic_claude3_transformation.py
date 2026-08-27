@@ -842,8 +842,15 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         patched_stream: Final = self._promote_message_stop_usage(completion_stream)
 
-        async for chunk in handler.async_sse_wrapper(patched_stream):
-            yield chunk
+        sse_stream: Final = handler.async_sse_wrapper(patched_stream)
+        try:
+            async for chunk in sse_stream:
+                yield chunk
+        finally:
+            # Close the inner generator deterministically so a client disconnect
+            # (GeneratorExit here) reaches async_sse_wrapper's partial-spend logging
+            # now instead of at garbage collection. See LIT-5839.
+            await sse_stream.aclose()
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
