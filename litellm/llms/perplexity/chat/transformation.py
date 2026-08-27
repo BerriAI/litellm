@@ -29,14 +29,14 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: matches the base chat transform signature
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: list[AllMessageValues],  # mutable-ok: matches the base chat transform signature
+        optional_params: dict,  # mutable-ok: matches the base chat transform signature
+        litellm_params: dict,  # mutable-ok: matches the base chat transform signature
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: matches the base chat transform signature
         headers.setdefault("X-Pplx-Integration", "litellm")
         return super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base
