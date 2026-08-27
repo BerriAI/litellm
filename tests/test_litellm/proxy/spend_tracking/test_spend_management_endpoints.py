@@ -106,6 +106,10 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             where["OR"] = where.get("OR", []) + [{"multi_team": True}]
         elif "status = 'success'" in cond:
             where["OR"] = where.get("OR", []) + [{"status": "success"}]
+        elif cond == "LOWER(cache_hit) = 'true'":
+            where["cache_hit"] = "hit"
+        elif cond == "(cache_hit IS NULL OR LOWER(cache_hit) != 'true')":
+            where["cache_hit"] = "miss"
         elif sess:
             where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
         elif status:
@@ -2440,6 +2444,96 @@ async def test_ui_view_spend_logs_with_status(client, monkeypatch):
         assert data["total"] == 1
         assert len(data["data"]) == 1
         assert data["data"][0]["status"] == "failure"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_cache_hit_filter(client, monkeypatch):
+    base = {
+        "api_key": "sk-test-key",
+        "user": "test_user_1",
+        "team_id": "team1",
+        "spend": 0.05,
+        "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+        "model": "gpt-4",
+        "status": "success",
+    }
+    mock_spend_logs = [
+        {**base, "id": "log1", "request_id": "req-hit", "cache_hit": "True"},
+        {**base, "id": "log2", "request_id": "req-miss", "cache_hit": "False"},
+        {**base, "id": "log3", "request_id": "req-legacy", "cache_hit": "None"},
+        {**base, "id": "log4", "request_id": "req-null", "cache_hit": None},
+    ]
+
+    def filter_by_cache(where):
+        cache_filter = where.get("cache_hit")
+        if cache_filter == "hit":
+            return [log for log in mock_spend_logs if str(log["cache_hit"]).lower() == "true"]
+        if cache_filter == "miss":
+            return [log for log in mock_spend_logs if str(log["cache_hit"]).lower() != "true"]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_cache),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "cache_hit_filter": "hit",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert [row["request_id"] for row in data["data"]] == ["req-hit"]
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "cache_hit_filter": "miss",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 3
+        assert [row["request_id"] for row in data["data"]] == ["req-miss", "req-legacy", "req-null"]
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert response.json()["total"] == 4
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "cache_hit_filter": "invalid",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
