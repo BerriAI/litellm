@@ -54171,10 +54171,9 @@
         "supports_response_schema": true
     },
     "xai/grok-imagine-image": {
-        "input_cost_per_image": 0.002,
+        "input_cost_per_image": 0.02,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.02,
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -54188,10 +54187,9 @@
         ]
     },
     "xai/grok-imagine-image-2026-03-02": {
-        "input_cost_per_image": 0.002,
+        "input_cost_per_image": 0.02,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.02,
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -54205,10 +54203,9 @@
         ]
     },
     "xai/grok-imagine-image-quality": {
-        "input_cost_per_image": 0.01,
+        "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.05,
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -54222,10 +54219,9 @@
         ]
     },
     "xai/grok-imagine-image-quality-20260403": {
-        "input_cost_per_image": 0.01,
+        "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.05,
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -54239,10 +54235,9 @@
         ]
     },
     "xai/grok-imagine-image-quality-latest": {
-        "input_cost_per_image": 0.01,
+        "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.05,
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -54256,10 +54251,9 @@
         ]
     },
     "xai/grok-imagine-image-pro": {
-        "input_cost_per_image": 0.01,
+        "input_cost_per_image": 0.05,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.05,
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -54273,10 +54267,9 @@
         ]
     },
     "xai/grok-imagine-image-2.0": {
-        "input_cost_per_image": 0.01,
+        "input_cost_per_image": 0.06,
         "litellm_provider": "xai",
         "mode": "image_generation",
-        "output_cost_per_image": 0.06,
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
             "/v1/images/generations"
