@@ -3597,7 +3597,7 @@ class ProxyBaseLLMRequestProcessing:
         chunks can emit anything still held at end of stream.
         ``protocol_supports_stream_options`` says whether this route's protocol gives
         callers a ``stream_options.include_usage`` to opt in with, which gates cost
-        injection; see ``_should_inject_cost_for_request``.
+        injection; see ``should_inject_cost_for_request``.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3608,7 +3608,7 @@ class ProxyBaseLLMRequestProcessing:
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
         caps: Final = ProxyLogging._callback_capabilities()
-        cost_injection_enabled: Final = ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+        cost_injection_enabled: Final = ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
             request_data,
             protocol_supports_stream_options=protocol_supports_stream_options,
         )
@@ -3763,7 +3763,7 @@ class ProxyBaseLLMRequestProcessing:
         )
 
     @staticmethod
-    def _should_inject_cost_for_request(
+    def should_inject_cost_for_request(
         request_data: Mapping[str, Any] | None,
         *,
         protocol_supports_stream_options: bool = True,
@@ -3820,7 +3820,7 @@ class ProxyBaseLLMRequestProcessing:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
             litellm_logging_obj: The call's logging object, used for pricing
-            enabled: Per-stream decision from ``_should_inject_cost_for_request``.
+            enabled: Per-stream decision from ``should_inject_cost_for_request``.
                 Falls back to the global flag alone when not passed.
 
         Returns:

@@ -7955,7 +7955,7 @@ class TestShouldInjectCostForRequest:
     def test_global_flag_off_never_injects(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
         assert (
-            ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
                 {"stream_options": {"include_usage": True}}
             )
             is False
@@ -7964,7 +7964,7 @@ class TestShouldInjectCostForRequest:
     def test_openai_protocol_requires_caller_opt_in(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         assert (
-            ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
                 {"model": "gpt-4o-mini", "stream": True},
                 protocol_supports_stream_options=True,
             )
@@ -7974,7 +7974,7 @@ class TestShouldInjectCostForRequest:
     def test_openai_protocol_opted_in_injects(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         assert (
-            ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
                 {"stream_options": {"include_usage": True}},
                 protocol_supports_stream_options=True,
             )
@@ -7985,7 +7985,7 @@ class TestShouldInjectCostForRequest:
     def test_explicit_opt_out_is_honoured_on_every_protocol(self, monkeypatch, protocol_supports_stream_options):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         assert (
-            ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
                 {"stream_options": {"include_usage": False}},
                 protocol_supports_stream_options=protocol_supports_stream_options,
             )
@@ -7997,7 +7997,7 @@ class TestShouldInjectCostForRequest:
         in, so the flag remains always-on there."""
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         assert (
-            ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
                 {"model": "claude-haiku-4-5", "stream": True},
                 protocol_supports_stream_options=False,
             )
@@ -8006,9 +8006,9 @@ class TestShouldInjectCostForRequest:
 
     def test_missing_request_data_falls_back_to_protocol_default(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
-        assert ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(None) is False
+        assert ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(None) is False
         assert (
-            ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
                 None, protocol_supports_stream_options=False
             )
             is True
@@ -8017,7 +8017,7 @@ class TestShouldInjectCostForRequest:
     def test_malformed_stream_options_falls_back_to_protocol_default(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
         assert (
-            ProxyBaseLLMRequestProcessing._should_inject_cost_for_request(
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
                 {"stream_options": "include_usage"},
                 protocol_supports_stream_options=False,
             )
@@ -8027,7 +8027,7 @@ class TestShouldInjectCostForRequest:
 
 class TestProcessChunkCostInjectionGate:
     """``_process_chunk_with_cost_injection`` takes the per-stream decision from
-    ``_should_inject_cost_for_request`` and falls back to the global flag when the
+    ``should_inject_cost_for_request`` and falls back to the global flag when the
     caller does not pass one."""
 
     @staticmethod
