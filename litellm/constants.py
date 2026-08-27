@@ -1364,8 +1364,6 @@ X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
-AUTO_ROUTED_REQUEST_METADATA_KEY: Final = "_auto_routed_request"
-ROUTER_MODEL_NAME_RESPONSE_FIELD: Final = "router_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
@@ -1813,6 +1811,43 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 )
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+
+# A retrieved response replays the usage of the call that created it, so pricing these
+# read/management routes like inference bills the same tokens twice.
+NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "get_responses",
+        "aget_responses",
+        "delete_responses",
+        "adelete_responses",
+        "cancel_responses",
+        "acancel_responses",
+        "list_input_items",
+        "alist_input_items",
+        "vector_store_create",
+        "avector_store_create",
+        "vector_store_retrieve",
+        "avector_store_retrieve",
+        "vector_store_list",
+        "avector_store_list",
+        "vector_store_update",
+        "avector_store_update",
+        "vector_store_delete",
+        "avector_store_delete",
+        "vector_store_file_create",
+        "avector_store_file_create",
+        "vector_store_file_list",
+        "avector_store_file_list",
+        "vector_store_file_retrieve",
+        "avector_store_file_retrieve",
+        "vector_store_file_content",
+        "avector_store_file_content",
+        "vector_store_file_update",
+        "avector_store_file_update",
+        "vector_store_file_delete",
+        "avector_store_file_delete",
+    }
+)
 
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request
