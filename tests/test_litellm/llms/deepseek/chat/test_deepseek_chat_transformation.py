@@ -1,12 +1,11 @@
 import logging
+from copy import deepcopy
 
 import litellm
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
 
 class _ListHandler(logging.Handler):
-    """Capture emitted LogRecords so we can count warnings deterministically."""
-
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
         self.records: list[logging.LogRecord] = []
@@ -16,10 +15,6 @@ class _ListHandler(logging.Handler):
 
 
 def _capture_reasoning_warnings(messages):
-    """
-    Run _fill_reasoning_content while capturing the WARNING records emitted by
-    litellm.verbose_logger. Returns (result, warning_records).
-    """
     handler = _ListHandler()
     logger = litellm.verbose_logger
     previous_level = logger.level
@@ -30,55 +25,30 @@ def _capture_reasoning_warnings(messages):
     finally:
         logger.removeHandler(handler)
         logger.setLevel(previous_level)
-    reasoning_records = [
-        record
-        for record in handler.records
-        if "reasoning_content" in record.getMessage()
-    ]
-    return result, reasoning_records
+    records = [record for record in handler.records if "reasoning_content" in record.getMessage()]
+    return result, records
 
 
 def test_fill_reasoning_content_warns_once_per_request_with_count():
-    """
-    Reproduces issue #37629: _fill_reasoning_content used to emit one identical
-    WARNING per historical assistant message that lacked reasoning_content. In a
-    multi-turn conversation this floods the logs (6 messages -> 6 warnings on a
-    single request) and buries genuine errors.
-
-    Expected behaviour: at most ONE aggregated warning per request, and it must
-    report how many assistant messages were back-filled with the placeholder.
-    """
     messages = [{"role": "system", "content": "You are helpful."}]
-    for i in range(6):
-        messages.append({"role": "user", "content": f"q{i}"})
-        messages.append({"role": "assistant", "content": f"a{i}"})
+    for index in range(6):
+        messages.append({"role": "user", "content": f"q{index}"})
+        messages.append({"role": "assistant", "content": f"a{index}"})
 
     result, warning_records = _capture_reasoning_warnings(messages)
 
-    # All six assistant messages still get the single-space placeholder.
-    assistant_placeholders = [
-        msg
-        for msg in result
-        if msg.get("role") == "assistant" and msg.get("reasoning_content") == " "
+    placeholders = [
+        message for message in result if message.get("role") == "assistant" and message.get("reasoning_content") == " "
     ]
-    assert len(assistant_placeholders) == 6
-
-    # Exactly one aggregated warning, not one-per-message.
-    assert len(warning_records) == 1, (
-        f"expected a single aggregated warning, got {len(warning_records)}: "
-        f"{[r.getMessage() for r in warning_records]}"
-    )
-    # And that warning must surface the count of affected messages.
-    assert "6" in warning_records[0].getMessage()
+    assert len(placeholders) == 6
+    assert len(warning_records) == 1
+    assert "6 assistant message(s)" in warning_records[0].getMessage()
 
 
-def test_fill_reasoning_content_no_warning_when_nothing_missing():
-    """When every assistant message already carries reasoning_content, the
-    aggregated warning must not fire at all."""
+def test_fill_reasoning_content_does_not_warn_when_nothing_is_missing():
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello", "reasoning_content": "thinking"},
-        {"role": "user", "content": "again"},
         {
             "role": "assistant",
             "content": "sure",
@@ -89,6 +59,53 @@ def test_fill_reasoning_content_no_warning_when_nothing_missing():
     _result, warning_records = _capture_reasoning_warnings(messages)
 
     assert warning_records == []
+
+
+def test_transform_request_replays_warn_once_and_preserve_history():
+    messages = [
+        {"role": "user", "content": "Use both tools."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "first"}],
+            "reasoning_content": "",
+        },
+        {"role": "tool", "tool_call_id": "first", "content": "first result"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "second"}],
+            "reasoning_content": "",
+        },
+        {"role": "tool", "tool_call_id": "second", "content": "second result"},
+        {"role": "user", "content": "Continue."},
+    ]
+    original_messages = deepcopy(messages)
+    handler = _ListHandler()
+    logger = litellm.verbose_logger
+    previous_level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    try:
+        results = [
+            DeepSeekChatConfig().transform_request(
+                model="deepseek-reasoner",
+                messages=messages,
+                optional_params={"thinking": {"type": "enabled"}},
+                litellm_params={},
+                headers={},
+            )
+            for _ in range(2)
+        ]
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    warnings = [record for record in handler.records if "reasoning_content" in record.getMessage()]
+    assert len(warnings) == 2
+    assert all("2 assistant message(s)" in record.getMessage() for record in warnings)
+    assert all([result["messages"][index]["reasoning_content"] for index in (1, 3)] == [" ", " "] for result in results)
+    assert messages == original_messages
 
 
 def _function_tool(name: str) -> dict:
@@ -196,6 +213,284 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
 def test_thinking_mode_active_bool_thinking_returns_false_without_crashing():
     config = DeepSeekChatConfig()
     assert config._thinking_mode_active(model="deepseek-reasoner", optional_params={"thinking": True}) is False
+
+
+class TestDeepSeekVisionMultimodalContent:
+    """Image content lists are forwarded only for user messages on vision models."""
+
+    VISION_MODEL = "deepseek/deepseek-v4-flash-vision-exp"
+    NON_VISION_MODEL = "deepseek/deepseek-chat"
+
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+        prior_entry = litellm.model_cost.get(self.VISION_MODEL)
+        self._prior_registry_entry = dict(prior_entry) if prior_entry is not None else None
+        litellm.register_model(
+            {
+                "deepseek/deepseek-v4-flash-vision-exp": {
+                    "litellm_provider": "deepseek",
+                    "mode": "chat",
+                    "input_cost_per_token": 4.4e-07,
+                    "output_cost_per_token": 1.32e-06,
+                    "supports_vision": True,
+                }
+            }
+        )
+
+    def teardown_method(self):
+        if self._prior_registry_entry is None:
+            litellm.model_cost.pop(self.VISION_MODEL, None)
+        else:
+            litellm.model_cost[self.VISION_MODEL] = self._prior_registry_entry
+
+    @staticmethod
+    def _image_message(role="user"):
+        return {
+            "role": role,
+            "content": [
+                {"type": "text", "text": "what is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.jpg", "detail": "auto"},
+                },
+            ],
+        }
+
+    def test_user_image_list_forwarded_on_vision_model(self):
+        result = self.config._transform_messages([self._image_message()], model=self.VISION_MODEL)
+
+        assert isinstance(result[0]["content"], list)
+        assert result[0]["content"][0]["type"] == "text"
+        assert result[0]["content"][1]["type"] == "image_url"
+        assert result[0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
+
+    def test_image_list_collapsed_on_non_vision_model(self):
+        result = self.config._transform_messages([self._image_message()], model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == "what is in this image?"
+
+    def test_image_list_collapsed_on_non_user_roles_even_on_vision_model(self):
+        for role in ("assistant", "system"):
+            result = self.config._transform_messages([self._image_message(role=role)], model=self.VISION_MODEL)
+
+            assert result[0]["content"] == "what is in this image?"
+
+    def test_audio_block_collapsed_even_on_vision_model(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe this"},
+                    {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "transcribe this"
+
+    def test_typeless_image_block_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this"},
+                    {"image_url": {"url": "https://example.com/image.jpg"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "what is this"
+
+    def test_text_only_content_list_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello "},
+                    {"type": "text", "text": "world"},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert isinstance(result[0]["content"], str)
+        assert result[0]["content"] == "Hello world"
+
+    def test_search_results_text_appended_on_forwarded_message(self):
+        message = self._image_message()
+        message["search_results"] = [{"source": "kb", "content": [{"text": "article body"}]}]
+
+        result = self.config._transform_messages([message], model=self.VISION_MODEL)
+
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert content[-1] == {"type": "text", "text": "kbarticle body"}
+        assert any(block.get("type") == "image_url" for block in content)
+        assert "search_results" not in result[0]
+
+    def test_search_results_text_kept_on_collapse(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "context: "}],
+                "search_results": [{"source": "kb", "content": [{"text": "article body"}]}],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == "context: kbarticle body"
+
+    def test_responses_shape_blocks_collapse_even_on_vision_model(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "what is this?"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "what is this?"
+
+    def test_image_block_missing_payload_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi"}, {"type": "image_url"}],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "hi"
+
+    def test_image_block_empty_payload_object_collapses(self):
+        for payload in ({}, {"url": ""}, {"detail": "auto"}, None, 42):
+            messages = [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi"}, {"type": "image_url", "image_url": payload}],
+                }
+            ]
+
+            result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+            assert result[0]["content"] == "hi"
+
+    def test_image_block_string_payload_forwarded(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this?"},
+                    {"type": "image_url", "image_url": "https://example.com/image.jpg"},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert content[1]["image_url"] == {"url": "https://example.com/image.jpg"}
+
+    def test_text_block_missing_text_field_collapses(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "text"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}},
+                ],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0]["content"] == "hi"
+
+    def test_string_content_search_results_folded_into_string(self):
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "summarize the docs",
+                "search_results": [{"source": "kb", "content": [{"text": "article body"}]}],
+            }
+        ]
+
+        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == "summarize the docskbarticle body"
+
+    def test_plain_string_content_message_unchanged(self):
+        messages = [{"role": "user", "content": "hello"}]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert result[0] is messages[0]
+
+    def test_empty_content_list_untouched(self):
+        messages = [{"role": "user", "content": []}]
+
+        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+
+        assert result[0]["content"] == []
+
+    def test_later_messages_still_collapsed_after_forwarded_one(self):
+        messages = [
+            self._image_message(),
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "and "},
+                    {"type": "text", "text": "then?"},
+                ],
+            },
+            self._image_message(),
+        ]
+
+        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+
+        assert isinstance(result[0]["content"], list)
+        assert result[1]["content"] == "and then?"
+        assert isinstance(result[2]["content"], list)
+
+    def test_transform_request_preserves_image_url_block(self):
+        body = self.config.transform_request(
+            model=self.VISION_MODEL,
+            messages=[self._image_message()],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = body["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert any(block.get("type") == "image_url" for block in content)
+
+    async def test_async_transform_request_preserves_image_url_block(self):
+        body = await self.config.async_transform_request(
+            model=self.VISION_MODEL,
+            messages=[self._image_message()],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        content = body["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert any(block.get("type") == "image_url" for block in content)
 
 
 class TestDeepSeekThinkingParams:
@@ -372,8 +667,6 @@ class TestDeepSeekThinkingParams:
 
         result = self.config._drop_unsupported_tools(optional_params)
 
-        assert result["tools"] == [
-            {"type": "function", "function": {"name": "get_weather"}}
-        ]
+        assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True

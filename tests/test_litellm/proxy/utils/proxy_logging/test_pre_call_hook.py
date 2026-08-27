@@ -298,6 +298,22 @@ async def test_default_path_still_applies_prompt_templates(proxy_logging, make_u
     process.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_aresponses_call_type_applies_prompt_templates_before_routing(proxy_logging, make_user_api_key_auth, monkeypatch):
+    """The responses surface must process registry prompts pre-routing so credentials follow the swapped model."""
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    process = AsyncMock()
+    monkeypatch.setattr(proxy_logging, "_process_prompt_template", process)
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"input": "hi", "model": "m", "prompt_id": "p1", "litellm_logging_obj": MagicMock()},
+        call_type="aresponses",
+    )
+    process.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # enforces_request_content: which CustomLoggers a guardrails-only walk reaches
 # ---------------------------------------------------------------------------

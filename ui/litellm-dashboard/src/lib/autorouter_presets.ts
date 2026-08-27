@@ -4,11 +4,11 @@ import {
 } from "@/components/add_model/build_complexity_router_config";
 import {
   ComplexityRouterConfigValue,
-  ComplexityTiers,
   ClassifierType,
   ClassifierLLMConfig,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
+  usesLlmClassifier,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
@@ -43,15 +43,7 @@ export const getRequiredModels = (
   config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model" | "default_model">,
 ): Set<string> => {
   const { tiers, classifier_llm_config: classifier, embedding_model: embedding, default_model: pinned } = config;
-  const models = [
-    ...tiers.SIMPLE,
-    ...tiers.MEDIUM,
-    ...tiers.COMPLEX,
-    ...tiers.REASONING,
-    classifier?.model,
-    embedding,
-    pinned,
-  ];
+  const models = [...Object.values(tiers).flat(), classifier?.model, embedding, pinned];
   // Boolean(), not != null: an empty-string placeholder (e.g. classifier_llm_config seeded before a
   // model is chosen) is never a real model reference either.
   return new Set(models.filter((model): model is string => Boolean(model)));
@@ -186,12 +178,12 @@ export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability:
 // Checks the config actually being built (whether it arrived via a preset prefill or was typed by
 // hand - the two are indistinguishable once the caller has started editing), not a preset's
 // original bundled model list. Only counts classifier_llm_config/embedding_model as referenced
-// when buildComplexityRouterConfig would actually emit them (classifierType === "llm",
+// when buildComplexityRouterConfig would actually emit them (usesLlmClassifier(classifierType),
 // semanticMatchingEnabled) - otherwise a dormant selection left over from a toggle no longer in
 // effect would block submit for a model that was never going to be submitted.
 export const getReferencedModelsError = (
   params: {
-    tiers: ComplexityTiers;
+    tiers: ComplexityRouterConfigPayload["tiers"];
     classifierType: ClassifierType;
     classifierLlmConfig: ClassifierLLMConfig | undefined;
     semanticMatchingEnabled: boolean;
@@ -204,7 +196,7 @@ export const getReferencedModelsError = (
     {
       tiers: params.tiers,
       default_model: params.defaultModel,
-      classifier_llm_config: params.classifierType === "llm" ? params.classifierLlmConfig : undefined,
+      classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
       embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
     },
     availability,
@@ -268,6 +260,7 @@ export const buildPresetPrefill = (
         model: resolve(config.classifier_llm_config.model),
       },
       classifier_context_window_size: config.classifier_context_window_size,
+      classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,

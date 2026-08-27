@@ -72,6 +72,20 @@ function describeReasoningOverride(tierLabel: string | undefined, floor: number 
   return `Heuristic, ${tierLabel ?? "REASONING"} override (2 or more reasoning markers, score of at least ${stated})`;
 }
 
+const CONSTANT_CAUSE_LABELS: Record<string, string> = {
+  heuristic_scorer: "Heuristic scorer",
+  heuristic_first_short_circuit: "Heuristic scorer, classifier skipped",
+  classifier_plugin: "Custom classifier plugin",
+  semantic_keyword_match: "Semantic keyword match",
+  session_affinity_pin: "Pinned to session",
+  session_affinity_escalation: "Escalated from session pin",
+  quality_tier: "Quality tier mapping",
+  bandit: "Adaptive bandit",
+  default_fallback: "Default model, no route matched",
+  classifier_fallback: "Fallback tier, LLM classifier failed",
+  default_model_fallback: "Default model, LLM classifier failed",
+};
+
 function describeCause(decision: RoutingDecision): string {
   const {
     cause,
@@ -81,35 +95,19 @@ function describeCause(decision: RoutingDecision): string {
     reasoning_override_min_score: overrideFloor,
   } = decision;
 
+  const constant = cause ? CONSTANT_CAUSE_LABELS[cause] : undefined;
+  if (constant) return constant;
+
   switch (cause) {
-    case "heuristic_scorer":
-      return "Heuristic scorer";
     case "reasoning_override":
       return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
     case "literal_keyword_match":
-      return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
-    case "semantic_keyword_match":
-      return "Semantic keyword match";
-    case "plan_mode":
-      return describePlanModeFloor(matchedKeyword);
-    case "session_affinity_pin":
-      return "Pinned to session";
-    case "session_affinity_escalation":
-      return "Escalated from session pin";
-    case "quality_tier":
-      return "Quality tier mapping";
     case "keyword":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
-    case "bandit":
-      return "Adaptive bandit";
-    case "default_fallback":
-      return "Default model, no route matched";
-    case "classifier_fallback":
-      return "Fallback tier, LLM classifier failed";
-    case "default_model_fallback":
-      return "Default model, LLM classifier failed";
+    case "plan_mode":
+      return describePlanModeFloor(matchedKeyword);
     default:
       return cause ?? "Unknown";
   }

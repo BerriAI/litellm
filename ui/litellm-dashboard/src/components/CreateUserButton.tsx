@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";

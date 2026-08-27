@@ -4,7 +4,7 @@ organizations, teams, and keys.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -19,6 +19,8 @@ from litellm.repositories.object_permission_repository import ObjectPermissionRe
 from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionTable,
         LiteLLM_TeamTableCachedObj,
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
 
 
 async def attach_object_permission_to_dict(
-    data_dict: dict,
+    data_dict: dict[str, object],
     prisma_client: PrismaClient,
 ) -> dict:
     """
@@ -61,7 +63,7 @@ async def attach_object_permission_to_dict(
             try:
                 object_permission = object_permission.model_dump()
             except Exception:
-                object_permission = object_permission.dict()
+                object_permission = object_permission.dict()  # pyright: ignore[reportDeprecated]  # pydantic v1 fallback
             data_dict["object_permission"] = object_permission
     return data_dict
 
@@ -188,7 +190,9 @@ async def _set_object_permission(
         return data_json
 
     # Clean data: exclude None values and object_permission_id
-    clean_data: Final = {k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"}
+    clean_data: Final[dict[str, object]] = {
+        k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"
+    }
 
     # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
     if "mcp_tool_permissions" in clean_data:
@@ -224,7 +228,7 @@ def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
 async def _get_db_mcp_servers_by_identifiers(
     identifiers: set[str],
     prisma_client: PrismaClient | None,
-) -> list[Any]:
+) -> "Sequence[prisma_models.LiteLLM_MCPServerTable]":
     if prisma_client is None or not identifiers:
         return []
 

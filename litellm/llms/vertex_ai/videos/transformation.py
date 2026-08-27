@@ -7,11 +7,11 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 
 import base64
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, RequestFiles
 from typing_extensions import ReadOnly
 
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
@@ -677,9 +677,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        video_file: FileContent | None = None,
         extra_body: dict[str, object] | None = None,
         prefetched_source_data: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
         Build a predictLongRunning edit request from the pre-fetched source video.
 
@@ -727,7 +728,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                 request_data["parameters"] = vertex_params
 
         edit_url: Final = f"{api_base.rstrip('/')}/{model}:predictLongRunning"
-        return edit_url, request_data
+        return edit_url, request_data, None
 
     def transform_video_edit_response(
         self,

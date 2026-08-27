@@ -777,6 +777,11 @@ export interface paths {
          *     overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
          *     over that bucket's turns.
+         *
+         *     The rollup supplies the measures, never the list. Which routers appear comes from the
+         *     model registry, so one shows up as soon as it is configured and reads zero until it
+         *     serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+         *     window recorded.
          */
         get: operations["get_auto_router_benchmarks_auto_router_benchmarks_get"];
         put?: never;
@@ -8147,6 +8152,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -8600,9 +8614,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -11024,11 +11042,9 @@ export interface paths {
          *         -d '{
          *             "prompt_id": "my_prompt",
          *             "litellm_params": {
-         *                 "prompt_id": "json_prompt",
+         *                 "prompt_id": "my_prompt",
          *                 "prompt_integration": "dotprompt",
-         *                 ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
-         *                 "prompt_directory": "/path/to/dotprompt/folder",
-         *                 "prompt_data": {"json_prompt": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}}
+         *                 "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
          *             },
          *             "prompt_info": {
          *                 "prompt_type": "config"
@@ -14833,6 +14849,7 @@ export interface paths {
          *         - langfuse_secret_key: The secret key for the Langfuse callback
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
+         *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -14925,6 +14942,33 @@ export interface paths {
          *     ```
          */
         post: operations["disable_team_logging_team__team_id__disable_logging_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/{team_id}/member/{user_id}/reset_spend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Team Member Spend Fn
+         * @description Reset a team member's tracked spend against their per-member budget.
+         *
+         *     A member's spend is tracked separately from both their own personal
+         *     budget and the team's own budget (LiteLLM_TeamMembership.spend), so
+         *     neither /user/update nor /team/update can clear it: this is the only
+         *     endpoint that does. The cross-pod spend counter and cached membership
+         *     reads are invalidated so the reset takes effect on the member's next
+         *     request rather than waiting on the membership cache's TTL.
+         */
+        post: operations["reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17904,6 +17948,15 @@ export interface paths {
          *         - When litellm_model_id is not passed, it will return the info for all models
          *         - include_team_models: When true, filter to deployments the caller can use (same as /v2/model/info).
          *         - teamId: Filter to models accessible by the given team.
+         *         - healthy_only: When true, hide models whose backing deployments are all marked
+         *           unhealthy by background health checks, matching `/v1/models?healthy_only=true`.
+         *           Set `general_settings.model_list_healthy_only: true` to apply this to every
+         *           caller without the query parameter. Requires `background_health_checks: true`,
+         *           plus either `model_list_healthy_only` or `enable_health_check_routing` to keep
+         *           deployment health state cached; without health state the listing is returned
+         *           unfiltered (fail open). Ignored when `litellm_model_id` is passed, since that
+         *           is a direct lookup of one deployment rather than a listing. Hiding is
+         *           presentation-only: a hidden model can still be called directly.
          *
          *     Each model in the list response includes `model_info.access_via_team_ids` and
          *     `model_info.direct_access` when the proxy database is connected.
@@ -17961,9 +18014,13 @@ export interface paths {
          *              When scope=expand is passed, proxy admins, team admins, and org admins
          *              will receive all proxy models as if they are a proxy admin.
          *     - healthy_only: When true, hide models whose backing deployments are all marked
-         *                     unhealthy by background health checks. Requires
-         *                     `background_health_checks: true` in general_settings; without
-         *                     health state the listing is returned unfiltered (fail open).
+         *                     unhealthy by background health checks. Set
+         *                     `general_settings.model_list_healthy_only: true` to apply this
+         *                     to every caller without the query parameter. Requires
+         *                     `background_health_checks: true` in general_settings, plus
+         *                     either `model_list_healthy_only` or `enable_health_check_routing`
+         *                     to keep deployment health state cached; without health state
+         *                     the listing is returned unfiltered (fail open).
          *                     Models expanded from wildcard routes (e.g. `openai/*`) are not
          *                     filtered, and nothing is hidden when `allowed_fails_policy` is
          *                     configured (cooldown remains the sole exclusion mechanism).
@@ -21965,9 +22022,15 @@ export interface components {
              * @description Window end day, YYYY-MM-DD UTC, inclusive
              */
             end_date: string;
-            /** Groups */
+            /**
+             * Groups
+             * @description One entry per auto-router, listed from the model registry rather than from the rollup, so a router appears as soon as it is configured and reads zero until it serves traffic. Semantic auto-routers are absent: they record no routing decision, so no session can ever be attributed to them
+             */
             groups: components["schemas"]["AutoRouterBenchmarkGroup"][];
-            /** Routers In Scope */
+            /**
+             * Routers In Scope
+             * @description How many groups this response carries. Every auto-router configured on the proxy counts, whether or not it served anything in the window. To count only the routers that did serve traffic, filter `groups` to the entries whose `sessions` is above zero
+             */
             routers_in_scope: number;
             /**
              * Start Date
@@ -22665,7 +22728,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -22998,6 +23061,17 @@ export interface components {
             /** Total Requested */
             total_requested: number;
         };
+        /** CacheActivityErrorBucket */
+        CacheActivityErrorBucket: {
+            /** Call Type */
+            call_type: string;
+            /** Count */
+            count: number;
+            /** Error Class */
+            error_class: string;
+            /** Error Code */
+            error_code: string;
+        };
         /** CacheActivityFilterOptions */
         CacheActivityFilterOptions: {
             /** Key Aliases */
@@ -23022,6 +23096,8 @@ export interface components {
         };
         /** CacheActivityResponse */
         CacheActivityResponse: {
+            /** Error Breakdown */
+            error_breakdown: components["schemas"]["CacheActivityErrorBucket"][];
             filter_options: components["schemas"]["CacheActivityFilterOptions"];
             /** Groups */
             groups: components["schemas"]["CacheActivityGroup"][];
@@ -23142,7 +23218,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -24213,6 +24289,11 @@ export interface components {
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
             mcp_xff_num_trusted_hops?: number | null;
+            /**
+             * Model List Healthy Only
+             * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
+             */
+            model_list_healthy_only?: boolean | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -26661,7 +26742,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -26701,7 +26782,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -26731,7 +26812,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -27501,6 +27582,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Google Maps Grounding Cost Per Query */
+            google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -27624,6 +27707,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -27933,7 +28020,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -27963,7 +28050,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -27993,7 +28080,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -29522,6 +29609,8 @@ export interface components {
              * @default []
              */
             supported_openai_params: string[] | null;
+            /** Supported Reasoning Efforts */
+            supported_reasoning_efforts?: string[] | null;
             /**
              * Supports Function Calling
              * @default false
@@ -30037,7 +30126,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /** Allowed Passthrough Routes */
             allowed_passthrough_routes?: unknown[] | null;
             /** Allowed Vector Store Indexes */
@@ -30081,7 +30170,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -30107,7 +30196,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organization Id */
             organization_id?: string | null;
@@ -32460,17 +32549,22 @@ export interface components {
              */
             classification_prompt?: string | null;
             /**
+             * Classifier Context Budget Chars
+             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and the caller's system prompt sit outside this budget and are always sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @default 8000
+             */
+            classifier_context_budget_chars: number;
+            /**
              * Classifier Context Include Assistant Turns
-             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies share classifier_context_per_turn_chars with user turns, so raise it if replies are truncated before the part that carries the difficulty. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
              * @default false
              */
             classifier_context_include_assistant_turns: boolean;
             /**
              * Classifier Context Per Turn Chars
-             * @description Maximum character length for each prior turn's text in the classifier context window. Turns exceeding this are truncated. Only applies when classifier_type is 'llm'.
-             * @default 200
+             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Only applies when classifier_type is 'llm'.
              */
-            classifier_context_per_turn_chars: number;
+            classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
              * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call already carries the current user ask and the caller's system prompt in full. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
@@ -32479,12 +32573,12 @@ export interface components {
             classifier_context_window_size: number;
             /**
              * Classifier Fallback
-             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm' or 'custom'.
+             * @description What classifies the request when the LLM classifier errors, times out, or returns an unparseable response. 'heuristic' runs the local complexity scorer, which is right when the classifier grades complexity too. 'default_model' skips scoring and routes to default_model, which is what a classifier on some other taxonomy wants: a prompt that grades data sensitivity has no use for a complexity score, and scoring one produces a tier unrelated to what the operator configured. Requires default_model when set to 'default_model'. Only applies when classifier_type is 'llm', 'custom', or 'heuristic_first'.
              * @default heuristic
              * @enum {string}
              */
             classifier_fallback: "heuristic" | "default_model";
-            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' */
+            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' or 'heuristic_first' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
              * Classifier Plugin
@@ -32499,11 +32593,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, an LLM call, or a custom classifier plugin
+             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm" | "custom";
+            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -32547,6 +32641,11 @@ export interface components {
              * @description Tier routed to when the LLM classifier fails (timeout, provider error, or an unparseable reply). Required with tier_definitions and must name a defined tier; the heuristic scorer cannot produce custom tiers, so this replaces the heuristic fallback for custom tier sets.
              */
             fallback_tier?: string | null;
+            /**
+             * Heuristic First Max Tier
+             * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
+             */
+            heuristic_first_max_tier?: string | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -33606,7 +33705,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -33885,7 +33984,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -33915,7 +34014,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members With Roles
              * @default []
@@ -33945,7 +34044,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -34015,7 +34114,7 @@ export interface components {
              * Admins
              * @default []
              */
-            admins: unknown[];
+            admins: string[];
             /**
              * Allow Team Guardrail Config
              * @default false
@@ -34050,7 +34149,7 @@ export interface components {
              * Members
              * @default []
              */
-            members: unknown[];
+            members: string[];
             /**
              * Members Count
              * @default 0
@@ -34085,7 +34184,7 @@ export interface components {
              * Models
              * @default []
              */
-            models: unknown[];
+            models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -36200,7 +36299,9 @@ export interface components {
             } | null;
             /** Model Max Budget Usage */
             model_max_budget_usage?: {
-                [key: string]: unknown;
+                [key: string]: {
+                    [key: string]: unknown;
+                };
             } | null;
             /**
              * Models
@@ -36710,6 +36811,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Google Maps Grounding Cost Per Query */
+            google_maps_grounding_cost_per_query?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -36833,6 +36936,10 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 480P */
+            output_cost_per_second_480p?: number | null;
+            /** Output Cost Per Second 4K */
+            output_cost_per_second_4k?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -47572,6 +47679,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
@@ -55046,6 +55154,42 @@ export interface operations {
             };
         };
     };
+    reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetSpendRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     team_member_me_team__team_id__members_me_get: {
         parameters: {
             query?: never;
@@ -59516,6 +59660,7 @@ export interface operations {
                 include_team_models?: boolean | null;
                 /** @description Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids */
                 teamId?: string | null;
+                healthy_only?: boolean | null;
             };
             header?: never;
             path?: never;
