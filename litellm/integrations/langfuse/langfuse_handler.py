@@ -1,5 +1,3 @@
-import os
-
 """
 This file contains the LangFuseHandler class
 
@@ -157,7 +155,7 @@ class LangFuseHandler:
         if raw is None:
             return None
         value = str(raw).strip()
-        if not value or value == os.getenv("LANGFUSE_TRACING_ENVIRONMENT"):
+        if not value or value == LangFuseLogger.resolve_deployment_environment():
             return None
         return value
 

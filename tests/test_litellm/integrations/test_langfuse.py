@@ -3,7 +3,7 @@ import json
 import sys
 import types
 import unittest
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1521,3 +1521,31 @@ def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
 
     params = StandardCallbackDynamicParams(langfuse_environment="team-a-prod")
     assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True
+
+    # a dynamic value equal to the logger's effective (stripped) environment is redundant
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "production ")
+    stripped_redundant_params: Final = StandardCallbackDynamicParams(langfuse_environment="production")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(stripped_redundant_params) is False
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    (
+        ("Production", "default"),
+        ("EU-Prod", "default"),
+        ("langfuse-prod", "default"),
+        ("   ", "default"),
+        ("production ", "production"),
+        ("prod", "prod"),
+    ),
+)
+def test_langfuse_deployment_environment_fallback_never_raises(monkeypatch, env_value, expected):
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", env_value)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    logger: Final = LangFuseLogger(
+        langfuse_public_key="pk-env",
+        langfuse_secret="sk-env",
+        langfuse_host="https://test.langfuse.com",
+    )
+    assert logger.langfuse_environment == expected
