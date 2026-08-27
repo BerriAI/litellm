@@ -352,8 +352,8 @@ async def _check_summary_model_budget(
             )
             return False
 
-    user_model_max_budget: Final = getattr(user_api_key_auth, "user_model_max_budget", None)
-    user_id: Final = getattr(user_api_key_auth, "user_id", None)
+    user_model_max_budget: Final = user_api_key_auth.user_model_max_budget
+    user_id: Final = user_api_key_auth.user_id
     if isinstance(user_model_max_budget, dict) and user_model_max_budget and user_id is not None:
         try:
             await model_max_budget_limiter.is_user_within_model_budget(

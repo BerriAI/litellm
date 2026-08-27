@@ -511,9 +511,6 @@ def update_messages_with_model_file_ids(
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
                             if not provider_file_id and is_model_embedded_id(file_id):
-                                # `litellm:<raw_id>;model,<m>` encoding from the
-                                # x-litellm-model upload path. Strip the wrapper
-                                # so the provider sees its own ID.
                                 provider_file_id = get_original_file_id(file_id)
                             file_object_file_field["file_id"] = provider_file_id or file_id
                         if format:
@@ -588,9 +585,6 @@ def update_responses_input_with_model_file_ids(
                                 updated_content_item["file_id"] = provider_file_id
                                 updated_content.append(updated_content_item)
                             elif is_model_embedded_id(file_id):
-                                # `litellm:<raw_id>;model,<m>` encoding from the
-                                # x-litellm-model upload path. Strip the wrapper
-                                # so the provider sees its own ID.
                                 updated_content_item = content_item.copy()
                                 updated_content_item["file_id"] = get_original_file_id(file_id)
                                 updated_content.append(updated_content_item)

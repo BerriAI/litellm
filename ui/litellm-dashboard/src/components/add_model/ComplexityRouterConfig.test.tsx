@@ -1012,3 +1012,47 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
     );
   });
 });
+
+describe("ComplexityRouterConfig custom technical keywords", () => {
+  const openClassificationPanel = (value: ComplexityRouterConfigValue) => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+  };
+
+  const llmConfig = { model: "gpt-3.5-turbo", timeout_ms: 3000 };
+
+  it.each([
+    ["heuristic", { ...defaultValue, classifier_type: "heuristic" as const }],
+    [
+      "heuristic_first",
+      {
+        ...defaultValue,
+        classifier_type: "heuristic_first" as const,
+        heuristic_first_max_tier: "SIMPLE",
+        classifier_llm_config: llmConfig,
+      },
+    ],
+    [
+      "llm falling back to the scorer",
+      {
+        ...defaultValue,
+        classifier_type: "llm" as const,
+        classifier_llm_config: llmConfig,
+        classifier_fallback: "heuristic" as const,
+      },
+    ],
+  ])("offers the keywords on a router whose scorer runs: %s", (_label, value) => {
+    openClassificationPanel(value);
+    expect(screen.getByText("Custom Technical Keywords")).toBeInTheDocument();
+  });
+
+  it("hides the keywords when the scorer never runs, so they cannot imply an effect they have none", () => {
+    openClassificationPanel({
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: llmConfig,
+      classifier_fallback: "default_model",
+    });
+    expect(screen.queryByText("Custom Technical Keywords")).not.toBeInTheDocument();
+  });
+});

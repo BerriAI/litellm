@@ -246,11 +246,12 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> dict[str, str] | None:
     """The W3C trace context (``traceparent``/``tracestate``) the MCP client
     propagated in the request's ``params._meta`` (SEP-414), or ``None``.
 
-    When present, per the OTel MCP semconv the MCP span parents to this propagated
-    context rather than to the HTTP transport (which is recorded as a link instead).
-    When absent, the span nests under the transport span of the request carrying
-    this specific message, so a streamable-HTTP session that multiplexes many
-    messages still does not glue every message under the session's first request;
+    When present, the MCP span records this propagated context as a span *link*,
+    never the parent — a remote parent would root the span in a trace whose root
+    never reaches the gateway's tracing backend. The span itself nests under the
+    transport span of the request carrying this specific message, so a
+    streamable-HTTP session that multiplexes many messages still does not glue
+    every message under the session's first request;
     see ``resolve_mcp_span_context``. The client's W3C Baggage is
     deliberately excluded: it is caller-controlled, and the otel baggage processor
     stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,

@@ -8,11 +8,8 @@ See https://github.com/BerriAI/litellm/issues/26153.
 
 import pytest
 
-
-from litellm.llms.anthropic.cost_calculation import (
-    _get_web_search_requests,
-    get_cost_for_anthropic_web_search,
-)
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests
+from litellm.llms.anthropic.cost_calculation import get_cost_for_anthropic_web_search
 from litellm.types.utils import ModelInfo, ServerToolUse
 
 
@@ -33,19 +30,19 @@ def _make_model_info(cost_per_query: float = 0.01) -> ModelInfo:
 
 
 def test_get_web_search_requests_handles_none():
-    assert _get_web_search_requests(None) is None
+    assert get_web_search_requests(None) is None
 
 
 def test_get_web_search_requests_handles_dict():
-    assert _get_web_search_requests({"web_search_requests": 4}) == 4
+    assert get_web_search_requests({"web_search_requests": 4}) == 4
 
 
 def test_get_web_search_requests_handles_dict_missing_key():
-    assert _get_web_search_requests({}) is None
+    assert get_web_search_requests({}) is None
 
 
 def test_get_web_search_requests_handles_pydantic():
-    assert _get_web_search_requests(ServerToolUse(web_search_requests=2)) == 2
+    assert get_web_search_requests(ServerToolUse(web_search_requests=2)) == 2
 
 
 def test_get_cost_for_anthropic_web_search_with_dict_server_tool_use():
