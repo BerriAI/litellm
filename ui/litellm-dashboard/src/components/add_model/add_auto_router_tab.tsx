@@ -26,7 +26,6 @@ import ComplexityRouterConfig, {
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
-  usesLlmClassifier,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";

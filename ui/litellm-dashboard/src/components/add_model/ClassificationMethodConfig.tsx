@@ -274,7 +274,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <span>
               <strong className="font-semibold">Heuristic</strong>{" "}
               <span className="text-muted-foreground">
-                (default) — rule-based scoring, no API calls, &lt;1ms latency
+                (default), rule-based scoring with no API calls and &lt;1ms latency
               </span>
             </span>
           </Label>
@@ -282,7 +282,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <RadioGroupItem value="llm" className="mt-0.5" />
             <span>
               <strong className="font-semibold">LLM Classifier</strong>{" "}
-              <span className="text-muted-foreground">— use a model to decide the tier (e.g. a small/fast model)</span>
+              <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
             </span>
           </Label>
           <Label className="items-start font-normal leading-normal">
@@ -290,7 +290,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <span>
               <strong className="font-semibold">Heuristic first</strong>{" "}
               <span className="text-muted-foreground">
-                — score locally, and only pay for the classifier when the score does not confidently land a cheap tier
+                scores locally, and only pays for the classifier when the score does not confidently land a cheap tier
               </span>
             </span>
           </Label>
@@ -301,7 +301,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         <div className="mt-4 space-y-2">
           <strong className="block font-semibold">Decide locally up to</strong>
           <Select
-            value={value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER}
+            value={value.heuristic_first_max_tier}
             onValueChange={(tier: unknown) => handleHeuristicFirstMaxTierChange(tier as string)}
           >
             <SelectTrigger className="w-full">
