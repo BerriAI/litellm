@@ -6,11 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
+import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
+from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2416,6 +2419,74 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     assert cleaned.get("api_version") == "2024-10-21"
 
 
+def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
+    """
+    gh-36898: GET /health must not leak provider credentials that live in
+    `extra_headers` / `headers` / `aws_session_token`. Before the fix these
+    were returned in plaintext (api_key was stripped, but these were not).
+    """
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    raw = {
+        "model": "openai/gpt-4o",
+        "api_base": "https://example.test/v1",
+        "extra_headers": {
+            "Authorization": "Bearer CANARY_EXTRA_HEADERS_AUTHORIZATION",
+            "x-goog-api-key": "CANARY_X_GOOG_API_KEY_VALUE",
+            "api-key": "CANARY_AZURE_STYLE_API_KEY",
+        },
+        "headers": {"X-Custom": "CANARY_HEADER_VALUE"},
+        "aws_session_token": "CANARY_AWS_SESSION_TOKEN_VALUE",
+    }
+
+    cleaned = _clean_endpoint_data(raw, details=True)
+
+    assert "extra_headers" not in cleaned
+    assert "headers" not in cleaned
+    assert "aws_session_token" not in cleaned
+    assert cleaned.get("api_base") == "https://example.test/v1"
+
+
+@pytest.mark.parametrize(
+    "credential_field",
+    [
+        "api_key",
+        "client_secret",
+        "azure_ad_token",
+        "azure_username",
+        "azure_password",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "extra_headers",
+        "headers",
+    ],
+)
+@pytest.mark.parametrize("details", [True, False, None])
+def test_clean_endpoint_data_never_displays_credential_fields(credential_field, details):
+    """
+    LIT-6239 / gh-36898: /health entries, healthy and unhealthy alike, must never
+    carry credential-bearing litellm_params, with or without details.
+    """
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    canary = f"CANARY-{credential_field}-VALUE"
+    cleaned = _clean_endpoint_data(
+        {
+            "model": "azure/gpt-5-mini",
+            "api_base": "https://example.test/v1",
+            credential_field: canary,
+        },
+        details=details,
+    )
+
+    assert credential_field not in cleaned
+    assert canary not in str(cleaned)
+
+
 class TestConfigBaseForHealthCheck:
     """A request that sets its own connection fields gets a base without the
     configuration's credentials; anything it leaves unset still comes from
@@ -2674,3 +2745,38 @@ class TestNoRedisWarning:
         ):
             details = await _health_endpoints_module._get_health_readiness_details()
         assert details["show_no_redis_warning"] is False
+
+
+def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
+    """
+    Regression: /health/test_connection rejected mode=image_edit with a 422
+    before image_edit was added to its mode Literal, breaking the UI Test
+    Connection button for image edit deployments.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(
+            json={"created": 1700000000, "data": [{"b64_json": TEST_IMAGE_BASE64}]}
+        )
+        response = client.post(
+            "/health/test_connection",
+            json={
+                "mode": "image_edit",
+                "litellm_params": {"model": "openai/gpt-image-2", "api_key": "sk-test"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "success"

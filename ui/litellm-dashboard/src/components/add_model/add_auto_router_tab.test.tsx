@@ -5,6 +5,8 @@ import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
+import { getSubmitBlockedReason } from "./add_auto_router_tab";
+import { buildModelAvailability } from "@/lib/autorouter_presets";
 import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
@@ -590,6 +592,28 @@ describe("AddAutoRouterTab", () => {
       });
     });
 
+    // Every step between the bundled JSON and the payload drops these params silently.
+    it("carries a preset's per-tier reasoning effort through to the create payload", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      await selectTemplate("Anthropic Family");
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        complexity_router_config: {
+          tier_model_configs: {
+            REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+          },
+        },
+      });
+    });
+
     // Bugbot-found bug: submitBlockedReason disables the button for this, but Form's onFinish
     // (wired to the same handler as the button) fires whenever the form itself is submitted,
     // independent of the button's own disabled state. Without submitRecommendedRouter re-checking
@@ -862,5 +886,40 @@ describe("AddAutoRouterTab", () => {
         },
       });
     });
+  });
+});
+
+describe("getSubmitBlockedReason", () => {
+  const tiers = {
+    SIMPLE: ["gpt-4o-mini"],
+    MEDIUM: ["gpt-4o-mini"],
+    COMPLEX: ["gpt-4o-mini"],
+    REASONING: ["gpt-4o-mini"],
+  };
+  const availability = buildModelAvailability(["gpt-4o-mini"], []);
+  const referenced = {
+    tiers,
+    classifierType: "heuristic" as const,
+    classifierLlmConfig: undefined,
+    semanticMatchingEnabled: false,
+    embeddingModel: undefined,
+    defaultModel: undefined,
+  };
+
+  it("lets a complete heuristic router through", () => {
+    expect(getSubmitBlockedReason({ tiers, classifier_type: "heuristic" }, [], referenced, availability)).toBeNull();
+  });
+
+  it("blocks an LLM classifier with no model, which the button previously left enabled", () => {
+    expect(getSubmitBlockedReason({ tiers, classifier_type: "llm" }, [], referenced, availability)).toContain(
+      "Please select a classifier model",
+    );
+  });
+
+  it("blocks a keyword rule aimed at a tier this router does not have", () => {
+    const rules = [{ id: "r1", keywords: ["audit"], tier: "AUDIT" }];
+    expect(getSubmitBlockedReason({ tiers, classifier_type: "heuristic" }, rules, referenced, availability)).toContain(
+      "no longer has",
+    );
   });
 });

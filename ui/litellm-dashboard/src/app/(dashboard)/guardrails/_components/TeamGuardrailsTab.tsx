@@ -758,7 +758,7 @@ type ConfirmDialogProps = {
 function ConfirmDialog({ action, guardrailName, onConfirm, onCancel }: ConfirmDialogProps) {
   const isApprove = action === "approve";
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-overlay">
       <div className="bg-card rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
         <div
           className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${
@@ -1106,7 +1106,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
                       >
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent alignItemWithTrigger={false}>
+                      <SelectContent>
                         {GUARDRAIL_MODES.map((mode) => (
                           <SelectItem key={mode.value} value={mode.value} title={mode.label}>
                             {mode.label}

@@ -543,7 +543,7 @@ async def update_plugin(
 
         manifest: Final[Mapping[str, object]] = _build_plugin_manifest(plugin_name, request)
 
-        plugin: Final[_PluginRecord] = await ClaudeCodePluginRepository(prisma_client).table.update(
+        plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.update(
             where={"name": plugin_name},  # mutable-ok: prisma query arguments must be plain dicts
             data={  # mutable-ok: prisma query arguments must be plain dicts
                 "version": request.version,
@@ -553,6 +553,8 @@ async def update_plugin(
                 "updated_at": datetime.now(timezone.utc),
             },
         )
+        if plugin is None:
+            raise _error_response(404, f"Plugin '{plugin_name}' not found")
 
         verbose_proxy_logger.info("Plugin %s updated successfully", plugin_name)
 

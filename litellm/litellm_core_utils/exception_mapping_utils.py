@@ -550,6 +550,13 @@ def _map_anthropic_exception(
                 llm_provider="anthropic",
                 model=model,
             )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"AnthropicException - {error_str}",
+                llm_provider="anthropic",
+                model=model,
+                response=original_exception.response,
+            )
         elif original_exception.status_code == 400 or original_exception.status_code == 413:
             raise BadRequestError(
                 message=f"AnthropicException - {error_str}",
@@ -755,11 +762,18 @@ def _map_openai_like_exception(
                 llm_provider=custom_llm_provider,
                 model=model,
             )
-        elif original_exception.status_code == 401 or original_exception.status_code == 403:
+        elif original_exception.status_code == 401:
             raise AuthenticationError(
                 message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
                 llm_provider=custom_llm_provider,
                 model=model,
+            )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"{custom_llm_provider.capitalize()}Exception - {original_exception.message}",
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=_response_or_stub(original_exception, status_code=403),
             )
         elif original_exception.status_code == 400:
             raise BadRequestError(
@@ -2187,6 +2201,120 @@ def _map_openrouter_exception(
         )
 
 
+def _response_or_stub(original_exception: _ProviderHTTPException, status_code: int) -> httpx.Response:
+    response: Final = original_exception.response if hasattr(original_exception, "response") else None
+    if response is not None:
+        return response
+    return httpx.Response(
+        status_code=status_code, request=httpx.Request(method="POST", url="https://docs.litellm.ai/docs")
+    )
+
+
+def _map_exception_by_status(
+    *,
+    model: str,
+    original_exception: _ProviderHTTPException,
+    custom_llm_provider: str,
+    error_str: str,
+    exception_provider: str,
+    extra_information: str,
+) -> None:
+    status_code: Final = original_exception.status_code if hasattr(original_exception, "status_code") else None
+    if not isinstance(status_code, int) or status_code < 400:
+        return
+    message: Final = f"{exception_provider} - {error_str}"
+    response: Final = original_exception.response if hasattr(original_exception, "response") else None
+    match status_code:
+        case 401:
+            raise AuthenticationError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 403:
+            raise PermissionDeniedError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=_response_or_stub(original_exception, status_code=status_code),
+                litellm_debug_info=extra_information,
+            )
+        case 404:
+            raise NotFoundError(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 408:
+            raise Timeout(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                litellm_debug_info=extra_information,
+            )
+        case 429:
+            raise RateLimitError(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 500:
+            raise InternalServerError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 502:
+            raise BadGatewayError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 503:
+            raise ServiceUnavailableError(
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case 504:
+            raise Timeout(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                litellm_debug_info=extra_information,
+                exception_status_code=status_code,
+            )
+        case _ if status_code < 500:
+            raise BadRequestError(
+                message=message,
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=response,
+                litellm_debug_info=extra_information,
+            )
+        case _:
+            raise APIError(
+                status_code=status_code,
+                message=message,
+                llm_provider=custom_llm_provider,
+                model=model,
+                request=original_exception.request if hasattr(original_exception, "request") else None,
+                litellm_debug_info=extra_information,
+            )
+
+
 def exception_type(
     model,
     original_exception,
@@ -2213,6 +2341,7 @@ def exception_type(
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
     try:
         error_str = redact_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
+        extra_information = ""
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
@@ -2229,7 +2358,6 @@ def exception_type(
             # Common Extra information needed for all providers
             # We pass num retries, api_base, vertex_deployment etc to the exception here
             ################################################################################
-            extra_information = ""
             try:
                 _api_base: Final = litellm.get_api_base(model=model, optional_params=extra_kwargs)
                 messages: Final = litellm.get_first_chars_messages(kwargs=completion_kwargs)
@@ -2501,6 +2629,14 @@ def exception_type(
             For unmapped exceptions - raise the exception with traceback - https://github.com/BerriAI/litellm/issues/4201
             """
             exception_mapping_worked = True
+            _map_exception_by_status(
+                model=model,
+                original_exception=mappable_exception,
+                custom_llm_provider=custom_llm_provider,
+                error_str=error_str,
+                exception_provider=exception_provider,
+                extra_information=extra_information,
+            )
             if hasattr(original_exception, "request"):
                 raise APIConnectionError(
                     message=f"{exception_provider} - {error_str}",

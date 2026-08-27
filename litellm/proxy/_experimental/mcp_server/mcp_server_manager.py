@@ -523,7 +523,7 @@ def _oauth_endpoints_unresolved(server: MCPServer) -> bool:
         # can come from resource discovery, so a server that resolved its endpoints but no scopes is
         # still unresolved for its flow.
         return True
-    if server.is_dcr_bridge and not server.client_id and server.registration_url is None:
+    if server.is_dcr_bridge and not server.client_id and server.effective_registration_url is None:
         # A DCR bridge with no admin-configured client can only register callers through the
         # upstream's registration endpoint, so a build that resolved the authorize and token
         # endpoints but not registration_endpoint (partial metadata) is still unresolved for its
@@ -535,8 +535,8 @@ def _oauth_endpoints_unresolved(server: MCPServer) -> bool:
     return _flow_endpoints_missing(
         server.auth_type,
         MCPServerManager.effective_oauth2_flow(server),
-        server.authorization_url,
-        server.token_url,
+        server.effective_authorization_url,
+        server.effective_token_url,
         server.token_exchange_endpoint,
     )
 
@@ -5256,7 +5256,9 @@ class MCPServerManager:
             proxy_logging_obj: Optional ProxyLogging object for hook integration
             host_progress_callback: Optional callback for progress updates
             hook_extra_headers: Optional headers injected by pre_mcp_call guardrail
-                hooks. Merged last (highest priority) into outbound request headers.
+                hooks. Merged last into outbound request headers, except a hook
+                Authorization header is dropped when an upstream credential already
+                occupies the Authorization slot.
 
         Returns:
             CallToolResult from the MCP server
@@ -5347,27 +5349,26 @@ class MCPServerManager:
         if hook_extra_headers:
             if extra_headers is None:
                 extra_headers = {}
-            if "Authorization" in hook_extra_headers:
-                if "Authorization" in extra_headers:
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
-                        "the existing Authorization header from static_headers. "
-                        "The hook JWT will take precedence."
-                    )
-                elif server_auth_header is not None:
-                    # server_auth_header is passed separately to _create_mcp_client as
-                    # auth_value.  Both will reach the upstream server — warn so admins
-                    # know two Authorization credentials are being sent.
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers injects 'Authorization' while "
-                        "server '%s' already has a configured authentication_token. "
-                        "Both credentials will be sent; the hook header is in extra_headers "
-                        "and the server token is in auth_value — the upstream server decides "
-                        "which one wins.  Consider unsetting authentication_token if you want "
-                        "the hook JWT to be the sole credential.",
-                        mcp_server.server_name or mcp_server.name,
-                    )
-            extra_headers.update(hook_extra_headers)
+            hook_has_authorization: Final = any(k.lower() == "authorization" for k in hook_extra_headers)
+            existing_has_authorization: Final = any(k.lower() == "authorization" for k in extra_headers)
+            server_auth_occupies_authorization: Final = (
+                any(k.lower() == "authorization" for k in server_auth_header)
+                if isinstance(server_auth_header, dict)
+                else server_auth_header is not None and mcp_server.auth_type != MCPAuth.api_key
+            )
+            if hook_has_authorization and (existing_has_authorization or server_auth_occupies_authorization):
+                # Mirror the tools/list signer guard: an upstream credential (user OAuth,
+                # static header, or configured authentication_token) already occupies the
+                # Authorization slot, so the hook must not replace it.
+                verbose_logger.warning(
+                    "MCPServerManager: dropping hook-injected 'Authorization' header for "
+                    "server '%s' because an upstream credential already occupies the "
+                    "Authorization slot; the existing credential is kept.",
+                    mcp_server.server_name or mcp_server.name,
+                )
+                extra_headers.update({k: v for k, v in hook_extra_headers.items() if k.lower() != "authorization"})
+            else:
+                extra_headers.update(hook_extra_headers)
 
         # Reset to None if no headers were actually added
         if extra_headers is not None and len(extra_headers) == 0:
@@ -6204,14 +6205,6 @@ class MCPServerManager:
                     return None
                 return server
         return None
-
-    async def get_resolved_mcp_server_by_name(
-        self,
-        server_name: str,
-        client_ip: str | None = None,
-    ) -> MCPServer | None:
-        server: Final = self.get_mcp_server_by_name(server_name, client_ip=client_ip)
-        return await self.ensure_oauth_metadata_discovered(server) if server is not None else None
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """

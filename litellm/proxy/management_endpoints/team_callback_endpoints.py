@@ -262,6 +262,7 @@ async def add_team_callbacks(
         - langfuse_secret_key: The secret key for the Langfuse callback
         - langfuse_secret: The secret for the Langfuse callback
         - langfuse_host: The host for the Langfuse callback
+        - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback
@@ -351,6 +352,9 @@ async def add_team_callbacks(
             # team_model_add for the full rationale.
             include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
         )
+
+        if new_team_row is None:
+            raise _callback_error(400, f"Team id = {team_id} does not exist. Please use a different team id.")
 
         # Without this a newly registered callback stays dormant for existing keys.
         await _refresh_cached_team(

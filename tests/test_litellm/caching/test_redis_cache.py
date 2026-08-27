@@ -17,6 +17,31 @@ def redis_no_ping():
         yield
 
 
+@pytest.mark.parametrize(
+    ("namespace", "key", "expected"),
+    [
+        ("litellm", "litellm_spend_update_buffer", "litellm:litellm_spend_update_buffer"),
+        ("litellm", "litellm_config:param:general_settings", "litellm:litellm_config:param:general_settings"),
+        ("litellm", "litellm:3997c4abcdef", "litellm:3997c4abcdef"),
+        ("litellm", "spend:key:3997c4abcdef", "litellm:spend:key:3997c4abcdef"),
+        (None, "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
+        ("", "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
+    ],
+)
+def test_check_and_fix_namespace_prefixes_keys_sharing_the_namespace_prefix(
+    namespace, key, expected, monkeypatch, redis_no_ping
+):
+    """A key whose name merely begins with the namespace string (e.g.
+    litellm_spend_update_buffer under namespace "litellm") is not namespaced
+    yet and must still get the "namespace:" prefix; only a key already carrying
+    the delimited prefix is left alone. Without this, spend update buffers and
+    litellm_config:param:* keys reach Redis unprefixed and NOPERM under an ACL
+    scoped to the namespace pattern."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    assert redis_cache.check_and_fix_namespace(key=key) == expected
+
+
 @pytest.mark.parametrize("namespace", [None, "litellm"])
 @pytest.mark.asyncio
 async def test_async_delete_cache_applies_namespace(

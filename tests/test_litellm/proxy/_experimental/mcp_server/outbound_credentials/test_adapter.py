@@ -579,3 +579,22 @@ def test_id_jag_honors_explicit_subject_token_type():
 def test_id_jag_half_configured_defers_to_v1(server):
     # A half-configured server must defer (None) rather than 500 at IdJagConfig construction.
     assert to_server_spec(server) is None
+
+
+def test_client_credentials_uses_admin_entered_token_url_when_issuer_yield_empties_resolved():
+    """A pinned issuer empties the resolved token_url while configured_token_url keeps the
+    admin-entered value; the M2M spec must carry it so egress can mint."""
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url=None,
+            configured_token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.token_url == "https://idp.example.com/token"

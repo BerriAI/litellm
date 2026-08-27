@@ -15,11 +15,16 @@ import litellm
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
+)
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     FallbackAwareAnthropicMessagesStream,
     _anthropic_stream_commits_now,
     _anthropic_stream_should_decline_fallback,
+    _anthropic_stream_error_is_gateway_verdict,
+    _anthropic_stream_forwards_ping_live,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
 )
@@ -8760,11 +8765,14 @@ def test_get_router_model_info_keeps_explicit_pricing_overrides():
     assert litellm.get_model_info(model="anthropic/claude-sonnet-4-5")["input_cost_per_token"] != 1e-08
 
 
-class TestAutoRoutedRequestMarker:
-    """The proxy exposes the routed model group in the response body only when an
-    auto-routing strategy actually picked it. The marker is what separates that from
-    ordinary model-group routing, so it must clear on any re-entry (fallbacks reuse the
-    same request_kwargs) that routes plainly."""
+class TestModelGroupAliasReachesPreRoutingStrategies:
+    """A `model_group_alias` whose target is a strategy router must dispatch exactly like the
+    router's own model_name. The four strategy registries are keyed by the marker deployment's
+    model_name, so the alias has to be resolved before the pre-routing hook looks anything up,
+    and a group that resolves only to markers is not callable at all (LIT-4664)."""
+
+    MARKER_TIMEOUT = 42.0
+    REGISTRY_NAMES = ("auto_routers", "complexity_routers", "adaptive_routers", "quality_routers")
 
     class _RewriteStrategy:
         async def async_pre_routing_hook(
@@ -8774,80 +8782,97 @@ class TestAutoRoutedRequestMarker:
 
             return PreRoutingHookResponse(model="gemini-flash", messages=messages)
 
-    class _AbstainStrategy:
-        async def async_pre_routing_hook(
-            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
-        ):
-            return None
-
     @classmethod
-    def _router(cls, strategy) -> "litellm.Router":
+    def _router(cls, registry_name: str | None) -> "litellm.Router":
         from litellm.types.router import TaggedPreRoutingStrategy
 
+        tiers = dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), "gemini-flash")
         router = litellm.Router(
             model_list=[
-                {"model_name": "smart-route", "litellm_params": {"model": "openai/gpt-4o"}},
-                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+                {
+                    "model_name": "smart-route",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {"tiers": tiers},
+                        "complexity_router_default_model": "gemini-flash",
+                        "timeout": cls.MARKER_TIMEOUT,
+                    },
+                },
+                {
+                    "model_name": "gemini-flash",
+                    "litellm_params": {"model": "gemini/gemini-3.6-flash", "mock_response": "routed by the tier"},
+                },
             ],
+            model_group_alias={"smart-alias": "smart-route"},
         )
-        router.auto_routers = {"smart-route": [TaggedPreRoutingStrategy(tags=(), strategy=strategy)]}
+        for name in cls.REGISTRY_NAMES:
+            setattr(router, name, {})
+        if registry_name is not None:
+            setattr(
+                router,
+                registry_name,
+                {"smart-route": [TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy())]},
+            )
         return router
 
-    @pytest.mark.asyncio
-    async def test_marks_the_request_when_an_auto_routing_strategy_picked_the_group(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+    @staticmethod
+    def _messages() -> list[dict[str, str]]:
+        return [{"role": "user", "content": "What is the capital of France?"}]
 
-        router = self._router(self._RewriteStrategy())
+    @pytest.mark.parametrize("registry_name", REGISTRY_NAMES)
+    @pytest.mark.asyncio
+    async def test_alias_dispatches_to_the_strategy_registered_under_the_target(self, registry_name):
+        router = self._router(registry_name)
         request_kwargs = {"metadata": {}}
 
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
+        response = await router.async_pre_routing_hook(
+            model="smart-alias", request_kwargs=request_kwargs, messages=self._messages()
+        )
 
-        assert request_kwargs["metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
-
-    @pytest.mark.asyncio
-    async def test_marks_into_litellm_metadata_when_the_request_uses_that_bucket(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        router = self._router(self._RewriteStrategy())
-        request_kwargs = {"litellm_metadata": {}}
-
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
-
-        assert request_kwargs["litellm_metadata"][AUTO_ROUTED_REQUEST_METADATA_KEY] is True
+        assert response is not None
+        assert response.model == "gemini-flash"
 
     @pytest.mark.asyncio
-    async def test_no_marker_when_the_group_has_no_auto_routing_strategy(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        router = self._router(self._RewriteStrategy())
+    async def test_alias_call_still_forwards_the_marker_own_params_to_the_routed_tier(self):
+        router = self._router("auto_routers")
         request_kwargs = {"metadata": {}}
 
-        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+        await router.async_pre_routing_hook(
+            model="smart-alias", request_kwargs=request_kwargs, messages=self._messages()
+        )
 
-        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
-
-    @pytest.mark.asyncio
-    async def test_no_marker_when_the_strategy_declined_to_route(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
-
-        router = self._router(self._AbstainStrategy())
-        request_kwargs = {"metadata": {}}
-
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
-
-        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+        assert request_kwargs["timeout"] == self.MARKER_TIMEOUT
 
     @pytest.mark.asyncio
-    async def test_fallback_reentry_with_a_plain_group_clears_the_stale_marker(self):
-        from litellm.constants import AUTO_ROUTED_REQUEST_METADATA_KEY
+    async def test_alias_deployment_selection_lands_on_the_tier_never_the_marker(self):
+        router = self._router("auto_routers")
 
-        router = self._router(self._RewriteStrategy())
-        request_kwargs = {"metadata": {}}
+        deployment = await router.async_get_available_deployment(
+            model="smart-alias", request_kwargs={"metadata": {}}, messages=self._messages()
+        )
 
-        await router.async_pre_routing_hook(model="smart-route", request_kwargs=request_kwargs)
-        await router.async_pre_routing_hook(model="gemini-flash", request_kwargs=request_kwargs)
+        assert deployment["litellm_params"]["model"] == "gemini/gemini-3.6-flash"
 
-        assert AUTO_ROUTED_REQUEST_METADATA_KEY not in request_kwargs["metadata"]
+    @pytest.mark.asyncio
+    async def test_alias_call_completes_and_still_bills_the_name_the_caller_sent(self):
+        router = self._router("auto_routers")
+        metadata: dict = {}
+
+        response = await router.acompletion(
+            model="smart-alias", messages=self._messages(), metadata=metadata
+        )
+
+        assert response.choices[0].message.content == "routed by the tier"
+        assert metadata["model_group"] == "smart-alias"
+        assert metadata["model_group_alias"] == "smart-alias"
+
+    def test_a_group_of_only_markers_is_not_a_callable_model(self):
+        router = self._router(None)
+
+        with pytest.raises(litellm.BadRequestError, match="strategy router marker"):
+            router.get_available_deployment(
+                model="smart-route", messages=self._messages(), request_kwargs={"metadata": {}}
+            )
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -9469,21 +9494,103 @@ async def test_anthropic_messages_content_coalesced_with_error_in_one_physical_c
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_ping_keepalive_never_buffered_or_forwarded():
-    """Bugbot regression: a `ping` keepalive carries no content and must be
-    dropped outright before any real content arrives, rather than buffered -
+async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_dropped():
+    """Bugbot regression: a `ping` keepalive behind buffered lifecycle frames
+    carries no content and is dropped outright rather than buffered -
     otherwise a slow-starting connection sending many pings could grow the
     pre-content buffer without bound."""
     router = _anthropic_messages_make_router()
     source = _AnthropicMessagesFakeByteStream(
-        [_anthropic_messages_ping_chunk(), _anthropic_messages_content_chunk("hi")]
+        [
+            _anthropic_messages_message_start_chunk(),
+            _anthropic_messages_ping_chunk(),
+            _anthropic_messages_content_chunk("hi"),
+        ]
     )
 
     wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
     collected = [chunk async for chunk in wrapped]
 
-    assert _anthropic_messages_ping_chunk() not in collected
-    assert collected == [_anthropic_messages_content_chunk("hi")]
+    assert collected == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_leading_ping_keepalive_is_forwarded_live():
+    """A `ping` that no lifecycle frame precedes is how a hold-back turn keeps
+    its connection alive (AgenticAnthropicStreamingIterator), so it must reach
+    the client at once rather than wait behind the pre-content buffer."""
+    router = _anthropic_messages_make_router()
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_ping_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_message_start_chunk()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_ping_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [
+        _anthropic_messages_message_start_chunk(),
+        _anthropic_messages_content_chunk("hi"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_leading_ping_does_not_disqualify_fallback():
+    """A live-forwarded leading `ping` commits nothing: a retriable error after
+    it still falls back, and the fallback's own lifecycle follows the ping cleanly."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_ping_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    )
+    fallback_message_start = b'event: message_start\ndata: {"type": "message_start", "message": {"id": "msg_2"}}\n\n'
+    fallback_stream = _AnthropicMessagesFallbackByteStream(
+        [fallback_message_start, _anthropic_messages_content_chunk("fallback answer")]
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == [
+        _anthropic_messages_ping_chunk(),
+        fallback_message_start,
+        _anthropic_messages_content_chunk("fallback answer"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_hold_back_retrieval_failure_reaches_client_without_fallback():
+    """The hold-back iterator's own retrieval-failure frame is the gateway's verdict, not a
+    provider failure: a configured fallback stays untouched and the client reads the error
+    right after the live keepalive."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_ping_chunk(), SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+    )
+    fallback = AsyncMock(
+        return_value=_AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
+    )
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils", new=fallback):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    fallback.assert_not_called()
+    assert collected == [_anthropic_messages_ping_chunk(), SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
 
 
 @pytest.mark.asyncio
@@ -9813,6 +9920,36 @@ def test_anthropic_stream_should_drop_pre_content_ping_direct_call():
     assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=False) is True
     assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=True) is False
     assert _anthropic_stream_should_drop_pre_content_ping(content, has_generated_content=False) is False
+
+
+def test_anthropic_stream_forwards_ping_live_direct_call():
+    ping = _anthropic_messages_ping_chunk()
+    content = _anthropic_messages_content_chunk("hi")
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=0) is True
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=1) is False
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True, buffered_chunk_count=0) is False
+    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False, buffered_chunk_count=0) is False
+
+
+def test_anthropic_stream_error_is_gateway_verdict_direct_call():
+    assert _anthropic_stream_error_is_gateway_verdict(SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES) is True
+    assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_overloaded_error_chunk()) is False
+    assert _anthropic_stream_error_is_gateway_verdict(_anthropic_messages_ping_chunk()) is False
+
+
+def test_fallback_aware_stream_reports_withheld_output_of_its_current_source():
+    """The proxy's cancel-refund guard reads this flag off the router wrapper, so it
+    must reflect the stream actually being drained: the primary, then the fallback."""
+
+    class _HoldingBack:
+        _hidden_params = {"additional_headers": {}}
+        has_buffered_provider_output = True
+
+    wrapper = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), _HoldingBack())
+    assert wrapper.has_buffered_provider_output is True
+
+    wrapper.adopt_fallback_source(_AnthropicMessagesFakeByteStream([]))
+    assert wrapper.has_buffered_provider_output is False
 
 
 def test_is_retriable_anthropic_status_direct_call():
@@ -10490,3 +10627,45 @@ async def test_async_function_with_fallbacks_scrubs_spoofed_values_from_sibling_
     assert litellm_metadata["client_key"] == "client_value"
     assert metadata["attempted_fallbacks"] == 0
     assert metadata["original_model_group"] == "gpt-3.5-turbo"
+
+
+def _permission_denied_error() -> litellm.PermissionDeniedError:
+    return litellm.PermissionDeniedError(
+        message="OpenrouterException - this key has no access to the model",
+        llm_provider="openrouter",
+        model="openrouter/openai/gpt-4o",
+        response=httpx.Response(status_code=403, request=httpx.Request(method="POST", url="https://openrouter.ai")),
+    )
+
+
+def test_permission_denied_error_is_not_retried_against_a_single_deployment():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-test"}},
+        ]
+    )
+
+    with pytest.raises(litellm.PermissionDeniedError):
+        router.should_retry_this_error(
+            error=_permission_denied_error(),
+            healthy_deployments=router.model_list,
+            all_deployments=router.model_list,
+        )
+
+
+def test_permission_denied_error_is_retried_when_other_deployments_exist():
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openrouter/openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+        ]
+    )
+
+    assert (
+        router.should_retry_this_error(
+            error=_permission_denied_error(),
+            healthy_deployments=router.model_list,
+            all_deployments=router.model_list,
+        )
+        is True
+    )

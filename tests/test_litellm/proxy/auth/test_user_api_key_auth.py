@@ -4973,6 +4973,143 @@ async def test_centralized_common_checks_ui_sentinel_team_vouches_despite_absent
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_ui_sentinel_team_skips_db_lookup():
+    """LIT-6297 / GH#28775: ``UI_TEAM_ID`` never has a team row and the
+    not-found path bypasses the DB throttle, so building the team fetch for it
+    cost one guaranteed-miss ``LiteLLM_TeamTable.find_unique`` plus a 404 debug
+    log on every dashboard request. The gate must not call ``get_team_object``
+    for the sentinel at all, while the token-derived team object still reaches
+    ``common_checks``."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTableCachedObj
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="ui-session-user",
+        team_id=UI_TEAM_ID,
+        models=[],
+        team_models=[],
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/user/info")
+    request._body = b"{}"
+
+    received_team_objects: list[LiteLLM_TeamTableCachedObj | None] = []
+
+    async def _capturing_common_checks(*_args, **kwargs) -> bool:
+        received_team_objects.append(kwargs.get("team_object"))
+        return True
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: the regression IS that this DB lookup is never made for the sentinel
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+            ) as mock_get_team_object,
+            patch(  # test-quality-ok: capture the team_object the consumer receives without a DB
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                _capturing_common_checks,
+            ),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/user/info",
+            )
+        mock_get_team_object.assert_not_awaited()
+        assert len(received_team_objects) == 1
+        received_team_object = received_team_objects[0]
+        assert received_team_object is not None
+        assert received_team_object.team_id == UI_TEAM_ID
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_builder_ui_sentinel_team_never_hits_get_team_object():  # test-quality-ok: absence of the guaranteed-miss DB call is the observable being pinned
+    """Companion to the centralized-gate test for the builder path: the cached
+    UI session token's team refresh and the post-validation team fetch must
+    both skip ``get_team_object`` for ``UI_TEAM_ID`` instead of 404ing on
+    every request."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import UI_TEAM_ID
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key = "sk-test-ui-session-key"
+    cached_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hash_token(api_key),
+        user_id="ui-session-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id=UI_TEAM_ID,
+    )
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": DualCache(),
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/user/info")
+
+        with (
+            patch(  # test-quality-ok: seed the cached UI session token without a DB
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new_callable=AsyncMock,
+                return_value=cached_token,
+            ),
+            patch(  # test-quality-ok: the regression IS that this DB lookup is never made for the sentinel
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+            ) as mock_get_team_object,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+        assert result.team_id == UI_TEAM_ID
+        mock_get_team_object.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_user_http_exception_isolates_to_user_only():
     """Per-fetch isolation, mirror of the team case: an HTTPException
     from get_user_object must zero only ``user_object``. The successfully
