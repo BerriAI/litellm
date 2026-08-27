@@ -1586,6 +1586,42 @@ def test_generic_cost_per_token_overlapping_cached_and_image_tokens():
     assert completion_cost == pytest.approx(10 * 2e-6)
 
 
+def test_generic_cost_per_token_warm_prefix_cache_spanning_text_and_image_tokens():
+    """xAI reports text_tokens + image_tokens = prompt_tokens with cached_tokens overlapping
+    both, so a warm prefix cache covering the whole image exceeds the text-only count.
+    Observed live on grok-4.6 (issue #37281): the image tokens were billed a second time at
+    the full input rate on top of the cache-read bucket, 0.003500 in vs the provider's own
+    0.001274 bill."""
+    model = "litellm-test-warm-prefix-cache-overlap"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 2e-6,
+                "cache_read_input_token_cost": 5e-7,
+                "output_cost_per_token": 6e-6,
+            }
+        }
+    )
+    usage = Usage(
+        prompt_tokens=2461,
+        completion_tokens=440,
+        total_tokens=2901,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=1319, cached_tokens=2432, image_tokens=1142
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model, usage=usage, custom_llm_provider="openai"
+    )
+
+    # 2432 cached at the cache-read rate, the 29 uncached tokens once at the input rate
+    assert prompt_cost == pytest.approx(2432 * 5e-7 + 29 * 2e-6)
+    assert completion_cost == pytest.approx(440 * 6e-6)
+
+
 def test_calculate_cost_component_with_string_values():
     """Test the calculate_cost_component function directly with string cost values."""
     from litellm.litellm_core_utils.llm_cost_calc.utils import calculate_cost_component
