@@ -2530,6 +2530,8 @@ class MCPRequestHandler:
             servers: Final = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
             return list(servers)
         except Exception as e:
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning("Failed to get allowed MCP servers for team: %s", e)
             return []
 

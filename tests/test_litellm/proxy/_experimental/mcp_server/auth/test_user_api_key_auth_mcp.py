@@ -518,11 +518,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["search_channels", "read_thread"]})
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None),
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
                 MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
             ),
-            patch(
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -550,11 +552,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["search_channels"]})
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None),
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
                 MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
             ),
-            patch(
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -574,11 +578,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["search_channels"], "server-b": ["get_doc"]})
 
         with (
-            patch(
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
         ):
             servers = await MCPRequestHandler._team_granted_servers(team_obj, [])
 
@@ -597,19 +603,27 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["search_channels"]})
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.auth.auth_checks.get_team_object", AsyncMock(return_value=team_obj)),
-            patch(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch(  # test-quality-ok: team-server resolution requires the proxy's module-global prisma client
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                "litellm.proxy.auth.auth_checks.get_team_object", AsyncMock(return_value=team_obj)
+            ),
+            patch(  # test-quality-ok: access-group lookup hits the DB, not under test here
                 "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
                 AsyncMock(return_value=[]),
             ),
-            patch(
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
-            patch.object(MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])),
-            patch.object(
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler,
                 "_get_allowed_mcp_servers_for_org",
                 AsyncMock(return_value=["server-a", "server-x"]),
@@ -627,18 +641,66 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({})
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission),
-            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])),
-            patch.object(MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
-            patch(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+            ),
+            patch.object(  # test-quality-ok: team resolution has its own tests; pin it empty here
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler,
                 "_get_allowed_mcp_servers_for_org",
                 AsyncMock(return_value=["server-x", "server-y"]),
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+
+    async def test_team_dangling_toolset_denies_key_own_grants(self):
+        """A team toolset that cannot be resolved must deny on the SERVER axis too,
+        not silently drop the team ceiling and pass the key's own grants through"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-1")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_toolsets = None
+        key_object_permission.mcp_servers = ["server-key-own"]
+        team_obj = MagicMock()
+        team_obj.blocked = False
+        team_obj.object_permission = self._toolset_only_object_permission(["toolset-gone"])
+        team_obj.access_group_ids = []
+        team_obj.organization_id = None
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+            ),
+            patch(  # test-quality-ok: team-server resolution requires the proxy's module-global prisma client
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                "litellm.proxy.auth.auth_checks.get_team_object", AsyncMock(return_value=team_obj)
+            ),
+            patch(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                AsyncMock(return_value=[]),
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])
             ),
         ):
             result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
@@ -653,12 +715,16 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["read_tool_1", "read_tool_2"]})
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None),
-            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)),
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_object_permission)
             ),
-            patch(
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -682,11 +748,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["search_channels"]})
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_object_permission)
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
-            patch(
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -704,10 +772,10 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["tool_1", "tool_2"]})
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=user_object_permission)
             ),
-            patch(
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -732,11 +800,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({"server-a": ["tool_1"]})
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=user_object_permission)
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
-            patch(
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -758,11 +828,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({})
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None),
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
                 MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
             ),
-            patch(
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -781,11 +853,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({})
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_object_permission)
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
-            patch(
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -801,11 +875,13 @@ class TestMCPRequestHandler:
         mock_manager = self._mock_manager_with_toolsets({})
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=user_object_permission)
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
-            patch(
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
@@ -823,8 +899,10 @@ class TestMCPRequestHandler:
         key_object_permission = self._toolset_only_object_permission(["toolset-1"])
 
         with (
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch(
+            patch(  # test-quality-ok: team-server resolution requires the proxy's module-global prisma client
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
                 "litellm.proxy.auth.auth_checks.get_object_permission",
                 AsyncMock(return_value=key_object_permission),
             ),
@@ -839,8 +917,10 @@ class TestMCPRequestHandler:
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", team_id="team-gone")
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None),
-            patch.object(
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
                 MCPRequestHandler,
                 "_get_team_object_permission",
                 AsyncMock(side_effect=Exception("team lookup blew up")),
@@ -854,8 +934,12 @@ class TestMCPRequestHandler:
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key")
 
         with (
-            patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None),
-            patch.object(MCPRequestHandler, "_get_team_object_permission", AsyncMock()) as team_lookup,
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock()
+            ) as team_lookup,
         ):
             declares = await MCPRequestHandler._key_or_team_declares_toolsets(user_api_key_auth)
 
@@ -6494,9 +6578,9 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling challenge tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
             ) as mock_mgr,
-            patch(
+            patch(  # test-quality-ok: envelope keys derive from the proxy master_key module global
                 "litellm.proxy.proxy_server.master_key", self._MASTER_KEY
-            ),  # test-quality-ok: envelope keys derive from the proxy master_key module global
+            ),
         ):
             mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server(
                 server_name="bridge_name", alias="bridge_alias"
