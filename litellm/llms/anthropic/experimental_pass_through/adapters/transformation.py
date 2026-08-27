@@ -584,11 +584,19 @@ class LiteLLMAnthropicMessagesAdapter:
                 else:
                     assistant_content = assistant_message_str
 
+                reasoning_content = None
+                for tb in thinking_blocks:
+                    if tb.get("type") == "thinking":
+                        reasoning_content = tb.get("thinking", "")
+                        break
+
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_content,
                     thinking_blocks=(thinking_blocks if len(thinking_blocks) > 0 else None),
                 )
+                if reasoning_content is not None:
+                    assistant_message["reasoning_content"] = reasoning_content
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls
                 if len(thinking_blocks) > 0:
@@ -1246,7 +1254,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             ).model_dump()
                         )
             # Handle reasoning_content when thinking_blocks is not present
-            elif hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content:
+            elif hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content is not None:
                 new_content.append(
                     AnthropicResponseContentBlockThinking(
                         type="thinking",

@@ -3997,3 +3997,111 @@ def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_ca
     assert result == [
         {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
     ]
+
+
+def test_translate_anthropic_to_openai_thinking_sets_reasoning_content():
+    """Regression for #37270: Anthropic thinking blocks must populate reasoning_content
+    on the OpenAI assistant message so providers like Fireworks/DeepSeek can round-trip them."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    request = {
+        "model": "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "  preserve me  ", "signature": ""},
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "lookup",
+                        "input": {"q": "x"},
+                    },
+                ],
+            }
+        ],
+    }
+    translated, _ = adapter.translate_anthropic_to_openai(request)
+    assistant = translated["messages"][0]
+    assert assistant["reasoning_content"] == "  preserve me  "
+    assert assistant.get("thinking_blocks") is not None
+    assert len(assistant["thinking_blocks"]) == 1
+
+
+def test_translate_anthropic_to_openai_redacted_thinking_no_reasoning_content():
+    """Redacted thinking blocks alone should not set reasoning_content."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    request = {
+        "model": "test",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "encrypted"},
+                    {"type": "text", "text": "hello"},
+                ],
+            }
+        ],
+    }
+    translated, _ = adapter.translate_anthropic_to_openai(request)
+    assistant = translated["messages"][0]
+    assert assistant.get("reasoning_content") is None
+
+
+def test_translate_openai_to_anthropic_empty_reasoning_content_with_tool_calls():
+    """Regression for #37270: an explicitly present reasoning_content="" on an assistant
+    tool-call response must produce a thinking block, not be dropped by truthiness check."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    response = ModelResponse(
+        id="chatcmpl-test",
+        model="test",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": '{"q":"x"}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    blocks = adapter._translate_openai_content_to_anthropic(response.choices)
+    thinking = [b for b in blocks if b.get("type") == "thinking"]
+    assert len(thinking) == 1
+    assert thinking[0]["thinking"] == ""
+    assert thinking[0]["signature"] is None
+
+
+def test_translate_openai_to_anthropic_none_reasoning_content_no_thinking():
+    """When reasoning_content is absent (None), no thinking block should appear."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    response = ModelResponse(
+        id="chatcmpl-test",
+        model="test",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                },
+            }
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    blocks = adapter._translate_openai_content_to_anthropic(response.choices)
+    thinking = [b for b in blocks if b.get("type") == "thinking"]
+    assert len(thinking) == 0
