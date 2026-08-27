@@ -68,6 +68,18 @@ class _PresidioAnonymizeResponse(TypedDict):
     items: ReadOnly[NotRequired[list[_PresidioAnonymizeItem]]]
 
 
+_LoopSemaphores = dict[asyncio.AbstractEventLoop, asyncio.Semaphore]
+
+
+def _json_escaped_len(text: str) -> int:
+    """
+    Byte length of ``text`` as it appears serialized inside the JSON request
+    body sent to Presidio (``json.dumps`` escapes non-ASCII characters, so a
+    3-byte UTF-8 character can occupy 6+ bytes on the wire).
+    """
+    return len(json.dumps(text).encode("utf-8")) - 2  # strip the surrounding quotes
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
@@ -140,6 +152,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # Loop-bound session cache for background threads
         self._loop_sessions: dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
+
+        # Per-loop semaphores bounding chunked-analyze fan-out across ALL
+        # concurrent oversized blocks/requests on this instance, not per call
+        self._loop_chunk_semaphores: _LoopSemaphores = {}  # mutable-ok: per-loop semaphore cache
 
         if mock_testing is True:  # for testing purposes only
             return
@@ -302,7 +318,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             text
             and len(text) > 1
             and self.mock_redacted_text is None
-            and len(text.encode("utf-8")) > self.presidio_analyze_chunk_size_bytes
+            and _json_escaped_len(text) > self.presidio_analyze_chunk_size_bytes
         ):
             return await self._analyze_text_chunked(
                 text=text,
@@ -434,9 +450,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Analyze an oversized text by splitting it into overlapping chunks.
 
-        Each chunk is at most ``presidio_analyze_chunk_size_bytes`` UTF-8 bytes,
-        so every /analyze call stays below the analyzer deployment's request
-        body limit; per-chunk results are remapped onto the original text and
+        Each chunk serializes to at most ``presidio_analyze_chunk_size_bytes``
+        bytes inside the JSON request body, so every /analyze call stays below
+        the analyzer deployment's request body limit; per-chunk results are remapped onto the original text and
         merged. Raises exactly like a single ``analyze_text`` call if any chunk
         fails.
 
@@ -454,9 +470,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.presidio_analyze_chunk_size_bytes,
             len(text_chunks),
         )
-        # Bound the fan-out so a single oversized request cannot saturate the
-        # analyzer; excess chunks wait here instead of piling onto the pool.
-        analyze_semaphore: Final = asyncio.Semaphore(PRESIDIO_ANALYZE_CHUNK_CONCURRENCY)
+        # Bound the fan-out so oversized requests cannot saturate the analyzer.
+        # The semaphore is shared per event loop across every chunked call on
+        # this instance, so many oversized blocks in one request (or many
+        # concurrent requests) still hold at most this many analyzer calls in
+        # flight. On the proxy's main thread the shared-session lock in
+        # _get_session_iterator additionally serializes the HTTP calls; the
+        # bound matters for loop-bound sessions (background threads).
+        analyze_semaphore: Final = self._get_chunk_semaphore()
 
         async def _analyze_chunk_bounded(
             chunk_text: str,
@@ -479,8 +500,26 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # analyze_text only returns a non-list shape when mock_redacted_text
             # is set, and the chunked path is never entered in that case.
             typed_result = cast("list[PresidioAnalyzeResponseItem]", result)  # cast-ok: gather() erases element type
-            chunk_results.append(typed_result)
+            # Apply the configured score thresholds and deny list BEFORE the
+            # overlap merge: a below-threshold detection must not win overlap
+            # resolution against one the thresholds would keep. The same filter
+            # runs again downstream in check_pii, where it is a no-op for the
+            # already-filtered items.
+            filtered_result = self.filter_analyze_results_by_score(analyze_results=typed_result)
+            chunk_results.append(
+                cast("list[PresidioAnalyzeResponseItem]", filtered_result)  # cast-ok: list input yields list
+            )
         return self._merge_chunked_analyze_results(text_chunks=text_chunks, chunk_results=chunk_results)
+
+    def _get_chunk_semaphore(self) -> asyncio.Semaphore:
+        """Per-event-loop semaphore shared by all chunked analyze calls on this instance."""
+        loop: Final = asyncio.get_running_loop()
+        existing: Final = self._loop_chunk_semaphores.get(loop)
+        if existing is not None:
+            return existing
+        created: Final = asyncio.Semaphore(PRESIDIO_ANALYZE_CHUNK_CONCURRENCY)
+        self._loop_chunk_semaphores[loop] = created
+        return created
 
     @staticmethod
     def _coerce_analyze_chunk_size(value: int | None) -> int:
@@ -489,9 +528,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         Non-positive values would either bypass chunking entirely or degenerate
         it into per-character splits (silently disabling detection), so they are
-        replaced by the default; values below 4 bytes (the widest UTF-8
-        character) are floored to 4 so a single character always fits in a
-        chunk and the chunked path can never re-enter itself.
+        replaced by the default; values below 4 bytes are floored to 4 and the
+        splitter always emits at least one character per chunk, so the chunked
+        path can never re-enter itself.
         """
         if not value or value <= 0:
             return DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
@@ -504,7 +543,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         overlap_chars: int,
     ) -> Sequence[tuple[int, str]]:
         """
-        Split ``text`` into chunks of at most ``chunk_size_bytes`` UTF-8 bytes.
+        Split ``text`` into chunks whose JSON-serialized form is at most
+        ``chunk_size_bytes`` bytes (the analyzer body limit applies to the
+        JSON request body, where non-ASCII characters are escaped and larger
+        than their raw UTF-8 encoding).
 
         Consecutive chunks overlap by up to ``overlap_chars`` characters so a
         PII entity up to that length lying across a chunk boundary is still
@@ -518,15 +560,23 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         text_len: Final = len(text)
         start = 0  # rebind-ok: chunk cursor advances across the loop
         while start < text_len:
-            # Byte-truncate a char-count-bounded slice, then drop the at most
-            # one trailing character the truncation split, so every chunk ends
-            # on a character boundary and holds at most chunk_size_bytes.
+            # Serialized length of a character is at least 1 byte, so a slice
+            # of chunk_size_bytes characters is a sufficient search window.
             candidate = text[start : start + chunk_size_bytes]
-            chunk = candidate.encode("utf-8")[:chunk_size_bytes].decode("utf-8", errors="ignore")
-            if not chunk:
-                # chunk_size_bytes is below one character's UTF-8 width; emit a
-                # single character rather than an empty chunk.
-                chunk = candidate[:1]
+            if _json_escaped_len(candidate) <= chunk_size_bytes:
+                chunk = candidate
+            else:
+                # Largest prefix whose serialized form fits the budget.
+                low, high = 1, len(candidate)
+                while low < high:
+                    mid = (low + high + 1) // 2
+                    if _json_escaped_len(candidate[:mid]) <= chunk_size_bytes:
+                        low = mid
+                    else:
+                        high = mid - 1
+                # low >= 1 keeps the loop advancing even when a single
+                # character serializes over a (floored, tiny) budget.
+                chunk = candidate[:low]
             end = start + len(chunk)
             chunks.append((start, chunk))
             if end >= text_len:
