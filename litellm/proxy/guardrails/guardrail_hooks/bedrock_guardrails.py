@@ -539,6 +539,38 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # on_unscannable_image policy decides rather than this helper.
         return value
 
+    @staticmethod
+    def _file_backed_image_count(structured_messages: object) -> int:
+        """Count image parts whose bytes live behind a provider Files API.
+
+        An Anthropic `{"type": "image", "source": {"type": "file", "file_id": ...}}`
+        block carries no data, so the guardrail translation yields nothing for it
+        while the provider still forwards the file to the model. Left alone that is
+        an image the policy never sees, which is the failure this whole path exists
+        to remove -- so it is counted here and refused rather than documented.
+
+        Detects that one shape rather than comparing counts against
+        `inputs["images"]`: structured_messages is already narrowed by the
+        skip/scope flags, so a mismatch is not by itself evidence of a dropped
+        image, and blocking a legitimate request is worse than the gap.
+        """
+        if not isinstance(structured_messages, list):
+            return 0
+        found = 0  # rebind-ok: running count over the message list
+        for message in structured_messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "image":
+                    continue
+                source = part.get("source")
+                if isinstance(source, dict) and source.get("type") == "file":
+                    found += 1
+        return found
+
     async def _build_image_content_item(
         self, image_url: str, budget: "_ImageFetchBudget | None" = None
     ) -> BedrockContentItem | None:
@@ -3404,6 +3436,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # from `image`/`source` blocks. Five other guardrails already consume this
         # field; Bedrock was the one that dropped it on the floor.
         image_urls: Final = tuple(inputs.get("images") or ()) if input_type == "request" else ()
+        if input_type == "request":
+            file_images: Final = self._file_backed_image_count(inputs.get("structured_messages"))
+            if file_images:
+                # Before the shortcuts below, so this cannot be skipped either.
+                self._handle_unscannable_image(
+                    reason=f"{file_images} image(s) reference a provider file id, whose bytes are not available here"
+                )
         try:
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Applying guardrail to %s text(s) and %s image(s)", len(texts), len(image_urls)
