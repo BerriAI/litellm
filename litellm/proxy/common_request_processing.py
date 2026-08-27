@@ -3018,7 +3018,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _flush_deferred_async_logging(
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: Any,
         exception_raised: bool,
     ) -> None:
         """
