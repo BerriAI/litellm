@@ -15,6 +15,22 @@
       "deployment_affinity": true
     }
   },
+  "gemini_family": {
+    "label": "Gemini Family",
+    "description": "Routes across the Gemini model family: Flash Lite 2.5 for simple queries, Flash Lite 3.1 for medium, Flash 3.7 for complex, Pro 3.1 for reasoning-heavy requests.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["gemini-2.5-flash-lite"],
+        "MEDIUM": ["gemini-3.1-flash-lite"],
+        "COMPLEX": ["gemini-3.7-flash"],
+        "REASONING": ["gemini-3.1-pro-preview"]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "session_affinity": false,
+      "deployment_affinity": true
+    }
+  },
   "lite": {
     "label": "Lite",
     "description": "Cost-optimized routing across providers: DeepSeek V4 Flash for simple queries, Muse Spark 1.2 for medium, Kimi K3 for complex, Claude Opus 5 for reasoning-heavy requests. An LLM classifier with the agentic rubric assigns tiers.",

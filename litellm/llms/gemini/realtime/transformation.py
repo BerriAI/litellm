@@ -4,6 +4,7 @@ This file contains the transformation logic for the Gemini realtime API.
 
 import json
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 import litellm
@@ -70,6 +71,28 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
+
+
+OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
+    {"alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"}
+)
+
+
+def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
+    """Build the Gemini Live speechConfig for a client-requested voice.
+
+    OpenAI stock voice names have no Gemini equivalent and Gemini Live closes
+    the session on an unknown voice, so they are dropped with a warning and
+    the model keeps its default voice. Every other name is forwarded verbatim.
+    """
+    if isinstance(voice, str) and voice.lower() in OPENAI_STOCK_REALTIME_VOICES:
+        verbose_logger.warning(
+            "Gemini Realtime: voice %s is an OpenAI voice with no Gemini equivalent; "
+            "dropping it so the session keeps the model's default voice.",
+            voice,
+        )
+        return None
+    return VertexGeminiConfig()._map_audio_params({"voice": voice})
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -282,12 +305,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         automaticActivityDetection=transformed_audio_activity_config
                     )
             elif key == "voice":
-                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                    VertexGeminiConfig,
-                )
-
-                vertex_gemini_config = VertexGeminiConfig()
-                speech_config = vertex_gemini_config._map_audio_params({"voice": value})
+                speech_config = _gemini_live_speech_config(value)
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
@@ -366,10 +384,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return bool(entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live"))
 
     @staticmethod
-    def _is_native_audio_model(model: str) -> bool:
-        return bool(GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio"))
-
-    @staticmethod
     def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:
         """Map unsupported TEXT responseModalities to AUDIO for audio-only Live models."""
         normalized: Final = [
@@ -384,7 +398,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     @staticmethod
     def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:
-        """Drop fields Gemini Live native-audio rejects on ``setup``."""
         generation_config: Final = setup.get("generationConfig")
         if isinstance(generation_config, dict):
             modalities: Final = generation_config.get("responseModalities")
@@ -392,8 +405,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
                     model, modalities
                 )
-            if GeminiRealtimeConfig._is_native_audio_model(model):
-                generation_config.pop("speechConfig", None)
         return setup
 
     def _handle_session_update(
