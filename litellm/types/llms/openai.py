@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, Union
+from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -820,9 +820,21 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
     reasoning_items: list[ChatCompletionReasoningItem] | None
 
 
+class ChatCompletionToolReferenceObject(TypedDict):
+    """Anthropic tool-search result block, carried through untouched so it survives a round trip."""
+
+    type: Literal["tool_reference"]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    tool_name: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+
+
+ToolMessageContentPart: TypeAlias = (
+    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionToolReferenceObject
+)
+
+
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: str | Iterable[ChatCompletionTextObject | ChatCompletionImageObject]
+    content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
 
 

@@ -1,8 +1,8 @@
 import copy
 import hashlib
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.utils import (
@@ -126,7 +126,9 @@ from litellm.types.llms.openai import (
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    ChatCompletionToolReferenceObject,
     ChatCompletionUserMessage,
+    ToolMessageContentPart,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
 
@@ -134,6 +136,8 @@ from .streaming_iterator import AnthropicStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
+
+ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
 
 
 class AnthropicAdapter:
@@ -412,90 +416,13 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
-                            if "content" not in content:
-                                tool_result = ChatCompletionToolMessage(
-                                    role="tool",
-                                    tool_call_id=content.get("tool_use_id", ""),
-                                    content="",
-                                )
-                                self._add_cache_control_if_applicable(content, tool_result, model)
-                                tool_message_list.append(tool_result)
-                            elif isinstance(content.get("content"), str):
-                                tool_result = ChatCompletionToolMessage(
-                                    role="tool",
-                                    tool_call_id=content.get("tool_use_id", ""),
-                                    content=str(content.get("content", "")),
-                                )
-                                self._add_cache_control_if_applicable(content, tool_result, model)
-                                tool_message_list.append(tool_result)
-                            elif isinstance(content.get("content"), list):
-                                # Combine all content items into a single tool message
-                                # to avoid creating multiple tool_result blocks with the same ID
-                                # (each tool_use must have exactly one tool_result)
-                                content_items = list(content.get("content", []))
-
-                                # Single-item text keeps the backward-compatible string format; a single
-                                # image or document becomes a structured image_url part
-                                if len(content_items) == 1:
-                                    c = content_items[0]
-                                    if isinstance(c, str):
-                                        tool_result = ChatCompletionToolMessage(
-                                            role="tool",
-                                            tool_call_id=content.get("tool_use_id", ""),
-                                            content=c,
-                                        )
-                                        self._add_cache_control_if_applicable(content, tool_result, model)
-                                        tool_message_list.append(tool_result)
-                                    elif isinstance(c, dict):
-                                        if c.get("type") == "text":
-                                            tool_result = ChatCompletionToolMessage(
-                                                role="tool",
-                                                tool_call_id=content.get("tool_use_id", ""),
-                                                content=c.get("text", ""),
-                                            )
-                                            self._add_cache_control_if_applicable(content, tool_result, model)
-                                            tool_message_list.append(tool_result)
-                                        elif c.get("type") in ("image", "document"):
-                                            image_part = self._tool_result_image_part(c.get("source"))
-                                            tool_result = ChatCompletionToolMessage(
-                                                role="tool",
-                                                tool_call_id=content.get("tool_use_id", ""),
-                                                content=[image_part]  # mutable-ok: content must be a json list
-                                                if image_part
-                                                else "",
-                                            )
-                                            self._add_cache_control_if_applicable(content, tool_result, model)
-                                            tool_message_list.append(tool_result)
-                                else:
-                                    # For multiple content items, combine into a single tool message
-                                    # with list content to preserve all items while having one tool_use_id
-                                    combined_content_parts: list[
-                                        ChatCompletionTextObject | ChatCompletionImageObject
-                                    ] = []
-                                    for c in content_items:
-                                        if isinstance(c, str):
-                                            combined_content_parts.append(ChatCompletionTextObject(type="text", text=c))
-                                        elif isinstance(c, dict):
-                                            if c.get("type") == "text":
-                                                combined_content_parts.append(
-                                                    ChatCompletionTextObject(
-                                                        type="text",
-                                                        text=c.get("text", ""),
-                                                    )
-                                                )
-                                            elif c.get("type") in ("image", "document"):
-                                                image_part = self._tool_result_image_part(c.get("source"))
-                                                if image_part:
-                                                    combined_content_parts.append(image_part)
-                                    # Create a single tool message with combined content
-                                    if combined_content_parts:
-                                        tool_result = ChatCompletionToolMessage(
-                                            role="tool",
-                                            tool_call_id=content.get("tool_use_id", ""),
-                                            content=combined_content_parts,
-                                        )
-                                        self._add_cache_control_if_applicable(content, tool_result, model)
-                                        tool_message_list.append(tool_result)
+                            tool_result = ChatCompletionToolMessage(
+                                role="tool",
+                                tool_call_id=content.get("tool_use_id", ""),
+                                content=self._tool_result_content(content.get("content")),
+                            )
+                            self._add_cache_control_if_applicable(content, tool_result, model)
+                            tool_message_list.append(tool_result)
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
@@ -1209,6 +1136,39 @@ class LiteLLMAnthropicMessagesAdapter:
             return image_source.get("url", "")
 
         return None
+
+    def _tool_result_content(self, raw_content: object) -> ToolResultContent:
+        if isinstance(raw_content, str):
+            return raw_content
+        if not isinstance(raw_content, list):
+            return ""
+        items: Final = cast(Sequence[object], raw_content)  # cast-ok: untrusted client payload
+        parts: Final = tuple(part for part in (self._tool_result_part(item) for item in items) if part is not None)
+        match parts:
+            case ():
+                return ""
+            case ({"type": "text", "text": str(text)},):
+                return text
+            case _:
+                return list(parts)  # mutable-ok: content must be a json list
+
+    def _tool_result_part(self, item: object) -> ToolMessageContentPart | None:
+        if isinstance(item, str):
+            return ChatCompletionTextObject(type="text", text=item)
+        if not isinstance(item, dict):
+            return None
+        block: Final = cast(Mapping[str, object], item)  # cast-ok: untrusted client payload
+        match block.get("type"):
+            case "text":
+                return ChatCompletionTextObject(type="text", text=str(block.get("text") or ""))
+            case "image" | "document":
+                return self._tool_result_image_part(block.get("source"))
+            case "tool_reference":
+                return ChatCompletionToolReferenceObject(
+                    type="tool_reference", tool_name=str(block.get("tool_name") or "")
+                )
+            case _:
+                return None
 
     def _tool_result_image_part(self, image_source: object) -> ChatCompletionImageObject | None:
         if not isinstance(image_source, dict):
