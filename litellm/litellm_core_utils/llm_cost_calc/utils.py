@@ -889,11 +889,22 @@ def generic_cost_per_token(
     total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
     has_double_counting: Final = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
 
-    if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
-        text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
+    if has_double_counting:
+        # cached and per-modality counts are both subsets of prompt_tokens and may overlap, so a
+        # modality can only bill what the cache did not already cover or the overlap is billed twice
+        uncached_budget: Final = max(usage.prompt_tokens - cache_hit - cache_creation, 0)
+        billable_audio: Final = min(audio_tokens, uncached_budget)
+        billable_image: Final = min(image_tokens, uncached_budget - billable_audio)
+        billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
+        prompt_tokens_details["audio_tokens"] = billable_audio
+        prompt_tokens_details["image_tokens"] = billable_image
+        prompt_tokens_details["video_tokens"] = billable_video
+        prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
+    elif text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
         # Clamp to zero: inconsistent streaming usage
-        text_tokens = max(text_tokens, 0)
-        prompt_tokens_details["text_tokens"] = text_tokens
+        prompt_tokens_details["text_tokens"] = max(
+            usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
+        )
 
     (
         prompt_base_cost,

@@ -26,6 +26,7 @@ from litellm.proxy.common_request_processing import (
     _ClientDisconnectedBeforeFirstChunk,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
+    CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
@@ -5016,6 +5017,169 @@ class TestResponseCostHeaderForTypedDictResponses:
         assert "_hidden_params" not in result
         assert fastapi_response.headers["x-ratelimit-limit-input-tokens"] == "25"
         assert fastapi_response.headers["x-litellm-response-cost"] == "0.00123"
+
+
+class TestCostHeadersForCallsPricedAtZero:
+    """
+    Regression for LIT-5602. Pricing responses reads and vector-store management routes at
+    zero dropped the entire x-litellm-response-cost family off those replies: the header
+    build reads a falsy zero as "this response never recorded a cost" and filters it out,
+    and a call that returns before pricing stores no cost breakdown for the component
+    headers to read. A client parsing the cost off a read got a KeyError where it had
+    previously been handed a number. Those calls now advertise the whole family at zero.
+    """
+
+    @staticmethod
+    def _responses_read(*, background=False):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_lit5602",
+            created_at=0,
+            model="gpt-4.1-mini",
+            object="response",
+            output=[],
+            status="completed",
+            background=background,
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+    @staticmethod
+    def _logging_obj(*, call_type, recovered_cost=0.0):
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-lit5602"
+        logging_obj.call_type = call_type
+        logging_obj.litellm_params = {}
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = {"response_cost": recovered_cost}
+        logging_obj._response_cost_calculator = MagicMock(return_value=recovered_cost)
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        return logging_obj
+
+    async def _drive(self, *, monkeypatch, response, logging_obj, route_type):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return response
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        async def fake_post_call_success_hook(data, user_api_key_dict, response):
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+
+        fastapi_response = Response()
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=False
+        ):
+            await processing_obj.base_process_llm_request(
+                request=MagicMock(spec=Request, headers={}),
+                fastapi_response=fastapi_response,
+                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+                route_type=route_type,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                select_data_generator=None,
+                llm_router=None,
+                skip_pre_call_logic=True,
+            )
+        return fastapi_response
+
+    @pytest.mark.asyncio
+    async def test_responses_read_emits_the_cost_header_family_at_zero(self, monkeypatch):
+        fastapi_response = await self._drive(
+            monkeypatch=monkeypatch,
+            response=self._responses_read(),
+            logging_obj=self._logging_obj(call_type="aget_responses"),
+            route_type="aget_responses",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.0"
+        for component in (
+            "original",
+            "discount-amount",
+            "margin-amount",
+            "margin-percent",
+            "input",
+            "output",
+            "tool-usage",
+        ):
+            assert fastapi_response.headers[f"x-litellm-response-cost-{component}"] == "0.0"
+
+    @pytest.mark.asyncio
+    async def test_reading_a_background_response_keeps_its_real_cost(self, monkeypatch):
+        fastapi_response = await self._drive(
+            monkeypatch=monkeypatch,
+            response=self._responses_read(background=True),
+            logging_obj=self._logging_obj(call_type="aget_responses", recovered_cost=0.00042),
+            route_type="aget_responses",
+        )
+
+        assert float(fastapi_response.headers["x-litellm-response-cost"]) == pytest.approx(0.00042)
+
+    @pytest.mark.asyncio
+    async def test_an_inference_call_without_a_recorded_cost_still_omits_the_header(self, monkeypatch):
+        """A chat completion has no zero-priced route, so a falsy cost there means the cost was
+        never recorded and the header stays absent rather than advertising a made-up zero."""
+        fastapi_response = await self._drive(
+            monkeypatch=monkeypatch,
+            response=SimpleNamespace(_hidden_params={}),
+            logging_obj=self._logging_obj(call_type="acompletion"),
+            route_type="acompletion",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+
+    def test_cost_breakdown_reports_zero_components_for_a_call_priced_at_zero(self):
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses")
+        )
+
+        assert breakdown.original_cost == 0.0
+        assert breakdown.input_cost == 0.0
+        assert breakdown.output_cost == 0.0
+        assert breakdown.tool_usage_cost == 0.0
+
+    def test_cost_breakdown_stays_empty_for_an_inference_call(self):
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="acompletion")
+        )
+
+        assert breakdown == CostBreakdownHeaderValues()
+
+    def test_cost_breakdown_never_zeroes_the_split_under_a_real_total(self):
+        """Reading a background response prices normally, so a breakdown that has not landed by the
+        time headers are built is reported as absent rather than as a zero split contradicting the
+        real total alongside it."""
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses"),
+            response_cost=1.96e-05,
+        )
+
+        assert breakdown == CostBreakdownHeaderValues()
+
+    def test_cost_breakdown_reports_zero_components_under_a_zero_total(self):
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses"),
+            response_cost=0.0,
+        )
+
+        assert breakdown.original_cost == 0.0
+        assert breakdown.input_cost == 0.0
+        assert breakdown.output_cost == 0.0
 
 
 class TestPreCallWithFallbacksOnLocalRateLimit:

@@ -297,9 +297,18 @@ class InMemoryPromptRegistry:
             if get_base_prompt_id(prompt_id=spec.prompt_id) == base_prompt_id
         )
 
+    def remove_prompt(self, registry_key: str) -> None:
+        import litellm
+
+        self.IN_MEMORY_PROMPTS.pop(registry_key, None)
+        stale_callback: Final = self.prompt_id_to_custom_prompt.pop(registry_key, None)
+        if stale_callback is not None:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(stale_callback)
+
     def delete_prompts_by_base_id(self, base_prompt_id: str, environment: str | None = None) -> list[str]:
         """
-        Delete matching prompts from memory, scoped to one environment when given.
+        Delete matching prompts from memory, along with their registered callbacks,
+        scoped to one environment when given.
 
         Returns the registry keys that were deleted.
         """
@@ -311,8 +320,7 @@ class InMemoryPromptRegistry:
         ]
 
         for key in keys_to_delete:
-            del self.IN_MEMORY_PROMPTS[key]
-            self.prompt_id_to_custom_prompt.pop(key, None)
+            self.remove_prompt(registry_key=key)
 
         return keys_to_delete
 
