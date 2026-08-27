@@ -422,6 +422,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 classificationPrompt={value.classification_prompt}
                 onChange={handleClassificationPromptChange}
                 tierRows={value.custom_tier_set.tiers}
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
               />
             ) : (
               <ClassifierPromptEditor

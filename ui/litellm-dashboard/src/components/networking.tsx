@@ -48,6 +48,30 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
+export const getAutoRouterCustomTierPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierDefinitions: { name: string; description?: string }[],
+  classificationPrompt?: string,
+): Promise<string> => {
+  /**
+   * Get the classifier system prompt an edited tier set sends, assembled by the proxy.
+   *
+   * The tier bullets, the injection guard and the closing line are appended by the router, and a
+   * built-in name with no description inherits criteria that live only in the backend, so the
+   * preview has to come from there rather than be rebuilt here.
+   */
+  const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+    accessToken,
+    query: {
+      context_window_size: contextWindowSize,
+      tier_definitions: JSON.stringify(tierDefinitions),
+      ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+    },
+  });
+  return response.system_prompt;
+};
+
 /**
  * Helper file for calls being made to proxy
  */

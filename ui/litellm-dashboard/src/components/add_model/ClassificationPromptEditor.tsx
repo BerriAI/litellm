@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { getAutoRouterCustomTierPromptCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,6 +10,7 @@ interface ClassificationPromptEditorProps {
   classificationPrompt: string | undefined;
   onChange: (classificationPrompt: string | undefined) => void;
   tierRows: readonly TierRow[];
+  contextWindowSize: number;
 }
 
 const PLACEHOLDER = `Classify the request into exactly one tier for a payments engineering team.
@@ -16,20 +19,46 @@ Examples:
 - "bump the copy on the checkout button" -> TRIAGE
 - "why is our webhook signature check failing" -> SECURITY_REVIEW`;
 
-const appendedTierBullets = (tierRows: readonly TierRow[]): string =>
-  tierRows.map((row) => `- ${activeTierName(row)}: ${row.definition}`).join("\n");
+const wireDefinitions = (tierRows: readonly TierRow[]): { name: string; description?: string }[] =>
+  tierRows.map((row) => ({
+    name: activeTierName(row),
+    ...(row.definition.trim() && { description: row.definition.trim() }),
+  }));
 
 const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
   classificationPrompt,
   onChange,
   tierRows,
+  contextWindowSize,
 }) => {
+  const { accessToken } = useAuthorized();
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  const [preview, setPreview] = useState<string | null>(null);
   const isOverridden = Boolean(classificationPrompt?.trim());
+
+  // Debounced so the preview follows the draft without a request per keystroke. Nothing is saved
+  // from here, so a failed fetch leaves the preview empty rather than blocking the edit.
+  const refreshPreview = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      setPreview(
+        await getAutoRouterCustomTierPromptCall(accessToken, contextWindowSize, wireDefinitions(tierRows), draft),
+      );
+    } catch {
+      setPreview(null);
+    }
+  }, [accessToken, contextWindowSize, tierRows, draft]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const timer = setTimeout(refreshPreview, 300);
+    return () => clearTimeout(timer);
+  }, [isOpen, refreshPreview]);
 
   const openEditor = () => {
     setDraft(classificationPrompt ?? "");
+    setPreview(null);
     setIsOpen(true);
   };
 
@@ -78,10 +107,17 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
           />
 
           <div className="mt-3">
-            <p className="text-xs font-medium">Tier definitions</p>
-            <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs text-muted-foreground">
-              {`Tiers:\n${appendedTierBullets(tierRows)}\n\n<injection guard and closing line>`}
-            </pre>
+            <p className="text-xs font-medium">What this router sends</p>
+            {preview === null ? (
+              <p className="mt-1 text-xs text-muted-foreground">Loading the assembled prompt…</p>
+            ) : (
+              <pre
+                aria-label="Assembled classifier prompt"
+                className="mt-1 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground"
+              >
+                {preview}
+              </pre>
+            )}
           </div>
 
           <DialogFooter className="mt-4">

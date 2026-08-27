@@ -38194,6 +38194,8 @@ export interface operations {
                 context_window_size?: number;
                 tier_labels?: string | null;
                 classification_rubric?: components["schemas"]["ClassificationRubric"] | null;
+                tier_definitions?: string | null;
+                classification_prompt?: string | null;
             };
             header?: never;
             path?: never;
