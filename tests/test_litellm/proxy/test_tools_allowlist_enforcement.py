@@ -106,6 +106,19 @@ class TestExtractRequestToolNames:
             "run_sql",
         ]
 
+    def test_anthropic_hybrid_tool_yields_every_name(self):
+        data = {
+            "tools": [
+                {"type": "function", "name": "decoy", "function": {"name": "blocked_fn"}},
+                {"type": "function", "name": "", "function": {"name": "hidden_fn"}},
+            ]
+        }
+        assert extract_request_tool_names("/v1/messages", data) == [
+            "decoy",
+            "blocked_fn",
+            "hidden_fn",
+        ]
+
     def test_generate_content_tools(self):
         data = {
             "tools": [
@@ -185,6 +198,20 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "get_weather" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_hybrid_tool_with_decoy_name_raises_on_messages_route(self):
+        token = _token(metadata={"allowed_tools": ["decoy"]})
+        body = {"tools": [{"type": "function", "name": "decoy", "function": {"name": "run_sql"}}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/messages",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_sql" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_disallowed_custom_tool_raises_on_responses_route(self):
