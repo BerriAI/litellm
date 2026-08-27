@@ -753,7 +753,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def record_gateway_injection(
-        request_kwargs: dict[str, Any],  # mutable-ok: stamps the marker into the caller's live request kwargs
+        request_kwargs: Mapping[str, object],
         added: int,
     ) -> None:
         """Name the deployment whose payload the gateway, not the client, put breakpoints on.
@@ -780,6 +780,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         that Bedrock credit is the fail-closed direction, and the alternative is a
         provider transform that carries spend-attribution state.
 
+        Reads whichever bucket the request actually carries rather than asking the shared
+        name resolver, which answers on key presence: ``litellm_params`` declares
+        ``litellm_metadata`` as None on every request, so the resolver names a bucket that
+        is not there and the mark is dropped.
+
         Never CREATES the bucket. The proxy seeds it on every request and is the marker's
         only reader, so a request without one is a bare SDK call nothing would consume it
         from. Creating it would also add a key to a dict call sites splat as ``**kwargs``,
@@ -788,10 +793,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if added <= 0:
             return
-        from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-
-        bucket: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
-        if isinstance(bucket, dict):
+        bucket: Final = next(
+            (
+                candidate
+                for candidate in (request_kwargs.get("litellm_metadata"), request_kwargs.get("metadata"))
+                if isinstance(candidate, dict)
+            ),
+            None,
+        )
+        if bucket is not None:
             model_info: Final = request_kwargs.get("model_info")
             bucket[GATEWAY_INJECTED_CACHE_METADATA_KEY] = (
                 model_info.get("id", GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT)
