@@ -9216,7 +9216,11 @@ class Router:
             }
 
         if model_id is not None:
-            litellm.register_model(model_cost={model_id: model_info}, persist_across_reloads=False)
+            litellm.register_model(
+                model_cost={model_id: model_info},
+                persist_across_reloads=False,
+                warning_display_name=model,
+            )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
