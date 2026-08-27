@@ -328,19 +328,15 @@ def _published_token_rate(
 
 
 def _unique_model_names(*names: str | None) -> tuple[str, ...]:
-    unique: list[str] = []
-    seen: set[str] = set()
-    for name in names:
-        if not isinstance(name, str) or not name or name in seen:
-            continue
-        seen.add(name)
-        unique.append(name)
-        if "/" in name:
-            tail: Final = name.split("/", 1)[1]
-            if tail and tail not in seen:
-                seen.add(tail)
-                unique.append(tail)
-    return tuple(unique)
+    return tuple(
+        dict.fromkeys(
+            part
+            for name in names
+            if isinstance(name, str) and name
+            for part in ((name,) if "/" not in name else (name, name.split("/", 1)[1]))
+            if part
+        )
+    )
 
 
 def _cost_map_rate(key: str | None, field: str) -> float | None:
