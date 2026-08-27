@@ -731,6 +731,70 @@ async def test_update_key_personal_non_admin_denied_vector_stores(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_key_grandfathers_existing_mcp_servers(monkeypatch):
+    """/key/update on a team key that already holds MCP servers outside the
+    team allowlist must accept re-sent or shrunk grants (LIT-6062). The wrapper
+    must pass the existing key's object_permission_id into the validator when
+    the team is unchanged."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        UpdateKeyRequest,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_mcp_servers_for_key_update,
+    )
+
+    existing_row = MagicMock()
+    existing_row.mcp_servers = ["server-a", "server-b"]
+    existing_row.mcp_tool_permissions = {}
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=existing_row
+    )
+    mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+
+    team_obj = MagicMock()
+    team_obj.team_id = "team-1"
+    team_obj.object_permission = None
+
+    existing_key_row = MagicMock(
+        team_id="team-1",
+        object_permission_id="perm-1",
+    )
+
+    mock_server_a = MagicMock()
+    mock_server_a.server_id = "server-a"
+    mock_server_b = MagicMock()
+    mock_server_b.server_id = "server-b"
+    mock_mgr = MagicMock()
+    mock_mgr.get_registry.return_value = {
+        "server-a": mock_server_a,
+        "server-b": mock_server_b,
+    }
+    mock_mgr.get_allow_all_keys_server_ids.return_value = []
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        mock_mgr,
+    )
+
+    result = await _validate_mcp_servers_for_key_update(
+        data=UpdateKeyRequest(
+            key="sk-team-key",
+            object_permission=LiteLLM_ObjectPermissionBase(mcp_servers=["server-a"]),
+        ),
+        team_obj=team_obj,
+        existing_key_row=existing_key_row,
+        prisma_client=mock_prisma,
+        user_api_key_cache=MagicMock(),
+        is_proxy_admin=False,
+    )
+    assert result is not None
+    assert result["mcp_servers"] == ["server-a"]
+
+
+@pytest.mark.asyncio
 async def test_update_key_personal_non_admin_denied_access_groups(
     monkeypatch,
 ):

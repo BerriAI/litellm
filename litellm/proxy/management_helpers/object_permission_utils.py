@@ -447,6 +447,41 @@ async def enforce_all_proxy_mcp_servers_grant_is_admin_only(
     )
 
 
+async def _get_grandfathered_key_mcp_server_ids(
+    object_permission_id: str | None,
+    prisma_client: PrismaClient | None,
+) -> frozenset[str]:
+    """
+    Resolve the canonical MCP server IDs a key's stored object_permission already
+    grants. Updates that keep or shrink those grants stay valid even when the
+    team allowlist has since changed; sentinels are excluded so they cannot
+    grandfather anything.
+    """
+    if not object_permission_id or prisma_client is None:
+        return frozenset()
+    existing: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        where={"object_permission_id": object_permission_id},
+    )
+    if existing is None:
+        return frozenset()
+    raw_tool_perms: Final = existing.mcp_tool_permissions or {}
+    tool_perm_keys: Final[frozenset[str]] = frozenset(
+        json.loads(raw_tool_perms).keys() if isinstance(raw_tool_perms, str) else raw_tool_perms.keys()
+    )
+    identifiers: Final = (frozenset(existing.mcp_servers or []) | tool_perm_keys) - {
+        SpecialMCPServerNames.no_mcp_servers.value,
+        SpecialMCPServerName.all_proxy_servers.value,
+    }
+    return frozenset(
+        _flatten_resolved_mcp_server_ids(
+            await _resolve_mcp_server_identifiers_to_ids(
+                identifiers=set(identifiers),
+                prisma_client=prisma_client,
+            )
+        )
+    )
+
+
 async def _get_team_allowed_mcp_servers(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: PrismaClient | None = None,
@@ -527,9 +562,15 @@ async def validate_key_mcp_servers_against_team(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: PrismaClient | None = None,
     is_proxy_admin: bool = False,
+    existing_key_object_permission_id: str | None = None,
 ) -> ObjectPermissionDict | None:
     """
     Validate that MCP servers requested on a key are within the allowed scope.
+
+    When ``existing_key_object_permission_id`` is provided (key updates), servers
+    the key already holds are grandfathered: keeping or removing them stays valid
+    even if the team allowlist has since shrunk, while adding new servers outside
+    the allowlist is still rejected.
 
     Rules:
     - If key is in a team: key's mcp_servers must be a subset of
@@ -589,7 +630,11 @@ async def validate_key_mcp_servers_against_team(
         if teamless_admin_assignment:
             allowed_servers = all_allowed_servers | active_requested_servers
 
-        disallowed_servers: Final = active_requested_servers - allowed_servers
+        grandfathered_servers: Final = await _get_grandfathered_key_mcp_server_ids(
+            object_permission_id=existing_key_object_permission_id,
+            prisma_client=prisma_client,
+        )
+        disallowed_servers: Final = active_requested_servers - allowed_servers - grandfathered_servers
         if disallowed_servers:
             if team_obj is not None:
                 team_id = team_obj.team_id
