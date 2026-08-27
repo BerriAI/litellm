@@ -7257,12 +7257,40 @@ class ProxyConfig:
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
         from litellm.types.prompts.init_prompts import PromptSpec
 
+        def parse_row(db_prompt: object) -> PromptSpec | None:
+            try:
+                return self._get_prompt_spec_for_db_prompt(db_prompt=db_prompt)
+            except Exception as row_error:  # noqa: BLE001  # a malformed row must not block syncing the remaining prompts
+                verbose_proxy_logger.exception(
+                    "litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - failed to parse prompt row %s: %s",
+                    getattr(db_prompt, "prompt_id", None),
+                    row_error,
+                )
+                return None
+
         try:
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
-            for prompt in prompts_in_db:
-                # Convert DB object to dict and create versioned prompt_id
-                prompt_spec = self._get_prompt_spec_for_db_prompt(db_prompt=prompt)
-                IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt_spec)
+            parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
+                spec for row in prompts_in_db if (spec := parse_row(row)) is not None
+            )
+            newest_spec_per_id: Final[Mapping[str, PromptSpec]] = MappingProxyType(
+                {
+                    spec.prompt_id: spec
+                    for spec in sorted(
+                        parsed_specs,
+                        key=lambda s: s.updated_at.timestamp() if s.updated_at else float("-inf"),
+                    )
+                }
+            )
+            for prompt_spec in newest_spec_per_id.values():
+                try:
+                    IN_MEMORY_PROMPT_REGISTRY.sync_prompt_from_db(prompt=prompt_spec)
+                except Exception as prompt_sync_error:  # noqa: BLE001  # one poisoned row must not block syncing the remaining prompts
+                    verbose_proxy_logger.exception(
+                        "litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - failed to sync prompt %s: %s",
+                        prompt_spec.prompt_id,
+                        prompt_sync_error,
+                    )
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 

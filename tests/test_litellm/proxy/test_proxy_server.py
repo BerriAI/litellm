@@ -11351,6 +11351,147 @@ async def test_init_guardrails_in_db_snapshots_and_reconciles_under_guardrail_re
     assert not GUARDRAIL_RECONCILE_LOCK.locked()
 
 
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_reloads_rows_patched_on_another_worker(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def db_row(content: str) -> MagicMock:
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "prompt_id": "greeting_sync",
+            "version": 1,
+            "environment": "development",
+            "created_by": None,
+            "litellm_params": json.dumps(
+                {
+                    "prompt_id": "greeting_sync",
+                    "prompt_integration": "dotprompt",
+                    "prompt_data": {"content": content, "metadata": {}},
+                }
+            ),
+            "prompt_info": json.dumps({"prompt_type": "db"}),
+            "created_at": None,
+            "updated_at": None,
+        }
+        return row
+
+    def served_content() -> str:
+        callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_sync.v1")
+        assert callback is not None
+        return callback.prompt_manager.get_prompt("greeting_sync").content
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row("Begin every reply with AHOY")])
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+        assert served_content() == "Begin every reply with AHOY"
+
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row("Begin every reply with HOWDY")])
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert served_content() == "Begin every reply with HOWDY"
+        assert litellm.callbacks == [IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_sync.v1")]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_sync")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_syncs_remaining_rows_when_one_row_fails(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def db_row(prompt_id: str, integration: str) -> MagicMock:
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "prompt_id": prompt_id,
+            "version": 1,
+            "environment": "development",
+            "created_by": None,
+            "litellm_params": json.dumps(
+                {
+                    "prompt_id": prompt_id,
+                    "prompt_integration": integration,
+                    "prompt_data": {"content": "Begin every reply with AHOY", "metadata": {}},
+                }
+            ),
+            "prompt_info": json.dumps({"prompt_type": "db"}),
+            "created_at": None,
+            "updated_at": None,
+        }
+        return row
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(
+            return_value=[db_row("broken_sync", "does_not_exist"), db_row("healthy_sync", "dotprompt")]
+        )
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id("broken_sync.v1") is None
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("healthy_sync.v1") is not None
+        assert litellm.callbacks == [IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("healthy_sync.v1")]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("healthy_sync")
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("broken_sync")
+
+
+@pytest.mark.asyncio
+async def test_init_prompts_in_db_serves_the_newest_row_when_environments_collide_on_a_versioned_id(monkeypatch):
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    def db_row(environment: str, content: str, updated_at: datetime) -> MagicMock:
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "prompt_id": "greeting_env",
+            "version": 1,
+            "environment": environment,
+            "created_by": None,
+            "litellm_params": json.dumps(
+                {
+                    "prompt_id": "greeting_env",
+                    "prompt_integration": "dotprompt",
+                    "prompt_data": {"content": content, "metadata": {}},
+                }
+            ),
+            "prompt_info": json.dumps({"prompt_type": "db"}),
+            "created_at": None,
+            "updated_at": updated_at,
+        }
+        return row
+
+    freshly_patched = db_row(
+        "production", "Begin every reply with HOWDY", datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+    )
+    stale_sibling = db_row(
+        "development", "Begin every reply with AHOY", datetime(2026, 8, 26, 11, 0, tzinfo=timezone.utc)
+    )
+
+    prisma_client = MagicMock()
+    try:
+        prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[freshly_patched, stale_sibling])
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        first_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_env.v1")
+        assert first_callback is not None
+        assert first_callback.prompt_manager.get_prompt("greeting_env").content == "Begin every reply with HOWDY"
+
+        await ProxyConfig()._init_prompts_in_db(prisma_client=prisma_client)
+
+        assert IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id("greeting_env.v1") is first_callback
+        assert litellm.callbacks == [first_callback]
+    finally:
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id("greeting_env")
+
+
 class TestEmbeddingsFailureHookRequestData:
     @pytest.mark.asyncio
     async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
