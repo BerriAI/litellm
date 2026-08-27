@@ -15,15 +15,16 @@ from collections.abc import Callable
 
 import pytest
 
-from e2e_config import unique_marker
-from e2e_http import StreamingResponse
+from e2e_config import UI_PASSWORD, UI_USERNAME, unique_marker
+from e2e_http import StreamingResponse, Success
 from lifecycle import ResourceManager
 from management_client import (
+    DASHBOARD_SESSION_TEAM_ID,
     MODEL_ACCESS_DENIED_MARKER,
     ROUTE_NOT_ALLOWED_MARKER,
     ManagementClient,
 )
-from models import KeyGenerateBody, OrgInfoResponse, OrgNewBody, OrgUpdateBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
+from models import KeyGenerateBody, KeyUpdateBody, OrgInfoResponse, OrgNewBody, OrgUpdateBody, TagListEntry, TagNewBody, TeamNewBody, TeamUpdateBody, UserNewBody, UserUpdateBody, LiteLLMParamsBody, ModelInfoEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -199,6 +200,100 @@ class TestKeyRoutes:
             return True if client.proxy.key_info(key).blocked else None
 
         _ = _poll(client, blocked, "/key/info never reported the key blocked after /key/block before the deadline")
+
+
+class TestDashboardKeyRoutes:
+    """The /key writes as the Admin UI makes them. Signing in mints the session key
+    the dashboard authenticates with, and every key an admin creates or edits in the
+    browser is written under that session key rather than the master key, so these
+    are the same routes the API-surface tests cover with a different caller."""
+
+    @pytest.mark.covers("mgmt.key.generate.happy_path")
+    def test_sign_in_mints_a_session_key_that_drives_the_dashboard(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        alias = f"e2e-mgmt-uisession-{unique_marker()}"
+        _ = _generate_key(client, resources, KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias))
+
+        session = client.dashboard_login(UI_USERNAME, UI_PASSWORD)
+        resources.defer(lambda: client.proxy.delete_key(session.session_key))
+
+        assert session.claims.login_method == "username_password", (
+            f"/v2/login reports login_method {session.claims.login_method!r} for a username/password sign-in"
+        )
+        assert session.claims.user_role == "proxy_admin", (
+            f"/v2/login reports user_role {session.claims.user_role!r} for the admin credentials, expected 'proxy_admin'"
+        )
+        assert session.redirect_url.endswith("/ui?login=success"), (
+            f"/v2/login sends the browser to {session.redirect_url!r} instead of the dashboard"
+        )
+
+        info = client.proxy.key_info(session.session_key)
+        assert info.team_id == DASHBOARD_SESSION_TEAM_ID, (
+            f"the minted session key reports team_id {info.team_id!r}, expected the dashboard's "
+            f"{DASHBOARD_SESSION_TEAM_ID!r}"
+        )
+
+        def dashboard_lists_the_key() -> bool | None:
+            match client.key_list(alias, caller_key=session.session_key):
+                case Success(data=listing) if listing.total_count == 1:
+                    return True
+                case _:
+                    return None
+
+        _ = _poll(
+            client,
+            dashboard_lists_the_key,
+            f"the session key never saw {alias!r} in /key/list before the deadline, so the dashboard "
+            "would render no keys",
+        )
+
+    @pytest.mark.covers("mgmt.key.update.happy_path")
+    def test_editing_a_key_from_the_dashboard_persists_and_is_enforced(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        alias = f"e2e-mgmt-uiedit-{unique_marker()}"
+        target = _generate_key(
+            client,
+            resources,
+            KeyGenerateBody(models=["gemini-2.5-flash"], key_alias=alias, tpm_limit=100, rpm_limit=200),
+        )
+        _poll_chat_ok(client, target, "gemini-2.5-flash")
+        _assert_model_denied(client.chat_status(target, "gpt-5.5", f"say hi {unique_marker()}"), "gpt-5.5")
+
+        session = client.dashboard_login(UI_USERNAME, UI_PASSWORD)
+        resources.defer(lambda: client.proxy.delete_key(session.session_key))
+
+        def dashboard_saves_the_edit() -> bool | None:
+            match client.update_key(
+                KeyUpdateBody(key=target, models=["gpt-5.5"], tpm_limit=300, rpm_limit=400),
+                caller_key=session.session_key,
+            ):
+                case Success():
+                    return True
+                case _:
+                    return None
+
+        _ = _poll(
+            client,
+            dashboard_saves_the_edit,
+            "the dashboard session key was never accepted on /key/update before the deadline",
+        )
+
+        info = client.proxy.key_info(target)
+        assert info.models == ["gpt-5.5"], (
+            f"/key/info reports models {info.models} after the dashboard edit to ['gpt-5.5']"
+        )
+        assert info.tpm_limit == 300, f"/key/info reports tpm_limit {info.tpm_limit} after the dashboard edit to 300"
+        assert info.rpm_limit == 400, f"/key/info reports rpm_limit {info.rpm_limit} after the dashboard edit to 400"
+        assert info.key_alias == alias, (
+            f"the dashboard edit renamed the key to {info.key_alias!r}, it should still be {alias!r}"
+        )
+
+        _poll_model_access_granted(client, target, "gpt-5.5")
+        _poll_chat_denied(client, target, "gemini-2.5-flash")
+
+
 class TestKeyRegeneration:
     @pytest.mark.covers("mgmt.key.regenerate.happy_path")
     def test_regenerate_rotates_to_a_working_new_key(
