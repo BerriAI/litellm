@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type SyntheticEvent } from "react";
 
 import {
   Combobox,
@@ -28,9 +28,11 @@ interface PaginatedSearchSelectProps {
   emptyText?: string;
   errorText?: string;
   loadingText?: string;
+  autoHighlight?: boolean | "always";
   disabled?: boolean;
   className?: string;
   inputId?: string;
+  "aria-required"?: true | undefined;
   "aria-invalid"?: true | undefined;
   "aria-describedby"?: string;
 }
@@ -61,13 +63,22 @@ export function PaginatedSearchSelect({
   emptyText = "No results",
   errorText,
   loadingText = "Loading…",
+  autoHighlight = false,
   disabled = false,
   className,
   inputId,
+  "aria-required": ariaRequired,
   "aria-invalid": ariaInvalid,
   "aria-describedby": ariaDescribedBy,
 }: PaginatedSearchSelectProps) {
   const [pickedOption, setPickedOption] = useState<SearchSelectOption | null>(null);
+  const wholeSelectionRef = useRef(false);
+
+  const snapshotWholeSelection = (event: SyntheticEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    wholeSelectionRef.current =
+      input.value.length > 0 && input.selectionStart === 0 && input.selectionEnd === input.value.length;
+  };
 
   const selected = useMemo<SearchSelectOption | null>(() => {
     if (value === undefined || value === "") return null;
@@ -86,6 +97,15 @@ export function PaginatedSearchSelect({
   const pagination = { onSearchChange, onLoadMore, hasNextPage, isFetchingNextPage };
   const { typedQuery, handleInputValueChange, handleOpenChange, handleScroll } = usePaginatedCombobox(pagination);
 
+  const handleTypedInput = (next: string, reason: string) => {
+    const replacedWholeInput = wholeSelectionRef.current;
+    wholeSelectionRef.current = false;
+    handleInputValueChange(
+      typedQuery === null && !replacedWholeInput ? typedInsertion(selected?.label ?? "", next) : next,
+      reason,
+    );
+  };
+
   return (
     <Combobox
       items={items}
@@ -95,22 +115,24 @@ export function PaginatedSearchSelect({
         setPickedOption(item);
         onValueChange(item?.value ?? "");
       }}
-      onInputValueChange={(next, eventDetails) =>
-        handleInputValueChange(
-          typedQuery === null ? typedInsertion(selected?.label ?? "", next) : next,
-          eventDetails.reason,
-        )
-      }
+      onInputValueChange={(next, eventDetails) => handleTypedInput(next, eventDetails.reason)}
       onOpenChange={(nextOpen, eventDetails) => handleOpenChange(nextOpen, eventDetails.reason)}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
+      // @ts-expect-error TS2322 -- Combobox.Root narrows autoHighlight to boolean; the AriaCombobox it wraps
+      // accepts "always", the only value that highlights a list filtered server-side
+      autoHighlight={autoHighlight}
       filter={null}
       disabled={disabled}
     >
       <ComboboxInput
         id={inputId}
+        aria-required={ariaRequired}
         aria-invalid={ariaInvalid}
         aria-describedby={ariaDescribedBy}
+        onFocus={(event) => event.currentTarget.select()}
+        onKeyDown={snapshotWholeSelection}
+        onPaste={snapshotWholeSelection}
         placeholder={placeholder}
         showClear={value !== undefined && value !== ""}
         className={`w-full ${className ?? ""}`}
