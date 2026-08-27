@@ -91,7 +91,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.core_helpers import coerce_token_limit, is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import (
+    coerce_token_limit,
+    is_expected_client_error,
+    safe_deep_copy,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -1407,11 +1411,14 @@ class ProxyLogging:
         declared block-only, same contract as ``run_in_parallel``: any data it
         returns is discarded, since applying its view on top of a stale
         snapshot would silently undo whatever a later guardrail already did to
-        the live request.
+        the live request. A guardrail that mutates content (e.g. PII masking)
+        should never set this flag -- if one does anyway, its returned
+        mutation is discarded and a warning is logged so the misconfiguration
+        is visible instead of silently forwarding unredacted content.
         """
         scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
         input_data: Final = (
-            copy.deepcopy(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
+            safe_deep_copy(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
         )
         result: Final = await self._process_guardrail_callback(
             callback=callback,
@@ -1420,6 +1427,14 @@ class ProxyLogging:
             call_type=call_type,
             event_type=GuardrailEventHooks.pre_call,
         )
+        if scans_raw_request and result is not None:
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' has scan_raw_request=True but returned a modified payload; "
+                "scan_raw_request is for block-only guardrails and this mutation is being "
+                "discarded. Remove scan_raw_request from this guardrail's config if it needs "
+                "to mask/rewrite content.",
+                getattr(callback, "guardrail_name", None) or callback.__class__.__name__,
+            )
         if result is None or scans_raw_request:
             return data
         return result
@@ -1715,6 +1730,22 @@ class ProxyLogging:
                 call_type=call_type,
             )
 
+        # Snapshotted here, before _maybe_execute_pipelines or any guardrail in
+        # this hook has run, so a scan_raw_request guardrail's block/pass
+        # decision never depends on its position in the guardrails list or on
+        # a pipeline that runs ahead of it: an earlier guardrail (pipelined or
+        # not) that masks/rewrites content can't hide a violation from a later
+        # one that opted into scanning the original request. Only computed
+        # when at least one registered guardrail actually opted in, and via
+        # safe_deep_copy (not a bare deepcopy) since the payload commonly
+        # carries unpicklable objects (e.g. an otel span in metadata) that
+        # would otherwise raise here on every guarded request.
+        needs_raw_request_snapshot: Final = any(
+            isinstance(cb, CustomGuardrail) and getattr(cb, "scan_raw_request", False)
+            for cb in ProxyLogging._callback_capabilities().resolved_callbacks
+        )
+        raw_request_snapshot: Final[dict | None] = safe_deep_copy(data) if needs_raw_request_snapshot else None
+
         try:
             # Execute guardrail pipelines before the normal callback loop
             data = await self._maybe_execute_pipelines(
@@ -1748,14 +1779,6 @@ class ProxyLogging:
                 if isinstance(cb, CustomGuardrail)
                 and getattr(cb, "run_in_parallel", False)
                 and not (cb.guardrail_name and cb.guardrail_name in pipeline_managed)
-            )
-            # Snapshotted once, before any guardrail in this hook has run, so a
-            # scan_raw_request guardrail's block/pass decision never depends on
-            # its position in the guardrails list: an earlier guardrail that
-            # masks/rewrites content (e.g. PII redaction) can't hide a violation
-            # from a later one that opted into scanning the original request.
-            raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
-                copy.deepcopy(data) if data is not None else None
             )
 
             deferred_route_exc: SensitiveDataRouteException | None = None
@@ -1878,7 +1901,7 @@ class ProxyLogging:
                 self._process_guardrail_callback(
                     callback=callback,
                     data=(
-                        copy.deepcopy(raw_request_snapshot)
+                        safe_deep_copy(raw_request_snapshot)
                         if getattr(callback, "scan_raw_request", False) and raw_request_snapshot is not None
                         else data
                     ),
