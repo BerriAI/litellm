@@ -24879,6 +24879,11 @@ export interface components {
              */
             apply_user_budget_to_team_keys?: boolean | null;
             /**
+             * Background Health Check Model Groups
+             * @description Opt-in allowlist of model group names for background health checks and health-check routing. When set, the background loop probes only deployments whose model_name is listed, and enable_health_check_routing filters unhealthy deployments only within the listed groups; every other group, including newly added deployments, is skipped and keeps its configured routing strategy. When unset, all deployments participate (opt out per deployment via model_info.disable_background_health_check).
+             */
+            background_health_check_model_groups?: string[] | null;
+            /**
              * Background Health Checks
              * @description run health checks in background
              */
