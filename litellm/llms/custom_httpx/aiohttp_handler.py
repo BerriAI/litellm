@@ -1,3 +1,4 @@
+import ssl
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -18,6 +19,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
+    get_ssl_configuration,
 )
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
@@ -58,7 +60,11 @@ class BaseLLMAIOHTTPHandler:
 
         # Create a transport using AsyncHTTPHandler's logic
         try:
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport()
+            ssl_config: Final = get_ssl_configuration()
+            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+                ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
+            )
             self._owns_transport = True
             return self.transport
         except Exception:
@@ -81,20 +87,19 @@ class BaseLLMAIOHTTPHandler:
 
     def _create_client_session_with_transport(self) -> ClientSession:
         """Create a new client session using transport or connector configuration."""
-        connector: Final = self._get_connector()
+        if self.transport is None:
+            connector: Final = self._get_connector()
+            if connector:
+                return aiohttp.ClientSession(connector=connector)
 
-        if self.transport and hasattr(self.transport, "_get_valid_client_session"):
-            # Use transport's session creation if available
-            session = self.transport._get_valid_client_session()
-            return session
-        elif connector:
-            # Use provided connector
-            session = aiohttp.ClientSession(connector=connector)
-            return session
-        else:
-            # Default session creation
-            session = aiohttp.ClientSession()
-            return session
+        transport: Final = self.transport or self._get_or_create_transport()
+        if transport is not None and hasattr(transport, "_get_valid_client_session"):
+            try:
+                return transport._get_valid_client_session()
+            except RuntimeError:
+                pass
+
+        return aiohttp.ClientSession()
 
     def _get_async_client_session(self, dynamic_client_session: ClientSession | None = None) -> ClientSession:
         if dynamic_client_session:

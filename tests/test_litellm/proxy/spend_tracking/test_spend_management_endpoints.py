@@ -3136,6 +3136,90 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_view_spend_logs_bounds_row_count(client, monkeypatch):
+    """Every /spend/logs read path must send take=SPEND_LOGS_PAGINATION_COUNT_CAP to Prisma (LIT-6284)."""
+    captured_find_many_kwargs = []
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+            self.available_rows = 0
+
+        async def find_many(self, *args, **kwargs):
+            captured_find_many_kwargs.append(kwargs)
+            return [{}] * min(kwargs.get("take", 0), self.available_rows)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+        def hash_token(self, token):
+            return f"hashed-{token}"
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    start_date = (
+        datetime.datetime.now(timezone.utc) - datetime.timedelta(days=2)
+    ).strftime("%Y-%m-%d")
+    end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        response = client.get(
+            "/spend/logs",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert (
+            captured_find_many_kwargs[-1].get("take")
+            == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+        assert "x-litellm-spend-logs-truncated" not in response.headers
+
+        response = client.get(
+            "/spend/logs",
+            params={"user_id": "test-user"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert captured_find_many_kwargs[-1].get("where") == {"user": "test-user"}
+        assert (
+            captured_find_many_kwargs[-1].get("take")
+            == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "summarize": "false",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert "startTime" in captured_find_many_kwargs[-1].get("where", {})
+        assert (
+            captured_find_many_kwargs[-1].get("take")
+            == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+
+        mock_prisma_client.db.available_rows = (
+            spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        )
+        response = client.get(
+            "/spend/logs",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert len(response.json()) == spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+        assert response.headers["x-litellm-spend-logs-truncated"] == "true"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_view_spend_tags(client, monkeypatch):
     """Test the /spend/tags endpoint"""
 

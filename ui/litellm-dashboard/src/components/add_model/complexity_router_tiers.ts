@@ -1,5 +1,5 @@
-import type { ComplexityTiers } from "./ComplexityRouterConfig";
 import type { ComplexityTier } from "./KeywordTierRules";
+import { TIER_ORDER } from "./tier_rows";
 
 export type TierModelParams = Record<string, unknown>;
 
@@ -80,13 +80,13 @@ export const hydrateTierModelParams = (
  * tiers this editor does not render pass through rather than being dropped now the key is managed.
  */
 export const serializeTierModelConfigs = (
-  tiers: ComplexityTiers,
+  tiers: Record<string, string[]>,
   tierModelParams: TierModelParamsByTier | undefined,
 ): Record<string, { model_name: string; litellm_params: TierModelParams }[]> | undefined => {
   if (tierModelParams === undefined) return undefined;
   const serialized = Object.entries(tierModelParams)
     .map(([tier, byModel]) => {
-      const selected = (TIER_ORDER as string[]).includes(tier) ? new Set(tiers[tier as ComplexityTier]) : undefined;
+      const selected = tier in tiers ? new Set(tiers[tier]) : undefined;
       const entries = Object.entries(byModel)
         .filter(([model, params]) => (selected === undefined || selected.has(model)) && Object.keys(params).length > 0)
         .map(([model_name, litellm_params]) => ({ model_name, litellm_params }));
@@ -126,22 +126,12 @@ export const pruneTierModelParams = (
   return Object.keys(next).length > 0 ? next : undefined;
 };
 
-/**
- * Mirrors `init_complexity_router_deployment` (litellm/router.py): an explicit pin wins, otherwise
- * the default is `MEDIUM or SIMPLE`. Deriving past SIMPLE would name a model the backend never
- * picks, and it raises rather than falling through to COMPLEX/REASONING.
- */
-export const resolveComplexityDefaultModel = (tiers: ComplexityTiers, pinned?: string): string | undefined =>
-  pinned?.trim() || tiers.MEDIUM[0] || tiers.SIMPLE[0];
-
 export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
   SIMPLE: "Simple",
   MEDIUM: "Medium",
   COMPLEX: "Complex",
   REASONING: "Reasoning",
 };
-
-export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
 export const tierOptions = (
   tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
