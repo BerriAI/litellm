@@ -68,7 +68,7 @@ class WriterPinnedClient:
 
     __slots__ = ("db",)
 
-    def __init__(self, db: "PrismaWrapper | RoutingPrismaWrapper"):
+    def __init__(self, db: "PrismaWrapper | RoutingPrismaWrapper") -> None:
         self.db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db
 
 
