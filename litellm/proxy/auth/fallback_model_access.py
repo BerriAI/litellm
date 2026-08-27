@@ -4,10 +4,12 @@ Authorize router fallback targets against the caller's key, team and project mod
 `_enforce_key_and_fallback_model_access` only sees fallbacks the client sends in the request body.
 Fallbacks configured on the router (`router_settings.fallbacks` and friends) are chosen after auth,
 inside the router, so this predicate is injected into the router to re-run the same model access
-checks for each fallback target before it is attempted.
+checks for each fallback target before it is attempted. Opt-in via
+`general_settings.enforce_fallback_model_access: true`.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Final
 
 from pydantic import BaseModel, ValidationError
@@ -20,6 +22,10 @@ from litellm.router import Router
 
 class _RequestMetadata(BaseModel):
     user_api_key_auth: UserAPIKeyAuth | None = None
+
+
+class _FallbackAccessSettings(BaseModel):
+    enforce_fallback_model_access: bool = False
 
 
 async def is_model_authorized_for_token(*, model: str, valid_token: UserAPIKeyAuth, llm_router: Router) -> bool:
@@ -56,13 +62,29 @@ def _user_api_key_auth_from_request(request_kwargs: Mapping[str, object]) -> Use
     )
 
 
-async def router_fallback_access_check(*, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+def _enforced_by_general_settings() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return _FallbackAccessSettings.model_validate(general_settings).enforce_fallback_model_access
+
+
+@dataclass(frozen=True, slots=True)
+class RouterFallbackAccessCheck:
     """
-    `FallbackAccessCheck` for the proxy's router: a fallback target is attempted only when the
-    key behind the request could have requested it directly. Requests that carry no key (for
-    example internal health checks) are not restricted.
+    `FallbackAccessCheck` for the proxy's router: while `is_enforced()` is true, a fallback target
+    is attempted only when the key behind the request could have requested it directly. Requests
+    that carry no key (for example internal health checks) are not restricted.
     """
-    valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
-    if valid_token is None:
-        return True
-    return await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=llm_router)
+
+    is_enforced: Callable[[], bool]
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+        if not self.is_enforced():
+            return True
+        valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
+        if valid_token is None:
+            return True
+        return await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=llm_router)
+
+
+router_fallback_access_check: Final = RouterFallbackAccessCheck(is_enforced=_enforced_by_general_settings)

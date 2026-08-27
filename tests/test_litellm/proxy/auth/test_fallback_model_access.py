@@ -3,6 +3,7 @@ import pytest
 from litellm import Router
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.fallback_model_access import (
+    RouterFallbackAccessCheck,
     is_model_authorized_for_token,
     router_fallback_access_check,
 )
@@ -27,6 +28,14 @@ def _router() -> Router:
 
 def _key_limited_to(access_group: str) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="hashed", models=[access_group])
+
+
+def _request_with_key(metadata_field: str = "metadata") -> dict:
+    return {metadata_field: {"user_api_key_auth": _key_limited_to("open-group")}}
+
+
+ENFORCED = RouterFallbackAccessCheck(is_enforced=lambda: True)
+NOT_ENFORCED = RouterFallbackAccessCheck(is_enforced=lambda: False)
 
 
 @pytest.mark.asyncio
@@ -57,18 +66,42 @@ async def test_is_model_authorized_for_token_fails_closed_when_the_lookup_breaks
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
-async def test_router_fallback_access_check_authorizes_the_key_carried_in_request_metadata(metadata_field: str):
+async def test_enforced_check_authorizes_the_key_carried_in_request_metadata(metadata_field: str):
     router = _router()
-    request_kwargs = {metadata_field: {"user_api_key_auth": _key_limited_to("open-group")}}
+    request_kwargs = _request_with_key(metadata_field)
 
-    assert await router_fallback_access_check(model="open-model", request_kwargs=request_kwargs, llm_router=router)
-    assert not await router_fallback_access_check(
-        model="secret-model", request_kwargs=request_kwargs, llm_router=router
-    )
+    assert await ENFORCED(model="open-model", request_kwargs=request_kwargs, llm_router=router)
+    assert not await ENFORCED(model="secret-model", request_kwargs=request_kwargs, llm_router=router)
 
 
 @pytest.mark.asyncio
-async def test_router_fallback_access_check_does_not_restrict_requests_without_a_key():
-    assert await router_fallback_access_check(
-        model="secret-model", request_kwargs={"metadata": {}}, llm_router=_router()
+async def test_enforced_check_does_not_restrict_requests_without_a_key():
+    assert await ENFORCED(model="secret-model", request_kwargs={"metadata": {}}, llm_router=_router())
+
+
+@pytest.mark.asyncio
+async def test_check_allows_every_fallback_while_not_enforced():
+    assert await NOT_ENFORCED(model="secret-model", request_kwargs=_request_with_key(), llm_router=_router())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("general_settings", "expected"),
+    [
+        ({}, True),
+        ({"enforce_fallback_model_access": False}, True),
+        ({"enforce_fallback_model_access": True}, False),
+        ({"enforce_fallback_model_access": "true"}, False),
+    ],
+)
+async def test_proxy_check_reads_enforce_fallback_model_access_from_general_settings(
+    monkeypatch: pytest.MonkeyPatch, general_settings: dict, expected: bool
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    assert (
+        await router_fallback_access_check(
+            model="secret-model", request_kwargs=_request_with_key(), llm_router=_router()
+        )
+        is expected
     )
