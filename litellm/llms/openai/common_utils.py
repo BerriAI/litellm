@@ -2,6 +2,7 @@
 Common helpers / utils across al OpenAI endpoints
 """
 
+import copy
 import hashlib
 import inspect
 import json
@@ -33,6 +34,37 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_ssl_configuration,
 )
+
+
+def _contains_cache_control(value: object) -> bool:
+    # Iterative rather than recursive: the code-quality gate bans unignored recursion here,
+    # and request payloads are attacker-shaped, so an explicit worklist has no stack depth to blow.
+    pending: list[object] = [value]  # mutable-ok: a local worklist, never returned or stored
+    while pending:
+        node = pending.pop()  # rebind-ok: the loop variable of an explicit worklist
+        if isinstance(node, dict):
+            if "cache_control" in node:
+                return True
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+    return False
+
+
+def without_cache_control(item: object) -> object:
+    """Return `item` with every `cache_control` key removed, without touching the original.
+
+    `filter_value_from_dict` deletes the key in place and recurses into nested dicts and
+    lists, so the caller's own message, tool or input object has to be copied first: it
+    may reuse the same list on a provider that does support prompt caching. The copy is
+    skipped when there is nothing to strip, which keeps the object identity the
+    pass-through paths rely on and avoids a deep copy on every request.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
+
+    if not isinstance(item, dict) or not _contains_cache_control(item):
+        return item
+    return filter_value_from_dict(copy.deepcopy(item), "cache_control")
 
 
 def _get_client_init_params(cls: type) -> tuple[str, ...]:
