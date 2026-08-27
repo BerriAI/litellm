@@ -57,7 +57,7 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
       </p>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
-        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
             <DialogTitle>Classifier prompt</DialogTitle>
           </DialogHeader>
@@ -78,7 +78,7 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
           />
 
           <div className="mt-3">
-            <p className="text-xs font-medium">Always appended below your text</p>
+            <p className="text-xs font-medium">Tier definitions</p>
             <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs text-muted-foreground">
               {`Tiers:\n${appendedTierBullets(tierRows)}\n\n<injection guard and closing line>`}
             </pre>
