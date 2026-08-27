@@ -43560,85 +43560,6 @@
             "/v1/audio/transcriptions"
         ]
     },
-    "xai/grok-2": {
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true
-    },
-    "xai/grok-2-1212": {
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true
-    },
-    "xai/grok-2-latest": {
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_web_search": true
-    },
-    "xai/grok-2-vision": {
-        "input_cost_per_image": 2e-06,
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
-    "xai/grok-2-vision-1212": {
-        "deprecation_date": "2026-02-28",
-        "input_cost_per_image": 2e-06,
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
-    "xai/grok-2-vision-latest": {
-        "input_cost_per_image": 2e-06,
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
     "xai/grok-3": {
         "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
@@ -44024,7 +43945,7 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "max_tokens": 1000000,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
@@ -44036,7 +43957,10 @@
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "output_cost_per_token_above_200k_tokens": 5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "xai/grok-4.20-beta-0309-reasoning": {
         "cache_read_input_token_cost": 2e-07,
@@ -44205,19 +44129,6 @@
         "supports_vision": true,
         "supports_web_search": true
     },
-    "xai/grok-beta": {
-        "input_cost_per_token": 5e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
     "xai/grok-code-fast": {
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 1e-06,
@@ -44280,20 +44191,6 @@
         "supports_response_schema": true,
         "supports_vision": true,
         "deprecation_date": "2026-05-15"
-    },
-    "xai/grok-vision-beta": {
-        "input_cost_per_image": 5e-06,
-        "input_cost_per_token": 5e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
-        "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true
     },
     "zai.glm-4.7": {
         "input_cost_per_token": 6e-07,
@@ -50964,7 +50861,7 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "max_tokens": 1000000,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 2.5e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
@@ -50976,7 +50873,10 @@
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "output_cost_per_token_above_200k_tokens": 5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 4e-07,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "xai/grok-build-0.1": {
         "cache_read_input_token_cost": 2e-07,
