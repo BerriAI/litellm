@@ -1308,21 +1308,37 @@ _ZERO_COST_BREAKDOWN: Final = CostBreakdownHeaderValues(
 read or management route still finds the whole family rather than a partially populated one."""
 
 
+def _totals_to_zero(response_cost: float | str | None) -> bool:
+    """Whether the total these headers carry is zero, counting a total no route ever priced as one.
+
+    A component split is only reported as zero alongside a total that agrees with it, so a read
+    that did price normally never advertises a real total beside an all-zero split.
+    """
+    if response_cost is None or response_cost == "":
+        return True
+    try:
+        return float(response_cost) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
+    response_cost: float | str | None = None,
 ) -> CostBreakdownHeaderValues:
     """Extract discount, margin, and per-component cost information from logging object's cost breakdown.
 
     A non-inference call that priced at zero never records a breakdown, so its components are
     reported as zero here. Any such call that did price normally (retrieving a background response,
-    and the cost poller's read of one) has a stored breakdown and takes the branch below instead.
+    and the cost poller's read of one) reports the breakdown it stored, or nothing at all when the
+    breakdown has not landed yet.
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
         return CostBreakdownHeaderValues()
 
     cost_breakdown: Final = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
-        if litellm_logging_obj.call_type in NON_INFERENCE_CALL_TYPES:
+        if litellm_logging_obj.call_type in NON_INFERENCE_CALL_TYPES and _totals_to_zero(response_cost):
             return _ZERO_COST_BREAKDOWN
         return CostBreakdownHeaderValues()
 
@@ -1467,7 +1483,9 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
 
-        cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(litellm_logging_obj=litellm_logging_obj)
+        cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
+        )
 
         # Calculate updated spend for header (include current response_cost)
         current_spend: Final = user_api_key_dict.spend or 0.0

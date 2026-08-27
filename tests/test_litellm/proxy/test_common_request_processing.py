@@ -5116,6 +5116,27 @@ class TestCostHeadersForCallsPricedAtZero:
 
         assert breakdown == CostBreakdownHeaderValues()
 
+    def test_cost_breakdown_never_zeroes_the_split_under_a_real_total(self):
+        """Reading a background response prices normally, so a breakdown that has not landed by the
+        time headers are built is reported as absent rather than as a zero split contradicting the
+        real total alongside it."""
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses"),
+            response_cost=1.96e-05,
+        )
+
+        assert breakdown == CostBreakdownHeaderValues()
+
+    def test_cost_breakdown_reports_zero_components_under_a_zero_total(self):
+        breakdown = _get_cost_breakdown_from_logging_obj(
+            litellm_logging_obj=self._logging_obj(call_type="aget_responses"),
+            response_cost=0.0,
+        )
+
+        assert breakdown.original_cost == 0.0
+        assert breakdown.input_cost == 0.0
+        assert breakdown.output_cost == 0.0
+
 
 class TestPreCallWithFallbacksOnLocalRateLimit:
 
