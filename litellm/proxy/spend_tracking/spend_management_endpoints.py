@@ -2315,7 +2315,7 @@ async def ui_view_spend_logs(
             param="sort_order",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    if cache_hit_filter is not None and cache_hit_filter not in {"hit", "miss"}:
+    if isinstance(cache_hit_filter, str) and cache_hit_filter not in {"hit", "miss"}:
         raise ProxyException(
             message=f"Invalid cache_hit_filter: {cache_hit_filter}. Must be one of: hit, miss",
             type="bad_request",
