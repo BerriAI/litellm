@@ -242,6 +242,7 @@ LLM_CONFIG_NAMES: Final = (
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "BedrockOpenAIResponsesConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "VertexAIInteractionsConfig",
@@ -900,6 +901,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "BedrockOpenAIResponsesConfig": (
+        ".llms.bedrock.responses.transformation",
+        "BedrockOpenAIResponsesConfig",
+    ),
     "BedrockMantleChatConfig": (
         ".llms.bedrock_mantle.chat.transformation",
         "BedrockMantleChatConfig",
