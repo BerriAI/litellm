@@ -37,7 +37,8 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: matches the base chat transform signature
-        headers.setdefault("X-Pplx-Integration", "litellm")
+        if not any(name.lower() == "x-pplx-integration" for name in headers):
+            headers["X-Pplx-Integration"] = "litellm"
         return super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
