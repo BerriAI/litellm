@@ -1,11 +1,11 @@
 """Contract machinery shared by every `/management/v1` route."""
 
+from collections.abc import Iterator
 from typing import Final
 from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.dependencies.utils import get_flat_params
-from fastapi.params import ParamTypes
+from fastapi.dependencies.models import Dependant
 from fastapi.responses import JSONResponse
 
 from litellm.types.proxy.management_endpoints.management_v1 import (
@@ -38,18 +38,19 @@ def problem_response(problem: ProblemDetail) -> JSONResponse:
     )
 
 
+def _query_param_aliases(dependant: Dependant) -> Iterator[str]:
+    for field in dependant.query_params:
+        yield field.alias
+    for sub_dependant in dependant.dependencies:
+        yield from _query_param_aliases(sub_dependant)
+
+
 def _declared_query_params(request: Request) -> frozenset[str]:
     route: Final = request.scope.get("route")
     dependant: Final = getattr(route, "dependant", None)
-    if dependant is None:
+    if not isinstance(dependant, Dependant):
         return frozenset()
-    # fastapi>=0.140.7 removed get_flat_dependant(); get_flat_params() returns the
-    # flattened (deduped) param list. Filter to query params to match the old behavior.
-    return frozenset(
-        field.alias
-        for field in get_flat_params(dependant)
-        if getattr(field.field_info, "in_", None) == ParamTypes.query
-    )
+    return frozenset(_query_param_aliases(dependant))
 
 
 def escape_like(value: str) -> str:
