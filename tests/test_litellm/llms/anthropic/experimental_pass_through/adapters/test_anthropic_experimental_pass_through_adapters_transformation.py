@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
+    AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
     truncate_tool_name,
@@ -2305,6 +2306,53 @@ def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
     result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
     assert result[0]["function"]["name"] == "litellm_unnamed_tool_0"
     assert result[1]["function"]["name"] == "litellm_unnamed_tool_1"
+
+
+def test_translate_anthropic_tools_to_openai_passes_provider_native_tool_dicts_through():
+    """Deployment-level provider-native tools (e.g. Gemini googleMaps) must reach the provider transformation verbatim (LIT-6286)."""
+    tools = [
+        {"googleMaps": {}},
+        {"googleSearch": {}},
+        {
+            "name": "get_weather",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+        },
+    ]
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+    assert result[0] == {"googleMaps": {}}
+    assert result[1] == {"googleSearch": {}}
+    assert result[2]["function"]["name"] == "get_weather"
+    assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_tools_to_openai_passes_openai_function_tools_through():
+    """A tool already in OpenAI function format must pass through unchanged instead of becoming litellm_unnamed_tool_N."""
+    openai_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+        },
+    }
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=[openai_tool], model=None)
+    assert result == [openai_tool]
+
+
+def test_translate_completion_input_params_keeps_provider_native_tools():
+    """/v1/messages request translation must keep router-merged provider-native tools in kwargs['tools'] (LIT-6286)."""
+    adapter = AnthropicAdapter()
+    translated = adapter.translate_completion_input_params(
+        {
+            "model": "gemini/gemini-2.5-flash",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "coffee shops near Union Square"}],
+            "tools": [{"googleMaps": {}}],
+        }
+    )
+    assert translated is not None
+    assert translated["tools"] == [{"googleMaps": {}}]
 
 
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
