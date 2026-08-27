@@ -33,7 +33,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     BACKGROUND_TASKS as _BACKGROUND_TASKS,
     CONCURRENCY_MIN_SAFETY_TTL_SECONDS as _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
 )
-from litellm.types.router import Deployment, RoutingGroup, TagRateLimitEntry, TagRateLimitScope
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, RoutingGroup, TagRateLimitEntry, TagRateLimitScope
 
 
 class TimeController:
@@ -1626,6 +1626,7 @@ async def test_log_success_event_uses_admissions_own_candidate_set_when_group_me
     request_kwargs, model_call_details = _call_context(["end_user_id:u1"])
 
     healthy = router._get_routing_group_deployments(model="my-group", team_id=None)
+    assert healthy is not None
     admitted = await limiter.async_filter_deployments(
         model="my-group", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
     )
@@ -1634,12 +1635,14 @@ async def test_log_success_event_uses_admissions_own_candidate_set_when_group_me
         "my-group", team_id=None, candidate_model_names=("backend-a", "backend-b")
     )[0].resolved_group
 
-    router.get_routing_group("my-group").models.append("backend-0")
+    routing_group = router.get_routing_group("my-group")
+    assert routing_group is not None
+    routing_group.models.append("backend-0")
     router.add_deployment(
         Deployment(
             model_name="backend-0",
-            litellm_params={"model": "gpt-4o", "mock_response": "ok"},  # type: ignore
-            model_info={"id": "dep-0", "tag_rate_limits": token_limits},
+            litellm_params=LiteLLM_Params(model="gpt-4o", mock_response="ok"),
+            model_info=ModelInfo(id="dep-0", tag_rate_limits=token_limits),
         )
     )
     serving_deployment_id = "dep-b" if admission_bucket_group == "backend-a" else "dep-a"
