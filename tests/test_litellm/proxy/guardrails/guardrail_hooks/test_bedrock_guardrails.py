@@ -3,13 +3,13 @@ Unit tests for Bedrock Guardrails
 """
 
 import json
+import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import HTTPException
-
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -5274,3 +5274,81 @@ async def test_terminal_failure_logs_usage_and_cost_of_prior_passed_chunks(monke
     assert logged["guardrail_cost"] == pytest.approx(0.0003)
     assert logged["guardrail_response"]["usage"] == {"contentPolicyUnits": 2, "wordPolicyUnits": 1}
     assert "error" in logged["guardrail_response"]
+
+
+class TestRequestApiKeyIsNotAlwaysABedrockCredential:
+    """request_data["api_key"] is the LLM call's key, not this guardrail's.
+
+    Credential-override routing writes the caller's BYOK provider key into that
+    field, so on a non-Bedrock deployment using it as an ApplyGuardrail bearer
+    token both fails signing with a 403 and sends the caller's third-party secret
+    to AWS (issue #37872).
+    """
+
+    @staticmethod
+    def _guardrail():
+        return BedrockGuardrail(guardrailIdentifier="gid", guardrailVersion="DRAFT")
+
+    @pytest.mark.parametrize(
+        "request_data, expected",
+        [
+            # BYOK credential override on a non-Bedrock deployment: never a Bedrock key.
+            ({"model": "nvidia_nim/meta/llama-3.1-8b", "api_key": "nvapi-xxx"}, False),
+            ({"model": "openrouter/anthropic/claude-3", "api_key": "sk-or-xxx"}, False),
+            ({"custom_llm_provider": "nvidia_nim", "model": "meta/llama", "api_key": "nvapi-xxx"}, False),
+            # Bedrock-routed requests keep the existing clientside-key behaviour.
+            ({"model": "bedrock/anthropic.claude-3", "api_key": "bedrock-key"}, True),
+            ({"custom_llm_provider": "bedrock", "model": "anthropic.claude-3", "api_key": "k"}, True),
+            ({"litellm_params": {"custom_llm_provider": "bedrock"}, "model": "x/y", "api_key": "k"}, True),
+            # Nothing to route on: unchanged, so a clientside Bedrock key still works.
+            ({"model": "claude-sonnet", "api_key": "k"}, True),
+            ({"api_key": "k"}, True),
+            # No request data at all.
+            (None, False),
+            ({}, False),
+        ],
+    )
+    def test_only_a_bedrock_routed_request_yields_a_bedrock_credential(self, request_data, expected):
+        assert self._guardrail()._request_api_key_is_a_bedrock_credential(request_data) is expected
+
+    def test_byok_key_is_not_sent_to_aws_as_a_bearer_token(self):
+        """End to end through _prepare_request: the NIM key must not become Authorization."""
+        guardrail = self._guardrail()
+        credentials = MagicMock()
+        credentials.access_key, credentials.secret_key, credentials.token = "ak", "sk", None
+        request_data = {"model": "nvidia_nim/meta/llama-3.1-8b", "api_key": "nvapi-SECRET"}
+
+        api_key = request_data["api_key"] if guardrail._request_api_key_is_a_bedrock_credential(request_data) else None
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+            prepped = guardrail._prepare_request(
+                credentials=credentials,
+                data={"source": "INPUT", "content": [{"text": {"text": "hi"}}]},
+                optional_params={},
+                aws_region_name="us-east-1",
+                api_key=api_key,
+            )
+
+        assert "nvapi-SECRET" not in str(dict(prepped.headers))
+        assert prepped.headers.get("Authorization", "") != "Bearer nvapi-SECRET"
+
+    def test_an_explicit_bedrock_key_still_becomes_the_bearer_token(self):
+        """Control: _prepare_request is untouched, so it passes with or without the fix.
+
+        Written against _prepare_request directly rather than through the new helper,
+        so it proves the capability the api_key field exists for is not regressed.
+        """
+        guardrail = self._guardrail()
+        credentials = MagicMock()
+        credentials.access_key, credentials.secret_key, credentials.token = "ak", "sk", None
+
+        api_key = "bedrock-KEY"
+        prepped = guardrail._prepare_request(
+            credentials=credentials,
+            data={"source": "INPUT", "content": [{"text": {"text": "hi"}}]},
+            optional_params={},
+            aws_region_name="us-east-1",
+            api_key=api_key,
+        )
+
+        assert prepped.headers.get("Authorization") == "Bearer bedrock-KEY"
