@@ -15216,6 +15216,29 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "databricks/databricks-glm-5-3-flash": {
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "metadata": {
+            "notes": "Databricks has not published pay-per-token DBU rates for this model yet (not on the foundation-model-serving pricing page as of 2026-08-27), so cost fields are omitted until rates are published."
+        },
+        "mode": "chat",
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "databricks/databricks-gpt-5": {
         "cache_creation_input_token_cost": 1.24999e-06,
         "cache_read_input_token_cost": 1.2502e-07,
