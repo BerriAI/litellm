@@ -280,6 +280,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   mcp_tool_search_enabled Boolean?
+  mcp_tool_search_top_k   Int?
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]

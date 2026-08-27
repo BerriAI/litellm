@@ -23,3 +23,4 @@ class ObjectPermissionDict(TypedDict, total=False):
     models: list[str] | None
     search_tools: list[str] | None
     mcp_tool_search_enabled: bool | None
+    mcp_tool_search_top_k: int | None  # writable-ok: mutated on in-memory dict payloads before persistence
