@@ -1418,7 +1418,7 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
 _CLIENT_DISCONNECT_DETAIL: Final = "Client disconnected the request"
 
 
-def _log_llm_api_exception(e: Exception) -> None:
+def _log_llm_api_exception(e: Exception, litellm_call_id: str | None = None) -> None:
     if getattr(e, "status_code", None) == 499 and getattr(e, "detail", None) == _CLIENT_DISCONNECT_DETAIL:
         verbose_proxy_logger.info(
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, upstream LLM request cancelled"
@@ -1429,7 +1429,15 @@ def _log_llm_api_exception(e: Exception) -> None:
         if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
         else verbose_proxy_logger.exception
     )
-    log_fn("litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s", e)
+    log_fn(
+        "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s",
+        e,
+        extra=(
+            {"litellm_call_id": litellm_call_id}
+            if litellm_call_id is not None
+            else None
+        ),
+    )
 
 
 async def _cancel_llm_call_on_client_disconnect(
@@ -3164,7 +3172,7 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        _log_llm_api_exception(e)
+        _log_llm_api_exception(e, self.data.get("litellm_call_id"))
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
