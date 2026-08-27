@@ -175,6 +175,15 @@ def _deployment_id(deployment: Mapping[str, object]) -> str | None:
     return (deployment.get("model_info") or _EMPTY_MAPPING).get("id")
 
 
+def _model_name_of(deployment: Mapping[str, object]) -> str:
+    """`model_name` is a required field on every deployment dict; `str(...)`
+    (rather than a bare index) gives `sorted`/`groupby`'s key functions a
+    provably orderable, hashable return type without an unsafe cast -- every
+    real deployment's value here is already a string, so this is a no-op
+    coercion in practice."""
+    return str(deployment["model_name"])
+
+
 def _extract_team_id(request_kwargs: Mapping[str, object], metadata_variable_name: str) -> str | None:
     """Reads `user_api_key_team_id` from only the one field
     `get_metadata_variable_name_from_kwargs` names as authoritative for this
@@ -444,7 +453,7 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
     would have seen them in without the sort, which is what keeps this safe
     (that relative order decides first-seen signature order downstream).
     """
-    sorted_by_model_name: Final = sorted(model_list, key=lambda deployment: deployment["model_name"])
+    sorted_by_model_name: Final = sorted(model_list, key=_model_name_of)
     by_model_name: Final[Mapping[str, tuple[_ConfiguredLimit, ...]]] = MappingProxyType(
         {
             model_name: (
@@ -461,9 +470,7 @@ def _build_limits_index(model_list: Sequence[Mapping[str, object]]) -> _LimitsIn
                 if (team_scope := next((key[0] for dep in group if (key := _team_alias_key(dep))), None)) is not None
                 else configured
             )
-            for model_name, deployment_group in groupby(
-                sorted_by_model_name, key=lambda deployment: deployment["model_name"]
-            )
+            for model_name, deployment_group in groupby(sorted_by_model_name, key=_model_name_of)
             for group in (tuple(deployment_group),)
             if (configured := tuple(limit for unit in _LIMIT_UNITS for limit in _build_group_limits(group, unit)))
         }
@@ -1727,7 +1734,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             partition = await self._partition_for(partition_key)  # not Final: rebound each loop iteration
             accounting_task = asyncio.create_task(  # not Final: rebound each loop iteration
                 partition.v3.async_increment_tokens_with_ttl_preservation(
-                    pipeline_operations=tuple(group_operations),
+                    pipeline_operations=group_operations,
                     parent_otel_span=parent_otel_span,
                 )
             )
