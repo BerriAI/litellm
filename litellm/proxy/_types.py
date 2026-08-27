@@ -579,6 +579,7 @@ class LiteLLMRoutes(enum.Enum):
         + litellm_native_routes
         + list(agent_inference_routes)
         + model_info_routes
+        + ["/model_group/info"]
     )
     info_routes = [
         "/key/info",

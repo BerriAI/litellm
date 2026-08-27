@@ -523,9 +523,31 @@ def test_virtual_key_llm_api_routes_allows_model_info(route):
     assert result is True
 
 
-@pytest.mark.parametrize("route", ["/model/info", "/v1/model/info"])
+@pytest.mark.parametrize("route", ["/model_group/info"])
+def test_virtual_key_llm_api_routes_allows_model_group_info(route):
+    """AI API virtual keys must be able to read group-level model metadata
+    (pricing, mode, context window) for the groups they can already call.
+    The handler scopes its response to the caller's model access and returns
+    no api_base or credentials.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+        request=_mock_request("GET"),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize("route", ["/model/info", "/v1/model/info", "/model_group/info"])
 def test_model_info_not_classified_as_llm_api(route):
-    """Membership in `llm_api_routes` must not promote /model/info to an
+    """Membership in `llm_api_routes` must not promote model-metadata reads to an
     `is_llm_api_route()`. That predicate gates DISABLE_LLM_API_ENDPOINTS,
     global/virtual-key budget enforcement, enforce_user_param and the JWT
     x-litellm-team-id attachment; model metadata is a free read and must stay
@@ -535,10 +557,10 @@ def test_model_info_not_classified_as_llm_api(route):
     assert RouteChecks.is_llm_api_route(route=route) is False
 
 
-@pytest.mark.parametrize("route", ["/v2/model/info", "/model_group/info"])
+@pytest.mark.parametrize("route", ["/v2/model/info"])
 def test_virtual_key_llm_api_routes_denies_other_model_info_routes(route):
-    """The grant is scoped to the two /model/info paths. The paginated Admin UI
-    listing and the model-group endpoint stay outside it.
+    """The grant covers /model_group/info (group-level metadata scoped to the
+    caller's model access) but not the paginated Admin UI deployment listing.
     """
 
     valid_token = UserAPIKeyAuth(
