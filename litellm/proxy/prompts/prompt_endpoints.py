@@ -554,8 +554,10 @@ async def get_prompt_info(
         if env_prompts:
             prompt_spec = create_versioned_prompt_spec(db_prompt=env_prompts[0])
 
-    if prompt_spec is None and environment is None:
-        prompt_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(prompt_id, version=requested_version)
+    if prompt_spec is None:
+        prompt_spec = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(
+            prompt_id, version=requested_version, environment=environment
+        )
 
     if prompt_spec is None:
         raise HTTPException(

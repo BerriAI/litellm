@@ -368,3 +368,95 @@ class TestAdminViewerReadAccess:
 
         assert response.prompt_spec.prompt_id == "jack"
         assert response.prompt_spec.version == 2
+
+
+class TestConfigPromptInfoWithEnvironment:
+    """
+    Regression: /prompts/{id}/info with an environment param must still resolve
+    config-file (in-memory) prompts on a DB-backed proxy instead of 400ing.
+    """
+
+    def _registry_with_config_prompt(self):
+        from litellm.proxy.prompts.prompt_registry import InMemoryPromptRegistry
+
+        registry = InMemoryPromptRegistry()
+        registry.IN_MEMORY_PROMPTS["envgreet::development"] = PromptSpec(
+            prompt_id="envgreet",
+            litellm_params=PromptLiteLLMParams(
+                prompt_id="envgreet",
+                prompt_integration="dotprompt",
+                dotprompt_content="AHOY {{user_message}}",
+            ),
+            prompt_info=PromptInfo(prompt_type="config"),
+        )
+        return registry
+
+    def _prisma_client_with_empty_prompt_table(self):
+        from unittest.mock import AsyncMock
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
+        return mock_prisma
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_info_with_environment_falls_back_to_registry(self):
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
+
+        admin = UserAPIKeyAuth(
+            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.proxy_server.prisma_client",
+                self._prisma_client_with_empty_prompt_table(),
+            ),
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY",
+                self._registry_with_config_prompt(),
+            ),
+        ):
+            response = await get_prompt_info(
+                prompt_id="envgreet",
+                environment="development",
+                user_api_key_dict=admin,
+            )
+
+        assert response.prompt_spec.prompt_id == "envgreet"
+        assert response.prompt_spec.litellm_params.dotprompt_content == "AHOY {{user_message}}"
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_info_with_wrong_environment_still_400s(self):
+        from unittest.mock import patch
+
+        from fastapi import HTTPException
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
+
+        admin = UserAPIKeyAuth(
+            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.proxy_server.prisma_client",
+                self._prisma_client_with_empty_prompt_table(),
+            ),
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY",
+                self._registry_with_config_prompt(),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_prompt_info(
+                    prompt_id="envgreet",
+                    environment="production",
+                    user_api_key_dict=admin,
+                )
+
+        assert exc_info.value.status_code == 400
+        assert "environment production" in exc_info.value.detail
