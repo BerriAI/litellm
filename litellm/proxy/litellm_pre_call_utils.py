@@ -1355,6 +1355,19 @@ class LiteLLMProxyRequestSetup:
         )
         if user_api_key_dict.budget_reservation is not None:
             data[_metadata_variable_name]["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+
+        # Every team/org this request is attributed to, stamped as plain metadata
+        # so the cost callback reads it the same way it reads
+        # user_api_key_team_id. Written only when track_spend_across_all_user_teams
+        # is on, so the default path adds no metadata keys at all. Deliberately
+        # not folded into StandardLoggingUserAPIKeyMetadata: that TypedDict is
+        # consumed by ~20 logging integrations and widening it would make this a
+        # breaking payload change rather than an additive proxy feature.
+        LiteLLMProxyRequestSetup._add_attributed_membership_metadata(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            _metadata_variable_name=_metadata_variable_name,
+        )
         # UserAPIKeyAuth object for MCP server access control
         data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
             update={
@@ -1365,6 +1378,39 @@ class LiteLLMProxyRequestSetup:
             }
         )
         return data
+
+    @staticmethod
+    def _add_attributed_membership_metadata(
+        data: dict,  # mutable-ok: every sibling stamper in this class writes into the caller's request dict
+        user_api_key_dict: UserAPIKeyAuth,
+        _metadata_variable_name: str,
+    ) -> None:
+        """Stamp the attributed team/org ids for the cost callback.
+
+        No-op unless ``track_spend_across_all_user_teams`` is on AND auth
+        actually resolved a membership set, so a deployment with the setting off
+        carries exactly the metadata it carries today.
+        """
+        from litellm.proxy.auth.membership_attribution import (
+            attributed_org_ids,
+            attributed_team_ids,
+            spend_attribution_enabled,
+        )
+        from litellm.proxy.proxy_server import general_settings
+
+        if not spend_attribution_enabled(general_settings):
+            return
+        if user_api_key_dict.attributed_team_ids is None and user_api_key_dict.attributed_org_ids is None:
+            return
+
+        # Stored as tuples. This dict is serialized into the spend-log payload,
+        # and json.dumps renders a tuple as an array exactly like a list; the
+        # reader (_metadata_id_list) accepts either, so a JSON round trip that
+        # turns these back into lists is also fine.
+        team_ids: Final = attributed_team_ids(user_api_key_dict)
+        org_ids: Final = attributed_org_ids(user_api_key_dict)
+        data[_metadata_variable_name]["user_api_key_attributed_team_ids"] = team_ids  # rebind-ok: metadata stamp
+        data[_metadata_variable_name]["user_api_key_attributed_org_ids"] = org_ids  # rebind-ok: metadata stamp
 
     @staticmethod
     def add_management_endpoint_metadata_to_request_metadata(

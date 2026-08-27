@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final, cast
 
@@ -206,6 +207,8 @@ class _ProxyDBLogger(CustomLogger):
             start_time=actual_start_time,
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
+            attributed_team_ids=_attributed_team_ids(user_api_key_dict),
+            attributed_org_ids=_attributed_org_ids(user_api_key_dict),
         )
 
     @log_db_metrics
@@ -245,6 +248,10 @@ class _ProxyDBLogger(CustomLogger):
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
             team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
             org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
+            # Present only when track_spend_across_all_user_teams is on; None
+            # otherwise, which keeps the single-team write path unchanged.
+            attributed_team_ids: Final = _metadata_id_list(metadata, "user_api_key_attributed_team_ids")
+            attributed_org_ids: Final = _metadata_id_list(metadata, "user_api_key_attributed_org_ids")
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -293,6 +300,8 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
                         request_tags=tags,
+                        attributed_team_ids=attributed_team_ids,
+                        attributed_org_ids=attributed_org_ids,
                     )
 
                     # update cache (fire-and-forget for backward compat:
@@ -538,6 +547,33 @@ def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
     return getattr(user_api_key_auth_obj, "budget_reservation", None)
 
 
+def _metadata_id_list(metadata: Mapping[str, object], key: str) -> tuple[str, ...] | None:
+    """Read a stamped id list out of request metadata, or None if absent.
+
+    Returns None (not an empty tuple) when the key is missing, so downstream
+    writers can tell "attribution off" apart from "attribution on, nothing
+    resolved".
+    """
+    value: Final = metadata.get(key)
+    # tuple as stamped, list after any JSON round trip
+    if not isinstance(value, (list, tuple)):
+        return None
+    ids: Final = tuple(v for v in value if isinstance(v, str) and v)
+    return ids or None
+
+
+def _attributed_team_ids(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...] | None:
+    from litellm.proxy.auth.membership_attribution import attributed_team_ids
+
+    return attributed_team_ids(user_api_key_dict) if user_api_key_dict.attributed_team_ids else None
+
+
+def _attributed_org_ids(user_api_key_dict: UserAPIKeyAuth) -> tuple[str, ...] | None:
+    from litellm.proxy.auth.membership_attribution import attributed_org_ids
+
+    return attributed_org_ids(user_api_key_dict) if user_api_key_dict.attributed_org_ids else None
+
+
 def _get_request_tags_for_cost_tracking(
     sl_object: StandardLoggingPayload | None,
     metadata: dict,
@@ -569,6 +605,8 @@ async def _update_database_and_spend_counters(
     response_cost: float,
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
+    attributed_team_ids: Sequence[str] | None = None,
+    attributed_org_ids: Sequence[str] | None = None,
 ) -> None:
     try:
         await proxy_logging_obj.db_spend_update_writer.update_database(
@@ -582,6 +620,8 @@ async def _update_database_and_spend_counters(
             start_time=start_time,
             end_time=end_time,
             org_id=org_id,
+            attributed_team_ids=attributed_team_ids,
+            attributed_org_ids=attributed_org_ids,
         )
     except Exception:
         if budget_reservation is not None:
@@ -607,6 +647,8 @@ async def _update_database_and_spend_counters(
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
+            attributed_team_ids=attributed_team_ids,
+            attributed_org_ids=attributed_org_ids,
         )
     except Exception:
         if budget_reservation is not None:

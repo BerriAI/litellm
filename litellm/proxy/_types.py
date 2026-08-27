@@ -2381,6 +2381,28 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     use_google_kms: bool | None = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: bool | None = Field(None, description="load keys from azure key vault")
+    track_spend_across_all_user_teams: bool | None = Field(
+        None,
+        description=(
+            "attribute each request's spend to EVERY team the calling user belongs to "
+            "(and every organization reached through those teams), not only the team "
+            "stamped on the virtual key. Budget gates expand to match, so one "
+            "over-budget team blocks the caller everywhere. Summing team spend then "
+            "exceeds real spend by design, because one request is charged to several "
+            "teams; key, user, and org totals stay single-counted. Default off."
+        ),
+    )
+    enforce_rate_limits_across_all_user_teams: bool | None = Field(
+        None,
+        description=(
+            "apply the RPM/TPM limits of EVERY team the calling user belongs to, not "
+            "only the team stamped on the virtual key. The caller's effective limit "
+            "becomes the minimum across their memberships, so a busy team can throttle "
+            "someone who is mostly working for a different team. Separate from "
+            "track_spend_across_all_user_teams so spend attribution can be adopted "
+            "without this. Default off."
+        ),
+    )
     master_key: str | None = Field(None, description="require a key for all calls to proxy")
     coordination_redis: CoordinationRedisParams | None = Field(
         None,
@@ -2782,6 +2804,20 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_rpm_limit: int | None = None
     organization_metadata: dict | None = None
 
+    # Membership attribution params (see litellm/proxy/auth/membership_attribution.py).
+    # Populated during auth ONLY when track_spend_across_all_user_teams or
+    # enforce_rate_limits_across_all_user_teams is on; None otherwise, so the
+    # default single-team path is untouched. Server-only and stripped from
+    # validated input for the same reason as mcp_source_team_rpm_limits below:
+    # a forged entry would let a caller choose which teams they are charged
+    # against, or name a team with generous limits to escape their real ones.
+    attributed_team_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
+    attributed_org_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
+    # team_id -> {"rpm": int | None, "tpm": int | None}. Precomputed during auth
+    # because rate-limit descriptor construction is synchronous and cannot await
+    # a per-team lookup.
+    attributed_team_limits: Mapping[str, Mapping[str, int | None]] | None = Field(default=None, exclude=True)
+
     # Project Params
     project_alias: str | None = None
     project_metadata: dict | None = None
@@ -2892,6 +2928,9 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_id", None)
         values.pop("via_virtual_key", None)
+        values.pop("attributed_team_ids", None)
+        values.pop("attributed_org_ids", None)
+        values.pop("attributed_team_limits", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):

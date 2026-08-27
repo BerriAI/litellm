@@ -12,6 +12,7 @@ import os
 import random
 import time
 import traceback
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 
@@ -160,6 +161,11 @@ class DBSpendUpdateWriter:
         start_time: datetime | None,
         end_time: datetime | None,
         response_cost: float | None,
+        # Every team/org this request is attributed to, when
+        # track_spend_across_all_user_teams is on. None keeps the historical
+        # single-team/single-org behavior.
+        attributed_team_ids: Sequence[str] | None = None,
+        attributed_org_ids: Sequence[str] | None = None,
     ):
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
@@ -238,6 +244,8 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
+                    attributed_team_ids=attributed_team_ids,
+                    attributed_org_ids=attributed_org_ids,
                 )
             )
 
@@ -429,6 +437,8 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient | None,
         litellm_proxy_budget_name: str | None,
         payload: SpendLogsPayload,
+        attributed_team_ids: Sequence[str] | None = None,
+        attributed_org_ids: Sequence[str] | None = None,
     ):
         """
         Runs all 11 spend-update helpers sequentially inside a single asyncio task.
@@ -472,6 +482,7 @@ class DBSpendUpdateWriter:
                 team_id=team_id,
                 user_id=user_id,
                 prisma_client=prisma_client,
+                attributed_team_ids=attributed_team_ids,
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -484,6 +495,7 @@ class DBSpendUpdateWriter:
                 response_cost=response_cost,
                 org_id=org_id,
                 prisma_client=prisma_client,
+                attributed_org_ids=attributed_org_ids,
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -553,6 +565,7 @@ class DBSpendUpdateWriter:
             await self.add_spend_log_transaction_to_daily_team_transaction(
                 payload=payload_copy,
                 prisma_client=prisma_client,
+                attributed_team_ids=attributed_team_ids,
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -565,6 +578,7 @@ class DBSpendUpdateWriter:
                 payload=payload_copy,
                 org_id=org_id,
                 prisma_client=prisma_client,
+                attributed_org_ids=attributed_org_ids,
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -651,54 +665,76 @@ class DBSpendUpdateWriter:
                 exc=e,
             )
 
+    @staticmethod
+    def _attribution_targets(attributed_ids: Sequence[str] | None, stamped_id: str | None) -> tuple[str, ...]:
+        """The entity ids to charge for one request. See ``attribution_targets``."""
+        from litellm.proxy.auth.membership_attribution import attribution_targets
+
+        return attribution_targets(attributed_ids, stamped_id)
+
     async def _update_team_db(
         self,
         response_cost: float | None,
         team_id: str | None,
         user_id: str | None,
         prisma_client: PrismaClient | None,
+        attributed_team_ids: Sequence[str] | None = None,
     ):
+        """Charge the request to every team it is attributed to.
+
+        With ``track_spend_across_all_user_teams`` off, ``attributed_team_ids``
+        is None and this charges the single stamped team, exactly as before.
+
+        Note the deliberate consequence when it is on: summing team spend across
+        the deployment then exceeds real spend, because one request is charged to
+        each of the caller's teams on purpose. The key, user, and org rows stay
+        single-counted, so those remain true totals.
+        """
+        target_team_ids: Final = self._attribution_targets(attributed_team_ids, team_id)
         try:
-            if team_id is None or prisma_client is None:
+            if not target_team_ids or prisma_client is None:
                 verbose_proxy_logger.debug(
-                    "track_cost_callback: team_id is None or prisma_client is None. Not tracking spend for team"
+                    "track_cost_callback: no attributed team or prisma_client is None. Not tracking spend for team"
                 )
                 return
 
-            await self.spend_update_queue.add_update(
-                update=SpendUpdateQueueItem(
-                    entity_type=Litellm_EntityType.TEAM,
-                    entity_id=team_id,
-                    response_cost=response_cost,
-                )
-            )
-
-            try:
-                # Track spend of the team member within this team
-                if user_id is not None:
-                    # key is "team_id::<value>::user_id::<value>"
-                    team_member_key: Final = f"team_id::{team_id}::user_id::{user_id}"
-                    await self.spend_update_queue.add_update(
-                        update=SpendUpdateQueueItem(
-                            entity_type=Litellm_EntityType.TEAM_MEMBER,
-                            entity_id=team_member_key,
-                            response_cost=response_cost,
-                        )
+            for target_team_id in target_team_ids:
+                await self.spend_update_queue.add_update(
+                    update=SpendUpdateQueueItem(
+                        entity_type=Litellm_EntityType.TEAM,
+                        entity_id=target_team_id,
+                        response_cost=response_cost,
                     )
-            except Exception as e:
-                spend_log_error(
-                    "Spend tracking - failed to enqueue team member spend update. "
-                    "team_id=%s, user_id=%s, response_cost=%s - %s",
-                    team_id,
-                    user_id,
-                    response_cost,
-                    str(e),
-                    exc=e,
                 )
+
+                try:
+                    # Track spend of the team member within this team
+                    if user_id is not None:
+                        # key is "team_id::<value>::user_id::<value>"
+                        team_member_key = (
+                            f"team_id::{target_team_id}::user_id::{user_id}"  # rebind-ok: one per attributed team
+                        )
+                        await self.spend_update_queue.add_update(
+                            update=SpendUpdateQueueItem(
+                                entity_type=Litellm_EntityType.TEAM_MEMBER,
+                                entity_id=team_member_key,
+                                response_cost=response_cost,
+                            )
+                        )
+                except Exception as e:
+                    spend_log_error(
+                        "Spend tracking - failed to enqueue team member spend update. "
+                        "team_id=%s, user_id=%s, response_cost=%s - %s",
+                        target_team_id,
+                        user_id,
+                        response_cost,
+                        str(e),
+                        exc=e,
+                    )
         except Exception as e:
             spend_log_error(
-                "Spend tracking - failed to enqueue team spend update. team_id=%s, response_cost=%s - %s",
-                team_id,
+                "Spend tracking - failed to enqueue team spend update. team_ids=%s, response_cost=%s - %s",
+                target_team_ids,
                 response_cost,
                 str(e),
                 exc=e,
@@ -710,25 +746,33 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         org_id: str | None,
         prisma_client: PrismaClient | None,
+        attributed_org_ids: Sequence[str] | None = None,
     ):
+        """Charge the request to every organization it is attributed to.
+
+        Normally a single org: a caller belongs to one, and extra ids only
+        appear when their teams span several organizations.
+        """
+        target_org_ids: Final = self._attribution_targets(attributed_org_ids, org_id)
         try:
-            if org_id is None or prisma_client is None:
+            if not target_org_ids or prisma_client is None:
                 verbose_proxy_logger.debug(
-                    "track_cost_callback: org_id is None or prisma_client is None. Not tracking spend for org"
+                    "track_cost_callback: no attributed org or prisma_client is None. Not tracking spend for org"
                 )
                 return
 
-            await self.spend_update_queue.add_update(
-                update=SpendUpdateQueueItem(
-                    entity_type=Litellm_EntityType.ORGANIZATION,
-                    entity_id=org_id,
-                    response_cost=response_cost,
+            for target_org_id in target_org_ids:
+                await self.spend_update_queue.add_update(
+                    update=SpendUpdateQueueItem(
+                        entity_type=Litellm_EntityType.ORGANIZATION,
+                        entity_id=target_org_id,
+                        response_cost=response_cost,
+                    )
                 )
-            )
         except Exception as e:
             spend_log_error(
-                "Spend tracking - failed to enqueue org spend update. org_id=%s, response_cost=%s - %s",
-                org_id,
+                "Spend tracking - failed to enqueue org spend update. org_ids=%s, response_cost=%s - %s",
+                target_org_ids,
                 response_cost,
                 str(e),
                 exc=e,
@@ -1948,7 +1992,17 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
+        attributed_team_ids: Sequence[str] | None = None,
     ) -> None:
+        """Enqueue one daily rollup row per attributed team.
+
+        ``LiteLLM_DailyTeamSpend`` is already unique on
+        ``(team_id, date, api_key, model, custom_llm_provider,
+        mcp_namespaced_tool_name, endpoint)``, so N teams means N distinct rows
+        and no migration is needed. The base transaction is computed once and
+        reused: it holds only per-request facts (tokens, cost, date, endpoint),
+        none of which depend on which team the row is keyed to.
+        """
         if prisma_client is None:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
             return
@@ -1958,47 +2012,56 @@ class DBSpendUpdateWriter:
         )
         if base_daily_transaction is None:
             return
-        if payload["team_id"] is None:
-            verbose_proxy_logger.debug("team_id is None for request. Skipping incrementing team spend.")
+
+        target_team_ids: Final = self._attribution_targets(attributed_team_ids, payload["team_id"])
+        if not target_team_ids:
+            verbose_proxy_logger.debug("no attributed team for request. Skipping incrementing team spend.")
             return
 
         endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{payload['team_id']}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
-        daily_transaction: Final = DailyTeamSpendTransaction(team_id=payload["team_id"], **base_daily_transaction)
-        await self.daily_team_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+        for target_team_id in target_team_ids:
+            daily_transaction_key = f"{target_team_id}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
+            daily_transaction = DailyTeamSpendTransaction(team_id=target_team_id, **base_daily_transaction)
+            await self.daily_team_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_org_transaction(
         self,
         payload: SpendLogsPayload,
         prisma_client: PrismaClient | None = None,
         org_id: str | None = None,
+        attributed_org_ids: Sequence[str] | None = None,
     ) -> None:
+        """Enqueue one daily rollup row per attributed organization."""
         if prisma_client is None:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
             return
 
-        if org_id is None:
+        target_org_ids: Final = self._attribution_targets(attributed_org_ids, org_id)
+        if not target_org_ids:
             verbose_proxy_logger.debug("organization_id is None for request. Skipping incrementing organization spend.")
             return
 
-        payload_with_org: Final = cast(
-            SpendLogsPayload,
-            {
-                **payload,
-                "organization_id": org_id,
-            },
-        )
+        for target_org_id in target_org_ids:
+            payload_with_org = cast(
+                SpendLogsPayload,
+                {
+                    **payload,
+                    "organization_id": target_org_id,
+                },
+            )
 
-        base_daily_transaction: Final = await self._common_add_spend_log_transaction_to_daily_transaction(
-            payload_with_org, prisma_client, "org"
-        )
-        if base_daily_transaction is None:
-            return
+            base_daily_transaction = await self._common_add_spend_log_transaction_to_daily_transaction(
+                payload_with_org, prisma_client, "org"
+            )
+            if base_daily_transaction is None:
+                continue
 
-        endpoint_str: Final = base_daily_transaction.get("endpoint") or ""
-        daily_transaction_key = f"{org_id}_{base_daily_transaction['date']}_{payload_with_org['api_key']}_{payload_with_org['model']}_{payload_with_org['custom_llm_provider']}_{endpoint_str}"
-        daily_transaction: Final = DailyOrganizationSpendTransaction(organization_id=org_id, **base_daily_transaction)
-        await self.daily_org_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
+            endpoint_str = base_daily_transaction.get("endpoint") or ""
+            daily_transaction_key = f"{target_org_id}_{base_daily_transaction['date']}_{payload_with_org['api_key']}_{payload_with_org['model']}_{payload_with_org['custom_llm_provider']}_{endpoint_str}"
+            daily_transaction = DailyOrganizationSpendTransaction(
+                organization_id=target_org_id, **base_daily_transaction
+            )
+            await self.daily_org_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})
 
     async def add_spend_log_transaction_to_daily_end_user_transaction(
         self,

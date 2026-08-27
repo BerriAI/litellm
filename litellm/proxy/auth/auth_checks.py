@@ -997,6 +997,23 @@ async def common_checks(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 ),
+                # No-ops unless track_spend_across_all_user_teams is on: with the
+                # setting off, attributed_team_ids/attributed_org_ids are None and
+                # both return before touching the cache.
+                _attributed_teams_max_budget_check(
+                    valid_token=valid_token,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                    general_settings=general_settings,
+                ),
+                _attributed_orgs_max_budget_check(
+                    valid_token=valid_token,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                    general_settings=general_settings,
+                ),
                 _tag_max_budget_check(
                     request_body=request_body,
                     prisma_client=prisma_client,
@@ -4816,6 +4833,193 @@ async def _team_max_budget_check(
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
             )
+
+
+async def _attributed_teams_max_budget_check(
+    valid_token: UserAPIKeyAuth | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    general_settings: Mapping[str, object],
+) -> None:
+    """Enforce the max budget of every OTHER team the caller belongs to.
+
+    Only active when ``track_spend_across_all_user_teams`` is on -- otherwise
+    ``attributed_team_ids`` is None and this returns immediately.
+
+    The stamped team is skipped because ``_team_max_budget_check`` already
+    covers it; checking it twice would fire a duplicate budget alert. Teams are
+    evaluated concurrently (each lookup is a cache hit in steady state) but the
+    raised error is chosen by membership order, not by which coroutine finished
+    first, so the same request always reports the same offending team.
+
+    Consequence worth stating plainly: with attribution on, ONE exhausted team
+    blocks the caller on every team, because their usage counts against all of
+    them.
+    """
+    from litellm.proxy.auth.membership_attribution import (
+        attributed_team_ids,
+        spend_attribution_enabled,
+    )
+
+    # Gated on the SPEND setting specifically. The resolver populates
+    # attributed_team_ids when either setting is on, so an operator who enabled
+    # only rate-limit attribution must not silently get all-team budget gates.
+    if not spend_attribution_enabled(general_settings):
+        return
+
+    if valid_token is None or prisma_client is None:
+        return
+
+    other_team_ids: Final = tuple(
+        team_id for team_id in attributed_team_ids(valid_token) if team_id != valid_token.team_id
+    )
+    if not other_team_ids:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    async def _check(team_id: str) -> None:
+        try:
+            team_object: Final = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=valid_token.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception:  # noqa: BLE001  # a team that cannot be loaded contributes no ceiling
+            return
+
+        if team_object.max_budget is None or not math.isfinite(team_object.max_budget):
+            return
+
+        spend: Final = await get_current_spend(
+            counter_key=f"spend:team:{team_id}",
+            fallback_spend=team_object.spend or 0.0,
+            max_budget=team_object.max_budget,
+        )
+        if spend <= team_object.max_budget:
+            return
+
+        call_info: Final = CallInfo(
+            token=valid_token.token,
+            spend=spend,
+            max_budget=team_object.max_budget,
+            user_id=valid_token.user_id,
+            team_id=team_id,
+            team_alias=team_object.team_alias,
+            organization_id=team_object.organization_id,
+            event_group=Litellm_EntityType.TEAM,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="team_budget",
+                user_info=call_info,
+            )
+        )
+        raise litellm.BudgetExceededError(
+            current_cost=spend,
+            max_budget=team_object.max_budget,
+            message=(
+                f"Budget has been exceeded! Team={team_id} Current cost: {spend}, Max budget: {team_object.max_budget}"
+            ),
+            entity_type=Litellm_EntityType.TEAM.value,
+            entity_id=team_id,
+        )
+
+    results: Final = await asyncio.gather(*(_check(team_id) for team_id in other_team_ids), return_exceptions=True)
+    first_error: Final = next((r for r in results if isinstance(r, BaseException)), None)
+    if first_error is not None:
+        raise first_error
+
+
+async def _attributed_orgs_max_budget_check(
+    valid_token: UserAPIKeyAuth | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    general_settings: Mapping[str, object],
+) -> None:
+    """Enforce the max budget of every OTHER organization the caller belongs to.
+
+    Skips ``valid_token.org_id`` -- ``_organization_max_budget_check`` owns that
+    one. Only reaches past it when the caller's teams span several
+    organizations; in a single-org deployment this is always a no-op.
+    """
+    from litellm.proxy.auth.membership_attribution import (
+        attributed_org_ids,
+        spend_attribution_enabled,
+    )
+
+    if not spend_attribution_enabled(general_settings):
+        return
+
+    if valid_token is None or prisma_client is None:
+        return
+
+    other_org_ids: Final = tuple(org_id for org_id in attributed_org_ids(valid_token) if org_id != valid_token.org_id)
+    if not other_org_ids:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    async def _check(org_id: str) -> None:
+        try:
+            org_table: Final = await get_org_object(
+                org_id=org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=valid_token.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                include_budget_table=True,
+            )
+        except Exception:  # noqa: BLE001  # an org that cannot be loaded contributes no ceiling
+            return
+
+        if org_table is None or org_table.litellm_budget_table is None:
+            return
+        org_max_budget: Final = org_table.litellm_budget_table.max_budget
+        if org_max_budget is None or org_max_budget <= 0 or not math.isfinite(org_max_budget):
+            return
+
+        org_spend: Final = await get_current_spend(
+            counter_key=f"spend:org:{org_id}",
+            fallback_spend=org_table.spend or 0.0,
+            max_budget=org_max_budget,
+        )
+        if org_spend <= org_max_budget:
+            return
+
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="team_budget",
+                user_info=CallInfo(
+                    token=valid_token.token,
+                    spend=org_spend,
+                    max_budget=org_max_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    organization_id=org_id,
+                    event_group=Litellm_EntityType.ORGANIZATION,
+                ),
+            )
+        )
+        raise litellm.BudgetExceededError(
+            current_cost=org_spend,
+            max_budget=org_max_budget,
+            message=(
+                f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, "
+                f"Max budget: {org_max_budget}"
+            ),
+            entity_type=Litellm_EntityType.ORGANIZATION.value,
+            entity_id=org_id,
+        )
+
+    results: Final = await asyncio.gather(*(_check(org_id) for org_id in other_org_ids), return_exceptions=True)
+    first_error: Final = next((r for r in results if isinstance(r, BaseException)), None)
+    if first_error is not None:
+        raise first_error
 
 
 async def _team_multi_budget_check(

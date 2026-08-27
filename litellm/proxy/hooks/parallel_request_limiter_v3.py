@@ -1198,25 +1198,44 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self.batch_rate_limiter_script is None:
             return []
 
+        # Bound here, not read off self inside the closure: the None check above
+        # narrows the attribute, but that narrowing does not reach into a nested
+        # function, so reading it there would be an optional call.
+        run_script: Final = self.batch_rate_limiter_script
         key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
         all_cache_values: Final[list[CacheCounterValue | None]] = []
 
-        for hash_tag, group_keys in key_groups.items():
+        # Both callees below (the Lua script and the in-memory fallback) declare
+        # `keys: list[str]`, and _group_keys_by_hash_tag hands back exactly that,
+        # so a read-only view here would not be assignable.
+        async def _read_group(tag: str, group_keys: list[str]) -> CacheCounterValues:  # mutable-ok: callee needs list
             try:
-                group_cache_values: CacheCounterValues = await self.batch_rate_limiter_script(
+                return await run_script(
                     keys=group_keys,
                     args=[now_int, self.window_size],  # Use integer timestamp
                 )
-                all_cache_values.extend(group_cache_values)
             except Exception as e:
-                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", hash_tag, e)
+                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", tag, e)
                 # Fallback to in-memory cache for this group
-                group_cache_values = await self.in_memory_cache_sliding_window(
+                return await self.in_memory_cache_sliding_window(
                     keys=group_keys,
                     now_int=now_int,
                     window_size=self.window_size,
                 )
-                all_cache_values.extend(group_cache_values)
+
+        # One Lua round trip per hash-tag group, issued concurrently. On
+        # non-cluster Redis there is exactly one group, so this stays a single
+        # call no matter how many descriptors the request carries. On Redis
+        # Cluster the groups are per-slot, and membership-attributed team
+        # descriptors can produce one group per team -- running them
+        # concurrently keeps the added latency at roughly one round trip
+        # instead of N. Results are consumed in group order so the returned
+        # list still lines up with ``keys_to_fetch``.
+        group_results: Final = await asyncio.gather(
+            *(_read_group(hash_tag, group_keys) for hash_tag, group_keys in key_groups.items())
+        )
+        for group_cache_values in group_results:
+            all_cache_values.extend(group_cache_values)
 
         return all_cache_values
 
@@ -2350,6 +2369,53 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
 
+    def _attributed_team_rate_limit_descriptors(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> tuple[RateLimitDescriptor, ...]:
+        """Add a team descriptor for every OTHER team the caller belongs to.
+
+        Only active when ``enforce_rate_limits_across_all_user_teams`` is on;
+        otherwise ``attributed_team_limits`` is None and this returns at once.
+
+        ``key="team"`` is reused deliberately: team T must share one bucket
+        whether T is the team stamped on the key or one the caller merely
+        belongs to, or the same team would be limited twice over under two
+        different counters. The stamped team is skipped because the block above
+        already emitted its descriptor.
+
+        Because ``should_rate_limit`` rejects when ANY descriptor is over, the
+        caller's effective limit becomes the minimum across their memberships.
+        That is the intended semantic, and it is why this rides a separate
+        setting from spend attribution: a busy team can now throttle someone
+        who is mostly working for a different team.
+        """
+        from litellm.proxy.auth.membership_attribution import rate_limit_attribution_enabled
+        from litellm.proxy.proxy_server import general_settings
+
+        if not rate_limit_attribution_enabled(general_settings):
+            return ()
+
+        attributed_limits: Final = user_api_key_dict.attributed_team_limits
+        if not attributed_limits:
+            return ()
+
+        return tuple(
+            RateLimitDescriptor(
+                key="team",
+                value=team_id,
+                rate_limit=RateLimitDescriptorRateLimitObject(
+                    requests_per_unit=team_limits.get("rpm"),
+                    tokens_per_unit=team_limits.get("tpm"),
+                    window_size=self.window_size,
+                ),
+            )
+            for team_id, team_limits in attributed_limits.items()
+            if team_id
+            and team_id != user_api_key_dict.team_id
+            and not (team_limits.get("rpm") is None and team_limits.get("tpm") is None)
+        )
+
     def _add_tag_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2700,6 +2766,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     },
                 )
             )
+
+        descriptors.extend(self._attributed_team_rate_limit_descriptors(user_api_key_dict=user_api_key_dict))
 
         # Team Member rate limits
         if user_api_key_dict.user_id and (

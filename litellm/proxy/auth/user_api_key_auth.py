@@ -71,6 +71,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.auth.membership_attribution import resolve_membership_attribution
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
@@ -2580,6 +2581,20 @@ async def _run_centralized_common_checks(
 
     if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
         user_api_key_auth_obj.org_id = team_object.organization_id
+
+    # Expand the single stamped team/org into every membership the caller has,
+    # when the operator opted in. Must run BEFORE common_checks so the
+    # all-teams budget gate sees the expansion, and before the request metadata
+    # is stamped so the cost callback can attribute spend to the same set.
+    # No-op (not even a cache read) when both settings are off.
+    await resolve_membership_attribution(
+        user_api_key_auth_obj=user_api_key_auth_obj,
+        user_object=user_object,
+        general_settings=general_settings,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and

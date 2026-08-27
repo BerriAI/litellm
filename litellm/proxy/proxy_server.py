@@ -292,6 +292,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.proxy.auth.membership_attribution import attribution_targets
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -2633,6 +2634,8 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
+    attributed_team_ids: Sequence[str] | None = None,
+    attributed_org_ids: Sequence[str] | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2747,12 +2750,21 @@ async def increment_spend_counters(
             increment=cost,
         )
 
+    # With track_spend_across_all_user_teams on, one request increments the
+    # counter of every team the caller belongs to, and of every org reached
+    # through those teams. These are the counters the budget gates read
+    # Redis-first, so enforcement across memberships is immediate rather than
+    # waiting for the batched DB flush. With the setting off, both lists
+    # collapse to the single stamped id and the scopes are unchanged.
+    target_team_ids: Final = attribution_targets(attributed_team_ids, team_id)
+    target_org_ids: Final = attribution_targets(attributed_org_ids, org_id)
+
     scope_coros: Final = tuple(
         coro
         for coro in (
             _key_scope(token) if token is not None else None,
-            _team_scope(team_id) if team_id is not None else None,
-            _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
+            *(_team_scope(scope_team_id) for scope_team_id in target_team_ids),
+            *(_team_member_scope(user_id, scope_team_id) for scope_team_id in target_team_ids if user_id is not None),
             _user_scope(user_id) if user_id is not None else None,
             _increment_end_user_and_tag_spend_counters(
                 end_user_id=end_user_id,
@@ -2762,13 +2774,14 @@ async def increment_spend_counters(
             )
             if end_user_id is not None or tags is not None
             else None,
-            _increment_org_spend_counter(
-                org_id=org_id,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
-            )
-            if org_id is not None
-            else None,
+            *(
+                _increment_org_spend_counter(
+                    org_id=scope_org_id,
+                    response_cost=cost,
+                    reserved_counter_keys=reserved_counter_keys,
+                )
+                for scope_org_id in target_org_ids
+            ),
         )
         if coro is not None
     )

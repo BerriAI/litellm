@@ -598,6 +598,10 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         budget_reservation=budget_reservation,
         end_user_id="test_end_user_id",
         tags=["tag-a"],
+        # None unless track_spend_across_all_user_teams is on, which keeps this
+        # call identical to the pre-attribution behavior.
+        attributed_team_ids=None,
+        attributed_org_ids=None,
     )
 
 

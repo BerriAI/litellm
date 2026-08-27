@@ -924,6 +924,8 @@ async def test_api_key_preserved_through_failure_hook_to_database():
         start_time,
         end_time,
         org_id,
+        attributed_team_ids=None,
+        attributed_org_ids=None,
     ):
         """Mock update_database and capture the payload it creates"""
         from litellm.proxy.spend_tracking.spend_tracking_utils import (

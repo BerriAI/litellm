@@ -24178,6 +24178,11 @@ export interface components {
              */
             enable_public_model_hub: boolean;
             /**
+             * Enforce Rate Limits Across All User Teams
+             * @description apply the RPM/TPM limits of EVERY team the calling user belongs to, not only the team stamped on the virtual key. The caller's effective limit becomes the minimum across their memberships, so a busy team can throttle someone who is mostly working for a different team. Separate from track_spend_across_all_user_teams so spend attribution can be adopted without this. Default off.
+             */
+            enforce_rate_limits_across_all_user_teams?: boolean | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */
@@ -24349,6 +24354,11 @@ export interface components {
              * @description Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).
              */
             supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
+            /**
+             * Track Spend Across All User Teams
+             * @description attribute each request's spend to EVERY team the calling user belongs to (and every organization reached through those teams), not only the team stamped on the virtual key. Budget gates expand to match, so one over-budget team blocks the caller everywhere. Summing team spend then exceeds real spend by design, because one request is charged to several teams; key, user, and org totals stay single-counted. Default off.
+             */
+            track_spend_across_all_user_teams?: boolean | null;
             /**
              * Trusted Proxy Ranges
              * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
