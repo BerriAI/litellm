@@ -73,11 +73,12 @@ def spend_counter_state():
         ps.prisma_client = original_prisma_client
 
 
-def _request_body() -> dict:
+def _request_body(*, include_usage: bool = False) -> dict:
     return {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 10,
+        **({"stream_options": {"include_usage": True}} if include_usage else {}),
     }
 
 
@@ -2717,14 +2718,15 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
         user_api_key_dict=valid_token,
-        request_data=_request_body(),
+        request_data=_request_body(include_usage=True),
         proxy_logging_obj=streaming_logging_obj,
         serialize_chunk=lambda chunk: chunk,
         serialize_error=lambda exc: str(exc),
     )
 
     received = []
-    # include_cost_in_streaming_usage forces fast_path off, so the hook above runs
+    # include_cost_in_streaming_usage plus the caller's stream_options.include_usage
+    # opt-in forces fast_path off, so the hook above runs
     with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
         async def _drain():
             async for chunk in generator:
@@ -2793,15 +2795,16 @@ async def test_streaming_slow_path_processes_and_yields_chunk(spend_counter_stat
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
         user_api_key_dict=valid_token,
-        request_data=_request_body(),
+        request_data=_request_body(include_usage=True),
         proxy_logging_obj=streaming_logging_obj,
         serialize_chunk=lambda chunk: chunk,
         serialize_error=lambda exc: str(exc),
     )
 
     received = []
-    # include_cost_in_streaming_usage forces the slow path so the per-chunk hook,
-    # content accumulation, and cost-injection branch all run to a successful yield
+    # include_cost_in_streaming_usage plus the caller's stream_options.include_usage
+    # opt-in forces the slow path, so the per-chunk hook, content accumulation, and
+    # cost-injection branch all run to a successful yield
     with patch.object(litellm, "include_cost_in_streaming_usage", True, create=True):
         async for chunk in generator:
             received.append(chunk)
