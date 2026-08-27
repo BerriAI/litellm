@@ -1998,6 +1998,164 @@ async def test_history_is_still_compressed(guardrail: HeadroomGuardrail):
     assert has_headroom_retrieve_tool(result.get("tools") or [])
 
 
+# ---------------------------------------------------------------------------
+# #38558: a client that runs its own tool loop (e.g. Claude Code via the MCP
+# gateway) executes headroom_retrieve and echoes the recovered original content
+# back as a tool result. Compressing that row re-derives the same content hash
+# it was just retrieved from -- the marker returns and the agent loops. The
+# retrieved row must be held back from the compression service.
+# ---------------------------------------------------------------------------
+
+RETRIEVE_ECHO_MESSAGES = [
+    {"role": "system", "content": "You are Claude Code. " + "S" * 5000},
+    {"role": "user", "content": "H" * 5000},
+    {
+        "role": "assistant",
+        "content": "Expanding the marker.",
+        "tool_calls": [
+            {
+                "id": "hr_1",
+                "type": "function",
+                "function": {
+                    "name": "mcp__headroom__headroom_retrieve",
+                    "arguments": '{"hash": "b573993006976af767214fac"}',
+                },
+            }
+        ],
+    },
+    {"role": "tool", "tool_call_id": "hr_1", "content": "RETRIEVED BODY " + "R" * 5000},
+    {"role": "assistant", "content": "Older answer. " + "O" * 5000},
+    {"role": "user", "content": "now summarize the description"},
+]
+
+
+@pytest.mark.asyncio
+async def test_retrieved_content_is_never_recompressed(guardrail: HeadroomGuardrail):
+    """The tool result carrying headroom_retrieve output is held back, so it can
+    never collapse back to the hash it was just retrieved from."""
+    wire, result = await _wire_and_result(guardrail, RETRIEVE_ECHO_MESSAGES)
+
+    assert not any(row.get("tool_call_id") == "hr_1" for row in wire)
+    assert not any("RETRIEVED BODY" in json.dumps(row) for row in wire)
+    # Reaches the model byte-identical, so no marker stands in for the expansion.
+    assert result["structured_messages"][3] == RETRIEVE_ECHO_MESSAGES[3]
+    # Negative control: unrelated history is still compressed, not a no-op.
+    assert any(row.get("content") == "H" * 5000 for row in wire)
+
+
+@pytest.mark.asyncio
+async def test_retrieved_content_guard_matches_direct_tool_name(guardrail: HeadroomGuardrail):
+    """Server-side the tool is named headroom_retrieve (no MCP prefix); its
+    result must be protected the same way."""
+    messages = [
+        {"role": "system", "content": "sys " + "S" * 5000},
+        {"role": "user", "content": "H" * 5000},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "hr_direct",
+                    "type": "function",
+                    "function": {"name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "hr_direct", "content": "RETRIEVED BODY " + "R" * 5000},
+        {"role": "assistant", "content": "Older. " + "O" * 5000},
+        {"role": "user", "content": "summarize"},
+    ]
+    wire, result = await _wire_and_result(guardrail, messages)
+
+    assert not any(row.get("tool_call_id") == "hr_direct" for row in wire)
+    assert result["structured_messages"][3] == messages[3]
+
+
+@pytest.mark.asyncio
+async def test_retrieved_content_protected_when_mcp_tool_name_is_truncated(guardrail: HeadroomGuardrail):
+    """A long mcp__<server>__headroom_retrieve name is truncated past 64 chars in
+    the OpenAI-translated view the guardrail scans, dropping the suffix. The call
+    id read from the request's own Anthropic tool_use (never truncated) still
+    pairs the retrieved row so it is held back."""
+    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        truncate_tool_name,
+    )
+
+    long_name = "mcp__" + "s" * 45 + "__" + HEADROOM_RETRIEVE_TOOL_NAME
+    assert len(long_name) > 64
+    truncated = truncate_tool_name(long_name)
+    assert not truncated.endswith(HEADROOM_RETRIEVE_TOOL_NAME)
+
+    # What the guardrail scans: OpenAI-translated messages with the truncated name.
+    structured = [
+        {"role": "system", "content": "sys " + "S" * 5000},
+        {"role": "user", "content": "H" * 5000},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "hr_long", "type": "function", "function": {"name": truncated, "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "hr_long", "content": "RETRIEVED BODY " + "R" * 5000},
+        {"role": "assistant", "content": "Older. " + "O" * 5000},
+        {"role": "user", "content": "summarize"},
+    ]
+    # The request's own messages, untranslated: Anthropic tool_use carries the full name.
+    raw_messages = [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "hr_long", "name": long_name, "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "hr_long", "content": "RETRIEVED BODY"}]},
+    ]
+
+    inputs = GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(structured)))
+    sent: dict = {}
+
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(kwargs["json"]["messages"])))
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "claude-sonnet-4-5-20250929", "messages": raw_messages},
+            input_type="request",
+        )
+
+    assert not any(row.get("tool_call_id") == "hr_long" for row in sent["messages"])
+    assert result["structured_messages"][3] == structured[3]
+    assert any(row.get("content") == "H" * 5000 for row in sent["messages"])
+
+
+def test_raw_retrieve_call_ids_covers_both_shapes_and_ignores_others():
+    """Retrieve ids are read from OpenAI tool_calls and Anthropic tool_use blocks;
+    non-retrieve calls, non-tool_use blocks, string content, and non-list inputs
+    yield nothing."""
+    from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import _raw_retrieve_call_ids
+
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "oa1", "function": {"name": HEADROOM_RETRIEVE_TOOL_NAME}},
+                {"id": "other", "function": {"name": "get_weather"}},
+                {"id": "malformed", "function": {"name": 123}},
+                {"id": "nofunc"},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "an1", "name": "mcp__hr__headroom_retrieve", "input": {}},
+                {"type": "tool_use", "id": "an2", "name": "jira_get_issue", "input": {}},
+                {"type": "text", "text": "noise"},
+            ],
+        },
+        {"role": "user", "content": "plain string content, not a list"},
+    ]
+
+    assert _raw_retrieve_call_ids(messages) == frozenset({"oa1", "an1"})
+    assert _raw_retrieve_call_ids("not a list") == frozenset()
+    assert _raw_retrieve_call_ids(None) == frozenset()
+
+
 @pytest.mark.asyncio
 async def test_nothing_compressible_returns_inputs_untouched(guardrail: HeadroomGuardrail):
     """A single-turn request is all protected, so there is nothing to send and
