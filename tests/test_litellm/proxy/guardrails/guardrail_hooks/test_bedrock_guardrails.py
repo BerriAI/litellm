@@ -5851,6 +5851,44 @@ class TestBedrockGuardrailImageInput:
         assert "image" in kinds
 
     @pytest.mark.asyncio
+    async def test_a_malformed_structured_message_does_not_derail_the_file_check(self):
+        """structured_messages comes from the caller, so its shape is not guaranteed.
+
+        The scan must keep walking past an entry it cannot read rather than throwing
+        or giving up, or a single junk element would hide a file image sitting after
+        it -- turning a defensive guard into the bypass it was meant to prevent.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(kwargs["messages"])
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            with pytest.raises(HTTPException) as exc_info:
+                await g.apply_guardrail(
+                    inputs={
+                        "texts": ["hello"],
+                        "images": [],
+                        "structured_messages": [
+                            "not a message",
+                            123,
+                            {"role": "user", "content": "a plain string, not a list"},
+                            {
+                                "role": "user",
+                                "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
+                            },
+                        ],
+                    },
+                    request_data={},
+                    input_type="request",
+                )
+
+        assert "file id" in str(exc_info.value.detail)
+        assert sent == []
+
+    @pytest.mark.asyncio
     async def test_a_file_backed_image_on_the_response_side_is_not_refused(self):
         """Images are a request-side concern; an OUTPUT scan takes generated text."""
         g = self._guardrail()
