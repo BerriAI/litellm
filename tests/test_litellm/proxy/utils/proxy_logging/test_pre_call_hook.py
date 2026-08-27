@@ -613,6 +613,37 @@ async def test_scan_raw_request_snapshot_survives_unpicklable_metadata(
 
 
 @pytest.mark.asyncio
+async def test_scan_raw_request_isolation_survives_unpicklable_top_level_field(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Bugbot finding on BerriAI/litellm#34940: real proxy requests carry
+    data["litellm_logging_obj"] (a Logging instance nesting a live OTel span
+    with a real lock) by the time pre_call_hook runs -- a top-level field, not
+    inside metadata, so the otel-span placeholder substitution never touches
+    it. A whole-dict copy.deepcopy over the entire payload (the previous
+    _independent_snapshot) fails on that field on every real request and
+    silently falls back to the live, unisolated data with no warning,
+    defeating the entire feature in production even though every test above
+    passes (none of them set litellm_logging_obj). The isolation guarantee
+    (blocking order-independence) must hold even when such a field is
+    present.
+    """
+    monkeypatch.setattr(
+        litellm, "callbacks", [_RedactingGuardrail(), _BlockOnSecretGuardrail(scan_raw_request=True)]
+    )
+    proxy_logging.slack_alerting_instance = MagicMock(alerting=None)
+    data = _secret_request()
+    data["litellm_logging_obj"] = _Unpicklable()
+    with pytest.raises(HTTPException, match="blocked"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
 async def test_scan_raw_request_snapshot_taken_before_pipelines(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
