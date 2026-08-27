@@ -266,3 +266,19 @@ def test_reload_is_idempotent_for_unchanged_config():
 
     assert [vs["vector_store_id"] for vs in registry.vector_stores] == ["vs_a"]
     assert registry.config_loaded_vector_store_ids == {"vs_a"}
+
+
+def test_reload_with_empty_config_evicts_every_prior_config_store():
+    """The `vector_store_registry` YAML block being emptied in config.yaml
+    should evict every previously-config-loaded store on the next load. This
+    exercises the stale-marker cleanup path against multiple entries at once."""
+    registry = VectorStoreRegistry(vector_stores=[])
+    registry.load_vector_stores_from_config(
+        [_cfg_entry("vs_a"), _cfg_entry("vs_b"), _cfg_entry("vs_c")]
+    )
+    assert registry.config_loaded_vector_store_ids == {"vs_a", "vs_b", "vs_c"}
+
+    registry.load_vector_stores_from_config([])
+
+    assert registry.config_loaded_vector_store_ids == set()
+    assert registry.vector_stores == []
