@@ -25,6 +25,7 @@ from endpoints_client import (
     ResponsesResult,
     ResponsesStreamEventType,
 )
+from image_assets import cat_image_data_url
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from pydantic import BaseModel, ValidationError
@@ -189,7 +190,7 @@ class TestResponses:
             key,
             model,
             "What animal is shown in this image? Answer in one word",
-            "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg",
+            cat_image_data_url(),
         )
         require_successful_call(result)
         parsed = ResponsesResult.model_validate_json(result.body)

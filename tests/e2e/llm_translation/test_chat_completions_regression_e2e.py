@@ -16,16 +16,14 @@ via /model/new (Cohere, Gemini, hosted_vllm), each deleted on teardown.
 
 from __future__ import annotations
 
-import base64
 import os
-from pathlib import Path
-from typing import Final
 
 import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, unwrap
+from image_assets import cat_image_data_url
 from lifecycle import ResourceManager
 from models import (
     ChatBody,
@@ -82,13 +80,7 @@ def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
     return name, arguments
 
 
-_FIXTURES_DIR: Final = Path(__file__).parent / "fixtures"
-CAT_IMAGE: Final = _FIXTURES_DIR / "cat.jpg"
 OPENAI_VISION_BACKEND = "openai/gpt-4o"
-
-
-def _cat_image_data_url() -> str:
-    return "data:image/jpeg;base64," + base64.b64encode(CAT_IMAGE.read_bytes()).decode()
 
 
 def _vision_messages() -> list[ChatMessage]:
@@ -97,7 +89,7 @@ def _vision_messages() -> list[ChatMessage]:
             role="user",
             content=[
                 TextContentPart(text="What animal is in this image? Answer in one word."),
-                ImageContentPart(image_url=ImageUrl(url=_cat_image_data_url())),
+                ImageContentPart(image_url=ImageUrl(url=cat_image_data_url())),
             ],
         )
     ]
