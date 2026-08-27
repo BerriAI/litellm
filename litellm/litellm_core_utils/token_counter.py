@@ -738,6 +738,17 @@ def _count_content_list(
                 tool_name = str(c.get("tool_name") or "")
                 if tool_name:
                     num_tokens += count_function(tool_name)
+            elif c["type"] == "input_audio":
+                # OpenAI input_audio content block: {"type": "input_audio", "input_audio": {"data": "<b64>", "format": "wav"}}
+                # Estimate tokens based on payload size (or default floor)
+                input_audio = c.get("input_audio")
+                b64_data = input_audio.get("data") if isinstance(input_audio, dict) else None
+                if b64_data and isinstance(b64_data, str):
+                    decoded_bytes = len(b64_data) * 3 // 4
+                    # 1 token ~ 32 bytes of 24kHz/16-bit mono audio (approx standard across audio models)
+                    num_tokens += max(decoded_bytes // 32, 50)
+                else:
+                    num_tokens += 50
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
