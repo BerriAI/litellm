@@ -1,6 +1,5 @@
 from unittest.mock import MagicMock, patch
 
-
 from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
 
 
@@ -524,13 +523,9 @@ def test_handle_logging_collected_chunks_inference_profile_arn_falls_back_gracef
 
     # Intercept the decoder so we don't need real botocore event-stream bytes.
     # The import is done inside handle_logging_collected_chunks, so patch the source module.
-    with patch(
-        "litellm.llms.bedrock.chat.get_bedrock_event_stream_decoder"
-    ) as mock_decoder:
+    with patch("litellm.llms.bedrock.chat.get_bedrock_event_stream_decoder") as mock_decoder:
         mock_chunk_obj = MagicMock()
-        mock_chunk_obj._chunk_parser.return_value = (
-            {}
-        )  # not a valid GenericStreamingChunk
+        mock_chunk_obj._chunk_parser.return_value = {}  # not a valid GenericStreamingChunk
         mock_decoder.return_value = mock_chunk_obj
 
         # Must not raise ValueError.
