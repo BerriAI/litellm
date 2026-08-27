@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
@@ -44,12 +45,7 @@ from litellm.proxy.spend_tracking.compression_savings import (
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.utils import (
     CallTypes,
-    ChatCompletionMessageToolCall,
-    Choices,
-    Function,
     GenericGuardrailAPIInputs,
-    Message,
-    ModelResponse,
 )
 
 FAKE_API_BASE = "https://headroom.example.com"
@@ -1919,28 +1915,39 @@ def _retrieve_tool_definition() -> dict:
     }
 
 
-def _model_response_with_retrieve_call() -> ModelResponse:
-    return ModelResponse(
-        choices=[
-            Choices(
-                finish_reason="tool_calls",
-                message=Message(
-                    role="assistant",
-                    content=None,
-                    tool_calls=[
-                        ChatCompletionMessageToolCall(
-                            id="call_ccr",
-                            type="function",
-                            function=Function(
-                                name=HEADROOM_RETRIEVE_TOOL_NAME,
-                                arguments=json.dumps({"hash": CCR_HASH}),
-                            ),
-                        )
-                    ],
-                ),
-            )
-        ]
+def _openai_completion_payload(message: dict, finish_reason: str) -> dict:
+    return {
+        "id": "chatcmpl-ccr",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _openai_tool_call_payload() -> dict:
+    return _openai_completion_payload(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_ccr",
+                    "type": "function",
+                    "function": {
+                        "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                        "arguments": json.dumps({"hash": CCR_HASH}),
+                    },
+                }
+            ],
+        },
+        "tool_calls",
     )
+
+
+def _openai_text_payload(content: str) -> dict:
+    return _openai_completion_payload({"role": "assistant", "content": content}, "stop")
 
 
 @pytest.mark.parametrize(
@@ -1981,6 +1988,8 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
 @pytest.mark.asyncio
 async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
     guardrail: HeadroomGuardrail,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """Regression test for streaming /chat/completions: the retrieve tool call the
     model emits must be resolved by the agentic loop instead of being streamed back
@@ -1992,39 +2001,42 @@ async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
         time.monotonic() + 999,
     )
 
-    real_acompletion = litellm.acompletion
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_tool_call_payload()),
+            httpx.Response(200, json=_openai_text_payload(final_answer)),
+        ]
+    )
 
-    async def acompletion_with_followup_answer(*args, **kwargs):
-        if kwargs.get("_agentic_loop_depth"):
-            kwargs["mock_response"] = final_answer
-        return await real_acompletion(*args, **kwargs)
-
-    saved_callbacks = list(litellm.callbacks)
-    litellm.callbacks = [guardrail]
-    try:
-        with patch.object(
-            guardrail.async_handler,
-            "get",
-            new_callable=AsyncMock,
-            return_value=_make_retrieve_response(original_content),
-        ) as mock_get, patch.object(litellm, "acompletion", new=acompletion_with_followup_answer):
-            response = await litellm.acompletion(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
-                tools=[_retrieve_tool_definition()],
-                stream=True,
-                litellm_call_id="ccr-call-id",
-                mock_response=_model_response_with_retrieve_call(),
-            )
-            chunks = [chunk async for chunk in response]
-    finally:
-        litellm.callbacks = saved_callbacks
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ) as mock_get:
+        response = await litellm.acompletion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
+            tools=[_retrieve_tool_definition()],
+            stream=True,
+            litellm_call_id="ccr-call-id",
+        )
+        chunks = [chunk async for chunk in response]
 
     streamed_text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
     assert streamed_text == final_answer
     assert not any(chunk.choices and chunk.choices[0].delta.tool_calls for chunk in chunks)
     mock_get.assert_called_once()
     assert CCR_HASH in (mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0])
+
+    assert len(upstream.calls) == 2
+    followup_body = json.loads(upstream.calls[1].request.content)
+    assert not followup_body.get("stream")
+    assert original_content in json.dumps(followup_body["messages"])
+    assert not any(key.startswith("_headroom_interception") for key in followup_body)
 
 
 # ---------------------------------------------------------------------------
