@@ -102,6 +102,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Aquaduck",
+    "provider_display_name": "Aquaduck AI",
+    "litellm_provider": "aquaduck",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://aqi.aquaduck.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "aquaduck/zai-org/glm-4.7-flash"
+  },
+  {
     "provider": "Bedrock",
     "provider_display_name": "Amazon Bedrock",
     "litellm_provider": "bedrock",
