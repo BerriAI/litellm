@@ -4,13 +4,15 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from litellm.exceptions import Timeout
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import (
     CrowdStrikeAIDRGuardrailMissingSecrets,
     CrowdStrikeAIDRHandler,
 )
-from litellm.exceptions import Timeout
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.guardrails import Guardrail, LitellmParams
 from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 
@@ -79,6 +81,25 @@ def test_crowdstrike_aidr_guardrail_config_no_api_base(monkeypatch) -> None:
             ],
             config_file_path="",
         )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [({}, True), ({"fail_on_error": None}, True), ({"fail_on_error": True}, True), ({"fail_on_error": False}, False)],
+)
+def test_initialize_guardrail_wires_fail_on_error_and_defaults_closed(configured: dict, expected: bool) -> None:
+    litellm_params = LitellmParams(
+        guardrail="crowdstrike_aidr",
+        mode="pre_call",
+        api_key="pts_crowdstrike_tokenid",
+        api_base="https://api.crowdstrike.com/aidr/aiguard",
+        **configured,
+    )
+    guardrail = Guardrail(guardrail_name="crowdstrike-aidr-guard", litellm_params=litellm_params)
+
+    handler = initialize_guardrail(litellm_params=litellm_params, guardrail=guardrail)
+
+    assert handler.fail_on_error is expected
 
 
 @pytest.mark.asyncio
