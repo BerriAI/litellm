@@ -3630,14 +3630,7 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
 
 
 def test_anthropic_messages_pt_drops_empty_but_signed_thinking_block():
-    """
-    Anthropic rejects a `thinking` block whose `thinking` text is empty, even
-    when it carries a valid-looking signature, with:
-        400 messages.N.content.M.thinking: each thinking block must contain thinking
-    This shape is reachable via cross-provider replay of a `thinking_blocks`
-    history item (see PR #36033), so `_is_unsignable_thinking_block()` must
-    also check the thinking text, not just the signature.
-    """
+    """An empty-but-signed thinking block must still be dropped."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
@@ -3670,10 +3663,7 @@ def test_anthropic_messages_pt_drops_empty_but_signed_thinking_block():
 
 
 def test_anthropic_messages_pt_keeps_non_empty_signed_thinking_block():
-    """
-    Regression: a real, non-empty, signed thinking block must still pass
-    through unchanged.
-    """
+    """Regression: a non-empty, signed thinking block passes through unchanged."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
@@ -3708,11 +3698,7 @@ def test_anthropic_messages_pt_keeps_non_empty_signed_thinking_block():
 
 
 def test_anthropic_messages_pt_keeps_redacted_thinking_block():
-    """
-    Regression: `redacted_thinking` blocks carry no signature and no plaintext
-    `thinking` field by design, and must always be kept regardless of the new
-    emptiness check (which only applies to `type == "thinking"` blocks).
-    """
+    """Regression: redacted_thinking blocks are unaffected by the emptiness check."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
@@ -3744,11 +3730,7 @@ def test_anthropic_messages_pt_keeps_redacted_thinking_block():
 
 
 def test_anthropic_messages_pt_drops_unsigned_thinking_block():
-    """
-    Regression (pre-existing behaviour): a thinking block with no signature
-    (or an empty/null one) must still be dropped, independent of whether the
-    thinking text is populated.
-    """
+    """Regression: an unsigned thinking block is still dropped, regardless of text."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
@@ -3781,24 +3763,7 @@ def test_anthropic_messages_pt_drops_unsigned_thinking_block():
 
 
 def test_is_unsignable_thinking_block_treats_whitespace_only_as_empty():
-    """
-    Edge case: a `thinking` field that is present but whitespace-only (e.g.
-    a single trailing newline forwarded from another provider's empty
-    reasoning summary) is functionally empty and Anthropic's API will still
-    reject it with "each thinking block must contain thinking". We treat it
-    the same as a fully empty string and drop the block.
-
-    Note the sibling check ~30 lines below this function's definition
-    (the "don't pass empty text blocks" comment) uses a bare
-    `len(thinking_block) > 0`, which by itself would treat whitespace-only
-    text as non-empty. That sibling check is always combined with
-    `not _is_unsignable_thinking_block(m)` in an `and`, so this function's
-    stricter whitespace-aware check is still the one that decides whether a
-    whitespace-only block survives — the two checks don't disagree in
-    practice, but this function is intentionally the stricter of the two
-    since it is also called standalone (via `_drop_unsignable_thinking_blocks`)
-    without that extra `len(...) > 0` guard.
-    """
+    """Whitespace-only `thinking` text is treated as empty and dropped."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _is_unsignable_thinking_block,
     )
