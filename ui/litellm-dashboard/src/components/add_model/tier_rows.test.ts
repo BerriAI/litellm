@@ -12,7 +12,6 @@ import {
   sameTierIdentity,
   tierRowById,
   getCustomTierRowsError,
-  restoredBuiltInRows,
   tierParamsByRowId,
   tierRowByName,
 } from "./tier_rows";
@@ -114,42 +113,6 @@ describe("CUSTOM_TIER_RESTRICTIONS", () => {
     expect(CUSTOM_TIER_OMITTED_KEYS).toEqual(
       expect.arrayContaining(["tier_labels", "escalation_keywords", "adaptive", "classifier_fallback"]),
     );
-  });
-});
-
-describe("restoredBuiltInRows", () => {
-  it("brings missing built-ins back in canonical order and leaves custom rows after them", () => {
-    const restored = restoredBuiltInRows([definedRow("AUDIT"), { ...definedRow("COMPLEX"), id: "COMPLEX" }], tiers);
-    expect(restored.map((r) => r.id)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING", "audit"]);
-  });
-
-  it("keeps the models an already-present built-in row carries rather than the stale record", () => {
-    const edited = { ...definedRow("SIMPLE", ["edited"]), id: "SIMPLE" };
-    expect(restoredBuiltInRows([edited], tiers).find((r) => r.id === "SIMPLE")?.models).toEqual(["edited"]);
-  });
-});
-
-describe("restoredBuiltInRows name collisions", () => {
-  it("does not restore a built-in slot whose name a custom row already answers to", () => {
-    const custom: TierRow[] = [
-      { id: "uuid-1", name: "SIMPLE", definition: "operator took this name", models: ["a"] },
-      { id: "MEDIUM", name: "MEDIUM", definition: "", models: ["b"] },
-    ];
-    const restored = restoredBuiltInRows(custom, tiers);
-    const folded = restored.map((row) => row.name.toLowerCase());
-    expect(new Set(folded).size).toBe(folded.length);
-    expect(restored.filter((row) => row.name === "SIMPLE")).toHaveLength(1);
-  });
-
-  it("still restores the built-in slots nothing else claims", () => {
-    const custom: TierRow[] = [{ id: "uuid-1", name: "AUDIT", definition: "d", models: ["a"] }];
-    expect(restoredBuiltInRows(custom, tiers).map((row) => row.id)).toEqual([
-      "SIMPLE",
-      "MEDIUM",
-      "COMPLEX",
-      "REASONING",
-      "uuid-1",
-    ]);
   });
 });
 

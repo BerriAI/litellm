@@ -1142,7 +1142,7 @@ describe("ComplexityRouterConfig tier editing", () => {
       tier_model_params: { sec: { "gpt-4": { reasoning_effort: "high" } }, SIMPLE: { "gpt-3.5-turbo": {} } },
     };
     const { committed } = renderEditor(withEfforts);
-    fireEvent.click(screen.getByRole("button", { name: "Use built-in tiers" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
     const next = committed();
     expect(next.custom_tier_set).toBeUndefined();
     expect(Object.keys(next.tier_model_params ?? {})).toEqual(["SIMPLE"]);
@@ -1161,13 +1161,13 @@ describe("ComplexityRouterConfig tier editing", () => {
       },
     };
     const { committed } = renderEditor(renamed);
-    fireEvent.click(screen.getByRole("button", { name: "Use built-in tiers" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
     const next = committed();
     expect(next.tiers.COMPLEX).toEqual(["gpt-4"]);
     expect(next.tier_model_params).toEqual({ COMPLEX: { "gpt-4": { reasoning_effort: "high" } } });
   });
 
-  it("refuses to restore the built-in tiers when doing so would pass the tier limit", () => {
+  it("resets a full tier set back to the four built-ins rather than stacking them on top", () => {
     const nearLimit: ComplexityRouterConfigValue = {
       ...customValue,
       custom_tier_set: {
@@ -1180,8 +1180,11 @@ describe("ComplexityRouterConfig tier editing", () => {
         fallback_tier_id: "row-0",
       },
     };
-    renderEditor(nearLimit);
-    expect(screen.getByRole("button", { name: "Restore defaults" })).toBeDisabled();
+    const { committed } = renderEditor(nearLimit);
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    const next = committed();
+    expect(next.custom_tier_set).toBeUndefined();
+    expect(Object.keys(next.tiers)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
   });
 
   it("stops describing the heuristic scorer once an edited tier set replaces it", () => {

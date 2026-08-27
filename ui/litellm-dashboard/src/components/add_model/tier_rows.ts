@@ -55,17 +55,6 @@ export const activeTierRows = (value: ActiveTierSet): ActiveTierRow[] => {
   return rows.map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
 };
 
-// A custom row can answer to a built-in name without carrying its id, and restoring the slot then
-// collides on the uniqueness rule, so a claimed name means that slot stays gone.
-export const restoredBuiltInRows = (rows: readonly TierRow[], tiers: ComplexityTiers): TierRow[] => [
-  ...TIER_ORDER.flatMap((tier) => {
-    const slot = rows.find((row) => row.id === tier);
-    if (slot) return [slot];
-    return rows.some((row) => sameTierIdentity(row.name, tier)) ? [] : [builtInRow(tier, tiers)];
-  }),
-  ...rows.filter((row) => !(TIER_ORDER as string[]).includes(row.id)),
-];
-
 export const tierRowById = <T extends TierRow>(rows: readonly T[], id: string | undefined): T | undefined =>
   id === undefined ? undefined : rows.find((row) => row.id === id);
 

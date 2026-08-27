@@ -26,7 +26,6 @@ import {
   getCustomTierRowsError,
   isBuiltInTierName,
   resolveComplexityDefaultModel,
-  restoredBuiltInRows,
   sameTierIdentity,
   tierRowById,
   tierRowByName,
@@ -406,10 +405,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
     );
   };
 
-  const restorableRows = restoredBuiltInRows(tierRows, value.tiers);
-
-  const restoreDefaultTiers = () => commitTierRows(restorableRows, currentFallbackId);
-
   // Models and params both come from these rows, so the two cannot be keyed differently.
   const exitToBuiltInTiers = () => {
     const { custom_tier_set: _dropped, ...rest } = value;
@@ -631,27 +626,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     Done
                   </Button>
                 </SimpleTooltip>
-                {customTierSet && TIER_ORDER.some((tier) => !tierRows.some((row) => row.id === tier)) && (
-                  <SimpleTooltip
-                    content={
-                      restorableRows.length > MAX_TIER_COUNT
-                        ? `Restoring the built-in tiers would make ${restorableRows.length} tiers, past the limit of ${MAX_TIER_COUNT}. Remove a tier first`
-                        : undefined
-                    }
-                  >
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={restorableRows.length > MAX_TIER_COUNT}
-                      onClick={restoreDefaultTiers}
-                    >
-                      Restore defaults
-                    </Button>
-                  </SimpleTooltip>
-                )}
                 {customTierSet && (
                   <Button variant="outline" size="sm" onClick={exitToBuiltInTiers}>
-                    Use built-in tiers
+                    Restore defaults
                   </Button>
                 )}
               </>

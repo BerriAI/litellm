@@ -936,7 +936,7 @@ describe("hydrateCustomTierSet", () => {
     expect(hydrated?.tiers.find((row) => row.id === hydrated.fallback_tier_id)?.name).toBe("SECURITY_REVIEW");
   });
 
-  it("mints the canonical key for a built-in name so Restore defaults recognises the row", () => {
+  it("mints the canonical key for a built-in name so every pointer into the set is a row id", () => {
     const hydrated = hydrateCustomTierSet({
       tier_definitions: [{ name: "SIMPLE" }, { name: "AUDIT", description: "audits" }],
       tiers: { SIMPLE: ["a"], AUDIT: ["b"] },
