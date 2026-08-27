@@ -70,5 +70,14 @@ export const fetchAvailableModels = async (accessToken: string): Promise<ModelGr
   }
 
   const response = await modelAvailableCall(accessToken, "", "");
-  return dedupeByGroup(toModelGroups(response?.data));
+  // Same permission sentinel excludeProxyWideSentinel filters elsewhere: it is
+  // a marker, not a selectable model.
+  const selectable = new Set(
+    excludeProxyWideSentinel(
+      (Array.isArray(response?.data) ? response.data : []).map(
+        (model: AvailableModel) => (model.model_group || model.id || model.model_name) ?? "",
+      ),
+    ),
+  );
+  return dedupeByGroup(toModelGroups(response?.data).filter((model) => selectable.has(model.model_group)));
 };

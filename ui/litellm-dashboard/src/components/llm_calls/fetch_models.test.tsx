@@ -87,6 +87,15 @@ describe("fetchAvailableModels", () => {
     expect(await fetchAvailableModels("token")).toEqual([{ model_group: "gpt-4o" }]);
   });
 
+  it("excludes the all-proxy-models permission sentinel from fallback options", async () => {
+    modelHubCallMock.mockResolvedValue({ data: [] });
+    modelAvailableCallMock.mockResolvedValue({
+      data: [{ id: "all-proxy-models" }, { id: "gpt-4o", mode: "chat" }],
+    });
+
+    expect(await fetchAvailableModels("token")).toEqual([{ model_group: "gpt-4o", mode: "chat" }]);
+  });
+
   it("returns an empty list when both routes come back empty", async () => {
     modelHubCallMock.mockResolvedValue({ data: [] });
     modelAvailableCallMock.mockResolvedValue({ data: [] });
