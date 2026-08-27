@@ -46930,6 +46930,7 @@
     },    
     "scaleway/deepseek-v4-flash-0731": {
         "input_cost_per_token": 4e-07,
+        "cache_read_input_token_cost": 8e-08
         "litellm_provider": "scaleway",
         "max_input_tokens": 256000,
         "max_output_tokens": 32768,
