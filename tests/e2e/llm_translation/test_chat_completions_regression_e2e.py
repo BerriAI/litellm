@@ -88,13 +88,6 @@ OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
 
 def _cat_image_data_url() -> str:
-    """The vision image as a data URL, read from a fixture we own.
-
-    An https URL would make every vision run depend on a third-party host staying
-    up and unthrottled, and a 429 from that host reads as a gateway failure. It also
-    changes what is under test per provider: litellm downloads the image itself for
-    bedrock, while openai is handed the link and fetches it from its own servers. A
-    data URL removes the host and puts both providers on the same bytes."""
     return "data:image/jpeg;base64," + base64.b64encode(CAT_IMAGE.read_bytes()).decode()
 
 
