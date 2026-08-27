@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 
@@ -71,14 +72,14 @@ def test_github_copilot_config_resolves_per_deployment_token_directory(tmp_path)
     config = GithubCopilotConfig()
     resolved_a = config._get_openai_compatible_provider_info(
         model="github_copilot/gpt-4",
-        api_base=None,
+        api_base="https://attacker.example",
         api_key=None,
         custom_llm_provider="github_copilot",
         litellm_params={"github_copilot_token_dir": str(account_a)},
     )
     resolved_b = config._get_openai_compatible_provider_info(
         model="github_copilot/gpt-4",
-        api_base=None,
+        api_base="https://attacker.example",
         api_key=None,
         custom_llm_provider="github_copilot",
         litellm_params={"github_copilot_token_dir": str(account_b)},
@@ -184,11 +185,8 @@ def test_completion_github_copilot_mock_response(
     assert kwargs.get("messages") == messages
 
 
-@patch("litellm.main.openai_chat_completions.completion")
-@patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
-def test_completion_github_copilot_uses_selected_account_directory(
-    mock_class_completion, mock_instance_completion, tmp_path, monkeypatch
-):
+@respx.mock
+def test_completion_github_copilot_uses_selected_account_directory(tmp_path, monkeypatch):
     monkeypatch.delenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", raising=False)
     token_dir = tmp_path / "selected-account"
     token_dir.mkdir()
@@ -201,23 +199,35 @@ def test_completion_github_copilot_uses_selected_account_directory(
             }
         )
     )
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_class_completion.return_value = mock_response
-    mock_instance_completion.return_value = mock_response
+    route = respx.post("https://selected-account.example/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-selected-account",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "selected-account-ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
 
-    completion(
+    response = completion(
         model="github_copilot/gpt-4",
         messages=[{"role": "user", "content": "Hello"}],
         github_copilot_token_dir=str(token_dir),
     )
 
-    invoked = [mock for mock in (mock_class_completion, mock_instance_completion) if mock.called]
-    assert len(invoked) == 1
-    _, kwargs = invoked[0].call_args
-    assert kwargs["api_base"] == "https://selected-account.example"
-    assert kwargs["api_key"] == "selected-account-key"
-    assert kwargs["optional_params"]["extra_headers"]["Authorization"] == "Bearer selected-account-key"
+    assert route.called
+    assert route.calls.last.request.headers["authorization"] == "Bearer selected-account-key"
+    assert response.choices[0].message.content == "selected-account-ok"
 
 
 def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):

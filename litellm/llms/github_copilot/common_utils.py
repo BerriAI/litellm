@@ -17,11 +17,6 @@ API_VERSION: Final = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE: Final = "https://api.githubcopilot.com"
 
 
-def is_default_copilot_api_base(api_base: str | None) -> bool:
-    """Return whether ``api_base`` is absent or LiteLLM's generic Copilot base."""
-    return api_base is None or api_base.rstrip("/") == DEFAULT_GITHUB_COPILOT_API_BASE
-
-
 class GithubCopilotError(BaseLLMException):
     def __init__(
         self,
