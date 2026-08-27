@@ -5812,6 +5812,8 @@ class Router:
         """
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            requested_model_group: Final = model
+            metadata_variable_name: Final = _get_router_metadata_variable_name(function_name="aretrieve_batch")
             if model is not None:
                 filtered_model_list: (
                     list[DeploymentTypedDict] | list[dict] | dict | None
@@ -5848,6 +5850,13 @@ class Router:
                         kwargs=new_kwargs,
                         function_name="aretrieve_batch",
                     )
+                    ## STAMP THE MODEL GROUP FOR SPEND TRACKING ##
+                    # A batch is retrieved by id, so the request carries no model group of its
+                    # own - only the deployment that answered knows it. Batch token usage lands
+                    # on this retrieve call (the provider reports counts once the job finishes),
+                    # so without this the tokens are logged under an empty model_group.
+                    model_group: Final = requested_model_group or model_name["model_name"]
+                    new_kwargs[metadata_variable_name].setdefault("model_group", model_group)
                     new_kwargs.pop("custom_llm_provider", None)
                     data.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
