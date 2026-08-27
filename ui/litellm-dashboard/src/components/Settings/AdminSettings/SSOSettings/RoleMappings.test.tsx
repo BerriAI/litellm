@@ -26,7 +26,7 @@ describe("RoleMappings", () => {
   it("should return null when roleMappings is undefined", () => {
     const { container } = renderWithProviders(<RoleMappings roleMappings={undefined} />);
 
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should display Group Claim and Default Role with correct values and display names", () => {

@@ -7,6 +7,8 @@ module should touch a failed upstream response's body.
 
 from __future__ import annotations
 
+from typing import Final
+
 import httpx
 
 from litellm._logging import verbose_logger
@@ -101,9 +103,9 @@ def classify_upstream_token_rejection(
     """Classify a token-endpoint rejection into exactly one fault: a body with an RFC 6749 §5.2
     ``error`` field goes through blame assignment (:func:`_classify_oauth_error_code`); anything
     without a usable ``error`` field is an upstream protocol fault."""
-    parsed = _safe_json(response)
-    fields = parsed if isinstance(parsed, dict) else {}
-    code = _bounded_field(fields.get("error"))
+    parsed: Final = _safe_json(response)
+    fields: Final = parsed if isinstance(parsed, dict) else {}
+    code: Final = _bounded_field(fields.get("error"))
     if code is None:
         _log_out_of_contract("token", response, log_context)
         return UpstreamProtocolFault(note=f"upstream token endpoint returned HTTP {response.status_code}")
@@ -121,9 +123,9 @@ def classify_upstream_dcr_rejection(response: httpx.Response, log_context: str) 
     ``error`` / ``error_description`` and go through the same blame assignment as token errors
     (registration sends no client credentials, so credential codes stay caller-actionable); anything
     without a usable ``error`` field is an upstream protocol fault."""
-    parsed = _safe_json(response)
-    fields = parsed if isinstance(parsed, dict) else {}
-    code = _bounded_field(fields.get("error"))
+    parsed: Final = _safe_json(response)
+    fields: Final = parsed if isinstance(parsed, dict) else {}
+    code: Final = _bounded_field(fields.get("error"))
     if code is None:
         _log_out_of_contract("registration", response, log_context)
         return UpstreamProtocolFault(note=f"upstream registration failed with HTTP {response.status_code}")

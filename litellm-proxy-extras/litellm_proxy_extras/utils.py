@@ -10,6 +10,14 @@ from pathlib import Path
 from typing import Optional
 
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras.replica_identity import (
+    REPLICA_IDENTITY_FULL_ENV_VAR,
+    apply_replica_identity_full,
+)
+from litellm_proxy_extras.prisma_toolchain import (
+    ensure_prisma_toolchain,
+    prisma_command_timeout,
+)
 
 
 def str_to_bool(value: Optional[str]) -> bool:
@@ -31,6 +39,65 @@ def _get_prisma_env() -> dict:
 
 
 _MIGRATION_TS_RE = re.compile(r"^(\d{14})_")
+
+_SPEND_LOGS_ALTER_RE = re.compile(r'^ALTER\s+TABLE\s+"LiteLLM_SpendLogs"\s', re.IGNORECASE)
+_SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(
+    r'^DROP\s+TABLE\s+"LiteLLM_SpendLogs_[^"]*"', re.IGNORECASE
+)
+_SPEND_LOGS_PK_CLAUSE_RE = re.compile(
+    r'^(?:DROP\s+CONSTRAINT\s+"[^"]*_pkey"'
+    r'|ADD\s+(?:CONSTRAINT\s+"[^"]*"\s+)?PRIMARY\s+KEY\s*\([^)]*\))$',
+    re.IGNORECASE,
+)
+
+PARTITIONED_SPEND_LOGS_PUSH_ERROR = (
+    "LiteLLM_SpendLogs is a partitioned table (see db_scripts/partition_spend_logs.sql), "
+    "so its primary key must include the partition key (\"startTime\"). `prisma db push` "
+    "reconciles the database against schema.prisma, which declares the unpartitioned "
+    "primary key (\"request_id\"), and Postgres rejects that rewrite with: unique "
+    "constraint on partitioned table must include all partitioning columns. Start the "
+    "proxy without --use_prisma_db_push so it uses `prisma migrate deploy`, which only "
+    "applies shipped migrations and leaves the partitioned primary key alone."
+)
+
+
+def _without_sql_comments(statement: str) -> str:
+    return "\n".join(
+        line
+        for line in statement.splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    ).strip()
+
+
+def _without_spend_logs_pk_clauses(statement: str) -> Optional[str]:
+    prefix_match = _SPEND_LOGS_ALTER_RE.match(statement)
+    if not prefix_match:
+        return statement
+    kept = tuple(
+        clause.strip()
+        for clause in statement[prefix_match.end():].split(",\n")
+        if not _SPEND_LOGS_PK_CLAUSE_RE.match(clause.strip())
+    )
+    if not kept:
+        return None
+    return statement[: prefix_match.end()] + ",\n".join(kept)
+
+
+def filter_partitioned_spend_logs_diff(diff_sql: str) -> str:
+    """Drop statements from a `prisma migrate diff` script that fight the
+    SpendLogs partitioning runbook (db_scripts/partition_spend_logs.sql): the
+    primary-key rewrite on "LiteLLM_SpendLogs", which Postgres rejects on a
+    partitioned table, and drops of runbook artifacts such as
+    "LiteLLM_SpendLogs_legacy"."""
+    kept = tuple(
+        filtered
+        for statement in diff_sql.split(";")
+        for bare in (_without_sql_comments(statement),)
+        if bare and not _SPEND_LOGS_ARTIFACT_DROP_RE.match(bare)
+        for filtered in (_without_spend_logs_pk_clauses(bare),)
+        if filtered is not None
+    )
+    return "".join(f"{statement};\n\n" for statement in kept)
 
 
 def _migration_timestamp(name: str) -> int:
@@ -138,7 +205,7 @@ class ProxyExtrasDBManager:
                 ],
                 stdout=open(migration_file, "w"),
                 check=True,
-                timeout=30,
+                timeout=prisma_command_timeout(),
                 env=prisma_env,
             )
 
@@ -153,7 +220,7 @@ class ProxyExtrasDBManager:
                     "0_init",
                 ],
                 check=True,
-                timeout=30,
+                timeout=prisma_command_timeout(),
                 env=prisma_env,
             )
 
@@ -189,7 +256,7 @@ class ProxyExtrasDBManager:
                 "--rolled-back",
                 migration_name,
             ],
-            timeout=60,
+            timeout=prisma_command_timeout(),
             check=True,
             capture_output=True,
             env=prisma_env,
@@ -201,7 +268,7 @@ class ProxyExtrasDBManager:
         prisma_env = _get_prisma_env()
         subprocess.run(
             [_get_prisma_command(), "migrate", "resolve", "--applied", migration_name],
-            timeout=60,
+            timeout=prisma_command_timeout(),
             check=True,
             capture_output=True,
             env=prisma_env,
@@ -299,7 +366,7 @@ class ProxyExtrasDBManager:
                         "--script",
                     ],
                     check=True,
-                    timeout=60,
+                    timeout=prisma_command_timeout(),
                     stdout=f,
                     env=_get_prisma_env(),
                 )
@@ -331,7 +398,7 @@ class ProxyExtrasDBManager:
                             "--schema",
                             schema_path,
                         ],
-                        timeout=60,
+                        timeout=prisma_command_timeout(),
                         check=True,
                         capture_output=True,
                         text=True,
@@ -347,7 +414,24 @@ class ProxyExtrasDBManager:
             return
         logger.info(f"Migration diff created at {diff_sql_path}")
 
+        if ProxyExtrasDBManager.spend_logs_is_partitioned():
+            filtered_sql = filter_partitioned_spend_logs_diff(
+                diff_sql_path.read_text()
+            )
+            diff_sql_path.write_text(filtered_sql)
+            logger.info(
+                "LiteLLM_SpendLogs is partitioned; removed its primary-key "
+                "rewrite and partitioning artifacts from the drift script"
+            )
+            if not filtered_sql.strip():
+                logger.info("Drift script is empty after filtering; nothing to apply")
+                if not mark_all_applied:
+                    return
+                ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
+                return
+
         # 2. Run prisma db execute to apply the migration
+        applied_ok = False
         try:
             logger.info("Running prisma db execute to apply the migration diff...")
             result = subprocess.run(
@@ -360,7 +444,7 @@ class ProxyExtrasDBManager:
                     "--schema",
                     schema_path,
                 ],
-                timeout=60,
+                timeout=prisma_command_timeout(),
                 check=True,
                 capture_output=True,
                 text=True,
@@ -368,6 +452,7 @@ class ProxyExtrasDBManager:
             )
             logger.info(f"prisma db execute stdout: {result.stdout}")
             logger.info("✅ Migration diff applied successfully")
+            applied_ok = True
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to apply migration diff: {e.stderr}")
         except subprocess.TimeoutExpired:
@@ -376,6 +461,16 @@ class ProxyExtrasDBManager:
         # 3. Mark all migrations as applied
         if not mark_all_applied:
             return
+        if not applied_ok:
+            logger.warning(
+                "Drift script failed to apply; NOT marking migrations as "
+                "applied so a later migration run can retry them"
+            )
+            return
+        ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
+
+    @staticmethod
+    def _mark_migrations_applied(migrations_dir: str):
         migration_names = ProxyExtrasDBManager._get_migration_names(migrations_dir)
         logger.info(f"Resolving {len(migration_names)} migrations")
         for migration_name in migration_names:
@@ -389,7 +484,7 @@ class ProxyExtrasDBManager:
                         "--applied",
                         migration_name,
                     ],
-                    timeout=60,
+                    timeout=prisma_command_timeout(),
                     check=True,
                     capture_output=True,
                     text=True,
@@ -401,6 +496,55 @@ class ProxyExtrasDBManager:
                     logger.warning(
                         f"Failed to resolve migration {migration_name}: {e.stderr}"
                     )
+
+    @staticmethod
+    def spend_logs_is_partitioned() -> bool:
+        """True when the connected database's LiteLLM_SpendLogs is a
+        partitioned table in Prisma's target schema (the `schema` URL param,
+        falling back to Prisma's default target, public), i.e. the operator
+        ran db_scripts/partition_spend_logs.sql. Returns False when psycopg is
+        unavailable or the database cannot be reached, preserving the
+        pre-existing behavior in those cases."""
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            return False
+
+        try:
+            import psycopg
+        except ImportError:
+            return False
+
+        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        try:
+            with psycopg.connect(
+                cleaned_url, connect_timeout=10, autocommit=True
+            ) as conn:
+                row = conn.execute(
+                    "SELECT 1 "
+                    "FROM pg_partitioned_table pt "
+                    "JOIN pg_class c ON c.oid = pt.partrelid "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE c.relname = 'LiteLLM_SpendLogs' "
+                    "  AND n.nspname = %s",
+                    (
+                        ProxyExtrasDBManager._prisma_schema_param(database_url)
+                        or "public",
+                    ),
+                ).fetchone()
+        except (psycopg.OperationalError, psycopg.DatabaseError):
+            return False
+        return row is not None
+
+    @staticmethod
+    def _prisma_schema_param(url: str) -> Optional[str]:
+        """The `schema` query param Prisma uses to pick its target schema,
+        or None when the URL does not set one."""
+        from urllib.parse import urlparse, parse_qsl
+
+        return next(
+            (v for k, v in parse_qsl(urlparse(url).query) if k == "schema"),
+            None,
+        )
 
     @staticmethod
     def _strip_prisma_query_params(url: str) -> str:
@@ -520,13 +664,14 @@ class ProxyExtrasDBManager:
         migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
 
         if not use_migrate:
-            # Preserve `prisma db push` path unchanged.
+            if ProxyExtrasDBManager.spend_logs_is_partitioned():
+                raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
             original_dir = os.getcwd()
             os.chdir(migrations_dir)
             try:
                 subprocess.run(
                     [_get_prisma_command(), "db", "push", "--accept-data-loss"],
-                    timeout=60,
+                    timeout=prisma_command_timeout(),
                     check=True,
                     env=_get_prisma_env(),
                 )
@@ -551,7 +696,7 @@ class ProxyExtrasDBManager:
                 try:
                     result = subprocess.run(
                         [_get_prisma_command(), "migrate", "deploy"],
-                        timeout=60,
+                        timeout=prisma_command_timeout(),
                         check=True,
                         capture_output=True,
                         text=True,
@@ -677,6 +822,39 @@ class ProxyExtrasDBManager:
             os.chdir(original_dir)
 
     @staticmethod
+    def apply_replica_identity_full_if_requested() -> bool:
+        """
+        Re-assert REPLICA IDENTITY FULL on LiteLLM's tables when the operator
+        opted in via LITELLM_SET_REPLICA_IDENTITY_FULL.
+
+        Prisma leaves new tables at the Postgres default, which logical
+        replication consumers reject, so the setting has to be re-applied after
+        every migration run rather than once by hand.
+
+        Returns:
+            bool: True if the setting was applied, False if it was not
+            requested or could not be applied.
+        """
+        if not str_to_bool(os.getenv(REPLICA_IDENTITY_FULL_ENV_VAR)):
+            return False
+        try:
+            schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
+            prisma_command = _get_prisma_command()
+            prisma_env = _get_prisma_env()
+        except OSError as e:
+            logger.error(
+                "Could not resolve the migrations directory for the REPLICA "
+                "IDENTITY FULL step, skipping it. Error: %s",
+                e,
+            )
+            return False
+        return apply_replica_identity_full(
+            schema_path=schema_path,
+            prisma_command=prisma_command,
+            prisma_env=prisma_env,
+        )
+
+    @staticmethod
     def setup_database(
         use_migrate: bool = False, use_v2_resolver: bool = False
     ) -> bool:
@@ -694,6 +872,18 @@ class ProxyExtrasDBManager:
         Returns:
             bool: True if setup was successful, False otherwise
         """
+        ensure_prisma_toolchain(
+            prisma_command=_get_prisma_command(), prisma_env=_get_prisma_env()
+        )
+        migrated = ProxyExtrasDBManager._run_migrations(
+            use_migrate=use_migrate, use_v2_resolver=use_v2_resolver
+        )
+        if migrated:
+            ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
+        return migrated
+
+    @staticmethod
+    def _run_migrations(use_migrate: bool, use_v2_resolver: bool) -> bool:
         if use_v2_resolver:
             logger.info("Using v2 migration resolver (--use_v2_migration_resolver)")
             return ProxyExtrasDBManager._setup_database_v2(use_migrate=use_migrate)
@@ -711,7 +901,7 @@ class ProxyExtrasDBManager:
                         # Set migrations directory for Prisma
                         result = subprocess.run(
                             [_get_prisma_command(), "migrate", "deploy"],
-                            timeout=60,
+                            timeout=prisma_command_timeout(),
                             check=True,
                             capture_output=True,
                             text=True,
@@ -794,7 +984,7 @@ class ProxyExtrasDBManager:
                                             "--rolled-back",
                                             failed_migration,
                                         ],
-                                        timeout=60,
+                                        timeout=prisma_command_timeout(),
                                         check=True,
                                         capture_output=True,
                                         text=True,
@@ -919,10 +1109,12 @@ class ProxyExtrasDBManager:
                                 )
                                 raise
                 else:
+                    if ProxyExtrasDBManager.spend_logs_is_partitioned():
+                        raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
                     # Use prisma db push with increased timeout
                     subprocess.run(
                         [_get_prisma_command(), "db", "push", "--accept-data-loss"],
-                        timeout=60,
+                        timeout=prisma_command_timeout(),
                         check=True,
                     )
                     return True

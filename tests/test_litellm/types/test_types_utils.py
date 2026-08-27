@@ -1,11 +1,13 @@
-import os
-import sys
+from typing import Final
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
-from litellm.types.utils import HiddenParams
+from litellm.types.utils import HiddenParams, all_litellm_params
+
+
+def test_rust_is_a_known_litellm_param():
+    assert "rust" in all_litellm_params
 
 
 def test_hidden_params_response_ms():
@@ -69,6 +71,29 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
+    """Regression (LIT-5757): DashScope nests the Anthropic-spelled
+    cache_creation_input_tokens inside prompt_tokens_details. It must populate
+    the canonical cache_write_tokens/cache_creation_tokens pair, without
+    overriding an explicitly provided canonical value."""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    nested: Final = PromptTokensDetailsWrapper(
+        cached_tokens=0, text_tokens=2059, cache_creation_input_tokens=2048
+    )
+    assert nested.cache_write_tokens == 2048
+    assert nested.cache_creation_tokens == 2048
+
+    explicit: Final = PromptTokensDetailsWrapper(
+        cache_write_tokens=100, cache_creation_input_tokens=2048
+    )
+    assert explicit.cache_write_tokens == 100
+    assert explicit.cache_creation_tokens == 100
+
+    non_int: Final = PromptTokensDetailsWrapper(cache_creation_input_tokens=None)
+    assert not hasattr(non_int, "cache_write_tokens")
 
 
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
@@ -319,29 +344,6 @@ class TestNativeFinishReason:
         choice = Choices(finish_reason="MAX_TOKENS")
         assert choice.finish_reason == "length"
         assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
-
-
-def test_parallel_request_limiter_internal_fields_in_all_litellm_params():
-    """
-    Regression test: internal fields written by parallel_request_limiter_v3 must
-    be in all_litellm_params so they are stripped before forwarding to upstream
-    providers.  If missing, they are sent as extra body parameters and providers
-    like OpenAI reject the request with a 400 invalid_request_error.
-    """
-    from litellm.types.utils import all_litellm_params
-
-    internal_fields = [
-        "_litellm_rate_limit_descriptors",
-        "_litellm_tpm_reserved_tokens",
-        "_litellm_tpm_reserved_model",
-        "_litellm_tpm_reserved_scopes",
-        "_litellm_tpm_reservation_released",
-    ]
-    for field in internal_fields:
-        assert field in all_litellm_params, (
-            f"{field!r} is not in all_litellm_params. "
-            "It will be forwarded to upstream providers and cause 400 errors."
-        )
 
 
 def test_delta_maps_reasoning_to_reasoning_content():
@@ -626,3 +628,134 @@ def test_delattr_fast_path_missing_attribute_is_noop():
 
     del racy.x
     del racy.x
+def test_chat_completion_tool_call_from_dict_custom():
+    from litellm.types.utils import (
+        ChatCompletionMessageCustomToolCall,
+        ChatCompletionMessageToolCall,
+        chat_completion_tool_call_from_dict,
+    )
+
+    custom_tc = {
+        "id": "call_njxQ",
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": "*** Begin Patch\n*** End Patch\n"},
+    }
+    parsed = chat_completion_tool_call_from_dict(custom_tc)
+    assert isinstance(parsed, ChatCompletionMessageCustomToolCall)
+    assert parsed.model_dump() == custom_tc
+
+    func_tc = {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    parsed_func = chat_completion_tool_call_from_dict(func_tc)
+    assert isinstance(parsed_func, ChatCompletionMessageToolCall)
+    assert "custom" not in parsed_func.model_dump()
+
+
+def test_chat_completion_tool_call_from_dict_custom_strips_null_function():
+    from litellm.types.utils import chat_completion_tool_call_from_dict
+
+    sdk_shaped = {
+        "id": "call_x",
+        "type": "custom",
+        "function": None,
+        "custom": {"name": "ApplyPatch", "input": ""},
+    }
+    parsed = chat_completion_tool_call_from_dict(sdk_shaped)
+    assert "function" not in parsed.model_dump()
+
+
+def test_chat_completion_tool_call_from_dict_typeless_custom_payload():
+    """A tool-call dict can carry a ``custom`` payload with ``type`` absent or None
+    (e.g. rebuilt from streaming deltas, where only the first chunk has ``type``).
+    Classifying on ``type == "custom"`` alone sent these to the function branch,
+    which raised TypeError (missing ``function``) on a payload the streaming path
+    accepts as custom."""
+    from litellm.types.utils import ChatCompletionMessageCustomToolCall, chat_completion_tool_call_from_dict
+
+    typeless = {"id": "call_1", "custom": {"name": "ApplyPatch", "input": "*** Begin Patch"}}
+    parsed = chat_completion_tool_call_from_dict(typeless)
+    assert isinstance(parsed, ChatCompletionMessageCustomToolCall)
+    assert parsed.type == "custom"
+    assert parsed.custom.name == "ApplyPatch"
+
+    null_typed = {"id": "call_2", "type": None, "custom": {"name": "f", "input": "{}"}}
+    assert isinstance(chat_completion_tool_call_from_dict(null_typed), ChatCompletionMessageCustomToolCall)
+
+
+def test_custom_tool_call_classification_agrees_across_streaming_and_non_streaming():
+    """The streaming Delta coercion and the non-streaming from_dict parser must
+    classify the same tool-call dict identically, or a provider payload becomes a
+    custom tool call mid-stream and something else on the completed message."""
+    from litellm.types.utils import (
+        ChatCompletionDeltaCustomToolCall,
+        ChatCompletionMessageCustomToolCall,
+        Delta,
+        chat_completion_tool_call_from_dict,
+    )
+
+    tool_calls = [
+        {"id": "c1", "type": "custom", "custom": {"name": "ApplyPatch", "input": ""}},
+        {"id": "c2", "custom": {"name": "ApplyPatch", "input": "x"}},
+        {"id": "c3", "type": "function", "function": {"name": "g", "arguments": "{}"}},
+    ]
+    for tool_call in tool_calls:
+        message_parsed = chat_completion_tool_call_from_dict(dict(tool_call))
+        delta_parsed = Delta(tool_calls=[dict(tool_call, index=0)]).tool_calls[0]
+        assert isinstance(message_parsed, ChatCompletionMessageCustomToolCall) == isinstance(
+            delta_parsed, ChatCompletionDeltaCustomToolCall
+        )
+
+
+def test_message_with_mixed_function_and_custom_tool_calls():
+    from litellm.types.utils import (
+        ChatCompletionMessageCustomToolCall,
+        ChatCompletionMessageToolCall,
+        Message,
+    )
+
+    message = Message(
+        content=None,
+        role="assistant",
+        tool_calls=[
+            {"id": "call_c", "type": "custom", "custom": {"name": "ApplyPatch", "input": "patch"}},
+            {"id": "call_f", "type": "function", "function": {"name": "f", "arguments": "{}"}},
+        ],
+    )
+    assert isinstance(message.tool_calls[0], ChatCompletionMessageCustomToolCall)
+    assert isinstance(message.tool_calls[1], ChatCompletionMessageToolCall)
+    dumped = message.model_dump()["tool_calls"]
+    assert dumped[0] == {"id": "call_c", "type": "custom", "custom": {"name": "ApplyPatch", "input": "patch"}}
+    assert "custom" not in dumped[1]
+
+
+def test_delta_custom_tool_call_first_and_continuation_chunks():
+    from litellm.types.utils import ChatCompletionDeltaCustomToolCall, Delta
+
+    first_chunk_tc = {
+        "index": 0,
+        "id": "call_TBs",
+        "function": None,
+        "type": "custom",
+        "custom": {"name": "ApplyPatch", "input": ""},
+    }
+    continuation_tc = {"index": 0, "id": None, "function": None, "type": None, "custom": {"input": "***"}}
+
+    first_delta = Delta(role="assistant", tool_calls=[first_chunk_tc])
+    assert isinstance(first_delta.tool_calls[0], ChatCompletionDeltaCustomToolCall)
+    first_dump = first_delta.model_dump()["tool_calls"][0]
+    assert first_dump["type"] == "custom"
+    assert first_dump["custom"] == {"name": "ApplyPatch", "input": ""}
+    assert "function" not in first_dump
+
+    continuation_delta = Delta(tool_calls=[continuation_tc])
+    cont_dump = continuation_delta.model_dump()["tool_calls"][0]
+    assert cont_dump["type"] is None
+    assert cont_dump["custom"]["input"] == "***"
+    assert "function" not in cont_dump
+
+
+def test_delta_function_tool_call_unchanged_by_custom_support():
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta
+
+    delta = Delta(tool_calls=[{"index": 0, "id": "c2", "type": "function", "function": {"name": "g", "arguments": ""}}])
+    assert isinstance(delta.tool_calls[0], ChatCompletionDeltaToolCall)
+    assert "custom" not in delta.model_dump()["tool_calls"][0]

@@ -12,7 +12,7 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Literal, NoReturn, Optional
+from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
 from fastapi import HTTPException
 from pydantic import SecretStr
@@ -20,6 +20,7 @@ from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    DEFAULT_CREDENTIAL_HEADER,
     ApiKeyConfig,
     AuthorizationCodeConfig,
     ClientAuth,
@@ -41,17 +42,26 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-_TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT = "urn:ietf:params:oauth:token-type:access_token"
-_ID_JAG_SUBJECT_TOKEN_DEFAULT = "urn:ietf:params:oauth:token-type:id_token"
+_TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT: Final = "urn:ietf:params:oauth:token-type:access_token"
+_ID_JAG_SUBJECT_TOKEN_DEFAULT: Final = "urn:ietf:params:oauth:token-type:id_token"
 
 
-def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]) -> Subject:
+def token_header(server: MCPServer) -> str:
+    """The upstream header this server's resolved credential occupies.
+
+    One owner for every arm, so no spec builder spells the default itself and a server can never
+    hand two arms different answers.
+    """
+    return server.upstream_token_header or DEFAULT_CREDENTIAL_HEADER
+
+
+def to_subject(user_api_key_auth: UserAPIKeyAuth | None, subject_token: str | None) -> Subject:
     """Map v1's authenticated principal onto the resolver's Subject.
 
     tenant_id / subject_id are empty for an unauthenticated caller; the per-user arms must reject
     an empty subject rather than share one credential slot across callers.
     """
-    inbound = SecretStr(subject_token) if subject_token else None
+    inbound: Final = SecretStr(subject_token) if subject_token else None
     if user_api_key_auth is None:
         return Subject(tenant_id="", subject_id="", inbound_token=inbound)
     return Subject(
@@ -61,7 +71,7 @@ def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optio
     )
 
 
-def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
+def to_server_spec(server: MCPServer) -> ServerSpec | None:
     """Map a v1 server onto a ServerSpec for a migrated mode, or None to defer to v1.
 
     BYOK is the per-user source of the ``api_key`` mode; its scheme rides on ``auth_type`` just
@@ -79,8 +89,8 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     """
     if server.is_byok:
         return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
-    resource = server.url or server.server_id
-    auth_type = server.auth_type
+    resource: Final = server.url or server.server_id
+    auth_type: Final = server.auth_type
     match auth_type:
         case None | MCPAuth.none:
             if server.is_oauth_passthrough:
@@ -122,7 +132,7 @@ def _oauth2_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         return ServerSpec(
             server_id=server.server_id,
             resource=resource,
-            config=AuthorizationCodeConfig(),
+            config=AuthorizationCodeConfig(header_name=token_header(server)),
         )
     return None
 
@@ -140,9 +150,10 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
         server_id=server.server_id,
         resource=resource,
         config=ClientCredentialsConfig(
+            header_name=token_header(server),
             client_id=server.client_id,
             client_secret=SecretStr(server.client_secret) if server.client_secret else None,
-            token_url=server.token_url,
+            token_url=server.effective_token_url,
             scopes=tuple(server.scopes or ()),
             audience=server.audience,
             upstream_resource=resolve_upstream_resource(server),
@@ -151,7 +162,7 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
     )
 
 
-def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
+def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     """Build a token_exchange (OBO) spec, or defer (None) when it is not OBO-configured.
 
     An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
@@ -163,16 +174,17 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpe
     normalizes to ``rfc8693`` so a bad config value cannot crash spec-building. ``audience`` is
     forwarded only when the operator set it; a missing one is omitted, not derived.
     """
-    endpoint = server.token_exchange_endpoint or server.token_url
+    endpoint: Final = server.token_exchange_endpoint or server.effective_token_url
     if not server.client_id or not server.client_secret:
         return None
-    profile: Literal["rfc8693", "entra_obo"] = (
+    profile: Final[Literal["rfc8693", "entra_obo"]] = (
         "entra_obo" if server.token_exchange_profile == "entra_obo" else "rfc8693"
     )
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
         config=TokenExchangeConfig(
+            header_name=token_header(server),
             profile=profile,
             subject_token_type=server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
             token_exchange_endpoint=endpoint,
@@ -192,28 +204,28 @@ def _shared_key_spec(
     value_prefix: str,
     *,
     encode: bool = False,
-) -> Optional[ServerSpec]:
+) -> ServerSpec | None:
     """Build an api_key spec from the server's static token, or defer (None) if it is absent.
 
     Covers the whole shared-key static-header family: ``api_key`` on ``X-API-Key`` and the
     Authorization schemes (bearer / token / authorization sent verbatim, basic base64-encoded).
     """
-    token = server.authentication_token
+    token: Final = server.authentication_token
     if not token:
         return None  # no key configured -> defer to v1 (parity-safe)
-    value = base64.b64encode(token.encode("utf-8")).decode() if encode else token
+    value: Final = base64.b64encode(token.encode("utf-8")).decode() if encode else token
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
         config=ApiKeyConfig(
-            header_name=header_name,
+            header_name=server.upstream_token_header or header_name,
             value_prefix=value_prefix,
             key_source=SharedKey(value=SecretStr(value)),
         ),
     )
 
 
-def _id_jag_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
+def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     """Build an ID-JAG spec from the v1 server's raw fields, or defer (None) if half-configured.
 
     The enum already routes here, but a server missing an endpoint, ``client_id``, or any client-auth
@@ -221,16 +233,17 @@ def _id_jag_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
     partially configured server does not 500. ``token_exchange_endpoint`` is leg 1 (the IdP org AS);
     leg 2 is ``id_jag_resource_token_endpoint`` (the upstream resource AS).
     """
-    org_token_endpoint = server.token_exchange_endpoint
-    resource_token_endpoint = server.id_jag_resource_token_endpoint
-    client_id = server.client_id
-    client_auth = _id_jag_client_auth(server)
+    org_token_endpoint: Final = server.token_exchange_endpoint
+    resource_token_endpoint: Final = server.id_jag_resource_token_endpoint
+    client_id: Final = server.client_id
+    client_auth: Final = _id_jag_client_auth(server)
     if not org_token_endpoint or not resource_token_endpoint or not client_id or client_auth is None:
         return None
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
         config=IdJagConfig(
+            header_name=token_header(server),
             org_token_endpoint=org_token_endpoint,
             resource_token_endpoint=resource_token_endpoint,
             client_id=client_id,
@@ -243,7 +256,7 @@ def _id_jag_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
     )
 
 
-def _id_jag_client_auth(server: MCPServer) -> Optional[ClientAuth]:
+def _id_jag_client_auth(server: MCPServer) -> ClientAuth | None:
     """Private-key JWT when a key is configured, else client_secret, else None (defer to v1)."""
     if server.client_private_key:
         return PrivateKeyJwtAuth(
@@ -259,7 +272,7 @@ def _id_jag_client_auth(server: MCPServer) -> Optional[ClientAuth]:
 def _id_jag_subject_token_type(server: MCPServer) -> str:
     """ID-JAG asserts the user's id_token, so the token-exchange access_token default maps to id_token;
     an explicitly configured value (e.g. a SAML2 assertion type) is honored verbatim."""
-    configured = server.subject_token_type
+    configured: Final = server.subject_token_type
     if configured and configured != _TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT:
         return configured
     return _ID_JAG_SUBJECT_TOKEN_DEFAULT
@@ -269,7 +282,7 @@ def raise_public(error: CredError) -> NoReturn:
     """Map a resolver CredError onto the proxy's public HTTP contract. The one edge that raises."""
     match error.tag:
         case "unauthorized":
-            challenge = error.unauthorized
+            challenge: Final = error.unauthorized
             raise HTTPException(
                 status_code=401,
                 detail=challenge.body if challenge.body is not None else error.summary,
@@ -295,8 +308,8 @@ def oauth_protected_resource_path(root_path: str, server: MCPServer) -> str:
     so this stays a pure function of its inputs; ``"/"`` and ``""`` both mean no prefix. The path is
     relative, so it resolves against the caller's own host (correct even behind a reverse proxy).
     """
-    prefix = "" if root_path == "/" else root_path
-    name = server.alias or server.server_name or server.name or server.server_id
+    prefix: Final = "" if root_path == "/" else root_path
+    name: Final = server.alias or server.server_name or server.name or server.server_id
     return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
 
 
@@ -308,7 +321,7 @@ def raise_user_oauth_challenge(server: MCPServer, *, root_path: str) -> NoReturn
     RFC 8414 ``authorization_uri`` form pending the format unification; both target the same server,
     so the difference is cosmetic.
     """
-    resource_metadata = oauth_protected_resource_path(root_path, server)
+    resource_metadata: Final = oauth_protected_resource_path(root_path, server)
     raise HTTPException(
         status_code=401,
         detail="Unauthorized",
@@ -339,15 +352,15 @@ def raise_token_exchange_challenge(
     two literals) and the base64 claims draw from a fixed alphabet, so nothing from the IdP body
     reaches the header unescaped.
     """
-    resource_metadata = oauth_protected_resource_path(root_path, server)
-    encoded_claims = base64.b64encode(claims.encode()).decode() if claims else None
-    error = "insufficient_claims" if encoded_claims else "invalid_token"
-    error_description = (
+    resource_metadata: Final = oauth_protected_resource_path(root_path, server)
+    encoded_claims: Final = base64.b64encode(claims.encode()).decode() if claims else None
+    error: Final = "insufficient_claims" if encoded_claims else "invalid_token"
+    error_description: Final = (
         "Step-up authentication required; satisfy the returned claims challenge with the IdP and retry"
         if encoded_claims
         else "Missing or invalid subject token; authenticate with the IdP and retry"
     )
-    www_authenticate = ", ".join(
+    www_authenticate: Final = ", ".join(
         (
             f'Bearer resource_metadata="{resource_metadata}"',
             f'error="{error}"',

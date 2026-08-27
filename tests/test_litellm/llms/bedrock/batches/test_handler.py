@@ -8,14 +8,11 @@ the tests don't hit AWS.
 
 from __future__ import annotations
 
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bedrock.batches.handler import (  # noqa: E402
     BedrockBatchesHandler,
@@ -336,3 +333,100 @@ def test_logging_url_uses_bare_id_when_only_id_passed(patched_boto3):
     assert pre_kwargs["additional_args"]["api_base"] == (
         f"https://bedrock.us-west-2.amazonaws.com/model-invocation-job/{JOB_ID}"
     )
+
+
+def test_cancel_batch_stops_job_and_returns_mapped_status(patched_boto3):
+    fake_client, boto_client_factory = patched_boto3
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopping")
+
+    batch = BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+    fake_client.stop_model_invocation_job.assert_called_once_with(jobIdentifier=JOB_ARN)
+    _, kwargs = boto_client_factory.call_args
+    assert kwargs["region_name"] == "us-west-2"
+    assert batch.status == "cancelling"
+
+
+def test_cancel_batch_tolerates_already_terminal_job(patched_boto3):
+    from botocore.exceptions import ClientError
+
+    fake_client, _ = patched_boto3
+    fake_client.stop_model_invocation_job.side_effect = ClientError(
+        {"Error": {"Code": "ValidationException", "Message": "Job is already in a terminal state"}},
+        "StopModelInvocationJob",
+    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
+
+    batch = BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+    assert batch.status == "cancelled"
+
+
+def test_cancel_batch_tolerates_conflict_on_already_stopped_job(patched_boto3):
+    from botocore.exceptions import ClientError
+
+    fake_client, _ = patched_boto3
+    fake_client.stop_model_invocation_job.side_effect = ClientError(
+        {"Error": {"Code": "ConflictException", "Message": "Job cannot be stopped in its current state"}},
+        "StopModelInvocationJob",
+    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
+
+    batch = BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+    assert batch.status == "cancelled"
+
+
+def test_cancel_batch_reraises_conflict_when_job_not_terminal(patched_boto3):
+    from botocore.exceptions import ClientError
+
+    fake_client, _ = patched_boto3
+    fake_client.stop_model_invocation_job.side_effect = ClientError(
+        {"Error": {"Code": "ConflictException", "Message": "Operation conflicts with current job state"}},
+        "StopModelInvocationJob",
+    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="InProgress")
+
+    with pytest.raises(ClientError):
+        BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+
+def test_cancel_batch_reraises_validation_error_when_job_not_terminal(patched_boto3):
+    from botocore.exceptions import ClientError
+
+    fake_client, _ = patched_boto3
+    fake_client.stop_model_invocation_job.side_effect = ClientError(
+        {"Error": {"Code": "ValidationException", "Message": "Cannot stop job in current state"}},
+        "StopModelInvocationJob",
+    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="InProgress")
+
+    with pytest.raises(ClientError):
+        BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+
+def test_cancel_batch_reraises_other_client_errors(patched_boto3):
+    from botocore.exceptions import ClientError
+
+    fake_client, _ = patched_boto3
+    fake_client.stop_model_invocation_job.side_effect = ClientError(
+        {"Error": {"Code": "AccessDeniedException", "Message": "not authorized"}},
+        "StopModelInvocationJob",
+    )
+
+    with pytest.raises(ClientError):
+        BedrockBatchesHandler.cancel_batch(batch_id=JOB_ARN)
+
+    fake_client.get_model_invocation_job.assert_not_called()
+
+
+def test_litellm_cancel_batch_dispatches_to_bedrock(patched_boto3):
+    import litellm
+
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
+
+    batch = litellm.cancel_batch(batch_id=JOB_ARN, custom_llm_provider="bedrock")
+
+    fake_client.stop_model_invocation_job.assert_called_once_with(jobIdentifier=JOB_ARN)
+    assert batch.status == "cancelled"

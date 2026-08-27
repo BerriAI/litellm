@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
@@ -14,9 +13,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -29,6 +25,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
 
@@ -1025,7 +1022,7 @@ def test_enforced_params_check(
     from litellm.proxy.litellm_pre_call_utils import _enforced_params_check
 
     if expected_error:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='in request body\\. This is a required param'):
             _enforced_params_check(
                 request_body=request_body,
                 general_settings=general_settings,
@@ -1695,13 +1692,13 @@ def test_update_key_request_validation():
     """
     from litellm.proxy._types import UpdateKeyRequest
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         UpdateKeyRequest(
             key="test_key",
             temp_budget_increase=100,
         )
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         UpdateKeyRequest(
             key="test_key",
             temp_budget_expiry="2024-01-20T00:00:00Z",
@@ -1848,7 +1845,7 @@ async def test_end_user_transactions_reset():
     mock_client.db.tx = AsyncMock(side_effect=Exception("DB Error"))
 
     # Call function - should raise error
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         await ProxyUpdateSpend.update_end_user_spend(
             n_retry_times=0,
             prisma_client=mock_client,
@@ -1878,7 +1875,7 @@ async def test_spend_logs_cleanup_after_error():
     original_logs = mock_client.spend_log_transactions.copy()
 
     # Call function - should raise error
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         await ProxyUpdateSpend.update_spend_logs(
             n_retry_times=0,
             prisma_client=mock_client,
@@ -2184,7 +2181,8 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
     class _MockRouter:
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2209,7 +2207,8 @@ def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
     class _MockRouter:
-        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+        model_name_to_deployment_indices = {"model_name_team-1_legacy-uuid": [0]}
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [1]}
 
     test_data = {"model": "gpt-4o"}
     user_api_key_dict = UserAPIKeyAuth(
@@ -2623,7 +2622,7 @@ async def test_during_call_hook_parallel_execution_with_error():
     try:
         litellm.callbacks = [FailingGuardrail()]
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Guardrail violation detected!') as exc_info:
             await proxy_logging.during_call_hook(
                 data={
                     "model": "gpt-4",

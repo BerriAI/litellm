@@ -6,7 +6,7 @@ Handles transformation between OpenAI-compatible format and ModelScope API forma
 API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from typing_extensions import override
@@ -66,7 +66,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         ModelScope uses the same parameter names as OpenAI.
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         if drop_params:
             non_default_params = {k: v for k, v in non_default_params.items() if k in supported_params}
         optional_params.update(non_default_params)
@@ -75,12 +75,12 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
     @override
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the ModelScope image generation API request.
@@ -99,20 +99,20 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for ModelScope.
         """
-        final_api_key: Optional[str] = api_key or get_secret_str("MODELSCOPE_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("MODELSCOPE_API_KEY")
 
         if not final_api_key:
             raise ValueError(
                 "MODELSCOPE_API_KEY is not set. Please set it via environment variable or pass api_key parameter."
             )
 
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {final_api_key}",
         }
@@ -134,7 +134,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         ModelScope uses the same format as OpenAI for image generation.
         """
         # Build the request body (same as OpenAI)
-        request_data: dict = {
+        request_data: Final[dict] = {
             "model": model,
             "prompt": prompt,
         }
@@ -158,8 +158,8 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: object,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform ModelScope response to OpenAI-compatible ImageResponse.
@@ -168,7 +168,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         {"created": timestamp, "data": [{"url": "..."}]}
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing ModelScope response: {e}",
@@ -178,7 +178,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         # Check for errors in response
         if "error" in response_data:
-            error_msg = response_data["error"].get("message", str(response_data["error"]))
+            error_msg: Final = response_data["error"].get("message", str(response_data["error"]))
             raise self.get_error_class(
                 error_message=f"ModelScope error: {error_msg}",
                 status_code=raw_response.status_code,
@@ -186,7 +186,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         # Extract images from response
-        data_list = response_data.get("data", [])
+        data_list: Final = response_data.get("data", [])
         if not model_response.data:
             model_response.data = []
 
@@ -204,7 +204,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         """Return the appropriate error class for ModelScope."""
         from litellm.exceptions import (
@@ -214,25 +214,25 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         if status_code == 400:
-            return BadRequestError(  # type: ignore[return-value]
+            return BadRequestError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",
             )
         elif status_code == 401:
-            return AuthenticationError(  # type: ignore[return-value]
+            return AuthenticationError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",
             )
         elif status_code >= 500:
-            return InternalServerError(  # type: ignore[return-value]
+            return InternalServerError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",
             )
         else:
-            return BadRequestError(  # type: ignore[return-value]
+            return BadRequestError(
                 message=error_message,
                 model="",
                 llm_provider="modelscope",
