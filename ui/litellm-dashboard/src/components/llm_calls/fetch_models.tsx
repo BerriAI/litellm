@@ -29,6 +29,15 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
   };
 };
 
+const toModelGroups = (fetchedData: unknown): ModelGroup[] =>
+  (Array.isArray(fetchedData) ? fetchedData : [])
+    .map(toModelGroup)
+    .filter((model: ModelGroup) => model.model_group !== "")
+    .sort((a: ModelGroup, b: ModelGroup) => a.model_group.localeCompare(b.model_group));
+
+const dedupeByGroup = (models: ModelGroup[]): ModelGroup[] =>
+  Array.from(new Map(models.map((model) => [model.model_group, model])).values());
+
 export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: string): Promise<ModelGroup[]> => {
   const response = await modelAvailableCall(accessToken, "", "", false, teamId);
   const modelNames: string[] = (response?.data ?? []).map((model: { id: string }) => model.id);
@@ -39,19 +48,27 @@ export const fetchAvailableModelsForTeam = async (accessToken: string, teamId: s
 };
 
 /**
- * Fetches available models using modelHubCall and formats them for the selection dropdown.
+ * Fetches the models the given credentials can call, for the selection dropdown.
+ *
+ * Primary source is /model_group/info (modelHubCall), which carries capability
+ * fields like supported_reasoning_efforts. That route returns an empty list for
+ * non-admin UI sessions (#38534), so when it comes back empty or fails we fall
+ * back to /models — the canonical list (same route as GET /v1/models) that
+ * works for both UI session tokens and virtual keys.
  */
 export const fetchAvailableModels = async (accessToken: string): Promise<ModelGroup[]> => {
+  let models: ModelGroup[] = [];
   try {
     const fetchedModels = await modelHubCall(accessToken);
-    const fetchedData: unknown = fetchedModels?.data;
-    const models: ModelGroup[] = (Array.isArray(fetchedData) ? fetchedData : [])
-      .map(toModelGroup)
-      .filter((model: ModelGroup) => model.model_group !== "")
-      .sort((a: ModelGroup, b: ModelGroup) => a.model_group.localeCompare(b.model_group));
-    return Array.from(new Map(models.map((model) => [model.model_group, model])).values());
+    models = toModelGroups(fetchedModels?.data);
   } catch (error) {
     console.error("Error fetching model info:", error);
-    throw error;
   }
+
+  if (models.length > 0) {
+    return dedupeByGroup(models);
+  }
+
+  const response = await modelAvailableCall(accessToken, "", "");
+  return dedupeByGroup(toModelGroups(response?.data));
 };

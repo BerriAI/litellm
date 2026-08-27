@@ -50,14 +50,46 @@ describe("fetchAvailableModels", () => {
       { model_group: "plain", mode: "chat" },
       { model_group: "smart", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: ["low", "high"] },
     ]);
+    expect(modelAvailableCallMock).not.toHaveBeenCalled();
   });
 
   it.each([
     ["an error payload in place of the list", { data: { error: "no access" } }],
     ["a missing data key", {}],
     ["no body at all", undefined],
-  ])("returns an empty list on %s rather than throwing", async (_label, response) => {
-    modelHubCallMock.mockResolvedValue(response);
+  ])("falls back to /models on %s so non-admin sessions still get a dropdown", async (_label, hubResponse) => {
+    modelHubCallMock.mockResolvedValue(hubResponse);
+    modelAvailableCallMock.mockResolvedValue({
+      data: [
+        { id: "llama", mode: "chat" },
+        { id: "gpt-4o", mode: "chat" },
+      ],
+    });
+
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "gpt-4o", mode: "chat" },
+      { model_group: "llama", mode: "chat" },
+    ]);
+    expect(modelAvailableCallMock).toHaveBeenCalledWith("token", "", "");
+  });
+
+  it("falls back to /models when the model hub call fails", async () => {
+    modelHubCallMock.mockRejectedValue(new Error("network down"));
+    modelAvailableCallMock.mockResolvedValue({ data: [{ id: "gpt-4o", mode: "chat" }] });
+
+    expect(await fetchAvailableModels("token")).toEqual([{ model_group: "gpt-4o", mode: "chat" }]);
+  });
+
+  it("deduplicates the fallback list by model group", async () => {
+    modelHubCallMock.mockResolvedValue({ data: [] });
+    modelAvailableCallMock.mockResolvedValue({ data: [{ id: "gpt-4o" }, { id: "gpt-4o" }] });
+
+    expect(await fetchAvailableModels("token")).toEqual([{ model_group: "gpt-4o" }]);
+  });
+
+  it("returns an empty list when both routes come back empty", async () => {
+    modelHubCallMock.mockResolvedValue({ data: [] });
+    modelAvailableCallMock.mockResolvedValue({ data: [] });
 
     expect(await fetchAvailableModels("token")).toEqual([]);
   });
