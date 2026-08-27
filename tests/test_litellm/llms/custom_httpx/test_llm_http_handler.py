@@ -1930,6 +1930,47 @@ def test_transform_audio_transcription_response_without_subtitle_opt_in_keeps_te
     assert response["words"] == words
 
 
+class _SubtitleSynthesisAudioTranscriptionConfig(_JSONBodyAudioTranscriptionConfig):
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        return True
+
+    def transform_audio_transcription_response(self, raw_response):
+        payload = raw_response.json()
+        response = TranscriptionResponse(text=payload["text"])
+        if "words" in payload:
+            response["words"] = payload["words"]
+        return response
+
+
+def _transform_subtitle_response(payload):
+    return BaseLLMHTTPHandler()._transform_audio_transcription_response(
+        provider_config=_SubtitleSynthesisAudioTranscriptionConfig(),
+        model="test-model",
+        response=httpx.Response(200, json=payload),
+        model_response=TranscriptionResponse(),
+        logging_obj=Mock(),
+        optional_params={"response_format": "srt"},
+        api_key=None,
+    )
+
+
+def test_subtitle_synthesis_fallback_without_timings_drops_words():
+    response = _transform_subtitle_response(
+        {"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]}
+    )
+
+    assert response.text == "hello world"
+    assert "words" not in response
+
+
+def test_subtitle_synthesis_without_words_keeps_plain_text():
+    response = _transform_subtitle_response({"text": "hello world"})
+
+    assert response.text == "hello world"
+    assert "words" not in response
+
+
 @pytest.mark.asyncio
 async def test_async_retrieve_file_content_raises_on_http_error():
     """

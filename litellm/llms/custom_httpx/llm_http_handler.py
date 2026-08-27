@@ -25,7 +25,10 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.audio_utils.subtitle_utils import synthesize_subtitle_document
+from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
+    SUBTITLE_RESPONSE_FORMATS,
+    synthesize_subtitle_document,
+)
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -1303,16 +1306,16 @@ class BaseLLMHTTPHandler:
         if not provider_config.supports_subtitle_synthesis:
             return transformed
         requested_format: Final = optional_params.get("response_format")
-        if not isinstance(requested_format, str):
+        if not isinstance(requested_format, str) or requested_format not in SUBTITLE_RESPONSE_FORMATS:
             return transformed
         document: Final = synthesize_subtitle_document(
             words=transformed.get("words"),
             response_format=requested_format,
         )
-        if document is None:
-            return transformed
-        transformed.text = document
-        delattr(transformed, "words")
+        if document is not None:
+            transformed.text = document
+        if "words" in transformed:
+            delattr(transformed, "words")
         return transformed
 
     def audio_transcriptions(
