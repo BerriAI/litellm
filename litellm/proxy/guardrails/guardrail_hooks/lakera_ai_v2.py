@@ -668,7 +668,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 _apply_redacted_messages_back_preserving_fields(self, data, redacted_messages)
                 verbose_proxy_logger.debug("Lakera AI: Masked PII in messages instead of blocking request")
             elif self.on_flagged == "inject_system_message":
-                if not is_multimodal_input:
+                if _breakdown_has_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
                     # A mixed violation (PII plus something else): mask whatever's
                     # maskable even though the advisory note below has no effect
                     # here, so raw PII doesn't pass through untouched just because
