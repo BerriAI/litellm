@@ -938,6 +938,10 @@ class LiteLLMRoutes(enum.Enum):
             # Model cost map maintenance views (read-only status / source).
             "/schedule/model_cost_map_reload/status",
             "/model/cost_map/source",
+            # Assembles a classifier prompt from the caller's own tier definitions and returns it.
+            # A POST only because the prompt must not ride in a URL; it reads nothing and writes
+            # nothing, so it belongs with the GET on the same path that default-allow already covers.
+            "/auto_router/classifier/default_prompt",
         ]
         # Spend tracking reads (/spend/logs, /spend/logs/ui, /spend/keys,
         # /spend/users, /spend/tags, /spend/calculate, /cost/estimate). Admin

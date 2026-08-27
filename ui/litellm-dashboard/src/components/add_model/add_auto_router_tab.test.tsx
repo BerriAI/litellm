@@ -70,10 +70,14 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
   mockFetchAllModelDeployments: vi.fn(),
 }));
 
+const { validateAutoRouterConfig } = vi.hoisted(() => ({
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+}));
+
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
-  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  validateAutoRouterConfig,
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -188,6 +192,37 @@ describe("AddAutoRouterTab", () => {
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({ team_id: "team-1" });
+  });
+
+  // The dry-run exists so a config the write gate would refuse shows the backend's own message
+  // inline instead of coming back as a raw 400. Nothing asserted that its verdict actually stops
+  // the submit, so the whole gate could be deleted with the suite still green.
+  it("does not submit when the backend's dry-run rejects the config", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    validateAutoRouterConfig.mockResolvedValueOnce({
+      valid: false,
+      error: "session_affinity cannot be combined with tier_definitions",
+    });
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "rejected-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  it("submits when the dry-run passes, so the gate is not simply blocking everything", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    validateAutoRouterConfig.mockResolvedValueOnce({ valid: true });
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "accepted-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
   });
 
   // LIT-5133: "Add keyword rule" seeds a row with no keywords, and the semantic toggle that used

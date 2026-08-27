@@ -16,10 +16,10 @@ import json
 from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -84,6 +84,7 @@ from litellm.router_strategy.complexity_router import (
     TierDefinition,
     classification_system_prompt,
     custom_tier_classification_prompt,
+    normalize_classification_prompt,
 )
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -2233,8 +2234,10 @@ class AutoRouterClassifierPromptPreviewRequest(BaseModel):
     """
 
     tier_definitions: tuple[TierDefinition, ...]
-    context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
+    context_window_size: Annotated[int, Field(ge=0)] = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
     classification_prompt: str | None = None
+
+    _normalize_prompt = field_validator("classification_prompt")(normalize_classification_prompt)
 
 
 @router.post(
@@ -2257,14 +2260,6 @@ async def preview_auto_router_classifier_prompt(
     TierDefinition validation is what makes the built-in-criteria lookup total: it rejects a
     non-built-in name carrying no description. Payload validity stays the dry-run's job.
     """
-    if request.context_window_size < 0:
-        raise ProxyException(
-            message="context_window_size must be non-negative",
-            type=ProxyErrorTypes.bad_request_error,
-            code=status.HTTP_400_BAD_REQUEST,
-            param="context_window_size",
-        )
-
     return AutoRouterClassifierDefaultPromptResponse(
         system_prompt=custom_tier_classification_prompt(
             request.tier_definitions, request.classification_prompt, request.context_window_size

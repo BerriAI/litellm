@@ -10,17 +10,19 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
-const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
-  modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
-  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
-}));
+const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall, validateAutoRouterConfig } =
+  vi.hoisted(() => ({
+    validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+    modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
+    modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+    getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+  }));
 
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
-  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+  validateAutoRouterConfig,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
@@ -95,6 +97,23 @@ describe("EditAutoRouterModal keyword matching", () => {
     expect(config.semantic_keyword_matching).toBe(true);
     expect(config.embedding_model).toBe("voyage-4-large");
     expect(config.match_threshold).toBe(0.72);
+  });
+
+  // Same gate as the create form: the dry-run's verdict has to stop the PATCH, or an operator sees
+  // a raw 400 instead of the inline message the dry-run was added to give them.
+  it("does not PATCH when the backend's dry-run rejects the config", async () => {
+    const user = userEvent.setup();
+    validateAutoRouterConfig.mockResolvedValueOnce({
+      valid: false,
+      error: "tier_labels cannot be combined with tier_definitions",
+    });
+
+    renderModal();
+    await screen.findByText(/Escalation Keywords/i);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
   // The create form blocks this; the edit modal renders the same controls, so it must block it

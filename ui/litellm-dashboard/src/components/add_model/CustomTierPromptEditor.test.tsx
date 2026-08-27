@@ -1,6 +1,6 @@
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import { vi } from "vitest";
-import ClassificationPromptEditor from "./ClassificationPromptEditor";
+import CustomTierPromptEditor from "./CustomTierPromptEditor";
 
 const { getAutoRouterCustomTierPromptCall } = vi.hoisted(() => ({
   getAutoRouterCustomTierPromptCall: vi.fn(),
@@ -19,7 +19,7 @@ const tierRows = [
 const renderEditor = (classificationPrompt?: string) => {
   const onChange = vi.fn();
   renderWithProviders(
-    <ClassificationPromptEditor
+    <CustomTierPromptEditor
       classificationPrompt={classificationPrompt}
       onChange={onChange}
       tierRows={tierRows}
@@ -36,7 +36,7 @@ beforeEach(() => {
   );
 });
 
-describe("ClassificationPromptEditor", () => {
+describe("CustomTierPromptEditor", () => {
   it("shows the prompt the proxy assembled rather than one rebuilt in the browser", async () => {
     renderEditor();
     fireEvent.click(screen.getByRole("button", { name: "Edit prompt" }));

@@ -20,6 +20,7 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityTier,
     ReminderMarkerPair,
     TierDefinition,
+    normalize_classification_prompt,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "TierDefinition",
     "classification_system_prompt",
     "custom_tier_classification_prompt",
+    "normalize_classification_prompt",
 ]

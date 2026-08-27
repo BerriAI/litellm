@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Textarea } from "@/components/ui/textarea";
 import { TierRow, activeTierName } from "./tier_rows";
 
-interface ClassificationPromptEditorProps {
+interface CustomTierPromptEditorProps {
   classificationPrompt: string | undefined;
   onChange: (classificationPrompt: string | undefined) => void;
   tierRows: readonly TierRow[];
@@ -25,7 +25,7 @@ const wireDefinitions = (tierRows: readonly TierRow[]): { name: string; descript
     ...(row.definition.trim() && { description: row.definition.trim() }),
   }));
 
-const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
+const CustomTierPromptEditor: React.FC<CustomTierPromptEditorProps> = ({
   classificationPrompt,
   onChange,
   tierRows,
@@ -34,7 +34,9 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
   const { accessToken } = useAuthorized();
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState("");
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<
+    { status: "loading" } | { status: "error" } | { status: "ready"; text: string }
+  >({ status: "loading" });
   const isOverridden = Boolean(classificationPrompt?.trim());
 
   // Debounced so the preview follows the draft without a request per keystroke. Nothing is saved
@@ -42,11 +44,17 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
   const refreshPreview = useCallback(async () => {
     if (!accessToken) return;
     try {
-      setPreview(
-        await getAutoRouterCustomTierPromptCall(accessToken, contextWindowSize, wireDefinitions(tierRows), draft),
+      const text = await getAutoRouterCustomTierPromptCall(
+        accessToken,
+        contextWindowSize,
+        wireDefinitions(tierRows),
+        draft,
       );
+      setPreview({ status: "ready", text });
     } catch {
-      setPreview(null);
+      // Distinct from loading: a role that may not call the preview, or a prompt the write gate
+      // would reject, otherwise leaves the panel claiming it is still fetching, forever.
+      setPreview({ status: "error" });
     }
   }, [accessToken, contextWindowSize, tierRows, draft]);
 
@@ -58,7 +66,7 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
 
   const openEditor = () => {
     setDraft(classificationPrompt ?? "");
-    setPreview(null);
+    setPreview({ status: "loading" });
     setIsOpen(true);
   };
 
@@ -108,14 +116,20 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
 
           <div className="mt-3">
             <p className="text-xs font-medium">What this router sends</p>
-            {preview === null ? (
+            {preview.status === "loading" && (
               <p className="mt-1 text-xs text-muted-foreground">Loading the assembled prompt…</p>
-            ) : (
+            )}
+            {preview.status === "error" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Could not load the assembled prompt. Your text is still saved as written.
+              </p>
+            )}
+            {preview.status === "ready" && (
               <pre
                 aria-label="Assembled classifier prompt"
                 className="mt-1 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground"
               >
-                {preview}
+                {preview.text}
               </pre>
             )}
           </div>
@@ -134,4 +148,4 @@ const ClassificationPromptEditor: React.FC<ClassificationPromptEditorProps> = ({
   );
 };
 
-export default ClassificationPromptEditor;
+export default CustomTierPromptEditor;

@@ -4325,6 +4325,87 @@ class TestAutoRouterClassifierDefaultPrompt:
         assert list(inspect.signature(preview_auto_router_classifier_prompt).parameters) == ["request"]
 
     @pytest.mark.asyncio
+    async def test_the_preview_normalizes_the_prompt_the_same_way_the_write_gate_stores_it(self):
+        """The preview exists to show what the router sends, so it must apply the write gate's own
+        normalization: an untrimmed preamble previewed raw shows whitespace the router strips."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            AutoRouterClassifierPromptPreviewRequest,
+            preview_auto_router_classifier_prompt,
+        )
+        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+
+        raw = "   Route for a payments team.   "
+        response = await preview_auto_router_classifier_prompt(
+            AutoRouterClassifierPromptPreviewRequest.model_validate(
+                {
+                    "tier_definitions": [
+                        {"name": "TRIAGE", "description": "quick"},
+                        {"name": "AUDIT", "description": "deep"},
+                    ],
+                    "classification_prompt": raw,
+                }
+            )
+        )
+        stored = ComplexityRouterConfig.model_validate(
+            {
+                "tiers": {"TRIAGE": ["a"], "AUDIT": ["b"]},
+                "tier_definitions": [
+                    {"name": "TRIAGE", "description": "quick"},
+                    {"name": "AUDIT", "description": "deep"},
+                ],
+                "fallback_tier": "TRIAGE",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "m", "timeout_ms": 1},
+                "classification_prompt": raw,
+            }
+        ).classification_prompt
+        assert response.system_prompt.startswith(stored)
+
+    @pytest.mark.asyncio
+    async def test_the_preview_refuses_a_prompt_the_write_gate_would_reject(self):
+        """Previewing an over-long prompt would let an operator compose one that looks fine and then
+        fails on save, which is the drift this endpoint exists to prevent."""
+        from pydantic import ValidationError as PydanticValidationError
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            AutoRouterClassifierPromptPreviewRequest,
+        )
+        from litellm.router_strategy.complexity_router.config import MAX_CLASSIFICATION_PROMPT_CHARS
+
+        definitions = [{"name": "TRIAGE", "description": "quick"}, {"name": "AUDIT", "description": "deep"}]
+        for bad in ("x" * (MAX_CLASSIFICATION_PROMPT_CHARS + 1), "   "):
+            with pytest.raises(PydanticValidationError):
+                AutoRouterClassifierPromptPreviewRequest.model_validate(
+                    {"tier_definitions": definitions, "classification_prompt": bad}
+                )
+
+    @pytest.mark.asyncio
+    async def test_a_negative_context_window_is_rejected_by_the_field_not_a_hand_rolled_branch(self):
+        from pydantic import ValidationError as PydanticValidationError
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            AutoRouterClassifierPromptPreviewRequest,
+        )
+
+        with pytest.raises(PydanticValidationError):
+            AutoRouterClassifierPromptPreviewRequest.model_validate(
+                {
+                    "tier_definitions": [
+                        {"name": "TRIAGE", "description": "quick"},
+                        {"name": "AUDIT", "description": "deep"},
+                    ],
+                    "context_window_size": -1,
+                }
+            )
+
+    def test_the_prompt_preview_is_readable_by_an_admin_viewer_like_the_get_beside_it(self):
+        """Both methods on this path are pure reads, so a role that may call the GET must not be
+        refused the POST purely because default-allow only covers safe methods."""
+        from litellm.proxy._types import LiteLLMRoutes
+
+        assert "/auto_router/classifier/default_prompt" in LiteLLMRoutes.admin_viewer_routes.value
+
+    @pytest.mark.asyncio
     async def test_malformed_tier_definitions_are_rejected_rather_than_silently_ignored(self):
         """A definition the router could not build a bullet from must fail loudly here rather than
         render a rubric that looks assembled."""

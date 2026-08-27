@@ -10,7 +10,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
-import ClassificationPromptEditor from "./ClassificationPromptEditor";
+import CustomTierPromptEditor from "./CustomTierPromptEditor";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
@@ -416,7 +416,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <div>
             <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
             {value.custom_tier_set ? (
-              <ClassificationPromptEditor
+              <CustomTierPromptEditor
                 classificationPrompt={value.classification_prompt}
                 onChange={handleClassificationPromptChange}
                 tierRows={value.custom_tier_set.tiers}

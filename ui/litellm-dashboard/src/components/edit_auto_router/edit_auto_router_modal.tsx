@@ -264,9 +264,10 @@ export const buildUpdatedComplexityRouterConfig = (
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
   };
-  // A custom save drops the stored keys an edited tier set forbids; a built-in save drops a stored
-  // classification_prompt, which the backend accepts only beside tier_definitions.
-  const dropped: readonly string[] = value.custom_tier_set ? CUSTOM_TIER_OMITTED_KEYS : ["classification_prompt"];
+  // A custom save drops the stored keys an edited tier set forbids. classification_prompt needs no
+  // entry here: it is a managed key, so a built-in save already drops it through isManaged and the
+  // built-in branch of the builder never re-emits it.
+  const dropped: readonly string[] = value.custom_tier_set ? CUSTOM_TIER_OMITTED_KEYS : [];
   const preservedConfig = Object.fromEntries(
     Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key) && !dropped.includes(key)),
   );
