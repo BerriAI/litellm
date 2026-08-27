@@ -9,6 +9,7 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -24,11 +25,12 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import _cached_get_model_info_helper
 
-from ..authenticator import Authenticator
+from ..authenticator import Authenticator, get_authenticator_for_litellm_params
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    is_default_copilot_api_base,
 )
 
 if TYPE_CHECKING:
@@ -183,7 +185,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         headers: dict,
         model: str,
-        litellm_params: GenericLiteLLMParams | None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
     ) -> dict:
         """
         Validate environment and set up headers for GitHub Copilot API.
@@ -199,8 +201,18 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - User-provided extra_headers (merged with priority)
         """
         try:
-            # Get GitHub Copilot API key via OAuth
-            api_key: Final = self.authenticator.get_api_key()
+            params_dict: Final[Mapping[str, object]] = (
+                litellm_params.model_dump(exclude_none=True)
+                if isinstance(litellm_params, GenericLiteLLMParams)
+                else litellm_params or {}
+            )
+            authenticator: Final = get_authenticator_for_litellm_params(
+                default_authenticator=self.authenticator,
+                litellm_params=params_dict,
+            )
+            configured_api_key: Final = params_dict.get("api_key")
+            explicit_api_key: Final = configured_api_key if isinstance(configured_api_key, str) else None
+            api_key: Final = explicit_api_key or authenticator.get_api_key()
 
             if not api_key:
                 raise AuthenticationError(
@@ -243,21 +255,28 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
-        effective_api_base = (
-            api_base
-            or self.authenticator.get_api_base()
+        authenticator: Final = get_authenticator_for_litellm_params(
+            default_authenticator=self.authenticator,
+            litellm_params=litellm_params,
+        )
+        authenticated_api_base: Final = authenticator.get_api_base()
+        # responses() pre-populates api_base with the generic Copilot host. That
+        # must not hide the account-specific endpoint returned alongside this
+        # token (for example, the business Copilot host). Preserve genuinely
+        # custom bases for backwards compatibility.
+        effective_api_base: Final = (
+            authenticated_api_base
+            if authenticated_api_base and is_default_copilot_api_base(api_base)
+            else api_base
+            or authenticated_api_base
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
-
-        # Remove trailing slashes
-        effective_api_base = effective_api_base.rstrip("/")
+        ).rstrip("/")
 
         # Return the responses endpoint
         return f"{effective_api_base}/responses"
@@ -303,7 +322,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     # ==================== Helper Methods ====================
 
-    def _get_input_from_params(self, litellm_params: GenericLiteLLMParams | None) -> str | ResponseInputParam | None:
+    def _get_input_from_params(
+        self,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
+    ) -> str | ResponseInputParam | None:
         """
         Extract input parameter from litellm_params.
 

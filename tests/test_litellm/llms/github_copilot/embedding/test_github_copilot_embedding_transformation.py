@@ -1,13 +1,14 @@
-from unittest.mock import MagicMock, patch
+import json
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
-
 from litellm.exceptions import AuthenticationError
+from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.embedding.transformation import (
     GithubCopilotEmbeddingConfig,
 )
-from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 
 
 def test_github_copilot_embedding_config_validate_environment():
@@ -64,7 +65,7 @@ def test_github_copilot_embedding_config_get_complete_url():
     # Test with default API base
     config.authenticator.get_api_base.return_value = None
     url = config.get_complete_url(
-        api_base=None,
+        api_base="https://api.githubcopilot.com/",
         api_key=None,
         model="github_copilot/text-embedding-3-small",
         optional_params={},
@@ -73,9 +74,7 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.githubcopilot.com/embeddings"
 
     # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -95,6 +94,40 @@ def test_github_copilot_embedding_config_get_complete_url():
         litellm_params={},
     )
     assert url == "https://custom.api.com/embeddings"
+
+
+def test_github_copilot_embedding_uses_per_deployment_token_directory(tmp_path):
+    token_dir = tmp_path / "embedding-account"
+    token_dir.mkdir()
+    (token_dir / "api-key.json").write_text(
+        json.dumps(
+            {
+                "token": "embedding-account-key",
+                "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
+                "endpoints": {"api": "https://embedding-account.example"},
+            }
+        )
+    )
+    params = {"github_copilot_token_dir": str(token_dir)}
+    config = GithubCopilotEmbeddingConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/text-embedding-3-small",
+        messages=[],
+        optional_params={},
+        litellm_params=params,
+    )
+    url = config.get_complete_url(
+        api_base="https://api.githubcopilot.com/",
+        api_key=None,
+        model="github_copilot/text-embedding-3-small",
+        optional_params={},
+        litellm_params=params,
+    )
+
+    assert headers["Authorization"] == "Bearer embedding-account-key"
+    assert url == "https://embedding-account.example/embeddings"
 
 
 def test_github_copilot_embedding_config_transform_request():

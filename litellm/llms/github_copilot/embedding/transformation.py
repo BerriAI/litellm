@@ -19,11 +19,12 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 from litellm.utils import convert_to_model_response_object
 
-from ..authenticator import Authenticator
+from ..authenticator import Authenticator, get_authenticator_for_litellm_params
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    is_default_copilot_api_base,
 )
 
 if TYPE_CHECKING:
@@ -51,7 +52,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         messages: list,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -59,10 +60,13 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         Validate environment and set up headers for GitHub Copilot API.
         """
         try:
-            # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
+            authenticator: Final = get_authenticator_for_litellm_params(
+                default_authenticator=self.authenticator,
+                litellm_params=litellm_params,
+            )
+            resolved_api_key: Final = api_key or authenticator.get_api_key()
 
-            if not api_key:
+            if not resolved_api_key:
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
@@ -70,7 +74,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
                 )
 
             # Get default headers
-            default_headers: Final = get_copilot_default_headers(api_key)
+            default_headers: Final = get_copilot_default_headers(resolved_api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers: Final = {**default_headers, **headers}
@@ -92,22 +96,27 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
-        effective_api_base = (
-            api_base
-            or self.authenticator.get_api_base()
+        authenticator: Final = get_authenticator_for_litellm_params(
+            default_authenticator=self.authenticator,
+            litellm_params=litellm_params,
+        )
+        authenticated_api_base: Final = authenticator.get_api_base()
+        # embedding() can pre-populate api_base with the generic Copilot host;
+        # prefer the endpoint bound to the selected account in that case.
+        effective_api_base: Final = (
+            authenticated_api_base
+            if authenticated_api_base and is_default_copilot_api_base(api_base)
+            else api_base
+            or authenticated_api_base
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
-
-        # Remove trailing slashes
-        effective_api_base = effective_api_base.rstrip("/")
+        ).rstrip("/")
 
         # Return the embeddings endpoint
         return f"{effective_api_base}/embeddings"
