@@ -431,7 +431,7 @@ def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
 
 
 def _anthropic_stream_fallback_error_for_raised(
-    error: Exception, model: str, llm_provider: str, has_generated_content: bool
+    error: Exception, model: str, has_generated_content: bool
 ) -> "MidStreamFallbackError | None":
     """
     A provider iterator that fails mid-stream by raising (Bedrock surfaces
@@ -454,7 +454,7 @@ def _anthropic_stream_fallback_error_for_raised(
     return MidStreamFallbackError(
         message=str(error),
         model=model,
-        llm_provider=llm_provider,
+        llm_provider="anthropic",
         original_exception=error,
         is_pre_first_chunk=True,
     )
@@ -5059,8 +5059,6 @@ class Router:
             has_generated_content = False  # rebind-ok: set once real content is seen, or the buffer cap is hit
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
-            custom_llm_provider: Final = initial_kwargs.get("custom_llm_provider")
-            llm_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else "anthropic"
             try:
                 async for chunk in source_iterator:
                     if _anthropic_stream_forwards_ping_live(
@@ -5109,7 +5107,6 @@ class Router:
                     has_generated_content,
                     buffered_lifecycle_chunks,
                     model,
-                    llm_provider,
                     initial_kwargs,
                     wrapper,
                 ):
@@ -5130,7 +5127,6 @@ class Router:
         has_generated_content: bool,
         buffered_lifecycle_chunks: tuple[bytes, ...],
         model: str,
-        llm_provider: str,
         initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
         wrapper: "FallbackAwareAnthropicMessagesStream",
     ) -> AsyncGenerator[bytes, None]:
@@ -5158,7 +5154,7 @@ class Router:
         fallback_error: Final = (
             stream_error
             if isinstance(stream_error, MidStreamFallbackError)
-            else _anthropic_stream_fallback_error_for_raised(stream_error, model, llm_provider, has_generated_content)
+            else _anthropic_stream_fallback_error_for_raised(stream_error, model, has_generated_content)
         )
         if fallback_error is None:
             raise stream_error
