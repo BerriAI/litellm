@@ -10,6 +10,8 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     HEADROOM_CONVERTED_STREAM_KEY,
@@ -104,9 +106,8 @@ def _wrap_response_as_fake_stream(
 ) -> object:
     if isinstance(response, CustomStreamWrapper):
         return response
-    if not isinstance(response, ModelResponse):
+    if not isinstance(response, ModelResponse) or not isinstance(logging_obj, LiteLLMLoggingObject):
         return response
-    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
     return CustomStreamWrapper(
         completion_stream=MockResponseIterator(model_response=response),
