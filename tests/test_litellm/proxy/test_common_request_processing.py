@@ -13,11 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import (
-    AUTO_ROUTED_REQUEST_METADATA_KEY,
-    RETURN_RAW_MODEL_NAME_METADATA_KEY,
-    ROUTER_MODEL_NAME_RESPONSE_FIELD,
-)
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -7221,128 +7217,6 @@ async def test_a_broken_hook_does_not_replace_the_real_error_with_its_own_bug():
     error_frame = json.loads(collected[-2].decode().removeprefix("data: ").strip())
     assert error_frame["error"]["message"] == "rate limited"
     assert "audit backend" not in collected[-2].decode()
-
-
-class TestRouterModelNameOnNonStreamingResponse:
-    """
-    The proxy restamps the response body `model` back to the client-requested
-    alias, so an auto-routed request (auto_router / complexity_router /
-    adaptive_router / quality_router) had no body-level surface naming the model
-    group that actually served it. `router_model_name` is now set on the response
-    whenever the router marked the request as auto-routed.
-    """
-
-    @staticmethod
-    def _logging_obj(*, metadata_bucket, bucket_name="metadata"):
-        logging_obj = MagicMock()
-        logging_obj.litellm_call_id = "call-auto-routed"
-        logging_obj.cost_breakdown = None
-        logging_obj.model_call_details = {}
-        logging_obj.litellm_params = {bucket_name: metadata_bucket}
-        logging_obj._enqueue_deferred_logging = None
-        logging_obj._on_deferred_stream_complete = None
-        return logging_obj
-
-    async def _drive(self, *, monkeypatch, logging_obj):
-        import litellm.proxy.common_request_processing as crp
-        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
-        from litellm.types.utils import ModelResponse
-
-        response = ModelResponse(
-            model="deep-model",
-            choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        )
-
-        async def fake_route_request(**kwargs):
-            async def _llm_call():
-                return response
-
-            return _llm_call()
-
-        monkeypatch.setattr(crp, "route_request", fake_route_request)
-
-        async def fake_post_call_success_hook(data, user_api_key_dict, response):
-            return response
-
-        proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
-        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
-
-        processing_obj = ProxyBaseLLMRequestProcessing(
-            data={"model": "smart-route", "litellm_logging_obj": logging_obj}
-        )
-
-        with patch.object(ProxyBaseLLMRequestProcessing, "_has_post_call_guardrails", return_value=False):
-            return await processing_obj.base_process_llm_request(
-                request=MagicMock(spec=Request, headers={}),
-                fastapi_response=Response(),
-                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
-                route_type="acompletion",
-                proxy_logging_obj=proxy_logging_obj,
-                general_settings={},
-                proxy_config=MagicMock(spec=ProxyConfig),
-                select_data_generator=None,
-                llm_router=None,
-                skip_pre_call_logic=True,
-            )
-
-    @pytest.mark.asyncio
-    async def test_auto_routed_request_carries_router_model_name(self, monkeypatch):
-        result = await self._drive(
-            monkeypatch=monkeypatch,
-            logging_obj=self._logging_obj(
-                metadata_bucket={
-                    AUTO_ROUTED_REQUEST_METADATA_KEY: True,
-                    "deployment_model_name": "deep-model",
-                }
-            ),
-        )
-
-        assert result.model == "smart-route"
-        assert result.model_dump(exclude_none=True, exclude_unset=True)[ROUTER_MODEL_NAME_RESPONSE_FIELD] == (
-            "deep-model"
-        )
-
-    @pytest.mark.asyncio
-    async def test_marker_and_model_name_in_different_buckets(self, monkeypatch):
-        logging_obj = self._logging_obj(metadata_bucket={AUTO_ROUTED_REQUEST_METADATA_KEY: True})
-        logging_obj.litellm_params["litellm_metadata"] = {"deployment_model_name": "deep-model"}
-
-        result = await self._drive(monkeypatch=monkeypatch, logging_obj=logging_obj)
-
-        assert result.model_dump(exclude_none=True, exclude_unset=True)[ROUTER_MODEL_NAME_RESPONSE_FIELD] == (
-            "deep-model"
-        )
-
-    @pytest.mark.asyncio
-    async def test_plain_model_group_request_has_no_router_model_name(self, monkeypatch):
-        result = await self._drive(
-            monkeypatch=monkeypatch,
-            logging_obj=self._logging_obj(metadata_bucket={"deployment_model_name": "deep-model"}),
-        )
-
-        assert ROUTER_MODEL_NAME_RESPONSE_FIELD not in result.model_dump(exclude_none=True, exclude_unset=True)
-
-    @pytest.mark.asyncio
-    async def test_typeddict_response_gets_router_model_name(self):
-        from litellm.types.utils import AnthropicMessagesResponse
-
-        response: AnthropicMessagesResponse = {"id": "msg_1", "model": "smart-route", "type": "message"}
-        ProxyBaseLLMRequestProcessing.set_router_selected_model_field(
-            response_obj=response,
-            router_model_name=ProxyBaseLLMRequestProcessing.get_router_selected_model_name(
-                self._logging_obj(
-                    metadata_bucket={
-                        AUTO_ROUTED_REQUEST_METADATA_KEY: True,
-                        "deployment_model_name": "deep-model",
-                    }
-                )
-            ),
-        )
-
-        assert response[ROUTER_MODEL_NAME_RESPONSE_FIELD] == "deep-model"
 
 
 @pytest.mark.parametrize(
