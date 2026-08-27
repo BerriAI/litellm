@@ -432,7 +432,6 @@ if MCP_AVAILABLE:
         _client_forwarded_authorization_headers,
         _resolve_openapi_tool_auth,
         _should_strip_caller_authorization,
-        _without_authorization,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -451,6 +450,7 @@ if MCP_AVAILABLE:
         split_server_prefix_from_name,
         strip_known_server_prefix,
     )
+    from litellm.types.mcp import DEFAULT_CREDENTIAL_HEADER, without_header
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -1732,7 +1732,7 @@ if MCP_AVAILABLE:
                     raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
                 ):
-                    extra_headers = _without_authorization(extra_headers)
+                    extra_headers = without_header(extra_headers, DEFAULT_CREDENTIAL_HEADER)
         elif is_client_forwarded_mode:
             if not withhold_forwarded_authorization:
                 extra_headers = _client_forwarded_authorization_headers(
