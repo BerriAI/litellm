@@ -624,6 +624,7 @@ def test_sync_prompt_swap_cross_provider_with_credentials_raises():
             litellm_logging_obj=logging_obj,
             kwargs={"prompt_id": "p1", "api_key": "sk-ant-test"},
             local_vars={},
+            use_chat_completions_api=False,
         )
 
 

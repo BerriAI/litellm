@@ -3,7 +3,10 @@ import os
 import pytest
 
 import litellm
-from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
+from litellm.llms.gemini.cost_calculator import (
+    cost_per_google_maps_grounding_request,
+    cost_per_web_search_request,
+)
 from litellm.llms.gemini.image_edit.cost_calculator import (
     cost_calculator as gemini_image_edit_cost_calculator,
 )
@@ -79,6 +82,63 @@ def test_no_usage_details():
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
     cost = cost_per_web_search_request(usage=usage, model_info=model_info)
     assert cost == 0.0
+
+
+def _make_maps_usage(google_maps_grounding_requests: int) -> Usage:
+    return Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            google_maps_grounding_requests=google_maps_grounding_requests,
+        ),
+    )
+
+
+def test_maps_per_query_billing():
+    """web_search_billing_unit=per_query charges per Maps query."""
+    model_info = {
+        "key": "gemini/gemini-3.5-flash",
+        "web_search_billing_unit": "per_query",
+        "google_maps_grounding_cost_per_query": 0.014,
+    }
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(3), model_info=model_info)
+    assert cost == pytest.approx(0.014 * 3)
+
+
+def test_maps_per_prompt_billing_clamps_to_one():
+    """Without web_search_billing_unit, Maps grounding is one flat fee per grounded prompt."""
+    model_info = {
+        "key": "gemini/gemini-2.5-flash",
+        "google_maps_grounding_cost_per_query": 0.025,
+    }
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(3), model_info=model_info)
+    assert cost == pytest.approx(0.025)
+
+
+def test_maps_default_rate_per_query():
+    """A per_query model missing the pricing key falls back to Google's $14/1K queries."""
+    model_info = {"key": "gemini/gemini-3.9-flash", "web_search_billing_unit": "per_query"}
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(2), model_info=model_info)
+    assert cost == pytest.approx(0.014 * 2)
+
+
+def test_maps_default_rate_per_prompt():
+    """A per_prompt model missing the pricing key falls back to Google's $25/1K grounded prompts."""
+    model_info = {"key": "gemini/gemini-2.6-flash"}
+    cost = cost_per_google_maps_grounding_request(usage=_make_maps_usage(2), model_info=model_info)
+    assert cost == pytest.approx(0.025)
+
+
+def test_maps_zero_requests():
+    model_info = {"key": "gemini/gemini-3.5-flash", "web_search_billing_unit": "per_query"}
+    assert cost_per_google_maps_grounding_request(usage=_make_maps_usage(0), model_info=model_info) == 0.0
+
+
+def test_maps_no_usage_details():
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    model_info = {"key": "gemini/gemini-3.5-flash"}
+    assert cost_per_google_maps_grounding_request(usage=usage, model_info=model_info) == 0.0
 
 
 def test_gemini_image_edit_cost_prefers_token_usage_metadata(monkeypatch):
@@ -301,3 +361,33 @@ def test_gemini_image_generation_cost_no_web_search_when_absent(monkeypatch):
     )
 
     assert cost_zero == cost_none
+
+
+@pytest.mark.parametrize(
+    "traffic_type, expected_service_tier",
+    [
+        ("ON_DEMAND", None),
+        ("ON_DEMAND_PRIORITY", "priority"),
+        ("FLEX", "flex"),
+        ("BATCH", "flex"),
+        # Vertex AI reports flex/shared-capacity traffic as ON_DEMAND_FLEX.
+        ("ON_DEMAND_FLEX", "flex"),
+        # trafficType is matched case-insensitively.
+        ("on_demand_flex", "flex"),
+        (None, None),
+        ("SOMETHING_UNKNOWN", None),
+    ],
+)
+def test_map_traffic_type_to_service_tier(
+    traffic_type: str | None, expected_service_tier: str | None
+):
+    """
+    Gemini/Vertex usageMetadata.trafficType maps to the LiteLLM service_tier
+    that selects flex/priority cost keys. ON_DEMAND_FLEX (Vertex's flex opt-in
+    value) must map to "flex" so flex-tier requests are not billed as standard.
+    """
+    from litellm.cost_calculator import _map_traffic_type_to_service_tier
+
+    assert (
+        _map_traffic_type_to_service_tier(traffic_type) == expected_service_tier
+    )
