@@ -73,8 +73,7 @@ interface EndpointRowActionsProps {
 
 function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: EndpointRowActionsProps) {
   const endpointId = endpoint.id;
-  // Config-file-defined endpoints can only be managed by editing config.yaml;
-  // the DB-backed API routes cannot create/update/delete them.
+  // The DB-backed CRUD API cannot manage config-file-defined endpoints.
   const readOnly = endpoint.is_from_config === true;
   const readOnlyHint = "Defined in config file — edit config.yaml to manage this endpoint";
   return (
