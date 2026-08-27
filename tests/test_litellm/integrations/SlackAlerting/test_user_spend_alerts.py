@@ -3,6 +3,7 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.user_spend_alerts import (
@@ -120,11 +121,11 @@ def test_anomalies_not_in_default_alert_types():
 
 
 def test_invalid_config_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError, match="daily_spend_per_user_threshold"):
         SlackAlertingArgs(daily_spend_per_user_threshold=0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError, match="spend_anomaly_baseline_days"):
         SlackAlertingArgs(spend_anomaly_baseline_days=0)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError, match="user_spend_check_interval"):
         SlackAlertingArgs(user_spend_check_interval=10)
 
 
