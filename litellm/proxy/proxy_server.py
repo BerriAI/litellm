@@ -6726,9 +6726,17 @@ class ProxyConfig:
         - list: the rows (may be empty if no models exist)
         - None: signals a DB fetch *failure* — callers must not treat this
           as "all models deleted" and must not evict existing router deployments.
+
+        Pinned to the writer DB: this read reconciles the router against the rows a
+        model write just committed, and reading it through a lagging read replica
+        makes the write-triggered reload report its own durable write as missing
+        (#38556). It also keeps a stale replica snapshot from evicting a deployment
+        another pod just added.
         """
         try:
-            new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(prisma_client).table.find_many()
+            new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
+                WriterPinnedClient(prisma_client.db)
+            ).table.find_many()
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -11974,6 +11982,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (

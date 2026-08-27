@@ -57,6 +57,21 @@ class _RoutedActions:
         return getattr(self._writer_actions, name)
 
 
+class WriterPinnedClient:
+    """PrismaClient-shaped view whose `.db` always resolves to the writer.
+
+    Read-after-write paths (e.g. the model reconcile a /model/new triggers to
+    verify its own just-committed row) must not read through a lagging read
+    replica: the row is not replayed there yet, so the reconcile concludes the
+    write is missing and fails the request even though it is durable (#38556).
+    """
+
+    __slots__ = ("db",)
+
+    def __init__(self, db: "PrismaWrapper | RoutingPrismaWrapper"):
+        self.db: Final = db.writer if isinstance(db, RoutingPrismaWrapper) else db
+
+
 class RoutingPrismaWrapper:
     """
     Routes Prisma operations between a writer and a reader Prisma client.
