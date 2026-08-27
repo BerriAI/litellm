@@ -421,6 +421,7 @@ class AnthropicContentBlock(BaseModel):
     text: str | None = None
     id: str | None = None
     name: str | None = None
+    input: dict[str, object] | None = None
 
 
 class AnthropicToolResultBlock(BaseModel):
