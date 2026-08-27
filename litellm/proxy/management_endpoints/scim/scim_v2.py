@@ -2542,7 +2542,7 @@ def _new_team_request_with_defaults(
             "team_alias": team_alias,
             "members_with_roles": members_with_roles,
             "metadata": metadata,
-            **({"organization_id": organization_id} if organization_id is not None else {}),
+            "organization_id": organization_id if organization_id is not None else defaults.get("organization_id"),
         }
     )
 
