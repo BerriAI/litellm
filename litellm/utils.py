@@ -35,6 +35,7 @@ from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
 from os.path import abspath, dirname, join
+from types import MappingProxyType
 
 import dotenv
 import httpx
@@ -73,6 +74,7 @@ from litellm.constants import (
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
+    NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -98,6 +100,43 @@ def _get_cached_custom_logger():
 
         _CustomLogger = CustomLogger
     return _CustomLogger
+
+
+@lru_cache(maxsize=None)
+def _accepts_fallback_depth_kwarg_for_class(cls: type) -> bool:
+    """
+    Whether cls's async_post_call_failure_deployment_hook override accepts a
+    fallback_depth keyword, cached per class so a signature the base class added after a
+    subscriber's override was written (e.g. the PR's own earlier 3-arg proof-of-fix
+    example) doesn't raise TypeError - swallowed at debug level - on every call.
+    """
+    params: Final = inspect.signature(cls.async_post_call_failure_deployment_hook).parameters
+    return "fallback_depth" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _snapshot_exception_for_hook(exception: Exception) -> Exception:
+    """
+    A same-class copy of exception that skips __init__ (many litellm exceptions require
+    constructor args beyond what .args carries, so copy.copy's pickle-based reconstruction
+    fails on them). Handed to failure-hook callbacks instead of the live object so a
+    callback setting e.g. exception.status_code cannot change the status code the real
+    caller actually receives. Falls back to the live object if snapshotting fails for a
+    type this doesn't anticipate, since the real exception must still reach the callback.
+    """
+    try:
+        cls: Final = type(exception)
+        snapshot: Final = cls.__new__(cls)
+        snapshot.__dict__.update(exception.__dict__)
+        snapshot.args = exception.args
+        snapshot.__traceback__ = exception.__traceback__
+        snapshot.__cause__ = exception.__cause__
+        snapshot.__context__ = exception.__context__
+        # Setting __cause__ implicitly forces __suppress_context__ to True (CPython
+        # behavior for `raise ... from ...`), so this must be set after, not before.
+        snapshot.__suppress_context__ = exception.__suppress_context__
+        return snapshot
+    except Exception:  # noqa: BLE001  # any snapshot failure must fall back to the live object, not break the failure path
+        return exception
 
 
 def _get_cached_custom_guardrail():
@@ -1071,6 +1110,8 @@ def function_setup(
             except Exception as e:
                 verbose_logger.debug("Error extracting messages from Google contents: %s", e)
                 messages = "default-message-value"
+        elif call_type in NON_INFERENCE_CALL_TYPES:
+            messages = []  # mutable-ok: loggers require a list here and Logging copies it
         else:
             messages = "default-message-value"
         stream = False
@@ -1251,6 +1292,59 @@ async def async_post_call_success_deployment_hook(
                 return result
 
     return response
+
+
+async def async_post_call_failure_deployment_hook(
+    request_data: Mapping[str, object], exception: Exception, call_type: str
+) -> None:
+    """
+    Notify CustomLogger callbacks that a deployment attempt failed.
+
+    Unlike its pre-call/post-success siblings, this wraps each callback call
+    in its own try/except: it runs on the wrapper's exception path, so a
+    broken callback must never replace the real exception that's about to be
+    re-raised to the caller.
+
+    Reads ``fallback_depth`` off ``request_data`` (set by ``Router`` on each
+    fallback hop) and passes it through to the callback; ``None`` when
+    missing or not an int, since a bare SDK call has no fallback chain.
+
+    Callbacks receive a same-class snapshot of ``exception``, not the live
+    object that's about to be re-raised, so a callback setting an attribute
+    on it (e.g. ``status_code``) cannot change what the real caller sees.
+    ``request_data`` omits ``attempted_targets``: unlike the rest of this
+    attempt's own kwargs, it's the *same* object shared by reference across
+    every hop of the live fallback walk, so a callback calling ``.record()``
+    on it would make the router skip a deployment it hasn't actually tried.
+    """
+    try:
+        typed_call_type = CallTypes(call_type)
+    except ValueError:
+        typed_call_type = None  # unknown call type
+
+    _raw_fallback_depth: Final = request_data.get("fallback_depth")
+    fallback_depth: Final = _raw_fallback_depth if isinstance(_raw_fallback_depth, int) else None
+    safe_request_data: Final = MappingProxyType({k: v for k, v in request_data.items() if k != "attempted_targets"})
+    safe_exception: Final = _snapshot_exception_for_hook(exception)
+
+    CustomLogger: Final = _get_cached_custom_logger()
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            try:
+                if _accepts_fallback_depth_kwarg_for_class(type(callback)):
+                    await callback.async_post_call_failure_deployment_hook(
+                        safe_request_data, safe_exception, typed_call_type, fallback_depth=fallback_depth
+                    )
+                else:
+                    await callback.async_post_call_failure_deployment_hook(
+                        safe_request_data, safe_exception, typed_call_type
+                    )
+            except Exception as callback_error:  # noqa: BLE001  # a broken callback must not mask the real failure
+                verbose_logger.debug(
+                    "async_post_call_failure_deployment_hook error in %s: %s",
+                    type(callback).__name__,
+                    callback_error,
+                )
 
 
 def post_call_processing(
@@ -1670,6 +1764,9 @@ def client(original_function):
         is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
+        _deployment_call_end_time: datetime.datetime | None = (
+            None  # rebind-ok: set once, from inside the except below, only if the model call itself fails
+        )
 
         try:
             if logging_obj is None:
@@ -1758,7 +1855,19 @@ def client(original_function):
                     print_verbose(f"Error while checking max token limit: {e}")
 
             # MODEL CALL
-            result = await original_function(*args, **kwargs)
+            try:
+                result = await original_function(*args, **kwargs)
+            except Exception as deployment_error:
+                _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
+                try:
+                    await async_post_call_failure_deployment_hook(
+                        request_data=kwargs,
+                        exception=deployment_error,
+                        call_type=call_type,
+                    )
+                except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must never replace the real deployment failure, so there is nothing to do with what it raises
+                    pass
+                raise
             end_time = datetime.datetime.now()
 
             if _is_streaming_request(
@@ -1871,7 +1980,9 @@ def client(original_function):
             return result
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
-            end_time = datetime.datetime.now()
+            # Reuse the timestamp taken right when the deployment call itself failed, before
+            # the failure hook ran, so a slow callback doesn't inflate the reported duration.
+            end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
                 try:
                     logging_obj.failure_handler(
@@ -2837,7 +2948,12 @@ def reapply_runtime_model_cost_registrations() -> None:
         register_model(model_cost=dict(_runtime_registered_model_cost))  # mutable-ok: snapshot, replay rewrites it
 
 
-def register_model(model_cost: str | dict, *, persist_across_reloads: bool = True):
+def register_model(
+    model_cost: str | dict,
+    *,
+    persist_across_reloads: bool = True,
+    warning_display_name: str | None = None,
+):
     """
     Register new / Override existing models (and their pricing) to specific providers.
     Provide EITHER a model cost dictionary or a url to a hosted json blob
@@ -2857,6 +2973,10 @@ def register_model(model_cost: str | dict, *, persist_across_reloads: bool = Tru
     registering a model is declaring durable intent. Pass False for a
     registration that only describes one request, so it is dropped rather than
     re-asserted over every future catalog.
+
+    ``warning_display_name`` names the model in the missing-cache-pricing
+    warning instead of the registered key, for callers that register under an
+    opaque key (e.g. the router's hashed deployment ids).
     """
 
     loaded_model_cost = {}
@@ -2903,10 +3023,14 @@ def register_model(model_cost: str | dict, *, persist_across_reloads: bool = Tru
                 elif (
                     value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
+                    and value.get("tiered_pricing") is None
+                    and (
+                        value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None
+                    )
                 ):
                     verbose_logger.warning(
-                        "register_model: model=%s not in built-in cost map and no prefix/region variant matched; cache cost fields will default to 0. To track cache cost, add cache_creation_input_token_cost and cache_read_input_token_cost to model_info",
-                        key,
+                        "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
+                        warning_display_name or key,
                     )
         # ``get_model_info`` returns ``litellm_provider: None`` when the
         # provider is unknown (e.g. custom deployments registered via
@@ -5737,6 +5861,7 @@ def _get_model_info_helper(
                 tiered_pricing=_model_info.get("tiered_pricing", None),
                 litellm_provider=_model_info.get("litellm_provider", custom_llm_provider),
                 mode=_model_info.get("mode"),
+                supported_endpoints=_model_info.get("supported_endpoints", None),
                 supports_system_messages=_model_info.get("supports_system_messages", None),
                 supports_response_schema=_model_info.get("supports_response_schema", None),
                 supports_vision=_model_info.get("supports_vision", None),
@@ -5769,6 +5894,7 @@ def _get_model_info_helper(
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
+                google_maps_grounding_cost_per_query=_model_info.get("google_maps_grounding_cost_per_query", None),
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
@@ -8390,6 +8516,12 @@ class ProviderConfigManager:
             )
 
             return VertexAIAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.audio_transcription.transformation import (
+                GeminiAudioTranscriptionConfig,
+            )
+
+            return GeminiAudioTranscriptionConfig()
         return None
 
     @staticmethod
