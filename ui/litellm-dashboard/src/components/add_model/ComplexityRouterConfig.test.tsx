@@ -1298,6 +1298,26 @@ describe("ComplexityRouterConfig tier editing", () => {
     ).toBeInTheDocument();
   });
 
+  it("lets an edited tier set write its own opening instructions instead of refusing a prompt outright", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("write calibration examples of your own", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("A replacement prompt drops the tier bullets", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the whole-prompt replacement editor on built-in routers, which the backend still accepts there", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, classifier_type: "llm", classifier_llm_config: { model: "gpt-4", timeout_ms: 3000 } }}
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("Replace the built-in complexity rubric", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("write calibration examples of your own", { exact: false })).not.toBeInTheDocument();
+  });
+
   it("leaves built-in routers with their display-name inputs and no restriction copy", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();

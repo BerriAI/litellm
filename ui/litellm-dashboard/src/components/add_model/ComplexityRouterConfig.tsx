@@ -13,11 +13,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   type CustomTierSet,
-  type TierRestriction,
   type ActiveTierRow,
   type TierRow,
   rowParamsByTier,
-  CUSTOM_TIER_RESTRICTIONS,
   MAX_TIER_COUNT,
   MAX_TIER_DEFINITION_CHARS,
   MAX_TIER_NAME_CHARS,
@@ -37,6 +35,7 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import { Restricted, restrictedBy } from "./TierRestrictions";
 import {
   REASONING_EFFORT_OPTIONS,
   ReasoningEffort,
@@ -166,16 +165,6 @@ export const effectiveClassifierType = (
   value: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type">,
 ): ClassifierType => (value.custom_tier_set ? "llm" : value.classifier_type);
 
-export const restrictedBy = (
-  value: Pick<ComplexityRouterConfigValue, "custom_tier_set">,
-  key: keyof typeof CUSTOM_TIER_RESTRICTIONS,
-): TierRestriction | undefined => (value.custom_tier_set ? CUSTOM_TIER_RESTRICTIONS[key] : undefined);
-
-export const Restricted: React.FC<{ by: TierRestriction | undefined; children: React.ReactNode }> = ({
-  by,
-  children,
-}) => (by ? <span className="block text-sm text-muted-foreground">{by.reason}</span> : <>{children}</>);
-
 const rowOrigin = (row: TierRow, editing: boolean): string => {
   if (!editing) return row.id;
   return isBuiltInTierName(row.name) ? "built-in" : "custom";
@@ -219,6 +208,8 @@ export interface ComplexityRouterConfigValue {
   classifier_context_per_turn_chars?: number;
   classifier_context_include_assistant_turns?: boolean;
   classifier_fallback?: ClassifierFallback;
+  /** Opening instructions only; the router appends the tier bullets and the injection guard after them. */
+  classification_prompt?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
   session_affinity?: boolean;

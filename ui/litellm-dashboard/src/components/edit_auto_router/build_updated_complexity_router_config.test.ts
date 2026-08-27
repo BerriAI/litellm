@@ -476,9 +476,10 @@ describe("managed keys survive an untouched open-and-save", () => {
     reasoning_override_min_score: 0.3,
   };
 
-  // tier_definitions and fallback_tier cannot sit beside heuristic_first, which this fixture uses, so
-  // no single stored config can hold every managed key. They get their own round trip below.
-  const CUSTOM_TIER_ONLY_KEYS = new Set(["tier_definitions", "fallback_tier"]);
+  // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
+  // this fixture uses, so no single stored config can hold every managed key. They get their own round
+  // trip below.
+  const CUSTOM_TIER_ONLY_KEYS = new Set(["tier_definitions", "fallback_tier", "classification_prompt"]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
@@ -526,6 +527,44 @@ describe("managed keys survive an untouched open-and-save", () => {
     expect(saved.tier_definitions).toEqual(storedCustom.tier_definitions);
     expect(saved.fallback_tier).toBe("CASUAL");
     expect(saved.tiers).toEqual(storedCustom.tiers);
+  });
+
+  it("clears a stored classification_prompt when the operator resets it, rather than preserving it as an unowned key", () => {
+    const storedCustom = {
+      tiers: { CASUAL: ["gpt-4o-mini"], AUDIT: ["o1"] },
+      tier_definitions: [
+        { name: "CASUAL", description: "small talk" },
+        { name: "AUDIT", description: "security review" },
+      ],
+      fallback_tier: "CASUAL",
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classification_prompt: "Route for a payments team.",
+    };
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+    const reset = { ...hydrated, classification_prompt: undefined };
+
+    expect(buildUpdatedComplexityRouterConfig(storedCustom, reset)).not.toHaveProperty("classification_prompt");
+  });
+
+  it("round-trips a stored classification_prompt, which an untouched open-and-save must not clear", () => {
+    const storedCustom = {
+      tiers: { CASUAL: ["gpt-4o-mini"], AUDIT: ["o1"] },
+      tier_definitions: [
+        { name: "CASUAL", description: "small talk" },
+        { name: "AUDIT", description: "security review" },
+      ],
+      fallback_tier: "CASUAL",
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classification_prompt: "Route for a payments team.\n\nExamples:\n- refund status -> CASUAL",
+    };
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+
+    expect(hydrated.classification_prompt).toBe(storedCustom.classification_prompt);
+    expect(buildUpdatedComplexityRouterConfig(storedCustom, hydrated).classification_prompt).toBe(
+      storedCustom.classification_prompt,
+    );
   });
 
   it("round-trips the heuristic_first threshold, which save requires and the backend rejects without", () => {

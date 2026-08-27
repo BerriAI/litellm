@@ -10,6 +10,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
+import ClassificationPromptEditor from "./ClassificationPromptEditor";
+import { Restricted, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -32,9 +34,6 @@ import {
   DEFAULT_HEURISTIC_FIRST_MAX_TIER,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
-  heuristicScoringRole,
-  restrictedBy,
-  Restricted,
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
@@ -200,6 +199,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
   const handleHeuristicFirstMaxTierChange = (tier: string) => {
     onChange({ ...value, heuristic_first_max_tier: tier });
+  };
+
+  const handleClassificationPromptChange = (classificationPrompt: string | undefined) => {
+    onChange({ ...value, classification_prompt: classificationPrompt });
   };
 
   const handleClassifierModelChange = (model: string) => {
@@ -414,7 +417,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </div>
           <div>
             <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
-            <Restricted by={restrictedBy(value, "classifierPrompt")}>
+            {value.custom_tier_set ? (
+              <ClassificationPromptEditor
+                classificationPrompt={value.classification_prompt}
+                onChange={handleClassificationPromptChange}
+                tierRows={value.custom_tier_set.tiers}
+              />
+            ) : (
               <ClassifierPromptEditor
                 systemPrompt={value.classifier_llm_config?.system_prompt}
                 onChange={handleClassifierSystemPromptChange}
@@ -422,7 +431,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 tierLabels={value.tier_labels}
                 classificationRubric={classificationRubric}
               />
-            </Restricted>
+            )}
           </div>
           <div>
             <strong className="block mb-1 font-semibold">If the classifier fails</strong>

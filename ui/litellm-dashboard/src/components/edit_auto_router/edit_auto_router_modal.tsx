@@ -86,6 +86,7 @@ export interface StoredComplexityRouterConfig {
   tier_model_configs?: unknown;
   default_model?: string | null;
   plan_mode_min_tier?: unknown;
+  classification_prompt?: unknown;
   heuristic_first_max_tier?: unknown;
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
@@ -153,6 +154,10 @@ export const hydrateComplexityRouterConfig = (
       parsedConfig.classifier_fallback === "default_model" || parsedConfig.classifier_fallback === "heuristic"
         ? parsedConfig.classifier_fallback
         : undefined,
+    classification_prompt:
+      typeof parsedConfig.classification_prompt === "string" && parsedConfig.classification_prompt.trim() !== ""
+        ? parsedConfig.classification_prompt
+        : undefined,
     heuristic_first_max_tier:
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
@@ -189,6 +194,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
   "classifier_fallback",
+  "classification_prompt",
   "heuristic_first_max_tier",
   "session_affinity",
   "deployment_affinity",
@@ -269,6 +275,7 @@ export const buildUpdatedComplexityRouterConfig = (
     customTierSet: value.custom_tier_set,
     defaultModel: value.default_model,
     planModeMinTier: value.plan_mode_min_tier,
+    classificationPrompt: value.classification_prompt,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
