@@ -2,6 +2,7 @@ import pytest
 
 from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
+    strategy_router_dependencies,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
@@ -179,3 +180,123 @@ def test_config_check_ignores_the_model_entirely():
         )
         is not None
     )
+
+
+@pytest.mark.parametrize(
+    "litellm_params, expected",
+    [
+        ({"model": "openai/gpt-4o"}, ()),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "a", "MEDIUM": ["b", "c"]}},
+                "complexity_router_default_model": "d",
+            },
+            (("a", "tier"), ("b", "tier"), ("c", "tier"), ("d", "default")),
+        ),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a"},
+                    "classifier_type": "llm",
+                    "classifier_llm_config": {"model": "clf"},
+                },
+            },
+            (("a", "tier"), ("clf", "classifier")),
+        ),
+        (
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a"},
+                    "classifier_llm_config": {"model": "clf"},
+                },
+            },
+            (("a", "tier"),),
+        ),
+        (
+            {"model": "auto_router/my_router", "auto_router_default_model": "d", "auto_router_embedding_model": "e"},
+            (("d", "default"), ("e", "embedding")),
+        ),
+        (
+            {"model": "auto_router/adaptive_router", "adaptive_router_config": {"available_models": ["m1", "m2"]}},
+            (("m1", "tier"), ("m2", "tier")),
+        ),
+        (
+            {
+                "model": "auto_router/quality_router",
+                "quality_router_config": {"available_models": ["q1"], "default_model": "qd"},
+            },
+            (("q1", "tier"), ("qd", "default")),
+        ),
+    ],
+)
+def test_strategy_router_dependencies(litellm_params, expected):
+    found = strategy_router_dependencies(litellm_params)
+    assert tuple((d.model_name, d.role) for d in found) == expected
+
+
+def test_complexity_default_model_param_wins_over_the_config_field():
+    """ComplexityRouter overwrites config.default_model with the litellm_params one, so the
+    config field is dead whenever the param is set and must not be able to red the router."""
+    found = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {}, "default_model": "shadowed"},
+            "complexity_router_default_model": "winner",
+        }
+    )
+
+    assert tuple(d.model_name for d in found) == ("winner",)
+
+
+def test_complexity_ignores_its_config_default_model_and_quality_does_not():
+    """Router init derives a complexity default from the tiers (fallback_tier, MEDIUM, SIMPLE)
+    and overwrites config.default_model, so that field names a model complexity never calls.
+    Quality init really does fall back to it, so the two must not be treated alike."""
+    complexity = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"MEDIUM": "derived"}, "default_model": "never-called"},
+        }
+    )
+    quality = strategy_router_dependencies(
+        {
+            "model": "auto_router/quality_router",
+            "quality_router_config": {"available_models": ["q1"], "default_model": "really-used"},
+        }
+    )
+
+    assert tuple(d.model_name for d in complexity) == ("derived",)
+    assert tuple(d.model_name for d in quality) == ("q1", "really-used")
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["not-a-dict", None, {"tiers": "not-a-dict"}, {"tiers": {"SIMPLE": 7}}, {"tiers": {"SIMPLE": [None, ""]}}],
+)
+def test_strategy_router_dependencies_never_raises_on_a_malformed_config(config):
+    """A config the router itself would refuse must not take the whole /health response down."""
+    assert strategy_router_dependencies({"model": "auto_router/complexity_router", "complexity_router_config": config}) == ()
+
+
+@pytest.mark.parametrize(
+    "semantic_on, expected",
+    [(False, ("t",)), (True, ("t", "emb"))],
+)
+def test_complexity_embedding_model_is_a_dependency_only_when_semantic_matching_is_on(semantic_on, expected):
+    """The runtime reads embedding_model only under semantic_keyword_matching, so listing it
+    unconditionally would red a router that never calls it."""
+    found = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {"SIMPLE": "t"},
+                "embedding_model": "emb",
+                "semantic_keyword_matching": semantic_on,
+            },
+        }
+    )
+
+    assert tuple(d.model_name for d in found) == expected

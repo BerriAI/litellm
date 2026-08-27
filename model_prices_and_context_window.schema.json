@@ -104,6 +104,11 @@
           "minimum": 0,
           "description": "Flex service-tier rate for the same-named base field."
         },
+        "cache_creation_input_token_cost_above_272k_tokens_priority": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Priority service-tier rate for the same-named base field."
+        },
         "cache_creation_input_token_cost_flex": {
           "type": "number",
           "minimum": 0,
@@ -185,6 +190,11 @@
         },
         "gemini_native_audio": {
           "type": "boolean"
+        },
+        "google_maps_grounding_cost_per_query": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
         },
         "guardrail_cost_per_unit": {
           "type": "object",
@@ -428,6 +438,14 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_480p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_4k": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -623,6 +641,9 @@
           "type": "boolean"
         },
         "supports_image_size": {
+          "type": "boolean"
+        },
+        "supports_legacy_thinking": {
           "type": "boolean"
         },
         "supports_low_reasoning_effort": {

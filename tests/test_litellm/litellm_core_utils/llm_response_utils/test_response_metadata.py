@@ -92,6 +92,39 @@ class TestCallbackDurationMs:
         assert hidden.get("litellm_overhead_time_ms") is not None
 
 
+class TestDictResultsSkipMetadataUpdate:
+    """Regression for /v1/messages cost-breakdown clobbering: AnthropicMessagesResponse
+    is a TypedDict, so apply() can never attach _hidden_params to it and the whole
+    metadata pass is discarded - except the cost recompute, whose only observable
+    effect was overwriting the logging object's already-correct cost breakdown with a
+    service-tier-less, reasoning-less recompute on the adapted response."""
+
+    def test_update_response_metadata_skips_cost_recompute_for_dict_results(self):
+        anthropic_response = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {"input_tokens": 7, "output_tokens": 320},
+        }
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        logging_obj.caching_details = None
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=anthropic_response,
+            logging_obj=logging_obj,
+            model="vertex_ai/gemini-3.5-flash",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj._response_cost_calculator.assert_not_called()
+        assert "_hidden_params" not in anthropic_response
+
+
 class TestCallbackDurationInCustomHeaders:
     """Test that callback_duration_ms flows into get_custom_headers."""
 

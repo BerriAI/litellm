@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
 
-import { Field, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {

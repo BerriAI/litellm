@@ -25,7 +25,11 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key, tag_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_cache_key,
+    tag_cache_key,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 
@@ -546,7 +550,9 @@ async def _get_team_member_budget_counter(
     if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
-    membership_cache_key: Final = f"team_membership:{valid_token.user_id}:{team_object.team_id}"
+    membership_cache_key: Final = team_membership_reservation_cache_key(
+        user_id=valid_token.user_id, team_id=team_object.team_id
+    )
     cached_team_membership: Final = await user_api_key_cache.async_get_cache(key=membership_cache_key)
     team_membership: LiteLLM_TeamMembership | None = None
     if isinstance(cached_team_membership, LiteLLM_TeamMembership):
@@ -1261,7 +1267,7 @@ def _count_input_tokens_for_models(
 _INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
 
 
-def _approximate_input_size(request_body: dict) -> int:
+def _approximate_input_size(request_body: Mapping[str, object]) -> int:
     """Length of the request's input text, a cheap stand-in for tokenizing cost.
 
     Every field _count_input_tokens hands the tokenizer is sized here, and
