@@ -1014,8 +1014,6 @@ describe("ComplexityRouterConfig per-model effort filtering", () => {
 });
 
 describe("ComplexityRouterConfig custom technical keywords", () => {
-  // The keywords feed the scorer's technical dimension, so the control belongs on every router whose
-  // scorer runs, which is the same question HeuristicScoringConfig asks right below it.
   const openClassificationPanel = (value: ComplexityRouterConfigValue) => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={value} onChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
