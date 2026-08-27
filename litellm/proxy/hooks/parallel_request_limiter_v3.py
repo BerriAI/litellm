@@ -390,6 +390,22 @@ class _AsyncLuaScript(Protocol):
     """A Lua script registered against the async Redis client, called with KEYS and ARGV."""
 
     def __call__(self, *, keys: Sequence[str], args: Sequence[object]) -> Awaitable[list[CacheCounterValue]]: ...
+WindowKeyType: TypeAlias = Literal["requests", "tokens"]
+
+
+def descriptor_window_key(descriptor_key: str, descriptor_value: str, rate_limit_type: WindowKeyType) -> str:
+    """
+    Window-start key for a single descriptor counter.
+
+    Each rate-limit type owns its window key. Sharing one window key between
+    the requests and tokens counters made a window roll on one pair leave the
+    sibling counter's stale previous-window value stranded under a freshly
+    reset window, which was then counted against the new window — guaranteed
+    false 429s on the first request after every window boundary (issue #24677).
+    With per-type windows, every tracked window rolls independently and no
+    branch can skip a sibling counter's reset.
+    """
+    return f"{{{descriptor_key}:{descriptor_value}}}:window:{rate_limit_type}"
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -1071,9 +1087,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch: list[str],
         cache_values: CacheCounterValues,
         key_metadata: dict[str, WindowKeyMetadata],
+        now_int: int | None = None,
     ) -> RateLimitResponse:
         """
         Check if the cache values are over the limit.
+
+        ``now_int`` enables window-aware evaluation: a counter snapshot whose
+        window_start shows its window has already expired is treated as 0.
+        The local in-memory mirror written by a previous request can hold an
+        over-limit value from a window that has since rolled; rejecting on it
+        (before the authoritative pass rolls the window) produced 429s that
+        outlived their window by up to a full window_size (#24677).
         """
         statuses: Final[list[RateLimitStatus]] = []
         overall_code = "OK"
@@ -1085,6 +1109,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             counter_value = cache_values[i + 1]
             requests_limit = key_metadata[window_key]["requests_limit"]
             tokens_limit = key_metadata[window_key]["tokens_limit"]
+
+            if now_int is not None and counter_value is not None:
+                window_start = cache_values[i]
+                if window_start is not None:
+                    try:
+                        window_expired = (now_int - int(window_start)) >= key_metadata[window_key]["window_size"]
+                    except (TypeError, ValueError):
+                        window_expired = False
+                    if window_expired:
+                        # This counter belongs to a window that has already
+                        # rolled over; it must not reject the request that
+                        # starts the new window.
+                        counter_value = 0
 
             # Determine which limit to use for current_limit and limit_remaining
             current_limit: int | None = None
@@ -1288,7 +1325,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if cache_values is not None:
-                rate_limit_response: Final = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+                rate_limit_response: Final = self.is_cache_list_over_limit(
+                    keys_to_fetch, cache_values, key_metadata, now_int=now_int
+                )
                 if rate_limit_response["overall_code"] == "OVER_LIMIT":
                     return rate_limit_response
 
@@ -1304,7 +1343,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # For keys that don't exist yet, set them to 0
                 if cache_values is None:
                     cache_values = [  # rebind-ok: missing keys default to a zeroed window snapshot
-                        str(now_int) if key.endswith(":window") else 0 for key in keys_to_fetch
+                        str(now_int) if ":window" in key else 0 for key in keys_to_fetch
                     ]
             elif self.batch_rate_limiter_script is not None:
                 # NORMAL MODE: Increment counters in Redis
@@ -1342,7 +1381,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
 
-            windowed_response = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+            windowed_response = self.is_cache_list_over_limit(
+                keys_to_fetch, cache_values, key_metadata, now_int=now_int
+            )
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
@@ -1384,8 +1425,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             max_parallel_requests_limit = rate_limit.get("max_parallel_requests")
             window_size = rate_limit.get("window_size") or self.window_size
 
-            window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
-
             if max_parallel_requests_limit is not None:
                 gauges.append(
                     ParallelRequestGauge(
@@ -1398,24 +1437,44 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
             rate_limit_set = False
+            requests_window_key: str | None = (
+                descriptor_window_key(descriptor_key, descriptor_value, "requests")
+                if requests_limit is not None
+                else None
+            )
+            tokens_window_key: str | None = (
+                descriptor_window_key(descriptor_key, descriptor_value, "tokens") if tokens_limit is not None else None
+            )
             if requests_limit is not None:
                 rpm_key = self.create_rate_limit_keys(descriptor_key, descriptor_value, "requests")
-                keys_to_fetch.extend([window_key, rpm_key])
+                keys_to_fetch.extend((requests_window_key, rpm_key))
                 rate_limit_set = True
             if tokens_limit is not None:
                 tpm_key = self.create_rate_limit_keys(descriptor_key, descriptor_value, "tokens")
-                keys_to_fetch.extend([window_key, tpm_key])
+                keys_to_fetch.extend((tokens_window_key, tpm_key))
                 rate_limit_set = True
 
             if not rate_limit_set:
                 continue
 
-            key_metadata[window_key] = {
-                "requests_limit": (int(requests_limit) if requests_limit is not None else None),
-                "tokens_limit": int(tokens_limit) if tokens_limit is not None else None,
-                "window_size": int(window_size),
-                "descriptor_key": descriptor_key,
-            }
+            # Per-type window metadata: each counter is evaluated against its
+            # own window, so the sibling limit stays None for the other type.
+            if requests_window_key is not None:
+                requests_metadata: WindowKeyMetadata = {
+                    "requests_limit": int(requests_limit),
+                    "tokens_limit": None,
+                    "window_size": int(window_size),
+                    "descriptor_key": descriptor_key,
+                }
+                key_metadata[requests_window_key] = requests_metadata
+            if tokens_window_key is not None:
+                tokens_metadata: WindowKeyMetadata = {
+                    "requests_limit": None,
+                    "tokens_limit": int(tokens_limit),
+                    "window_size": int(window_size),
+                    "descriptor_key": descriptor_key,
+                }
+                key_metadata[tokens_window_key] = tokens_metadata
         return keys_to_fetch, key_metadata, gauges
 
     def _gauge_status(self, gauge: ParallelRequestGauge, in_flight: int, code: str) -> RateLimitStatus:
@@ -1736,7 +1795,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
         )
         window_size: Final = rate_limit.get("window_size") or self.window_size
-        window_key: Final = f"{{{descriptor_key}:{descriptor_value}}}:window"
 
         keys: Final[list[str]] = []
         args: Final[list[int]] = []
@@ -1753,6 +1811,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if limit_value is None or inc_amount < 0:
                 continue
             counter_key = self.create_rate_limit_keys(descriptor_key, descriptor_value, rlt)
+            # Per-type window key: the requests and tokens counters roll their
+            # windows independently, so a roll on one can never leave the
+            # sibling counter's stale value stranded under a fresh window
+            # (issue #24677).
+            window_key: Final = descriptor_window_key(descriptor_key, descriptor_value, rlt)
             # Counter-key TTL and window_size are conceptually distinct
             # ("how long the counter Redis key lives" vs "how long the
             # sliding window is"). Kept as separate values so a future
@@ -4285,7 +4348,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             key=counter_key,
             increment_value=increment,
             ttl=self.window_size,
-            window_key=f"{{{scope_key}:{scope_value}}}:window",
+            # The guarded increment is tokens-only, so it is pinned to the
+            # tokens window that reserve_io_tokens observed.
+            window_key=descriptor_window_key(scope_key, scope_value, "tokens"),
             expected_window_start=window_identity[0],
             reservation_backend=window_identity[1],
         )
