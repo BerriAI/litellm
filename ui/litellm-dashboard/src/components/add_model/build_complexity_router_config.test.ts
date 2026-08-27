@@ -5,12 +5,13 @@ import {
   getKeywordTierRulesError,
   getClassifierModelError,
   getMissingTiersError,
+  hydrateCustomTierSet,
   getSemanticConfigError,
   getTierLabelsError,
   hydrateTierLabels,
   BuildComplexityRouterConfigParams,
 } from "./build_complexity_router_config";
-import { activeTierRows } from "./tier_rows";
+import { CUSTOM_TIER_RESTRICTIONS, activeTierRows } from "./tier_rows";
 
 const tiers = {
   SIMPLE: ["gpt-4o-mini"],
@@ -694,6 +695,19 @@ describe("getClassifierModelError", () => {
     );
   });
 
+  it("asks for a model under an edited tier set even while the stored type still reads heuristic", () => {
+    const customSet = {
+      tiers: [
+        { id: "a", name: "CASUAL", definition: "d", models: ["m"] },
+        { id: "b", name: "AUDIT", definition: "d", models: ["m"] },
+      ],
+      fallback_tier_id: "a",
+    };
+    expect(getClassifierModelError({ classifier_type: "heuristic", custom_tier_set: customSet })).toContain(
+      "an edited tier set routes with the LLM classifier",
+    );
+  });
+
   it("stays quiet once a model is chosen", () => {
     expect(
       getClassifierModelError({ classifier_type: "llm", classifier_llm_config: { model: "m", timeout_ms: 3000 } }),
@@ -757,5 +771,170 @@ describe("heuristic_first", () => {
       const config = buildComplexityRouterConfig({ ...heuristicFirstParams, classifierType });
       expect(config.heuristic_first_max_tier).toBeUndefined();
     }
+  });
+});
+
+describe("buildComplexityRouterConfig with an edited tier set", () => {
+  const customTierSet = {
+    tiers: [
+      { id: "CASUAL", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+      { id: "sec", name: " SECURITY_REVIEW ", definition: " audits and vulnerability review ", models: ["o1-preview"] },
+    ],
+    fallback_tier_id: "CASUAL",
+  };
+  const build = (overrides: Partial<BuildComplexityRouterConfigParams> = {}) => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      customTierSet,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      ...overrides,
+    };
+    return buildComplexityRouterConfig(params);
+  };
+
+  it("writes tiers, tier_definitions and fallback_tier from the rows, trimmed to what the backend matches", () => {
+    const payload = build();
+    expect(payload.tiers).toEqual({ CASUAL: ["gpt-4o-mini"], SECURITY_REVIEW: ["o1-preview"] });
+    expect(payload.tier_definitions).toEqual([
+      { name: "CASUAL", description: "small talk" },
+      { name: "SECURITY_REVIEW", description: "audits and vulnerability review" },
+    ]);
+    expect(payload.fallback_tier).toBe("CASUAL");
+  });
+
+  it("forces the LLM classifier even when the form still holds heuristic, which the backend rejects", () => {
+    expect(build({ classifierType: "heuristic" }).classifier_type).toBe("llm");
+  });
+
+  it("turns session pinning off rather than leaving a stale true the backend rejects", () => {
+    expect(build({ sessionAffinity: true }).session_affinity).toBe(false);
+  });
+
+  it("omits a definition on a built-in name, letting the backend rubric supply it", () => {
+    const payload = build({
+      customTierSet: {
+        tiers: [{ id: "SIMPLE", name: "SIMPLE", definition: "", models: ["gpt-4o-mini"] }, customTierSet.tiers[1]],
+        fallback_tier_id: "SIMPLE",
+      },
+    });
+    expect(payload.tier_definitions?.[0]).toEqual({ name: "SIMPLE" });
+  });
+
+  it("drops the replacement prompt and the rubric preset, which live inside classifier_llm_config", () => {
+    const payload = build({
+      classifierLlmConfig: {
+        model: "gpt-4o-mini",
+        timeout_ms: 3000,
+        system_prompt: "replace the whole rubric",
+        classification_rubric: "agentic",
+      },
+    });
+    expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it.each(
+    Object.entries(CUSTOM_TIER_RESTRICTIONS).flatMap(([name, restriction]) =>
+      restriction.omit.map((key) => [name, key] as const),
+    ),
+  )("drops %s's %s key, which an edited tier set never uses", (_name, key) => {
+    const loaded: Partial<BuildComplexityRouterConfigParams> = {
+      tierLabels: { SIMPLE: "Cheap" },
+      escalationKeywords: ["LITELLM ESCALATE"],
+      adaptive: true,
+      classifierFallback: "heuristic",
+      tierBoundaries: { simple_medium: 0.1, medium_complex: 0.25, complex_reasoning: 0.5 },
+      tokenThresholds: { short: 1, long: 2 },
+      dimensionWeights: { length: 1 },
+      reasoningOverrideMinScore: 0.5,
+      heuristicFirstMaxTier: "SIMPLE",
+      customTechnicalKeywords: ["kubernetes"],
+    };
+    // The control arm must be a router that actually emits the key, or the assertion is vacuous.
+    const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
+    expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: emittingType })).toHaveProperty(key);
+    expect(build(loaded)).not.toHaveProperty(key);
+  });
+
+  it("drops the local-scorer threshold left behind by a heuristic_first router, which the backend rejects here", () => {
+    const payload = build({ classifierType: "heuristic_first", heuristicFirstMaxTier: "SIMPLE" });
+    expect(payload).not.toHaveProperty("heuristic_first_max_tier");
+    expect(payload.classifier_type).toBe("llm");
+  });
+
+  it("keeps the classifier context knobs the operator set, which the forced LLM classifier reads", () => {
+    const payload = build({ classifierType: "heuristic", classifierContextWindowSize: 5 });
+    expect(payload.classifier_context_window_size).toBe(5);
+    expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it("carries the plan-mode floor as the row's name, not the row id the form holds", () => {
+    expect(build({ planModeMinTier: "sec" }).plan_mode_min_tier).toBe("SECURITY_REVIEW");
+  });
+
+  it("leaves the floor off when its row is gone, the same rule hydration and the editor apply", () => {
+    expect(build({ planModeMinTier: "removed-row" })).not.toHaveProperty("plan_mode_min_tier");
+  });
+
+  it("keys per-model params by tier name on the wire while the editor keys them by row id", () => {
+    const payload = build({ tierModelParams: { sec: { "o1-preview": { reasoning_effort: "high" } } } });
+    expect(payload.tier_model_configs).toEqual({
+      SECURITY_REVIEW: [{ model_name: "o1-preview", litellm_params: { reasoning_effort: "high" } }],
+    });
+  });
+
+  it("leaves behind no params for a row that is no longer in the set", () => {
+    const payload = build({ tierModelParams: { removed: { "o1-preview": { reasoning_effort: "high" } } } });
+    expect(payload).not.toHaveProperty("tier_model_configs");
+  });
+});
+
+describe("hydrateCustomTierSet", () => {
+  it("returns nothing when the stored config has no tier_definitions, keeping built-in routers built-in", () => {
+    expect(hydrateCustomTierSet({ tiers: { SIMPLE: ["a"] } })).toBeUndefined();
+  });
+
+  it("round-trips a payload this form built, so an edit save cannot lose a key", () => {
+    const roundTripParams: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      customTierSet: {
+        tiers: [
+          { id: "CASUAL", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "sec", name: "SECURITY_REVIEW", definition: "audits", models: ["o1-preview"] },
+        ],
+        fallback_tier_id: "sec",
+      },
+    };
+    const payload = buildComplexityRouterConfig(roundTripParams);
+    const hydrated = hydrateCustomTierSet(payload);
+    expect(hydrated?.tiers).toEqual([
+      { id: "stored-0", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+      { id: "stored-1", name: "SECURITY_REVIEW", definition: "audits", models: ["o1-preview"] },
+    ]);
+    expect(hydrated?.tiers.find((row) => row.id === hydrated.fallback_tier_id)?.name).toBe("SECURITY_REVIEW");
+  });
+
+  it("mints the canonical key for a built-in name so Restore defaults recognises the row", () => {
+    const hydrated = hydrateCustomTierSet({
+      tier_definitions: [{ name: "SIMPLE" }, { name: "AUDIT", description: "audits" }],
+      tiers: { SIMPLE: ["a"], AUDIT: ["b"] },
+      fallback_tier: "AUDIT",
+    });
+    expect(hydrated?.tiers.map((row) => row.id)).toEqual(["SIMPLE", "stored-1"]);
+  });
+
+  it("matches a hand-written config's tier pool case-insensitively rather than losing its models", () => {
+    const hydrated = hydrateCustomTierSet({
+      tier_definitions: [
+        { name: "audit", description: "x" },
+        { name: "CASUAL", description: "y" },
+      ],
+      tiers: { Audit: ["m1"], CASUAL: ["m2"] },
+      fallback_tier: " audit ",
+    });
+    expect(hydrated?.tiers[0].models).toEqual(["m1"]);
+    expect(hydrated?.fallback_tier_id).toBe(hydrated?.tiers[0].id);
   });
 });

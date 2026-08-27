@@ -2394,6 +2394,30 @@ export const testAutoRouterRouting = async (
   }
 };
 
+export interface ComplexityRouterConfigValidation {
+  valid: boolean;
+  error?: string | null;
+}
+
+// Dry-runs the same write gate /model/new and /model/update apply, so a save that would come back
+// as a raw 400 shows the backend's own message inline first. Transport failures fail open: the
+// write gate stays authoritative.
+export const validateAutoRouterConfig = async (
+  accessToken: string,
+  complexityRouterConfig: Record<string, unknown>,
+  teamId?: string,
+): Promise<ComplexityRouterConfigValidation> => {
+  try {
+    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
+      accessToken,
+      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
+    });
+  } catch (error) {
+    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
+    return { valid: true };
+  }
+};
+
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {

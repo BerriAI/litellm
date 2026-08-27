@@ -11,20 +11,30 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import AccessGroupTagsCombobox from "../add_model/AccessGroupTagsCombobox";
 import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceCombobox";
-import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
+import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
 import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
-import { type ActiveTierSet, activeTierRows, resolveComplexityDefaultModel } from "../add_model/tier_rows";
+import {
+  type ActiveTierSet,
+  CUSTOM_TIER_OMITTED_KEYS,
+  activeTierRows,
+  getCustomTierRowsError,
+  tierParamsByRowId,
+  resolveComplexityDefaultModel,
+} from "../add_model/tier_rows";
 import { isComplexityRouter } from "../add_model/auto_router_strategies";
 import {
   type BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
   getClassifierModelError,
   getKeywordTierRulesError,
+  getMissingTiersError,
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateCustomTierSet,
+  hydratePlanModeMinTier,
   hydrateTierLabels,
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
@@ -112,16 +122,18 @@ export const hydrateComplexityRouterConfig = (
     REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
   };
 
+  const custom_tier_set = hydrateCustomTierSet(parsedConfig);
+  const activeTiers = { tiers: hydratedTiers, custom_tier_set };
+
   return {
     tiers: hydratedTiers,
-    tier_model_params: hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
-    default_model: hydratePinnedDefaultModel(parsedConfig.default_model, complexityRouterDefaultModel, {
-      tiers: hydratedTiers,
-    }),
-    plan_mode_min_tier:
-      typeof parsedConfig.plan_mode_min_tier === "string" && parsedConfig.plan_mode_min_tier.trim() !== ""
-        ? parsedConfig.plan_mode_min_tier
-        : undefined,
+    custom_tier_set,
+    tier_model_params: tierParamsByRowId(
+      hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
+      activeTierRows(activeTiers),
+    ),
+    default_model: hydratePinnedDefaultModel(parsedConfig.default_model, complexityRouterDefaultModel, activeTiers),
+    plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
     classifier_llm_config: parsedConfig.classifier_llm_config,
@@ -165,6 +177,8 @@ export const hydrateComplexityRouterConfig = (
 
 export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "tier_definitions",
+  "fallback_tier",
   "tier_model_configs",
   "default_model",
   "plan_mode_min_tier",
@@ -243,10 +257,16 @@ export const buildUpdatedComplexityRouterConfig = (
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
   };
-  const preservedConfig = Object.fromEntries(Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key)));
+  // A custom save drops the stored keys an edited tier set forbids; a built-in save drops a stored
+  // classification_prompt, which the backend accepts only beside tier_definitions.
+  const dropped: readonly string[] = value.custom_tier_set ? CUSTOM_TIER_OMITTED_KEYS : ["classification_prompt"];
+  const preservedConfig = Object.fromEntries(
+    Object.entries(toRecord(storedConfig)).filter(([key]) => !isManaged(key) && !dropped.includes(key)),
+  );
 
   const builderParams: BuildComplexityRouterConfigParams = {
     tiers: value.tiers,
+    customTierSet: value.custom_tier_set,
     defaultModel: value.default_model,
     planModeMinTier: value.plan_mode_min_tier,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
@@ -340,6 +360,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
+  const [editingTiers, setEditingTiers] = useState(false);
   const [routerConfig, setRouterConfig] = useState<any>(null);
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
   const [keywordTierRules, setKeywordTierRules] = useState<KeywordTierRule[]>([]);
@@ -364,10 +385,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   // is legal today stays legal.
   const submitBlockedReason = !isComplexityRouterModel
     ? null
-    : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
-        ? "Please select at least one model for a complexity tier"
-        : null) ??
-      getTierLabelsError(complexityRouterConfig.tier_labels) ??
+    : (complexityRouterConfig.custom_tier_set
+        ? getCustomTierRowsError(complexityRouterConfig.custom_tier_set) ??
+          getMissingTiersError(activeTierRows(complexityRouterConfig))
+        : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
+            ? "Please select at least one model for a complexity tier"
+            : null) ?? getTierLabelsError(complexityRouterConfig.tier_labels)) ??
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
       getClassifierModelError(complexityRouterConfig);
@@ -406,6 +429,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   }, [isVisible, accessToken]);
 
   const initializeForm = () => {
+    setEditingTiers(false);
     try {
       if (isComplexityRouterModel) {
         // Parse the complexity_router_config if it exists and is a string
@@ -472,10 +496,15 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
   const saveValues = async (values: EditAutoRouterFormValues) => {
     if (isComplexityRouterModel) {
-      const { tiers, classifier_type, classifier_llm_config } = complexityRouterConfig;
-      if (Object.values(tiers).every((models) => models.length === 0)) {
+      const { tiers, custom_tier_set, classifier_llm_config } = complexityRouterConfig;
+      const rows = activeTierRows(complexityRouterConfig);
+      const builtInTiersEmpty = Object.values(tiers).every((models) => models.length === 0);
+      const tierSetError = custom_tier_set
+        ? getCustomTierRowsError(custom_tier_set) ?? getMissingTiersError(rows)
+        : builtInTiersEmpty && "Please select at least one model for a complexity tier";
+      if (tierSetError) {
         setShowValidationErrors(true);
-        toast.fromError("Please select at least one model for a complexity tier");
+        toast.fromError(tierSetError);
         return;
       }
       const classifierError = getClassifierModelError(complexityRouterConfig);
@@ -488,7 +517,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       // keyword rule with no keyword, and semantic_keyword_matching without an embedding model
       // or keyword rules (complexity_router/config.py), so without these a save fails as a raw
       // 400 instead of an inline message.
-      const keywordRulesError = getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig));
+      const keywordRulesError = getKeywordTierRulesError(keywordTierRules, rows);
       if (keywordRulesError) {
         setShowValidationErrors(true);
         toast.fromError(keywordRulesError);
@@ -519,20 +548,22 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       // Dual write: complexity_router_config.default_model (the pin marker hydratePinnedDefaultModel
       // reads back) and complexity_router_default_model (what the backend routes on) must always be
       // written together from the same value. Same pairing in add_auto_router_tab.tsx.
+      const updatedConfig = buildUpdatedComplexityRouterConfig(
+        modelData.litellm_params?.complexity_router_config,
+        complexityRouterConfig,
+        customTechnicalKeywords,
+        { keywordTierRules, escalationKeywords, semanticMatchingEnabled, embeddingModel, matchThreshold },
+      );
+      const serverVerdict = await validateAutoRouterConfig(accessToken, updatedConfig, modelData?.model_info?.team_id);
+      if (!serverVerdict.valid && serverVerdict.error) {
+        setShowValidationErrors(true);
+        toast.fromError(serverVerdict.error);
+        return;
+      }
+
       const updatedLitellmParams = {
         ...modelData.litellm_params,
-        complexity_router_config: buildUpdatedComplexityRouterConfig(
-          modelData.litellm_params?.complexity_router_config,
-          complexityRouterConfig,
-          customTechnicalKeywords,
-          {
-            keywordTierRules,
-            escalationKeywords,
-            semanticMatchingEnabled,
-            embeddingModel,
-            matchThreshold,
-          },
-        ),
+        complexity_router_config: updatedConfig,
         complexity_router_default_model: defaultModel,
       };
       const updatedModelInfo = {
@@ -631,6 +662,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 /* Complexity Router Configuration */
                 <div className="w-full">
                   <ComplexityRouterConfig
+                    editingTiers={editingTiers}
+                    onEditingTiersChange={setEditingTiers}
                     showValidationErrors={showValidationErrors}
                     modelInfo={modelInfo}
                     value={complexityRouterConfig}

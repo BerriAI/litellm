@@ -1,7 +1,20 @@
 import { KeywordTierRule } from "./KeywordTierRules";
-import { type TierRow, activeTierName, tierRowById } from "./tier_rows";
+import {
+  type CustomTierSet,
+  type TierRow,
+  CUSTOM_TIER_OMITTED_KEYS,
+  activeTierName,
+  sameTierIdentity,
+  tierRowById,
+  tierRowByName,
+} from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
-import { TierModelParams, TierModelParamsByTier, serializeTierModelConfigs } from "./complexity_router_tiers";
+import {
+  TierModelParams,
+  TierModelParamsByTier,
+  normalizeTierModels,
+  serializeTierModelConfigs,
+} from "./complexity_router_tiers";
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
@@ -13,6 +26,7 @@ import {
   ComplexityTiers,
   DimensionWeights,
   TIER_KEYS,
+  effectiveClassifierType,
   TIER_DESCRIPTIONS,
   TierBoundaries,
   TokenThresholds,
@@ -78,6 +92,7 @@ const scorerKnobPayload = ({
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  customTierSet?: CustomTierSet;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
@@ -108,8 +123,15 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
 }
 
+export interface TierDefinitionPayload {
+  name: string;
+  description?: string;
+}
+
 export interface ComplexityRouterConfigPayload {
-  tiers: ComplexityTiers;
+  tiers: ComplexityTiers | Record<string, string[]>;
+  tier_definitions?: TierDefinitionPayload[];
+  fallback_tier?: string;
   default_model?: string;
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
@@ -177,7 +199,7 @@ export const getTierLabelsError = (tierLabels: ComplexityTierLabels | undefined)
 
 // Requires every active tier non-empty, so the create form can never reach the
 // resolveComplexityDefaultModel === undefined case. The edit modal allows a partially filled
-// set, which is why it keeps its own !defaultModel guard after deriving.
+// built-in set, which is why it keeps its own !defaultModel guard after deriving.
 export const getMissingTiersError = (rows: readonly TierRow[]): string | null => {
   const missing = rows.filter((row) => row.models.length === 0).map(activeTierName);
   if (missing.length === 0) return null;
@@ -191,8 +213,9 @@ export const getPlanModeTierError = (planModeMinTier: string | undefined, rows: 
   return `The plan-mode minimum tier (${floor ? activeTierName(floor) : planModeMinTier}) has no models. Add one or turn the override off.`;
 };
 
-// The tier is a free string since #37413, and _validate_keyword_rule_tiers matches it EXACTLY, so a
-// rule naming a tier this router does not have is a raw 400 unless the gate catches it first.
+// The orphan check compares exactly, not casefold: _validate_keyword_rule_tiers is exact
+// membership, so a rule left pointing at a differently cased name would clear a gate the
+// backend then rejects.
 export const getKeywordTierRulesError = (
   keywordTierRules: KeywordTierRule[],
   rows: readonly TierRow[],
@@ -206,14 +229,16 @@ export const getKeywordTierRulesError = (
   return `Keyword rule(s) ${orphaned.join(", ")} route to a tier this router no longer has`;
 };
 
-// The submit gate and the submit handler both read this, so a disabled button and a refused submit
-// cannot disagree about why.
+// An edited tier set forces the LLM classifier, so the model requirement follows the EFFECTIVE type.
+// Both forms' submit gates and their submit handlers read this one answer so they cannot drift.
 export const getClassifierModelError = (
-  config: Pick<ComplexityRouterConfigValue, "classifier_type" | "classifier_llm_config">,
-): string | null =>
-  usesLlmClassifier(config.classifier_type) && !config.classifier_llm_config?.model
-    ? "Please select a classifier model, or switch back to Heuristic"
-    : null;
+  config: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type" | "classifier_llm_config">,
+): string | null => {
+  if (!usesLlmClassifier(effectiveClassifierType(config)) || config.classifier_llm_config?.model) return null;
+  return config.custom_tier_set
+    ? "Please select a classifier model: an edited tier set routes with the LLM classifier"
+    : "Please select a classifier model, or switch back to Heuristic";
+};
 
 export const getSemanticConfigError = ({
   semanticMatchingEnabled,
@@ -228,8 +253,79 @@ export const getSemanticConfigError = ({
   return null;
 };
 
+export const customTierWireFields = (
+  customTierSet: CustomTierSet,
+  classifierLlmConfig: ClassifierLLMConfig | undefined,
+  planModeMinTierId: string | undefined,
+): Partial<ComplexityRouterConfigPayload> => {
+  const rows = customTierSet.tiers;
+  const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
+  const floor = tierRowById(rows, planModeMinTierId);
+  return {
+    tiers: Object.fromEntries(rows.map((row) => [activeTierName(row), row.models])),
+    tier_definitions: rows.map((row) => ({
+      name: activeTierName(row),
+      ...(row.definition.trim() && { description: row.definition.trim() }),
+    })),
+    ...(fallback && { fallback_tier: activeTierName(fallback) }),
+    classifier_type: "llm",
+    // Rebuilt from the two fields an edited tier set allows: system_prompt and
+    // classification_rubric are the classifierPrompt and classificationRubric restrictions, and
+    // both live inside this object rather than at the top level the omit list covers.
+    ...(classifierLlmConfig && {
+      classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
+    }),
+    session_affinity: false,
+    ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
+  };
+};
+
+// plan_mode_min_tier rides the strip list because the base payload carries it as a row id;
+// customTierWireFields re-emits it as the row's name, and an unresolvable floor stays off.
+const CUSTOM_TIER_STRIPPED_KEYS: readonly string[] = [...CUSTOM_TIER_OMITTED_KEYS, "plan_mode_min_tier"];
+
+export const hydrateCustomTierSet = (parsedConfig: {
+  tier_definitions?: unknown;
+  fallback_tier?: unknown;
+  tiers?: unknown;
+}): CustomTierSet | undefined => {
+  if (!Array.isArray(parsedConfig.tier_definitions) || parsedConfig.tier_definitions.length === 0) return undefined;
+  const storedTiers =
+    typeof parsedConfig.tiers === "object" && parsedConfig.tiers !== null && !Array.isArray(parsedConfig.tiers)
+      ? Object.entries(parsedConfig.tiers as Record<string, unknown>)
+      : [];
+  const rows = parsedConfig.tier_definitions.flatMap((entry, index): TierRow[] => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const { name, description } = entry as { name?: unknown; description?: unknown };
+    if (typeof name !== "string" || !name.trim()) return [];
+    return [
+      {
+        id: TIER_KEYS.find((tier) => sameTierIdentity(tier, name)) ?? `stored-${index}`,
+        name: name.trim(),
+        definition: typeof description === "string" ? description.trim() : "",
+        models: normalizeTierModels(storedTiers.find(([tier]) => sameTierIdentity(tier, name))?.[1]),
+      },
+    ];
+  });
+  if (rows.length === 0) return undefined;
+  const storedFallback = typeof parsedConfig.fallback_tier === "string" ? parsedConfig.fallback_tier : "";
+  return { tiers: rows, fallback_tier_id: tierRowByName(rows, storedFallback)?.id ?? "" };
+};
+
+// Ids are session-ephemeral, so a stored floor hydrates by name; unresolvable means off, the same
+// rule the editor and the wire apply.
+export const hydratePlanModeMinTier = (
+  stored: unknown,
+  customTierSet: CustomTierSet | undefined,
+): string | undefined => {
+  if (typeof stored !== "string" || !stored.trim()) return undefined;
+  if (!customTierSet) return stored;
+  return tierRowByName(customTierSet.tiers, stored)?.id;
+};
+
 export const buildComplexityRouterConfig = ({
   tiers,
+  customTierSet,
   defaultModel,
   planModeMinTier,
   tierLabels,
@@ -259,7 +355,12 @@ export const buildComplexityRouterConfig = ({
   reasoningOverrideMinScore,
   tierModelParams,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
-  const serializedTierModelConfigs = serializeTierModelConfigs(tiers, tierModelParams);
+  const serializedTierModelConfigs = customTierSet
+    ? serializeTierModelConfigs(
+        Object.fromEntries(customTierSet.tiers.map((row) => [activeTierName(row), row.models])),
+        Object.fromEntries(customTierSet.tiers.map((row) => [activeTierName(row), tierModelParams?.[row.id] ?? {}])),
+      )
+    : serializeTierModelConfigs(tiers, tierModelParams);
   const cleanedEscalationKeywords = escalationKeywords.map((keyword) => keyword.trim()).filter(Boolean);
   const cleanedKeywordTierRules = serializeKeywordTierRules(keywordTierRules);
   const cleanedTierLabels = serializeTierLabels(tierLabels);
@@ -272,29 +373,32 @@ export const buildComplexityRouterConfig = ({
     reasoningOverrideMinScore,
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
+  // An edited tier set forces the LLM classifier, so llm-only inputs must survive a classifier_type
+  // the form never rewrote. The UI gates the same controls on this, not on the raw value.
+  const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
 
-  return {
+  const payload: ComplexityRouterConfigPayload = {
     tiers,
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
-    ...(usesLlmClassifier(classifierType) &&
+    ...(usesLlmClassifier(effectiveType) &&
       classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-    ...(usesLlmClassifier(classifierType) &&
+    ...(usesLlmClassifier(effectiveType) &&
       classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-    ...(classifierType === "heuristic_first" &&
+    ...(effectiveType === "heuristic_first" &&
       heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
-    ...(usesLlmClassifier(classifierType) &&
+    ...(usesLlmClassifier(effectiveType) &&
       classifierContextWindowSize !== undefined && {
         classifier_context_window_size: classifierContextWindowSize,
       }),
-    ...(usesLlmClassifier(classifierType) &&
+    ...(usesLlmClassifier(effectiveType) &&
       classifierContextBudgetChars !== undefined && {
         classifier_context_budget_chars: classifierContextBudgetChars,
       }),
-    ...(usesLlmClassifier(classifierType) &&
+    ...(usesLlmClassifier(effectiveType) &&
       classifierContextIncludeAssistantTurns !== undefined && {
         classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
       }),
@@ -317,4 +421,9 @@ export const buildComplexityRouterConfig = ({
     ...(returnRawModelName && { return_raw_model_name: true }),
     ...scorerKnobs,
   };
+  if (!customTierSet) return payload;
+  const kept = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !CUSTOM_TIER_STRIPPED_KEYS.includes(key)),
+  ) as ComplexityRouterConfigPayload;
+  return { ...kept, ...customTierWireFields(customTierSet, classifierLlmConfig, planModeMinTier) };
 };

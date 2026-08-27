@@ -73,6 +73,7 @@ const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(()
 vi.mock("../networking", () => ({
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
+  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
 }));
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
@@ -891,6 +892,23 @@ describe("getSubmitBlockedReason", () => {
   it("blocks an LLM classifier with no model, which the button previously left enabled", () => {
     expect(getSubmitBlockedReason({ tiers, classifier_type: "llm" }, [], referenced, availability)).toContain(
       "Please select a classifier model",
+    );
+  });
+
+  it("blocks an edited tier set with no classifier model, since the set forces the LLM classifier", () => {
+    const config = {
+      tiers,
+      classifier_type: "heuristic" as const,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "d", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "d", models: ["gpt-4o-mini"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    };
+    expect(getSubmitBlockedReason(config, [], referenced, availability)).toContain(
+      "an edited tier set routes with the LLM classifier",
     );
   });
 

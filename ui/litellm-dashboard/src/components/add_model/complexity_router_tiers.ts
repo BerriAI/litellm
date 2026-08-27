@@ -133,7 +133,25 @@ export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
   REASONING: "Reasoning",
 };
 
+const isBuiltInTier = (tier: string): tier is ComplexityTier => (TIER_ORDER as string[]).includes(tier);
+
+// What a tier row is called on screen. A row the operator named shows that name; an untouched
+// built-in row shows its display label. The one owner for every surface that renders a tier.
+export const tierRowLabel = (
+  row: { id: string; name: string },
+  tierLabels?: Partial<Record<ComplexityTier, string>>,
+): string => {
+  const builtIn = TIER_ORDER.find((tier) => tier === row.id);
+  const named = row.name.trim();
+  if (!builtIn || named !== builtIn) return named || "New";
+  return tierLabels?.[builtIn]?.trim() || DEFAULT_TIER_LABELS[builtIn];
+};
+
 export const tierOptions = (
   tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
-): { value: ComplexityTier; label: string }[] =>
-  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));
+  tierNames?: readonly string[],
+): { value: string; label: string }[] =>
+  (tierNames ?? TIER_ORDER).map((tier) => ({
+    value: tier,
+    label: (isBuiltInTier(tier) && (tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier])) || tier,
+  }));
