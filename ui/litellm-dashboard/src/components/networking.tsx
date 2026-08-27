@@ -4938,6 +4938,15 @@ export const createMCPServer = async (
   }
 };
 
+export const importMCPServers = async (accessToken: string, payload: Record<string, unknown>) => {
+  try {
+    return await apiClient.post(`/v1/mcp/server/import`, { accessToken, body: payload });
+  } catch (error) {
+    console.error("Failed to import MCP servers:", error);
+    throw error;
+  }
+};
+
 export const updateMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
   try {
     return await apiClient.put(`/v1/mcp/server`, { accessToken, body: formValues });
