@@ -77,3 +77,11 @@ class LangfuseMapper:
             **collect(cls._LLM_CALL_ATTRS, data),
             **collect(cls._BLOB_ATTRS, data),
         }
+
+    @classmethod
+    def root_observation_io(cls, data: LLMCallSpanData) -> AttributeMap:
+        return {
+            key: value
+            for key, value in collect(cls._BLOB_ATTRS, data).items()
+            if key in ("langfuse.observation.input", "langfuse.observation.output")
+        }

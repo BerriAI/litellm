@@ -9,8 +9,8 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 import asyncio
 import contextlib
 import os
-from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -28,6 +28,16 @@ from litellm.integrations.otel import (  # noqa: E402
     LiteLLM,
     OpenTelemetryV2Config,
 )
+from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
+from litellm.integrations.otel.model.config import (  # noqa: E402
+    CaptureMessageContent,
+    ExporterSpec,
+)
+from litellm.integrations.otel.model.spans import (  # noqa: E402
+    LITELLM_PROXY_REQUEST_SPAN_NAME,
+    SpanRole,
+)
+from litellm.integrations.otel.model.utils import to_ns, to_seconds  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     reset_mcp_message_trace_carrier,
@@ -36,13 +46,6 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     set_mcp_message_transport_span,
     set_request_root_span,
 )
-from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import ExporterSpec  # noqa: E402
-from litellm.integrations.otel.model.spans import (  # noqa: E402
-    LITELLM_PROXY_REQUEST_SPAN_NAME,
-    SpanRole,
-)
-from litellm.integrations.otel.model.utils import to_ns, to_seconds  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 #  Fixtures
@@ -957,6 +960,41 @@ def test_llm_span_parents_to_ambient_server_span():
     llm_span = by_name["chat gpt-4o"]
     assert llm_span.parent is not None
     assert llm_span.parent.span_id == server.get_span_context().span_id
+
+
+def test_langfuse_mapper_stamps_input_output_on_root_observation():
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["langfuse"],
+        capture_message_content=CaptureMessageContent.SPAN_ONLY,
+    )
+    exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider)
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    payload = _payload(
+        messages=[{"role": "user", "content": "Say hi"}],
+        response={
+            "id": "resp_1",
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hi"},
+                }
+            ],
+        },
+    )
+
+    _emit_llm(logger, _kwargs(payload=payload))
+    server.end()
+
+    by_name = {span.name: span for span in exporter.get_finished_spans()}
+    root_attrs = by_name[LITELLM_PROXY_REQUEST_SPAN_NAME].attributes
+    assert root_attrs["langfuse.observation.input"] == ('[{"role": "user", "content": "Say hi"}]')
+    assert root_attrs["langfuse.observation.output"] == ('[{"role": "assistant", "content": "Hi"}]')
 
 
 def test_llm_span_is_root_without_ambient_server_span():

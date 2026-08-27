@@ -24,6 +24,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.mappers.langfuse import LangfuseMapper
 from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import (
@@ -550,6 +551,7 @@ class OpenTelemetryV2(CustomLogger):
             # logging object) cannot re-emit through the deferred branch.
             self._emitter.mark_emitted(call_id, SpanRole.LLM_CALL)
             self._emitter.finish_span(SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns)
+            self._stamp_langfuse_root_observation(data, carrier.span)
             return carrier.span
         # Deferred: ``pre_call`` saw no recordable parent, so create the span now.
         # The worker copied the request task's context, which carries the anchored
@@ -561,7 +563,7 @@ class OpenTelemetryV2(CustomLogger):
             parent_ctx: Final = self._seed_identity_baggage(
                 data.identity, data.request_model, resolve_request_span_context()
             )
-            return self._emitter.emit(
+            span: Final = self._emitter.emit(
                 SpanRole.LLM_CALL,
                 data,
                 parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
@@ -570,8 +572,21 @@ class OpenTelemetryV2(CustomLogger):
                 tracer=route.tracer,
                 links=_request_trace_links(parent_ctx) if route.detached else None,
             )
+            self._stamp_langfuse_root_observation(data, span)
+            return span
         finally:
             self._tenant_tracers.release(route.provider)
+
+    def _stamp_langfuse_root_observation(self, data: LLMCallSpanData, llm_span: Span | None) -> None:
+        if "langfuse" not in self.config.mapper_names or llm_span is None:
+            return
+        root: Final = request_root_span()
+        if root is None or not root.is_recording():
+            return
+        if root.get_span_context().trace_id != llm_span.get_span_context().trace_id:
+            return
+        for key, value in LangfuseMapper.root_observation_io(data).items():
+            root.set_attribute(key, value)
 
     # ====================================================================== #
     #  Service hooks
