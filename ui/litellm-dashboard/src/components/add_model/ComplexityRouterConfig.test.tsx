@@ -1187,11 +1187,18 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(Object.keys(next.tiers)).toEqual(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
   });
 
-  it("stops describing the heuristic scorer once an edited tier set replaces it", () => {
+  it("drops the scorer card entirely once an edited tier set replaces the heuristic", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    expect(screen.getByText("The LLM classifier reads your tier definitions", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("How Classification Works")).not.toBeInTheDocument();
     expect(screen.queryByText("scores each request across 7 dimensions", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the scorer card on a built-in router, whose tiers the score still decides", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("How Classification Works")).toBeInTheDocument();
+    expect(screen.getByText("scores each request across 7 dimensions", { exact: false })).toBeInTheDocument();
   });
 
   it("says why a custom row is blocked instead of only reddening its border", () => {

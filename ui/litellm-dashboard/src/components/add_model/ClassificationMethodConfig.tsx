@@ -54,12 +54,7 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
  * decides the tier, and pairing one with the default-model fallback means the heuristic never runs
  * at all, so the panel must not keep implying a score is involved on either router.
  */
-const CUSTOM_TIER_SET_EXPLANATION =
-  "The LLM classifier reads your tier definitions and picks the tier a request belongs to. The built-in " +
-  "seven-dimension scorer does not run, so its score ranges do not apply here.";
-
 const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
-  if (value.custom_tier_set) return CUSTOM_TIER_SET_EXPLANATION;
   const usesCustomPrompt =
     usesLlmClassifier(value.classifier_type) && Boolean(value.classifier_llm_config?.system_prompt?.trim());
   if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
@@ -103,6 +98,9 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
     value.tier_boundaries,
     value.reasoning_override_min_score,
   );
+
+  // The whole card describes the heuristic scorer, which an edited tier set replaces outright.
+  if (value.custom_tier_set) return null;
 
   return (
     <Card className="bg-muted mt-4">

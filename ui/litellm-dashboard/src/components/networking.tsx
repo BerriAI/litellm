@@ -60,12 +60,15 @@ export const getAutoRouterCustomTierPromptCall = async (
    * The tier bullets, the injection guard and the closing line are appended by the router, and a
    * built-in name with no description inherits criteria that live only in the backend, so the
    * preview has to come from there rather than be rebuilt here.
+   *
+   * POSTed rather than sent as query params: the prompt is the operator's own instructions and
+   * calibration examples, which a URL would leak into every access log along the path.
    */
-  const response = await apiClient.get<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+  const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
     accessToken,
-    query: {
+    body: {
       context_window_size: contextWindowSize,
-      tier_definitions: JSON.stringify(tierDefinitions),
+      tier_definitions: tierDefinitions,
       ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
     },
   });

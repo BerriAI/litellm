@@ -19,7 +19,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -2202,30 +2202,6 @@ async def update_useful_links(
         )
 
 
-def _tier_definitions_from_query(tier_definitions: str | None) -> tuple[TierDefinition, ...] | None:
-    """Resolve the tier_definitions query param into the definitions the rubric is built from.
-
-    Validated as TierDefinition rather than through ComplexityRouterConfig, whose other rules need a
-    whole router: tier pools, a fallback tier and an llm classifier are all required beside
-    tier_definitions and none of them shape the prompt. TierDefinition alone rejects a blank name, an
-    over-long name or description, and a non-built-in name with no description, and that last rule is
-    what makes the built-in-criteria lookup total. Payload validity stays the dry-run's job.
-
-    None when unset, leaving the built-in rubric as the prompt to return.
-    """
-    if not tier_definitions:
-        return None
-    try:
-        return TypeAdapter(tuple[TierDefinition, ...]).validate_python(json.loads(tier_definitions))
-    except (JSONDecodeError, ValidationError) as e:
-        raise ProxyException(
-            message=f"tier_definitions must be a JSON array of tier definitions: {e}",
-            type=ProxyErrorTypes.bad_request_error,
-            code=status.HTTP_400_BAD_REQUEST,
-            param="tier_definitions",
-        ) from e
-
-
 def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[ComplexityTier, str], ...] | None:
     """Resolve the tier_labels query param into the labeled tiers the rubric is built from.
 
@@ -2249,6 +2225,53 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
         ) from e
 
 
+class AutoRouterClassifierPromptPreviewRequest(BaseModel):
+    """What an edited tier set would send its classifier.
+
+    A POST rather than query params because classification_prompt carries the operator's own
+    instructions and calibration examples, which must not reach access logs through a URL.
+    """
+
+    tier_definitions: tuple[TierDefinition, ...]
+    context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
+    classification_prompt: str | None = None
+
+
+@router.post(
+    "/auto_router/classifier/default_prompt",
+    description="Get the system prompt an auto-router's LLM classifier sends for an edited tier set",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+)
+async def preview_auto_router_classifier_prompt(
+    request: AutoRouterClassifierPromptPreviewRequest,
+) -> AutoRouterClassifierDefaultPromptResponse:
+    """
+    Get the classifier system prompt an edited tier set sends, so the dashboard can show it.
+
+    An edited tier set replaces the whole rubric, and a definition naming a built-in tier may omit
+    its description to track the shipped criteria, so the prompt is built by the same function the
+    live classifier uses rather than reassembled by the caller. tier_labels and classification_rubric
+    have no counterpart here because the write path rejects both beside tier_definitions.
+
+    TierDefinition validation is what makes the built-in-criteria lookup total: it rejects a
+    non-built-in name carrying no description. Payload validity stays the dry-run's job.
+    """
+    if request.context_window_size < 0:
+        raise ProxyException(
+            message="context_window_size must be non-negative",
+            type=ProxyErrorTypes.bad_request_error,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="context_window_size",
+        )
+
+    return AutoRouterClassifierDefaultPromptResponse(
+        system_prompt=custom_tier_classification_prompt(
+            request.tier_definitions, request.classification_prompt, request.context_window_size
+        )
+    )
+
+
 @router.get(
     "/auto_router/classifier/default_prompt",
     description="Get the built-in system prompt used by an auto-router's LLM classifier",
@@ -2259,8 +2282,6 @@ async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     tier_labels: str | None = None,
     classification_rubric: ClassificationRubric | None = None,
-    tier_definitions: str | None = None,
-    classification_prompt: str | None = None,
 ) -> AutoRouterClassifierDefaultPromptResponse:
     """
     Get the classifier system prompt a router would send, so the dashboard can show it.
@@ -2270,10 +2291,8 @@ async def get_auto_router_classifier_default_prompt(
     come from the router's classification rubric, so the caller passes all three to get the text that router
     would actually send rather than a rubric it does not use.
 
-    An edited tier set replaces the whole rubric, so passing tier_definitions returns that prompt
-    instead, built by the same function the live classifier uses. tier_labels and
-    classification_rubric are ignored there because the write path rejects both beside
-    tier_definitions.
+    An edited tier set replaces the whole rubric; POST to this path for that prompt, which carries
+    the operator's own instructions and so must not ride in a query string.
 
     Parameters:
     - context_window_size: int - The router's classifier_context_window_size. Defaults to the
@@ -2282,11 +2301,6 @@ async def get_auto_router_classifier_default_prompt(
       display name, e.g. `{"SIMPLE": "Cheap"}`. Omit or pass an empty object for the default names.
     - classification_rubric: ClassificationRubric | None - The router's
       classifier_llm_config.classification_rubric. Omit for the default.
-    - tier_definitions: str | None - The router's tier_definitions as a JSON array of
-      `{"name": ..., "description": ...}`. A built-in name may omit its description to inherit the
-      shipped criteria, which this resolves the way the classifier does.
-    - classification_prompt: str | None - The router's classification_prompt, which opens an edited
-      tier set's rubric. Only read beside tier_definitions.
     """
     if context_window_size < 0:
         raise ProxyException(
@@ -2294,12 +2308,6 @@ async def get_auto_router_classifier_default_prompt(
             type=ProxyErrorTypes.bad_request_error,
             code=status.HTTP_400_BAD_REQUEST,
             param="context_window_size",
-        )
-
-    definitions: Final = _tier_definitions_from_query(tier_definitions)
-    if definitions is not None:
-        return AutoRouterClassifierDefaultPromptResponse(
-            system_prompt=custom_tier_classification_prompt(definitions, classification_prompt, context_window_size)
         )
 
     labeled_tiers: Final = _labeled_tiers_from_query(tier_labels)
