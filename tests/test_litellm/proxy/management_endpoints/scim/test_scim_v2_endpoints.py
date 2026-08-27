@@ -5813,3 +5813,81 @@ async def test_patch_group_rename_assigns_mapped_organization(mocker: MockerFixt
 def test_scim_settings_rejects_invalid_regex_pattern():
     with pytest.raises(ValueError, match="Invalid regex pattern"):
         SCIMGroupOrganizationMapping(group_display_name_pattern="Engineering-[", organization_id="org-eng")
+
+
+@pytest.mark.asyncio
+async def test_resolve_organization_id_times_out_on_catastrophic_pattern():
+    """A backtracking-heavy pattern must terminate with an actionable 400 instead of
+    matching forever."""
+    from litellm.proxy.management_endpoints.scim.scim_v2 import (
+        _resolve_scim_group_organization_id,
+    )
+
+    settings = SCIMSettings(
+        organization_mappings=[
+            SCIMGroupOrganizationMapping(group_display_name_pattern="(a|a)+$", organization_id="org-eng")
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_scim_group_organization_id("a" * 64 + "!", settings)
+
+    assert exc_info.value.status_code == 400
+    assert "timed out" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_group_refreshes_cached_team(mocker: MockerFixture):  # test-quality-ok: the observable is the shared cache refresh helper receiving the committed row; the helper's cache write is covered by team_endpoints tests
+    """A PUT that moves a team into a mapped organization must refresh the cached
+    team object auth checks read, so the move takes effect immediately."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.management_endpoints.scim.scim_transformations import (
+        ScimTransformations,
+    )
+
+    group_id = "team-1"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Sales",
+        members=["user1"],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={},
+    )
+    scim_group_update = SCIMGroup(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:Group"],
+        id=group_id,
+        displayName="Engineering-Platform",
+        members=[SCIMMember(value="user1")],
+    )
+
+    mock_prisma_client = _mock_group_prisma_client(mocker, existing_team=existing_team)
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_settings",
+        AsyncMock(return_value=_org_mapping_settings()),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._validate_mapped_organization_exists",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        AsyncMock(),
+    )
+    mocker.patch(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch.object(  # test-quality-ok: stubs the collaborator to pin the org mapping the endpoint computes
+        ScimTransformations,
+        "transform_litellm_team_to_scim_group",
+        AsyncMock(return_value=scim_group_update),
+    )
+    refresh_mock = mocker.patch(  # test-quality-ok: asserts the cache refresh the endpoint must trigger
+        "litellm.proxy.management_endpoints.scim.scim_v2._refresh_cached_team",
+        AsyncMock(),
+    )
+
+    await update_group(group_id=group_id, group=scim_group_update)
+
+    updated_team = mock_prisma_client.db.litellm_teamtable.update.return_value
+    assert refresh_mock.await_args.kwargs["team_row"] is updated_team

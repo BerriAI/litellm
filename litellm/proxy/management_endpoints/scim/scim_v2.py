@@ -6,12 +6,14 @@ This is an enterprise feature and requires a premium license.
 
 import asyncio
 import re
+import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
 
+import regex
 from fastapi import (
     APIRouter,
     Body,
@@ -51,6 +53,8 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    _CacheableTeamRow,  # pyright: ignore[reportPrivateUsage]  # shared team-cache protocol has no public export
+    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage]  # shared team-cache refresh helper has no public export
     fetch_and_validate_organization,
     new_team,
     team_member_add,
@@ -444,12 +448,20 @@ async def _get_scim_settings() -> SCIMSettings:
 SCIM_ORG_MAPPING_MATCH_TIMEOUT_SECONDS: Final = 1.0
 
 
+def _fullmatch_before_deadline(pattern: str, display_name: str, deadline: float) -> bool:
+    remaining: Final = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("scim organization mapping evaluation deadline exceeded")
+    return regex.fullmatch(pattern, display_name, timeout=remaining) is not None
+
+
 def _first_matching_organization_id(display_name: str, settings: SCIMSettings) -> str | None:
+    deadline: Final = time.monotonic() + SCIM_ORG_MAPPING_MATCH_TIMEOUT_SECONDS
     return next(
         (
             mapping.organization_id
             for mapping in settings.organization_mappings
-            if re.fullmatch(mapping.group_display_name_pattern, display_name)
+            if _fullmatch_before_deadline(mapping.group_display_name_pattern, display_name, deadline)
         ),
         None,
     )
@@ -458,17 +470,16 @@ def _first_matching_organization_id(display_name: str, settings: SCIMSettings) -
 async def _resolve_scim_group_organization_id(display_name: str, settings: SCIMSettings) -> str | None:
     """First organization mapping whose pattern fully matches the group displayName, or None.
 
-    Matching runs off the event loop with a timeout so a backtracking-heavy
-    pattern cannot stall SCIM and unrelated proxy requests.
+    Matching runs off the event loop, and the regex engine enforces a hard
+    per-evaluation deadline that terminates the match itself, so a
+    backtracking-heavy pattern cannot stall the proxy or keep burning a
+    worker thread after the request has failed.
     """
     if not settings.organization_mappings:
         return None
     try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(_first_matching_organization_id, display_name, settings),
-            timeout=SCIM_ORG_MAPPING_MATCH_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError as e:
+        return await asyncio.to_thread(_first_matching_organization_id, display_name, settings)
+    except TimeoutError as e:
         raise HTTPException(
             status_code=400,
             detail={
@@ -476,6 +487,32 @@ async def _resolve_scim_group_organization_id(display_name: str, settings: SCIMS
                 "Simplify the regex patterns to avoid catastrophic backtracking."
             },
         ) from e
+
+
+async def _refresh_scim_updated_team_cache(updated_team: _CacheableTeamRow | None) -> None:
+    """Keep the cached team object used by auth checks in sync after a SCIM write,
+    so an organization or alias change takes effect immediately instead of after TTL expiry.
+
+    Best-effort: the DB write has already committed, so a cache backend failure
+    must not fail the SCIM response and trigger an IdP retry of a successful write.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    if updated_team is None:
+        return
+    try:
+        await _refresh_cached_team(
+            team_row=updated_team,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # best-effort refresh: the team row is committed; a stale cache entry expires at TTL
+        verbose_proxy_logger.warning(
+            "Failed to refresh cached team %s after SCIM update; "
+            "a stale team object may be served until its TTL expires: %s",
+            updated_team.team_id,
+            e,
+        )
 
 
 async def _validate_mapped_organization_exists(
@@ -2583,6 +2620,7 @@ async def update_group(
             where={"team_id": group_id},
             data=update_data,
         )
+        await _refresh_scim_updated_team_cache(updated_team)
 
         # Handle user-team relationship changes
         current_members: Final = set(await _get_team_member_user_ids_from_team(existing_team))
@@ -2754,10 +2792,12 @@ async def _apply_group_patch_updates(group_id: str, update_data: dict[str, objec
         update_data["metadata"] = safe_dumps(update_data["metadata"])
 
     if update_data:
-        return await TeamRepository(prisma_client).table.update(
+        updated_team: Final = await TeamRepository(prisma_client).table.update(
             where={"team_id": group_id},
             data=update_data,
         )
+        await _refresh_scim_updated_team_cache(updated_team)
+        return updated_team
     return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
 
 
