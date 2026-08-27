@@ -726,3 +726,36 @@ describe("getKeywordTierRulesError orphaned tiers", () => {
     );
   });
 });
+
+describe("heuristic_first", () => {
+  const heuristicFirstParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "heuristic_first",
+    heuristicFirstMaxTier: "SIMPLE",
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierContextWindowSize: 5,
+    classifierContextBudgetChars: 4000,
+    classifierFallback: "default_model",
+  };
+
+  it("emits heuristic_first_max_tier", () => {
+    const config = buildComplexityRouterConfig(heuristicFirstParams);
+    expect(config.classifier_type).toBe("heuristic_first");
+    expect(config.heuristic_first_max_tier).toBe("SIMPLE");
+  });
+
+  it("keeps every classifier key the operator set, since heuristic_first still calls the classifier", () => {
+    const config = buildComplexityRouterConfig(heuristicFirstParams);
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(config.classifier_context_window_size).toBe(5);
+    expect(config.classifier_context_budget_chars).toBe(4000);
+    expect(config.classifier_fallback).toBe("default_model");
+  });
+
+  it("omits heuristic_first_max_tier on every other classifier type, which the backend rejects it on", () => {
+    for (const classifierType of ["heuristic", "llm"] as const) {
+      const config = buildComplexityRouterConfig({ ...heuristicFirstParams, classifierType });
+      expect(config.heuristic_first_max_tier).toBeUndefined();
+    }
+  });
+});
