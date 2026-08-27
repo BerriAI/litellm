@@ -32,7 +32,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
-    AllAnthropicMessageValues,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
     AnthropicComputerTool,
@@ -1728,10 +1728,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def add_code_execution_tool(
         self,
-        messages: list[AllAnthropicMessageValues],
+        messages: list[AllAnthropicPassThroughMessageValues],
         tools: list[AllAnthropicToolsValues | dict],
     ) -> list[AllAnthropicToolsValues | dict]:
-        """if 'container_upload' in messages, add code_execution tool"""
+        """if 'container_upload' in messages, add code_execution tool
+
+        Takes the pass-through union because the translator emits ``role: "system"``
+        in ``messages`` for models that accept it; only ``content`` is read here."""
         add_code_execution_tool = False
         for message in messages:
             message_content = message.get("content", None)
