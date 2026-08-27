@@ -153,7 +153,7 @@ class GcsLogReader:
         duplicate-delivery bug, so this never collapses to a single record."""
         records: list[GcsLogRecord] = []
         window_start = since - _SKEW
-        for day_offset in (0, 1):
+        for day_offset in (-1, 0, 1):
             day = (since + timedelta(days=day_offset)).strftime("%Y-%m-%d")
             for obj in self._list(f"{day}/"):
                 if obj.name == f"{day}/{response_id}":

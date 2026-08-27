@@ -62,16 +62,33 @@ class TestTeamLangfuseCallback:
         solo_key = client.key_with_alias(solo_alias, models=[CHEAP_ANTHROPIC_MODEL])
         resources.defer(lambda: client.delete_key(solo_key))
 
-        team_marker = unique_marker()
-        team_outcome = first_ok(
-            client,
-            lambda: client.chat_raw(
-                team_key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {team_marker}", max_tokens=16
-            ),
-        )
-        assert team_outcome.response_cost is not None and team_outcome.response_cost > 0, (
-            f"the response must report x-litellm-response-cost, got {team_outcome.response_cost!r}"
-        )
+        # Enforced behavior, positive half, with one propagation retry: a
+        # worker still holding the pre-callback team object can serve the
+        # first call without shipping it, and by the time the first Langfuse
+        # poll has timed out the team cache TTL has lapsed, so a second call
+        # must deliver.
+        team_marker = ""
+        team_outcome = None
+        observation = None
+        for _attempt in range(2):
+            team_marker = unique_marker()
+            team_outcome = first_ok(
+                client,
+                lambda marker=team_marker: client.chat_raw(
+                    team_key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=16
+                ),
+            )
+            assert team_outcome.response_cost is not None and team_outcome.response_cost > 0, (
+                f"the response must report x-litellm-response-cost, got {team_outcome.response_cost!r}"
+            )
+            observation = client.poll_langfuse_observation(
+                langfuse_creds,
+                key_alias=team_alias,
+                prompt_marker=team_marker,
+                require_positive_cost=True,
+            )
+            if observation is not None:
+                break
         solo_marker = unique_marker()
         _ = first_ok(
             client,
@@ -80,17 +97,11 @@ class TestTeamLangfuseCallback:
             ),
         )
 
-        # Enforced behavior, positive half: the team member's call is readable
-        # back from the real Langfuse project with an agreeing cost.
-        observation = client.poll_langfuse_observation(
-            langfuse_creds,
-            key_alias=team_alias,
-            prompt_marker=team_marker,
-            require_positive_cost=True,
-        )
         assert observation is not None, (
-            f"the team key's call (marker {team_marker}) never reached Langfuse within the deadline"
+            f"the team key's call (marker {team_marker}) never reached Langfuse within the deadline, "
+            "even after a fresh call past the team-object cache TTL"
         )
+        assert team_outcome is not None and team_outcome.response_cost is not None
         cost = observation_spend(observation)
         assert cost is not None and costs_agree(team_outcome.response_cost, cost), (
             f"Langfuse calculatedTotalCost {cost!r} must agree with the header cost {team_outcome.response_cost}"
