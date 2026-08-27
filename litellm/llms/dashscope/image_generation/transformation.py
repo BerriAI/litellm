@@ -46,7 +46,6 @@ else:
 
 DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
-# get_llm_provider resolves every dashscope route to the chat/embed base, which cannot serve images
 CHAT_COMPATIBLE_MODE_PATH: Final = "/compatible-mode/v1"
 
 # Maps OpenAI size strings (WxH) to DashScope size strings (W*H)
