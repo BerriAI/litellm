@@ -196,6 +196,15 @@ class TestTransformRequest:
         )
         assert "generation_config" not in request_data.data
 
+    def test_non_string_response_format_sends_no_mode(self, config):
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+        )
+        assert "generation_config" not in request_data.data
+
     def test_segment_granularity_sends_no_mode(self, config):
         request_data = config.transform_audio_transcription_request(
             model="gemini-3.5-transcribe",
