@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Any, Dict, FrozenSet, List, cast, get_type_hints
+from typing import Any, Final, cast, get_type_hints
 
 from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -8,7 +8,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 
 
 @lru_cache(maxsize=1)
-def _anthropic_messages_optional_param_keys() -> FrozenSet[str]:
+def _anthropic_messages_optional_param_keys() -> frozenset[str]:
     """
     Valid AnthropicMessagesRequestOptionalParams keys.
 
@@ -22,7 +22,7 @@ def _anthropic_messages_optional_param_keys() -> FrozenSet[str]:
 class AnthropicMessagesRequestUtils:
     @staticmethod
     def get_requested_anthropic_messages_optional_param(
-        params: Dict[str, Any],
+        params: dict[str, Any],
         *,
         model: str | None = None,
         drop_params: bool = False,
@@ -40,10 +40,11 @@ class AnthropicMessagesRequestUtils:
         Returns:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
-        valid_keys = _anthropic_messages_optional_param_keys()
-        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
+        valid_keys: Final = _anthropic_messages_optional_param_keys()
+        filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+            from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
             AnthropicConfig._maybe_drop_speed_param(
                 model=model,
@@ -51,12 +52,22 @@ class AnthropicMessagesRequestUtils:
                 drop_params=drop_params,
                 custom_llm_provider=custom_llm_provider,
             )
+            for param in ("temperature", "top_p", "top_k"):
+                if param in filtered_params:
+                    AnthropicModelInfo._apply_sampling_param(  # pyright: ignore[reportPrivateUsage]  # same gating the /chat/completions path applies; forking it would drift
+                        optional_params=filtered_params,
+                        model=model,
+                        param=param,
+                        value=filtered_params.pop(param),
+                        drop_params=drop_params,
+                        output_key=param,
+                    )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 
 
 def mock_response(
     model: str,
-    messages: List[Dict],
+    messages: list[dict],
     max_tokens: int,
     mock_response: str = "Hi! My name is Claude.",
     **kwargs,

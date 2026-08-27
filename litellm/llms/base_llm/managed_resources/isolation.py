@@ -10,10 +10,12 @@ they created. Callers with no admin role and no identifying ids at all
 are denied so an empty user_id can never select an unscoped query.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from litellm.proxy._types import (
     UserAPIKeyAuth,
+)
+from litellm.proxy._types import (
     user_api_key_has_admin_view as _user_has_admin_view,
 )
 
@@ -37,14 +39,14 @@ def resolve_resource_owner_id(
     if user_api_key_dict.team_id is not None:
         return None
 
-    token = user_api_key_dict.token or user_api_key_dict.api_key
+    token: Final = user_api_key_dict.token or user_api_key_dict.api_key
     if token:
         return f"key:{token}"
 
     return None
 
 
-def build_list_page(items: List[Any], has_more: bool = False) -> Dict[str, Any]:
+def build_list_page(items: list[Any], has_more: bool = False) -> dict[str, Any]:
     """Build the OpenAI-style paginated list response shape used by managed
     file/batch/vector-store listings. ``first_id`` and ``last_id`` are
     sourced from each item's ``.id`` attribute."""
@@ -59,7 +61,7 @@ def build_list_page(items: List[Any], has_more: bool = False) -> Dict[str, Any]:
 
 def build_owner_filter(
     user_api_key_dict: UserAPIKeyAuth,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return a Prisma `where` fragment that scopes a managed-resource listing
     to records the caller is allowed to see.
 
@@ -77,8 +79,8 @@ def build_owner_filter(
     if _user_has_admin_view(user_api_key_dict):
         return {}
 
-    user_id = user_api_key_dict.user_id
-    team_id = user_api_key_dict.team_id
+    user_id: Final = user_api_key_dict.user_id
+    team_id: Final = user_api_key_dict.team_id
 
     if user_id is not None and team_id is not None:
         return {
@@ -91,7 +93,7 @@ def build_owner_filter(
     if team_id is not None:
         return {"team_id": team_id}
 
-    owner_id = resolve_resource_owner_id(user_api_key_dict)
+    owner_id: Final = resolve_resource_owner_id(user_api_key_dict)
     if owner_id is not None:
         return {"created_by": owner_id}
 
@@ -100,8 +102,8 @@ def build_owner_filter(
 
 def can_access_resource(
     user_api_key_dict: UserAPIKeyAuth,
-    created_by: Optional[str],
-    resource_team_id: Optional[str],
+    created_by: str | None,
+    resource_team_id: str | None,
 ) -> bool:
     """Return True iff the caller may read/modify a managed resource.
 
@@ -113,11 +115,11 @@ def can_access_resource(
     if _user_has_admin_view(user_api_key_dict):
         return True
 
-    owner_id = resolve_resource_owner_id(user_api_key_dict)
+    owner_id: Final = resolve_resource_owner_id(user_api_key_dict)
     if owner_id is not None and created_by is not None and created_by == owner_id:
         return True
 
-    team_id = user_api_key_dict.team_id
+    team_id: Final = user_api_key_dict.team_id
     if team_id is not None and resource_team_id is not None and resource_team_id == team_id:
         return True
 

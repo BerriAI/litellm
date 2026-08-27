@@ -1,3 +1,5 @@
+import os
+
 """
 This file contains the LangFuseHandler class
 
@@ -6,7 +8,7 @@ Used to get the LangFuseLogger for a given request
 Handles Key/Team Based Langfuse Logging
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicParams
 
@@ -23,7 +25,7 @@ class LangFuseHandler:
     def get_langfuse_logger_for_request(
         standard_callback_dynamic_params: StandardCallbackDynamicParams,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
-        globalLangfuseLogger: Optional[LangFuseLogger] = None,
+        globalLangfuseLogger: LangFuseLogger | None = None,
     ) -> LangFuseLogger:
         """
         This function is used to get the LangFuseLogger for a given request
@@ -35,7 +37,7 @@ class LangFuseHandler:
         2. If dynamic credentials are not passed return the globalLangfuseLogger
 
         """
-        temp_langfuse_logger: Optional[LangFuseLogger] = globalLangfuseLogger
+        temp_langfuse_logger: LangFuseLogger | None = globalLangfuseLogger
         if LangFuseHandler._dynamic_langfuse_credentials_are_passed(standard_callback_dynamic_params) is False:
             return LangFuseHandler._return_global_langfuse_logger(
                 globalLangfuseLogger=globalLangfuseLogger,
@@ -43,11 +45,11 @@ class LangFuseHandler:
             )
 
         # get langfuse logging config to use for this request, based on standard_callback_dynamic_params
-        _credentials = LangFuseHandler.get_dynamic_langfuse_logging_config(
+        _credentials: Final = LangFuseHandler.get_dynamic_langfuse_logging_config(
             globalLangfuseLogger=globalLangfuseLogger,
             standard_callback_dynamic_params=standard_callback_dynamic_params,
         )
-        credentials_dict = dict(_credentials)
+        credentials_dict: Final = dict(_credentials)
 
         # check if langfuse logger is already cached
         temp_langfuse_logger = in_memory_dynamic_logger_cache.get_cache(
@@ -65,7 +67,7 @@ class LangFuseHandler:
 
     @staticmethod
     def _return_global_langfuse_logger(
-        globalLangfuseLogger: Optional[LangFuseLogger],
+        globalLangfuseLogger: LangFuseLogger | None,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
         """
@@ -79,7 +81,7 @@ class LangFuseHandler:
         if globalLangfuseLogger is not None:
             return globalLangfuseLogger
 
-        credentials_dict: Dict[
+        credentials_dict: dict[
             str, Any
         ] = {}  # the global langfuse logger uses Environment Variables, there are no dynamic credentials
         globalLangfuseLogger = in_memory_dynamic_logger_cache.get_cache(
@@ -95,7 +97,7 @@ class LangFuseHandler:
 
     @staticmethod
     def _create_langfuse_logger_from_credentials(
-        credentials: Dict,
+        credentials: dict,
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
         """
@@ -104,10 +106,11 @@ class LangFuseHandler:
         2. cache the LangFuseLogger to prevent re-creating it for the same credentials
         """
 
-        langfuse_logger = LangFuseLogger(
+        langfuse_logger: Final = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret") or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),
+            langfuse_environment=credentials.get("langfuse_environment"),
             allow_env_credentials=credentials.get("langfuse_host") is None,
         )
         in_memory_dynamic_logger_cache.set_cache(
@@ -120,7 +123,7 @@ class LangFuseHandler:
     @staticmethod
     def get_dynamic_langfuse_logging_config(
         standard_callback_dynamic_params: StandardCallbackDynamicParams,
-        globalLangfuseLogger: Optional[LangFuseLogger] = None,
+        globalLangfuseLogger: LangFuseLogger | None = None,
     ) -> LangfuseLoggingConfig:
         """
         This function is used to get the Langfuse logging config to use for a given request.
@@ -135,7 +138,28 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_secret_key"),
             langfuse_public_key=standard_callback_dynamic_params.get("langfuse_public_key"),
             langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
+            langfuse_environment=LangFuseHandler._meaningful_dynamic_environment(standard_callback_dynamic_params),
         )
+
+    @staticmethod
+    def _meaningful_dynamic_environment(
+        standard_callback_dynamic_params: StandardCallbackDynamicParams,
+    ) -> str | None:
+        """Return the per-request environment only when it changes behavior.
+
+        Empty/whitespace values and values equal to the deployment-wide
+        LANGFUSE_TRACING_ENVIRONMENT fallback are treated as absent so an
+        environment-only override that matches the default does not mint a
+        duplicate SDK client (each client costs threads and counts against
+        MAX_LANGFUSE_INITIALIZED_CLIENTS).
+        """
+        raw = standard_callback_dynamic_params.get("langfuse_environment")
+        if raw is None:
+            return None
+        value = str(raw).strip()
+        if not value or value == os.getenv("LANGFUSE_TRACING_ENVIRONMENT"):
+            return None
+        return value
 
     @staticmethod
     def _dynamic_langfuse_credentials_are_passed(
@@ -153,6 +177,7 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_public_key") is not None
             or standard_callback_dynamic_params.get("langfuse_secret") is not None
             or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
+            or LangFuseHandler._meaningful_dynamic_environment(standard_callback_dynamic_params) is not None
         ):
             return True
         return False

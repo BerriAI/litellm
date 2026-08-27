@@ -4,7 +4,7 @@ OpenAI Responses API token counting transformation logic.
 This module handles the transformation of requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 
 class OpenAICountTokensConfig:
@@ -16,7 +16,7 @@ class OpenAICountTokensConfig:
     - Response: {"input_tokens": <number>}
     """
 
-    def get_openai_count_tokens_endpoint(self, api_base: Optional[str] = None) -> str:
+    def get_openai_count_tokens_endpoint(self, api_base: str | None = None) -> str:
         base = api_base or "https://api.openai.com/v1"
         base = base.rstrip("/")
         return f"{base}/responses/input_tokens"
@@ -24,16 +24,16 @@ class OpenAICountTokensConfig:
     def transform_request_to_count_tokens(
         self,
         model: str,
-        input: Union[str, List[Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        instructions: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        input: str | list[Any],
+        tools: list[dict[str, Any]] | None = None,
+        instructions: str | None = None,
+    ) -> dict[str, Any]:
         """
         Transform request to OpenAI Responses API token counting format.
 
         The Responses API uses `input` (not `messages`) and `instructions` (not `system`).
         """
-        request: Dict[str, Any] = {
+        request: Final[dict[str, Any]] = {
             "model": model,
             "input": input,
         }
@@ -46,13 +46,13 @@ class OpenAICountTokensConfig:
 
         return request
 
-    def get_required_headers(self, api_key: str) -> Dict[str, str]:
+    def get_required_headers(self, api_key: str) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
 
-    def validate_request(self, model: str, input: Union[str, List[Any]]) -> None:
+    def validate_request(self, model: str, input: str | list[Any]) -> None:
         if not model:
             raise ValueError("model parameter is required")
 
@@ -61,19 +61,19 @@ class OpenAICountTokensConfig:
 
     @staticmethod
     def _transform_tools_for_responses_api(
-        tools: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        tools: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """
         Transform OpenAI chat tools format to Responses API tools format.
 
         Chat format:  {"type": "function", "function": {"name": "...", "parameters": {...}}}
         Responses format: {"type": "function", "name": "...", "parameters": {...}}
         """
-        transformed = []
+        transformed: Final = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                item: Dict[str, Any] = {
+                item: dict[str, Any] = {
                     "type": "function",
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
@@ -89,7 +89,7 @@ class OpenAICountTokensConfig:
 
     @staticmethod
     def messages_to_responses_input(
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
     ) -> tuple:
         """
         Convert standard chat messages format to OpenAI Responses API input format.
@@ -98,8 +98,8 @@ class OpenAICountTokensConfig:
             (input_items, instructions) tuple where instructions is extracted
             from system/developer messages.
         """
-        input_items: List[Dict[str, Any]] = []
-        instructions_parts: List[str] = []
+        input_items: Final[list[dict[str, Any]]] = []
+        instructions_parts: Final[list[str]] = []
 
         for msg in messages:
             role = msg.get("role", "")
@@ -156,5 +156,5 @@ class OpenAICountTokensConfig:
                     }
                 )
 
-        instructions = "\n".join(instructions_parts) if instructions_parts else None
+        instructions: Final = "\n".join(instructions_parts) if instructions_parts else None
         return input_items, instructions

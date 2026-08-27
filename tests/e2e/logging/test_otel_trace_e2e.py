@@ -150,13 +150,41 @@ def _tag(span: JaegerSpan, key: str) -> str | int | float | bool | None:
 #: chunk (stamped only for streaming; added in #32236).
 TTFT_TAG = "gen_ai.response.time_to_first_chunk"
 
+#: Jaeger's rendering of a span whose OTEL status is ERROR.
+ERROR_STATUS_TAG = "otel.status_code"
+
+
+def served_genai_spans(trace: JaegerTrace, genai_span: str) -> list[JaegerSpan]:
+    """The gen-AI spans for attempts that actually served the request.
+
+    The proxy opens one gen-AI span per upstream attempt, so a call the router
+    retried carries an error span for every failed attempt beside the one that
+    answered. Only the served attempt streams chunks, so only it records TTFT
+    or a streaming flag; asserting over the raw span list makes every one of
+    these tests fail whenever the upstream 429s, 529s, or hands back a stale
+    credential on the first try."""
+    return [
+        span
+        for span in trace.spans
+        if span.operation_name == genai_span and _tag(span, ERROR_STATUS_TAG) != "ERROR"
+    ]
+
+
+def one_served_genai_span(trace: JaegerTrace, genai_span: str) -> JaegerSpan:
+    served = served_genai_spans(trace, genai_span)
+    assert len(served) == 1, (
+        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; "
+        f"spans: {trace.span_names()}"
+    )
+    return served[0]
+
 
 def _assert_real_ttft(hits: list[JaegerTrace], *, genai_span: str) -> None:
-    """The enforced behavior: the streamed call's single gen-AI span records a
-    TTFT that is a real measurement - present, numeric, positive, and strictly
-    less than the span's own total duration. A TTFT of zero, or one at/above
-    the full span duration, is a clock artifact rather than first-token
-    latency."""
+    """The enforced behavior: the gen-AI span for the attempt that served the
+    stream records a TTFT that is a real measurement - present, numeric,
+    positive, and strictly less than that span's own total duration. A TTFT of
+    zero, or one at/above the span duration, is a clock artifact rather than
+    first-token latency."""
     assert hits, (
         "no trace for this call arrived at the destination within the deadline "
         "(nothing tagged with its call id was found)"
@@ -166,12 +194,7 @@ def _assert_real_ttft(hits: list[JaegerTrace], *, genai_span: str) -> None:
         f"{[(t.trace_id, t.span_names()) for t in hits]}"
     )
     trace = hits[0]
-    spans = [span for span in trace.spans if span.operation_name == genai_span]
-    assert len(spans) == 1, (
-        f"a streamed call must produce exactly ONE gen-AI span, got {len(spans)}; "
-        f"spans: {trace.span_names()}"
-    )
-    span = spans[0]
+    span = one_served_genai_span(trace, genai_span)
 
     value = _tag(span, TTFT_TAG)
     assert value is not None, (
@@ -246,8 +269,12 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
         provider_error = _ProviderError.model_validate_json(message[start : end + 1])
     except ValidationError:
         pytest.fail(f"the embedded provider error JSON does not parse (truncated?): {message[:300]}")
-    assert provider_error.error.message == "invalid x-api-key", (
-        f"the embedded provider error must survive untruncated; parsed: {provider_error}"
+    assert provider_error.error.type == "authentication_error", (
+        f"the span must carry anthropic's own auth error object rather than a litellm "
+        f"stand-in; parsed: {provider_error}"
+    )
+    assert provider_error.error.message.strip(), (
+        f"the embedded provider error must carry a non-empty message; parsed: {provider_error}"
     )
     assert _tag(span, "otel.status_description") == message, (
         "the span status description must carry the same untruncated message as error.message"
@@ -412,12 +439,8 @@ class TestOtelTraceCompleteness:
         )
         _assert_complete_trace(hits, route=route, genai_span=genai_span)
 
-        genai_spans = [span for span in hits[0].spans if span.operation_name == genai_span]
-        assert len(genai_spans) == 1, (
-            f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
-            f"spans: {hits[0].span_names()}"
-        )
-        assert _tag(genai_spans[0], "litellm.request.streaming") is True, (
+        served = one_served_genai_span(hits[0], genai_span)
+        assert _tag(served, "litellm.request.streaming") is True, (
             "the gen-AI span must record litellm.request.streaming=true; its absence means "
             "the stream flag was dropped before the model call"
         )
@@ -468,12 +491,8 @@ class TestOtelTraceCompleteness:
         )
         _assert_complete_trace(hits, route=route, genai_span=genai_span)
 
-        genai_spans = [span for span in hits[0].spans if span.operation_name == genai_span]
-        assert len(genai_spans) == 1, (
-            f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
-            f"spans: {hits[0].span_names()}"
-        )
-        assert _tag(genai_spans[0], "litellm.request.streaming") is True, (
+        served = one_served_genai_span(hits[0], genai_span)
+        assert _tag(served, "litellm.request.streaming") is True, (
             "the gen-AI span must record litellm.request.streaming=true; its absence means "
             "the stream flag was dropped before the model call"
         )
@@ -526,11 +545,7 @@ class TestOtelTraceCompleteness:
         )
         _assert_complete_trace(hits, route=route, genai_span=genai_span, require_cost_span=False)
 
-        genai_spans = [span for span in hits[0].spans if span.operation_name == genai_span]
-        assert len(genai_spans) == 1, (
-            f"a streamed call must produce exactly ONE gen-AI span, got {len(genai_spans)}; "
-            f"spans: {hits[0].span_names()}"
-        )
+        one_served_genai_span(hits[0], genai_span)
 
         spend_row = client.poll_proxy_spend_for_key(key)
         assert spend_row is not None and spend_row.spend is not None and spend_row.spend > 0, (
@@ -708,6 +723,64 @@ class TestOtelTraceCompleteness:
         assert "AnthropicException" in outcome.body, (
             "never saw the upstream provider failure before the deadline; the key may still be "
             f"propagating - last outcome {outcome.status_code}: {outcome.body[:200]}"
+        )
+        assert outcome.status_code == 401, (
+            f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"
+        )
+        assert outcome.call_id is not None, "failed responses must still carry x-litellm-call-id"
+
+        genai_span = f"chat {model_name}"
+        hits = otel_reader.poll_traces_for_call(
+            call_id=outcome.call_id,
+            settled_names=_settled_names(route=route, genai_span=genai_span, require_cost_span=False),
+            settled_prefixes={DB_SPAN_PREFIX},
+        )
+        _assert_complete_trace(hits, route=route, genai_span=genai_span, require_cost_span=False)
+
+        root = next(span for span in hits[0].spans if not span.references)
+        assert str(_tag(root, "http.status_code")) == "401", (
+            f"the SERVER span must record the 401 the client received, got {_tag(root, 'http.status_code')!r}"
+        )
+        genai = next(span for span in hits[0].spans if span.operation_name == genai_span)
+        _assert_error_span_contract(genai)
+
+    @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["messages"])
+    def test_failed_messages_error_span_attributes(
+        self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
+    ) -> None:
+        """A failed `/v1/messages` request must carry the same error-span
+        contract as a failed `/chat/completions` request (LIT-6164). The
+        async messages entrypoint used to surface the provider handler's raw
+        BaseLLMException to the failure logger, so the model-call span came
+        out with error.type=BaseLLMException and no
+        litellm.provider.error.llm_provider attribute.
+
+        Same setup as the chat sibling: a deployment with an invalid upstream
+        API key passes proxy auth and fails at the provider with a real 401,
+        and failed requests are not billed, so no cost-write span."""
+        route = "/v1/messages"
+        _assert_otel_destination_configured(client)
+
+        model_name = f"otel-err-{unique_marker()}"
+        model_id = client.create_model(
+            model_name,
+            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+        )
+        resources.defer(lambda: client.delete_model(model_id))
+        key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
+        resources.defer(lambda: client.delete_key(key))
+
+        deadline = time.monotonic() + client.proxy.poll_timeout
+        while True:
+            outcome = client.messages_raw(key, model_name, "trigger an upstream auth failure", max_tokens=16)
+            assert not outcome.ok, "the call must fail; the deployment's upstream key is invalid"
+            if "AnthropicException" in outcome.body or time.monotonic() >= deadline:
+                break
+            time.sleep(client.proxy.poll_interval)
+        assert "AnthropicException" in outcome.body, (
+            "never saw the mapped upstream provider failure before the deadline; either the key is "
+            "still propagating or the messages route surfaced the raw unmapped provider error - "
+            f"last outcome {outcome.status_code}: {outcome.body[:200]}"
         )
         assert outcome.status_code == 401, (
             f"an upstream auth failure must map to 401, got {outcome.status_code}: {outcome.body[:200]}"

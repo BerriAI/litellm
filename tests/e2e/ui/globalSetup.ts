@@ -1,11 +1,20 @@
 import { chromium, expect, request } from "@playwright/test";
 import { users, Role, STORAGE_PATHS } from "./fixtures/users";
-import { UI_BASE_URL } from "./constants";
+import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 import * as fs from "fs";
+import * as path from "path";
 
 async function globalSetup() {
   const browser = await chromium.launch();
   const rootPath = process.env.SERVER_ROOT_PATH ?? "";
+
+  // Create the artifact root before anything writes into it. storageState() does
+  // not create missing parents, so pointing E2E_UI_ARTIFACT_DIR at a path that
+  // does not exist yet would fail with ENOENT on the first role's snapshot,
+  // before any test ran. Playwright creates its own outputDir lazily, so this is
+  // the only place that has to do it. recursive:true makes it idempotent, and
+  // keeps the default "." a no-op.
+  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
 
   // The Projects sidebar item is hidden unless the enterprise-gated
   // enable_projects_ui setting is on, and the seeded DB starts with it off.
@@ -19,6 +28,26 @@ async function globalSetup() {
   });
   if (!settingsRes.ok()) {
     throw new Error(`Enabling enable_projects_ui failed (${settingsRes.status()}): ${await settingsRes.text()}`);
+  }
+
+  for (const { email, password, seedApiRole } of Object.values(users)) {
+    if (!seedApiRole) {
+      continue;
+    }
+    const createRes = await api.post(`${UI_BASE_URL}${rootPath}/user/new`, {
+      headers: { Authorization: `Bearer ${masterKey}` },
+      data: { user_email: email, user_role: seedApiRole, auto_create_key: false },
+    });
+    if (!createRes.ok() && createRes.status() !== 409) {
+      throw new Error(`Seeding user ${email} failed (${createRes.status()}): ${await createRes.text()}`);
+    }
+    const passwordRes = await api.post(`${UI_BASE_URL}${rootPath}/user/update`, {
+      headers: { Authorization: `Bearer ${masterKey}` },
+      data: { user_email: email, password },
+    });
+    if (!passwordRes.ok()) {
+      throw new Error(`Setting password for ${email} failed (${passwordRes.status()}): ${await passwordRes.text()}`);
+    }
   }
   await api.dispose();
 
@@ -47,9 +76,24 @@ async function globalSetup() {
       await page.context().clearCookies({ name: "litellm_return_url" });
       await page.context().storageState({ path: storagePath });
     } catch (e) {
-      fs.mkdirSync("test-results", { recursive: true });
-      await page.screenshot({ path: `test-results/global-setup-${role}-failure.png`, fullPage: true });
-      console.error(`Global setup failed for role ${role}. Screenshot saved. URL: ${page.url()}`);
+      // Best-effort diagnostics only: this handler must never replace the real
+      // failure with its own. Writing the screenshot used to throw ENOENT/EROFS
+      // on the read-only cwd in the e2e image, which masked every underlying
+      // login error and made the run look like a filesystem bug.
+      try {
+        const failureDir = path.join(ARTIFACT_DIR, "test-results");
+        fs.mkdirSync(failureDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(failureDir, `global-setup-${role}-failure.png`),
+          fullPage: true,
+        });
+        console.error(`Global setup failed for role ${role}. Screenshot saved. URL: ${page.url()}`);
+      } catch (diagnosticError) {
+        console.error(
+          `Global setup failed for role ${role} at URL: ${page.url()}. ` +
+            `Could not save a screenshot: ${diagnosticError}`,
+        );
+      }
       throw e;
     } finally {
       await page.close();

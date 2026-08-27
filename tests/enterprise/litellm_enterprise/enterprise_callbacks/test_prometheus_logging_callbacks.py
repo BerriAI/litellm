@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import logging
@@ -428,6 +425,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
         0.5
@@ -447,6 +445,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -466,6 +465,7 @@ def test_set_latency_metrics(prometheus_logger):
         model="gpt-5-mini",
         model_id="model-123",
         api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
@@ -634,6 +634,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         client_ip=None,
         user_agent=None,
         requested_model=None,
+        service_tier=None,
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
@@ -1737,26 +1738,16 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
 
             # Verify all five errors were logged (teams, keys, users, orgs, and user/team count)
             assert mock_logger.call_count == 5
-            assert (
-                "Error initializing teams budget metrics"
-                in mock_logger.call_args_list[0][0][0]
-            )
-            assert (
-                "Error initializing keys budget metrics"
-                in mock_logger.call_args_list[1][0][0]
-            )
-            assert (
-                "Error initializing users budget metrics"
-                in mock_logger.call_args_list[2][0][0]
-            )
-            assert (
-                "Error initializing orgs budget metrics"
-                in mock_logger.call_args_list[3][0][0]
-            )
-            assert (
-                "Error initializing user/team count metrics"
-                in mock_logger.call_args_list[4][0][0]
-            )
+            logged = [
+                call.args[0] % call.args[1:] for call in mock_logger.call_args_list
+            ]
+            assert logged == [
+                "Error initializing teams budget metrics: Database error",
+                "Error initializing keys budget metrics: Key listing error",
+                "Error initializing users budget metrics: User database error",
+                "Error initializing orgs budget metrics: Org database error",
+                "Error initializing user/team count metrics: User count error",
+            ]
 
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()

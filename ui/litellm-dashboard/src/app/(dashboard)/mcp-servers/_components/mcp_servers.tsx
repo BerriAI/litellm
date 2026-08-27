@@ -15,16 +15,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import NewBadge from "@/components/common_components/NewBadge";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
-import CreateMCPServer from "./create_mcp_server";
+import CreateMCPServer from "./CreateMCPServer";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";
@@ -350,7 +349,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     try {
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
-      NotificationsManager.success("Deleted MCP Server successfully");
+      toast.success("Deleted MCP Server successfully");
       // If the user is currently viewing the detail page of the server they
       // just deleted, return them to the All Servers list. Otherwise the
       // detail view would stay mounted, fall back to an empty stub server,
@@ -413,7 +412,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   }, [refetch]);
 
   if (!accessToken || !userRole || !userID) {
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+    return <div className="p-6 text-center text-muted-foreground">Missing required authentication parameters.</div>;
   }
 
   return (
@@ -538,12 +537,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
-              <TabsTrigger value="submitted" className="flex-none gap-2 rounded-none px-4 py-2">
-                Submitted MCPs <NewBadge />
+              <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+                Submitted MCPs
               </TabsTrigger>
             )}
           </TabsList>
-          <TabsContent value="servers">
+          <TabsContent value="servers" keepMounted>
             {selectedServerId ? (
               <MCPServerView
                 key={selectedServerId}
@@ -703,24 +702,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </div>
             )}
           </TabsContent>
-          <TabsContent value="toolsets">
+          <TabsContent value="toolsets" keepMounted>
             <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
           </TabsContent>
-          <TabsContent value="connect">
+          <TabsContent value="connect" keepMounted>
             <MCPConnect />
           </TabsContent>
           {isAdminRole(userRole) && (
-            <TabsContent value="semantic-filter">
+            <TabsContent value="semantic-filter" keepMounted>
               <MCPSemanticFilterSettings accessToken={accessToken} />
             </TabsContent>
           )}
           {isAdminRole(userRole) && (
-            <TabsContent value="network-settings">
+            <TabsContent value="network-settings" keepMounted>
               <MCPNetworkSettings accessToken={accessToken} />
             </TabsContent>
           )}
           {isAdminRole(userRole) && (
-            <TabsContent value="submitted">
+            <TabsContent value="submitted" keepMounted>
               <MCPSubmissionsTab accessToken={accessToken} />
             </TabsContent>
           )}
