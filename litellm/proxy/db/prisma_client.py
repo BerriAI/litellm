@@ -51,6 +51,8 @@ class _PrismaEngine(Protocol):
 
     async def rollback_transaction(self, tx_id: str) -> None: ...
 
+    async def request(self, method: str, path: str) -> object: ...
+
 
 class _PrismaClient(Protocol):
     _Prisma__engine: _PrismaEngine
@@ -307,6 +309,10 @@ class PrismaWrapper:
         else:
             await self._original_prisma.connect(timeout)
         self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
+
+    async def query_engine_status(self) -> object:
+        engine: Final = self._read_engine(self._original_prisma)
+        return await engine.request("GET", "/status")
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:

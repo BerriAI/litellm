@@ -447,58 +447,60 @@ async def test_stop_db_health_watchdog_task_noop_when_no_task(
 async def test_db_health_watchdog_loop_triggers_reconnect_on_timeout(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The watchdog loop reconnects when ``wait_for`` raises TimeoutError
-    or a recognized DB connection error.
-    """
+    """A local query-engine status timeout triggers reconnect."""
     prisma_client._db_health_watchdog_interval_seconds = 0
     prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    prisma_client.writer_db.query_engine_status = AsyncMock(
+        side_effect=asyncio.TimeoutError()
+    )
 
-    call_count = {"n": 0}
-
-    async def _timeout_then_cancel(*args: Any, **kwargs: Any) -> None:
-        call_count["n"] += 1
-        if call_count["n"] >= 2:
-            raise asyncio.CancelledError()
-        raise asyncio.TimeoutError()
-
-    monkeypatch.setattr("asyncio.wait_for", _timeout_then_cancel)
-    await prisma_client._db_health_watchdog_loop()
+    with monkeypatch.context() as patch_context:
+        patch_context.setattr(
+            asyncio,
+            "sleep",
+            AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+        )
+        await prisma_client._db_health_watchdog_loop()
     pinned = {
         "reconnect_called": prisma_client.attempt_db_reconnect.await_count,
         "reconnect_reason": prisma_client.attempt_db_reconnect.await_args.kwargs[
             "reason"
         ],
-        "wait_for_calls": call_count["n"],
+        "status_calls": prisma_client.writer_db.query_engine_status.await_count,
         "loop_exited_clean": True,
     }
     assert pinned == {
         "reconnect_called": 1,
         "reconnect_reason": "db_health_watchdog_connection_error",
-        "wait_for_calls": 2,
+        "status_calls": 1,
         "loop_exited_clean": True,
     }
 
 
 @pytest.mark.asyncio
-async def test_db_health_watchdog_loop_swallows_non_db_errors(
+async def test_db_health_watchdog_loop_probes_engine_status_without_querying_db(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A non-DB error during the probe should NOT trigger reconnect; the
-    loop logs and continues until cancellation.
-    """
+    """A healthy local engine does not issue a PostgreSQL query."""
     prisma_client._db_health_watchdog_interval_seconds = 0
     prisma_client.attempt_db_reconnect = AsyncMock()
+    prisma_client.writer_db.query_engine_status = AsyncMock(
+        return_value={"status": "ok"}
+    )
+    prisma_client.db.query_raw = AsyncMock(
+        side_effect=AssertionError("watchdog must not query PostgreSQL")
+    )
 
-    call_count = {"n": 0}
+    with monkeypatch.context() as patch_context:
+        patch_context.setattr(
+            asyncio,
+            "sleep",
+            AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+        )
+        await prisma_client._db_health_watchdog_loop()
 
-    async def _raise_then_cancel(*args: Any, **kwargs: Any) -> None:
-        call_count["n"] += 1
-        if call_count["n"] >= 2:
-            raise asyncio.CancelledError()
-        raise ValueError("not a db error")
-
-    monkeypatch.setattr("asyncio.wait_for", _raise_then_cancel)
-    await prisma_client._db_health_watchdog_loop()
+    prisma_client.writer_db.query_engine_status.assert_awaited_once()
+    prisma_client.db.query_raw.assert_not_awaited()
     assert prisma_client.attempt_db_reconnect.await_count == 0
 
 

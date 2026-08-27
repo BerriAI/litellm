@@ -144,9 +144,7 @@ async def test_db_health_transport_error_never_raises(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "disconnected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(
-        reason="health_readiness_check"
-    )
+    mock_prisma.attempt_db_reconnect.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -158,49 +156,14 @@ async def test_db_health_transport_error_never_raises(transport_error):
         HTTPClientClosedError(),
     ],
 )
-async def test_db_health_transport_error_reconnect_succeeds(transport_error):
+async def test_db_health_transport_error_does_not_reconnect(transport_error):
     """
-    When health_check raises a transport error and attempt_db_reconnect
-    succeeds, the second health_check passes and we return 'connected'.
-    """
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=[transport_error, None])
-    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=True)
-
-    _health_endpoints_module.db_health_cache = {
-        "status": "connected",
-        "last_updated": datetime.now() - timedelta(seconds=20),
-    }
-
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
-        result = await _db_health_readiness_check()
-
-    assert result["status"] == "connected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(
-        reason="health_readiness_check"
-    )
-    assert mock_prisma.health_check.call_count == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "transport_error",
-    [
-        httpx.ConnectError("All connection attempts failed"),
-        ClientNotConnectedError(),
-        HTTPClientClosedError(),
-    ],
-)
-async def test_db_health_transport_error_reconnect_fails(transport_error):
-    """
-    When health_check raises a transport error and attempt_db_reconnect also
-    fails, return 'disconnected' without raising.
+    A readiness probe reports a transport error as disconnected without
+    rebuilding the Prisma query engine or retrying the probe inline.
     """
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock(side_effect=transport_error)
-    mock_prisma.attempt_db_reconnect = AsyncMock(
-        side_effect=RuntimeError("reconnect failed")
-    )
+    mock_prisma.attempt_db_reconnect = AsyncMock()
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
@@ -211,6 +174,38 @@ async def test_db_health_transport_error_reconnect_fails(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "disconnected"
+    mock_prisma.attempt_db_reconnect.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        httpx.ConnectError("All connection attempts failed"),
+        ClientNotConnectedError(),
+        HTTPClientClosedError(),
+    ],
+)
+async def test_db_health_transport_error_keeps_disconnected_cache(transport_error):
+    """
+    A failed readiness probe refreshes the disconnected cache timestamp so
+    callers receive the current state without launching reconnect work.
+    """
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=transport_error)
+    mock_prisma.attempt_db_reconnect = AsyncMock()
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
+
+    assert result["status"] == "disconnected"
+    assert _health_endpoints_module.db_health_cache["status"] == "disconnected"
+    mock_prisma.attempt_db_reconnect.assert_not_called()
 
 
 @pytest.mark.asyncio
