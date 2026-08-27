@@ -563,9 +563,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
 
-    def clear_deferred_logging_enqueue(self) -> None:
-        self._enqueue_deferred_logging = None
-
     def process_dynamic_callbacks(self):
         """
         Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks
