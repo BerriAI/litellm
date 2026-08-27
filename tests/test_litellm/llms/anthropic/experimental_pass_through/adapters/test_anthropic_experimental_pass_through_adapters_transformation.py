@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
+    AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
     truncate_tool_name,
@@ -2307,6 +2308,53 @@ def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
     assert result[1]["function"]["name"] == "litellm_unnamed_tool_1"
 
 
+def test_translate_anthropic_tools_to_openai_passes_provider_native_tool_dicts_through():
+    """Deployment-level provider-native tools (e.g. Gemini googleMaps) must reach the provider transformation verbatim (LIT-6286)."""
+    tools = [
+        {"googleMaps": {}},
+        {"googleSearch": {}},
+        {
+            "name": "get_weather",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+        },
+    ]
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+    assert result[0] == {"googleMaps": {}}
+    assert result[1] == {"googleSearch": {}}
+    assert result[2]["function"]["name"] == "get_weather"
+    assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_tools_to_openai_passes_openai_function_tools_through():
+    """A tool already in OpenAI function format must pass through unchanged instead of becoming litellm_unnamed_tool_N."""
+    openai_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+        },
+    }
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=[openai_tool], model=None)
+    assert result == [openai_tool]
+
+
+def test_translate_completion_input_params_keeps_provider_native_tools():
+    """/v1/messages request translation must keep router-merged provider-native tools in kwargs['tools'] (LIT-6286)."""
+    adapter = AnthropicAdapter()
+    translated = adapter.translate_completion_input_params(
+        {
+            "model": "gemini/gemini-2.5-flash",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "coffee shops near Union Square"}],
+            "tools": [{"googleMaps": {}}],
+        }
+    )
+    assert translated is not None
+    assert translated["tools"] == [{"googleMaps": {}}]
+
+
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
     """
     Test that reasoning_content is converted to thinking block when thinking_blocks is not present.
@@ -3997,6 +4045,75 @@ def test_translate_anthropic_messages_to_openai_carries_midturn_system_prompt_ca
     assert result == [
         {"role": "system", "content": [{"type": "text", "text": "fix", "prompt_cache_breakpoint": explicit}]}
     ]
+
+
+def _tool_reference_block(tool_name="WebFetch"):
+    return {"type": "tool_reference", "tool_name": tool_name}
+
+
+def test_tool_result_tool_reference_is_carried_through_untouched():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn({"toolu_01": [_tool_reference_block()]}),
+        ]
+    )
+
+    assert [m["role"] for m in result] == ["assistant", "tool"]
+    assert result[1]["tool_call_id"] == "toolu_01"
+    assert result[1]["content"] == [{"type": "tool_reference", "tool_name": "WebFetch"}]
+
+
+def test_tool_result_text_beside_tool_reference_keeps_both_parts_in_order():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            _anthropic_tool_result_turn(
+                {"toolu_01": [{"type": "text", "text": "loaded"}, _tool_reference_block("Grep")]}
+            ),
+        ]
+    )
+
+    assert result[1]["content"] == [
+        {"type": "text", "text": "loaded"},
+        {"type": "tool_reference", "tool_name": "Grep"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "tool_result_content",
+    [
+        [],
+        None,
+        "",
+        {"not": "a list"},
+        [{"type": "future_block", "payload": 1}],
+        [{"type": "search_result", "source": "https://example.com", "title": "t", "content": []}],
+    ],
+    ids=["empty_list", "null", "empty_string", "non_list", "unknown_block", "search_result_only"],
+)
+def test_tool_result_without_translatable_content_still_answers_its_tool_use(tool_result_content):
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}],
+            },
+        ]
+    )
+
+    assert result == [
+        result[0],
+        {"role": "tool", "tool_call_id": "toolu_01", "content": ""},
+    ]
+    assert result[0]["role"] == "assistant"
 
 
 def _openai_response_with_usage(usage: Usage) -> ModelResponse:

@@ -1,21 +1,12 @@
 import { useRef, useState } from "react";
 import { Info, UserPlus } from "lucide-react";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { useForm } from "react-hook-form";
 import { userFilterUICall } from "@/components/networking";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { Button } from "@/components/ui/button";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -119,14 +110,9 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     }
   };
 
-  const debouncedSearch = useDebouncedCallback(
-    (text: string, fieldName: "user_email" | "user_id") => fetchUsers(text, fieldName),
-    { wait: DEBOUNCE_WAIT_MS },
-  );
-
   const handleSearch = (value: string, fieldName: "user_email" | "user_id"): void => {
     setSelectedField(fieldName);
-    debouncedSearch(value, fieldName);
+    void fetchUsers(value, fieldName);
   };
 
   const handleSelect = (option: UserOption | null): void => {
@@ -154,54 +140,30 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     if (event.key === "Enter") event.preventDefault();
   };
 
-  const optionsFor = (fieldName: "user_email" | "user_id", value: string | undefined): UserOption[] => {
-    const visible = selectedField === fieldName ? userOptions : [];
-    if (value == null || value === "" || visible.some((option) => option.value === value)) return visible;
-    return [{ label: value, value, user: null }, ...visible];
-  };
-
   const renderUserSearch = (
     fieldName: "user_email" | "user_id",
     placeholder: string,
     controlProps: { id: string; value: string | undefined; onChange: (value: string | undefined) => void },
     testId?: string,
   ) => {
-    const items = optionsFor(fieldName, controlProps.value);
-    const selected = items.find((option) => option.value === controlProps.value) ?? null;
+    const items = selectedField === fieldName ? userOptions : [];
     return (
-      <div data-testid={testId}>
-        <Combobox
-          items={items}
-          value={selected}
-          // @ts-expect-error TS2322 -- Combobox.Root narrows autoHighlight to boolean; the AriaCombobox it wraps
-          // accepts "always", the only value that highlights a list this component filters server-side
-          autoHighlight="always"
-          filter={null}
-          onValueChange={(option: UserOption | null) => {
-            controlProps.onChange(option?.value);
-            handleSelect(option);
+      <div data-testid={testId} onKeyDown={swallowEnter}>
+        <PaginatedSearchSelect
+          options={items}
+          value={controlProps.value}
+          onValueChange={(value: string) => {
+            controlProps.onChange(value === "" ? undefined : value);
+            handleSelect(items.find((option) => option.value === value) ?? null);
           }}
-          onInputValueChange={(text: string) => handleSearch(text, fieldName)}
-          isItemEqualToValue={(a: UserOption, b: UserOption) => a.value === b.value}
-          itemToStringLabel={(option: UserOption) => option.label}
-        >
-          <ComboboxInput
-            id={controlProps.id}
-            placeholder={placeholder}
-            showClear={selected !== null}
-            onKeyDown={swallowEnter}
-          />
-          <ComboboxContent>
-            <ComboboxEmpty>{loading ? "Loading..." : "No results"}</ComboboxEmpty>
-            <ComboboxList>
-              {(option: UserOption) => (
-                <ComboboxItem key={option.value} value={option}>
-                  {option.label}
-                </ComboboxItem>
-              )}
-            </ComboboxList>
-          </ComboboxContent>
-        </Combobox>
+          onSearchChange={(query: string) => handleSearch(query, fieldName)}
+          autoHighlight="always"
+          isLoading={loading}
+          placeholder={placeholder}
+          emptyText="No results"
+          loadingText="Loading..."
+          inputId={controlProps.id}
+        />
       </div>
     );
   };
