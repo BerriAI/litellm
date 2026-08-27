@@ -343,6 +343,31 @@ def test_transcription_cost_uses_token_pricing(_local_model_cost_map):
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_transcription_token_pricing_is_provider_aware(_local_model_cost_map):
+    """Regression: the token-priced transcription path hardcoded provider openai,
+    so gemini transcription models raised "This model isn't mapped yet"."""
+    from litellm import completion_cost
+
+    usage = Usage(
+        prompt_tokens=200,
+        completion_tokens=10,
+        total_tokens=210,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1, audio_tokens=199),
+    )
+    response = TranscriptionResponse(text="demo text")
+    response.usage = usage
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gemini/gemini-3.5-transcribe",
+        custom_llm_provider="gemini",
+        call_type="atranscription",
+    )
+
+    expected_cost = (199 * 2e-06) + (1 * 2e-06) + (10 * 1.2e-05)
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_transcription_cost_falls_back_to_duration(_local_model_cost_map):
     from litellm import completion_cost
 

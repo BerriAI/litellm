@@ -99,6 +99,36 @@ describe("autorouter_presets", () => {
     );
   });
 
+  // Opus serves both tiers, so the effort is all that separates them and losing it fails silently.
+  it("pins the anthropic preset's reasoning tier to Opus at high thinking", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    expect(config.tiers.COMPLEX).toEqual(["claude-opus-5"]);
+    expect(config.tiers.REASONING).toEqual(["claude-opus-5"]);
+    expect(config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+    });
+  });
+
+  // serializeTierModelConfigs filters on the tier's models, so a stray name drops silently.
+  it("never names a model in tier_model_configs that its own tier does not hold", () => {
+    for (const preset of getAllPresets()) {
+      const { tiers, tier_model_configs: configs } = preset.complexity_router_config;
+      for (const [tier, entries] of Object.entries(configs ?? {})) {
+        for (const entry of entries) {
+          expect(tiers[tier as keyof typeof tiers] ?? [], `${preset.key}.${tier}`).toContain(entry.model_name);
+        }
+      }
+    }
+  });
+
+  it("prefills the anthropic preset's effort through to tier_model_params", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "claude-opus-5": { reasoning_effort: "high" } },
+    });
+  });
+
   it("pins the gemini preset to concrete model ids, never Google's hot-swapping -latest aliases", () => {
     const gemini = getPresetByKey("gemini_family")!;
     const config = gemini.complexity_router_config;

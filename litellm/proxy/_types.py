@@ -2510,6 +2510,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
+    background_health_check_model_groups: tuple[str, ...] | None = Field(
+        None,
+        description=(
+            "Opt-in allowlist of model group names for background health checks and "
+            "health-check routing. When set, the background loop probes only deployments "
+            "whose model_name is listed, and enable_health_check_routing filters unhealthy "
+            "deployments only within the listed groups; every other group, including newly "
+            "added deployments, is skipped and keeps its configured routing strategy. "
+            "When unset, all deployments participate (opt out per deployment via "
+            "model_info.disable_background_health_check)."
+        ),
+    )
     model_list_healthy_only: bool | None = Field(
         None,
         description=(

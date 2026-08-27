@@ -23,6 +23,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -53,6 +54,11 @@ else:
 router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
+
+_INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
+)
 
 _RowT = TypeVar("_RowT")
 
@@ -2248,6 +2254,10 @@ async def ui_view_spend_logs(
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
     ),
+    cache_hit_filter: str | None = fastapi.Query(
+        default=None,
+        description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
+    ),
     model: str | None = fastapi.Query(default=None, description="Filter logs by model"),
     model_id: str | None = fastapi.Query(
         default=None,
@@ -2267,6 +2277,10 @@ async def ui_view_spend_logs(
     sort_order: str | None = fastapi.Query(
         default="desc",
         description="Sort order: asc or desc",
+    ),
+    exclude_internal_health_checks: bool = fastapi.Query(
+        default=False,
+        description="Exclude LiteLLM internal health check requests from results",
     ),
 ):
     """
@@ -2318,6 +2332,13 @@ async def ui_view_spend_logs(
             message=f"Invalid sort_order: {sort_order}. Must be one of: asc, desc",
             type="bad_request",
             param="sort_order",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if isinstance(cache_hit_filter, str) and cache_hit_filter not in {"hit", "miss"}:
+        raise ProxyException(
+            message=f"Invalid cache_hit_filter: {cache_hit_filter}. Must be one of: hit, miss",
+            type="bad_request",
+            param="cache_hit_filter",
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -2559,6 +2580,16 @@ async def ui_view_spend_logs(
                 sql_conditions.append(f"status = ${p}")
                 sql_params.append(status_filter)
                 p += 1
+
+        if cache_hit_filter == "hit":
+            sql_conditions.append("LOWER(cache_hit) = 'true'")
+        elif cache_hit_filter == "miss":
+            sql_conditions.append("(cache_hit IS NULL OR LOWER(cache_hit) != 'true')")
+
+        if exclude_internal_health_checks:
+            sql_conditions.append(f"api_key NOT IN (${p}, ${p + 1})")
+            sql_params.extend(_INTERNAL_HEALTH_CHECK_API_KEYS)
+            p += 2  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Spend range
         if min_spend is not None:
