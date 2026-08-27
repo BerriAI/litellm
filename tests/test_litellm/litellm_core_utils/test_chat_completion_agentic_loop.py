@@ -429,7 +429,7 @@ async def test_dispatcher_raises_on_repeated_tool_call_fingerprint(restore_callb
 
 @pytest.mark.asyncio
 async def test_converted_stream_result_is_async_iterable_after_the_loop_runs(
-    restore_callbacks,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """A client that sent stream=true gets something it can `async for` over.
 
@@ -443,22 +443,26 @@ async def test_converted_stream_result_is_async_iterable_after_the_loop_runs(
         run_agentic_loop=True,
         request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
     )
-    litellm.callbacks = [_GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})]
+    # monkeypatch rather than a raw module-global write or patch.object: both are
+    # process-wide on the SDK, and the fixture undoes them at teardown.
+    monkeypatch.setattr(
+        litellm, "callbacks", [_GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})]
+    )
+    monkeypatch.setattr(litellm, "acompletion", AsyncMock(return_value=followup))
 
-    with patch.object(litellm, "acompletion", AsyncMock(return_value=followup)):
-        result = await maybe_run_chat_completion_agentic_loop(
-            response=_tool_call_model_response(),
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "what is 6*7?"}],
-            optional_params={},
-            kwargs={
-                "_code_interpreter_interception_active": True,
-                "_code_interpreter_interception_converted_stream": True,
-            },
-            logging_obj=_real_logging_obj(),
-            custom_llm_provider="openai",
-            stream=True,
-        )
+    result = await maybe_run_chat_completion_agentic_loop(
+        response=_tool_call_model_response(),
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        optional_params={},
+        kwargs={
+            "_code_interpreter_interception_active": True,
+            "_code_interpreter_interception_converted_stream": True,
+        },
+        logging_obj=_real_logging_obj(),
+        custom_llm_provider="openai",
+        stream=True,
+    )
 
     assert isinstance(result, CustomStreamWrapper)
     chunks = [chunk async for chunk in result]
@@ -467,7 +471,7 @@ async def test_converted_stream_result_is_async_iterable_after_the_loop_runs(
 
 @pytest.mark.asyncio
 async def test_converted_stream_result_is_async_iterable_without_a_tool_call(
-    restore_callbacks,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """The same holds when the model never calls the tool.
 
@@ -475,7 +479,7 @@ async def test_converted_stream_result_is_async_iterable_without_a_tool_call(
     original response in streamed form. That path had the same defect, which is
     why a plain assistant reply was enough to trigger the failure.
     """
-    litellm.callbacks = []
+    monkeypatch.setattr(litellm, "callbacks", [])
 
     result = await maybe_run_chat_completion_agentic_loop(
         response=_plain_model_response("no tool needed"),
