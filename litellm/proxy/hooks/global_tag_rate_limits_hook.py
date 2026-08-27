@@ -99,6 +99,7 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _extract_key_hash,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _fixed_length_identity,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _LimitUnit,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
+    _order_tags_for_identity_resolution,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _partition_key,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _PartitionKey,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
     _PartitionOperations,  # pyright: ignore[reportPrivateUsage]  # reused across module boundaries, see module docstring
@@ -122,6 +123,20 @@ if TYPE_CHECKING:
     Span: TypeAlias = _Span
 else:
     Span: TypeAlias = object
+
+
+def _entry_applies_any_admitted_model(
+    entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str | None, admitted_models: frozenset[str]
+) -> bool:
+    """Same as `_entry_applies`, except an `apply_to_models`-scoped entry
+    counts as applying if ANY model an admission attempt for this call_id
+    saw was in scope -- not just whichever model the call ultimately served.
+    A `_pre_call_with_fallbacks` retry re-admits with a different model for
+    the same call_id, and an entry that matched an earlier attempt must
+    still get its success-time accounting."""
+    if not admitted_models:
+        return _entry_applies(entry, tags, key_alias, None)
+    return any(_entry_applies(entry, tags, key_alias, model) for model in admitted_models)
 
 
 def _hash_tag(entry: TagRateLimitEntry, unit: _LimitUnit, tag_value: str, key_hash: str | None) -> str:
@@ -183,11 +198,13 @@ class _GlobalTagRateLimitStash:
     """
 
     admission_time: float | None = None
-    # The caller-facing `model` admission read from `data.get("model")`, so
-    # async_log_success_event's tokens/dollars accounting gates
-    # apply_to_models against the same, originally-requested model admission
-    # decided on -- not whatever model a later fallback actually served.
-    model: str | None = None
+    # Every model any admission attempt for this call_id has classified
+    # entries against, accumulated rather than overwritten: a
+    # _pre_call_with_fallbacks retry re-runs admission with a *different*
+    # model for the same call_id, and an apply_to_models entry that matched
+    # an earlier attempt must still get its accounting at success time even
+    # though the request ultimately serves from a later attempt's model.
+    admitted_models: frozenset[str] = field(default_factory=frozenset)
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
     # "requests" keys already charged for this call_id -- veria-ai finding:
     # ProxyBaseLLMRequestProcessing._pre_call_with_fallbacks reruns the whole
@@ -401,6 +418,16 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 )
 
     @staticmethod
+    def _record_admitted_model(stash: "_GlobalTagRateLimitStash", model: str | None, renewal_allowed: bool) -> None:
+        """Only called once this admission attempt has cleared every check
+        without raising -- a rejected attempt's model must never join
+        admitted_models, or a later successful attempt's accounting could
+        wrongly credit an apply_to_models entry that never actually admitted
+        this request under that model."""
+        if renewal_allowed and model is not None:
+            stash.admitted_models = stash.admitted_models | frozenset((model,))
+
+    @staticmethod
     def _ttl_for(unit: _LimitUnit, entry: TagRateLimitEntry) -> int:
         if unit == "concurrency":
             requested_ttl: Final = entry.key_ttl_seconds if entry.key_ttl_seconds is not None else entry.period_seconds
@@ -500,7 +527,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 "error": "tag_rate_limit_exceeded",
                 "type": unit,
                 "tag_id": entry.tag_id,
-                "tag_value": tag_value,
+                # tag_value deliberately excluded: it can resolve from
+                # inherited_tags (server-assigned key/team/project metadata),
+                # and echoing it back would disclose that identity to the
+                # caller. verbose_proxy_logger.debug above still logs it
+                # server-side for observability.
                 "limit_name": entry.name,
                 "limit": entry.limit,
                 "period_seconds": entry.period_seconds,
@@ -536,7 +567,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         stash: Final = _claim_stash_for_data(data)
 
         metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(data)
-        tags: Final = _get_tags_from_request_kwargs(data, metadata_variable_name=metadata_variable_name)
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(data, metadata_variable_name=metadata_variable_name),
+            data,
+            metadata_variable_name,
+        )
         key_alias: Final = user_api_key_dict.key_alias
         key_hash: Final = user_api_key_dict.api_key
         model: Final = data.get("model") if isinstance(data.get("model"), str) else None
@@ -551,9 +586,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
         now: Final = self._time_provider().timestamp()
         stash.admission_time = now
-        stash.model = model
         classified: Final = self._classify(config, tags, key_alias, key_hash, now, model)
         if not classified:
+            self._record_admitted_model(stash, model, renewal_allowed)
             return data
 
         read_only_checks: Final = tuple(c for c in classified if not c.is_atomic)
@@ -637,39 +672,52 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if request_keys:
                 stash.charged_request_keys.extend(request_keys)  # mutable-ok: see field's own docstring
 
+        self._record_admitted_model(stash, model, renewal_allowed)
         return data
 
-    async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
-        stash: Final = _stash_for_call(_call_id_from_kwargs(request_data))
+    async def _release_pending_for_call_id(self, request_kwargs: Mapping[str, object]) -> None:
+        stash: Final = _stash_for_call(_call_id_from_kwargs(request_kwargs))
         if stash is None or not stash.pending_concurrency_keys:
             return
         release_keys: Final = tuple(stash.pending_concurrency_keys)
         stash.pending_concurrency_keys.clear()
         await self._release_keys(release_keys)
 
+    async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
+        await self._release_pending_for_call_id(request_data)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,  # mutable-ok: must match CustomLogger.async_post_call_failure_hook's own base signature exactly
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        """
+        A request that never reaches Router (every fallback model also
+        rejected, or none configured) never runs the actual LLM call, so
+        neither async_log_success_event nor async_log_failure_event -- both
+        tied to that call's own wrapper -- ever fires for it. This is the
+        only remaining release path for a reservation from an earlier,
+        successful admission attempt in the same _pre_call_with_fallbacks
+        chain. litellm_call_id survives proxy/utils.py's own stripping here
+        (only litellm_logging_obj is popped), so the same ContextVar-based
+        stash lookup as the other release hooks still works.
+        """
+        await self._release_pending_for_call_id(request_data)
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        # No special-case skip for this hook's own tag_rate_limit_exceeded
-        # rejection: that rejection never reaches the point where a
-        # concurrency reservation is queued (see async_pre_call_hook), so
-        # stash.pending_concurrency_keys is already empty in that case and
-        # the check below naturally no-ops. Skipping release based on the
-        # exception's error marker alone would be wrong here, since
-        # model_based_tag_rate_limits_hook raises the identical marker --
-        # that rejection can land after this hook already reserved a slot
-        # for this same request, and that slot must still be released.
-        stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
-        if stash is None or not stash.pending_concurrency_keys:
-            return
-        release_keys: Final = tuple(stash.pending_concurrency_keys)
-        stash.pending_concurrency_keys.clear()
-        await self._release_keys(release_keys)
+        # Always release regardless of which hook raised: this hook's own
+        # rejection never reserves a slot, so pending_concurrency_keys is
+        # already empty in that case and the check below no-ops; a rejection
+        # from model_based_tag_rate_limits_hook (same error marker) can still
+        # land after this hook already reserved its own slot.
+        await self._release_pending_for_call_id(kwargs)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
         if stash is not None and stash.pending_concurrency_keys:
-            release_keys: Final = tuple(stash.pending_concurrency_keys)
-            stash.pending_concurrency_keys.clear()
-            release_task: Final = asyncio.create_task(self._release_keys(release_keys))
+            release_task: Final = asyncio.create_task(self._release_pending_for_call_id(kwargs))
             _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
             release_task.add_done_callback(_BACKGROUND_TASKS.discard)
 
@@ -690,7 +738,11 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
         key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
 
-        tags: Final = _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
+            kwargs,
+            metadata_variable_name,
+        )
         if not tags:
             return
 
@@ -699,7 +751,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if stash is not None and stash.admission_time is not None
             else self._time_provider().timestamp()
         )
-        model: Final = stash.model if stash is not None else None
+        admitted_models: Final = stash.admitted_models if stash is not None else frozenset()
         increment_by_unit: Final[Mapping[_LimitUnit, float]] = MappingProxyType(
             {
                 "tokens": float(standard_logging_object.get("total_tokens") or 0),
@@ -716,7 +768,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies(entry, tags, key_alias, model):
+                if not _entry_applies_any_admitted_model(entry, tags, key_alias, admitted_models):
                     continue
                 increment_value = increment_by_unit[unit]
                 if increment_value == 0:
