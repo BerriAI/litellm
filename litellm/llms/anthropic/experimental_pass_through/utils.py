@@ -1,8 +1,21 @@
 import os
-from typing import Optional
+from typing import Final
 
 import litellm
 from litellm.types.utils import ModelInfo
+
+OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH: Final = 64
+
+
+def prompt_cache_key_from_user_id(user_id: object) -> str | None:
+    if user_id is None:
+        return None
+    return str(user_id)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+
+
+def local_model_name(model: str, custom_llm_provider: object) -> str:
+    """The id the provider itself knows, for reporting back to the caller in ``message_start``."""
+    return model.removeprefix(f"{custom_llm_provider}/") if isinstance(custom_llm_provider, str) else model
 
 
 def is_reasoning_auto_summary_enabled() -> bool:
@@ -13,7 +26,7 @@ def is_reasoning_auto_summary_enabled() -> bool:
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
 ) -> str:
     """
     Normalize a reasoning effort value based on model capabilities.
@@ -29,7 +42,7 @@ def normalize_reasoning_effort_value(
 
     from litellm.utils import get_model_info
 
-    model_info: Optional[ModelInfo] = None
+    model_info: ModelInfo | None = None
     try:
         model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:

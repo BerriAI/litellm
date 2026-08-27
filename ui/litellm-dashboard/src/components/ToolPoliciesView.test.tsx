@@ -1,9 +1,14 @@
 import React from "react";
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../tests/test-utils";
 import ToolPoliciesView from "./ToolPoliciesView";
+
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
 
 vi.mock("@/components/ToolDetail", () => ({
   ToolDetail: ({ toolName, onBack }: { toolName: string; onBack: () => void }) => (
@@ -26,6 +31,18 @@ vi.mock("@/components/ToolPolicies/ToolPoliciesPanel", () => ({
 }));
 
 describe("ToolPoliciesView", () => {
+  beforeEach(() => {
+    can.mockReset().mockReturnValue(true);
+  });
+
+  it("should show an admin-only notice instead of the overview when the caller lacks access", () => {
+    can.mockReturnValue(false);
+    renderWithProviders(<ToolPoliciesView accessToken="token" />);
+
+    expect(screen.getByText(/only available to admin users/i)).toBeInTheDocument();
+    expect(screen.queryByText("Tool Policies Overview")).not.toBeInTheDocument();
+  });
+
   it("should render the overview by default", () => {
     renderWithProviders(<ToolPoliciesView accessToken="token" />);
 

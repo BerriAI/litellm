@@ -1,6 +1,7 @@
+import copy
 import enum
 import re
-from typing import Any, List, Optional, Tuple, cast
+from typing import Any, Final, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -11,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
+    filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -28,14 +30,22 @@ class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
 
 
+NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
+    "thinking_blocks",
+    "reasoning_content",
+    "provider_specific_fields",
+    "cache_control",
+)
+
+
 class AzureAIStudioConfig(OpenAIConfig):
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
             model_supports_tool_choice = False
         supported_params = super().get_supported_openai_params(model)
         if not model_supports_tool_choice:
-            filtered_supported_params = []
+            filtered_supported_params: Final = []
             for param in supported_params:
                 if param != "tool_choice":
                     filtered_supported_params.append(param)
@@ -53,7 +63,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         if "grok" in model:
             # Reuse Xai method for Grok model
-            xai_config = XAIChatConfig()
+            xai_config: Final = XAIChatConfig()
             return xai_config._supports_stop_reason(model)
         return True
 
@@ -61,11 +71,11 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key:
             if api_base and self._should_use_api_key_header(api_base):
@@ -85,20 +95,20 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        parsed_url = urlparse(api_base)
-        host = parsed_url.hostname
+        parsed_url: Final = urlparse(api_base)
+        host: Final = parsed_url.hostname
         if host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")):
             return True
         return False
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Constructs a complete URL for the API request.
@@ -120,13 +130,13 @@ class AzureAIStudioConfig(OpenAIConfig):
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
             )
-        original_url = httpx.URL(api_base)
+        original_url: Final = httpx.URL(api_base)
 
         # Extract api_version or use default
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
+        api_version: Final = cast(str | None, litellm_params.get("api_version"))
 
         # Create a new dictionary with existing params
-        query_params = dict(original_url.params)
+        query_params: Final = dict(original_url.params)
 
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
@@ -139,11 +149,11 @@ class AzureAIStudioConfig(OpenAIConfig):
             new_url = _add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
 
         # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params=query_params)
+        final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
 
-    def get_required_params(self) -> List[ProviderField]:
+    def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""
         return [
             ProviderField(
@@ -162,15 +172,29 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
-    ) -> List:
+    ) -> list:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
-            1. Transforms list content to a string.
-            2. If message contains an image or audio, send as is (user-intended)
+            1. Strips message fields that are not part of the OpenAI chat-completions
+               schema (thinking_blocks, reasoning_content, provider_specific_fields,
+               cache_control).
+               Azure AI Foundry backends set additionalProperties=false and reject
+               these with "Extra inputs are not permitted", which breaks multi-turn
+               Anthropic-format clients that echo thinking blocks back as history.
+            2. Transforms list content to a string.
+            3. If message contains an image or audio, send as is (user-intended)
+
+        Operates on a deep copy so the caller's messages keep their thinking blocks
+        and provider metadata, which a fallback to another provider still needs.
         """
-        for message in messages:
+        stripped_messages: Final = copy.deepcopy(messages)
+        for message in stripped_messages:
+            message_dict = cast(dict, message)  # cast-ok: TypedDict is a runtime dict stripped on our copy
+            for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
+                filter_value_from_dict(message_dict, field)
+
             # Do nothing if the message contains an image or audio
             if _audio_or_image_in_message_content(message):
                 continue
@@ -178,9 +202,9 @@ class AzureAIStudioConfig(OpenAIConfig):
             texts = convert_content_list_to_str(message=message)
             if texts:
                 message["content"] = texts
-        return messages
+        return stripped_messages
 
-    def _is_azure_openai_model(self, model: str, api_base: Optional[str]) -> bool:
+    def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
         try:
             if "/" in model:
                 model = model.split("/", 1)[1]
@@ -198,27 +222,27 @@ class AzureAIStudioConfig(OpenAIConfig):
     def _get_openai_compatible_provider_info(
         self,
         model: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         custom_llm_provider: str,
-    ) -> Tuple[Optional[str], Optional[str], str]:
+    ) -> tuple[str | None, str | None, str]:
         api_base = api_base or get_secret_str("AZURE_AI_API_BASE")
-        dynamic_api_key = api_key or get_secret_str("AZURE_AI_API_KEY")
+        dynamic_api_key: Final = api_key or get_secret_str("AZURE_AI_API_KEY")
 
         if self._is_azure_openai_model(model=model, api_base=api_base):
-            verbose_logger.debug("Model={} is Azure OpenAI model. Setting custom_llm_provider='azure'.".format(model))
+            verbose_logger.debug("Model=%s is Azure OpenAI model. Setting custom_llm_provider='azure'.", model)
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
@@ -231,12 +255,12 @@ class AzureAIStudioConfig(OpenAIConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         model_response.model = f"azure_ai/{model}"
         return super().transform_response(
@@ -248,7 +272,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            encoding=encoding,
+            encoding=encoding if encoding is not None else None,
             api_key=api_key,
             json_mode=json_mode,
         )
@@ -256,8 +280,8 @@ class AzureAIStudioConfig(OpenAIConfig):
     def should_retry_llm_api_inside_llm_translation_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: dict
     ) -> bool:
-        should_drop_params = litellm_params.get("drop_params") or litellm.drop_params
-        error_text = e.response.text
+        should_drop_params: Final = litellm_params.get("drop_params") or litellm.drop_params
+        error_text: Final = e.response.text
 
         if "Extra inputs are not permitted" in error_text:
             if should_drop_params or self._error_has_tool_level_extra_fields(error_text):
@@ -276,8 +300,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         return 2
 
     def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
-        error_text = e.response.text
-        _messages = cast(Optional[List[AllMessageValues]], request_data.get("messages"))
+        error_text: Final = e.response.text
+        _messages: Final = cast(list[AllMessageValues] | None, request_data.get("messages"))
         if "unknown field: parameter index is not a valid field" in error_text and _messages is not None:
             litellm.remove_index_from_tool_calls(
                 messages=_messages,
@@ -286,12 +310,12 @@ class AzureAIStudioConfig(OpenAIConfig):
             request_data = self._drop_extra_params_from_request_data(request_data, error_text)
         if "Extra inputs are not permitted" in error_text and self._error_has_tool_level_extra_fields(error_text):
             request_data = self._drop_tool_level_extra_fields(request_data, error_text)
-        data = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
+        data: Final = drop_params_from_unprocessable_entity_error(e=e, data=request_data)
         return data
 
     def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
-        fields_to_drop = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
-        tools = request_data.get("tools")
+        fields_to_drop: Final = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
+        tools: Final = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
             for tool in tools:
                 if isinstance(tool, dict):
@@ -300,25 +324,25 @@ class AzureAIStudioConfig(OpenAIConfig):
         return request_data
 
     def _drop_extra_params_from_request_data(self, request_data: dict, error_text: str) -> dict:
-        params_to_drop = self._extract_params_to_drop_from_error_text(error_text)
+        params_to_drop: Final = self._extract_params_to_drop_from_error_text(error_text)
         if params_to_drop:
             for param in params_to_drop:
                 if param in request_data:
                     request_data.pop(param, None)
         return request_data
 
-    def _extract_params_to_drop_from_error_text(self, error_text: str) -> Optional[List[str]]:
+    def _extract_params_to_drop_from_error_text(self, error_text: str) -> list[str] | None:
         """
         Error text looks like this"
             "Extra parameters ['stream_options', 'extra-parameters'] are not allowed when extra-parameters is not set or set to be 'error'.
         """
-        match = re.search(r"\[(.*?)\]", error_text)
+        match: Final = re.search(r"\[(.*?)\]", error_text)
         if not match:
             return []
 
         # Parse the extracted string into a list of parameter names
-        params_str = match.group(1)
-        params = []
+        params_str: Final = match.group(1)
+        params: Final = []
         for param in params_str.split(","):
             # Clean up the parameter name (remove quotes, spaces)
             clean_param = param.strip().strip("'").strip('"')

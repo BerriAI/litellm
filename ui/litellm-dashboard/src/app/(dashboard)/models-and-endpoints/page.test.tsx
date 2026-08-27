@@ -7,6 +7,7 @@ import ModelsAndEndpointsPage from "./page";
 
 vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="panel-all-models" /> }));
 vi.mock("./panels/AddModelPanel", () => ({ default: () => <div data-testid="panel-add" /> }));
+vi.mock("./panels/AutoRoutersTabPanel", () => ({ default: () => <div data-testid="panel-auto-routers" /> }));
 vi.mock("./panels/LlmCredentialsPanel", () => ({ default: () => <div data-testid="panel-credentials" /> }));
 vi.mock("./panels/PassThroughPanel", () => ({ default: () => <div data-testid="panel-pass-through" /> }));
 vi.mock("./panels/HealthStatusPanel", () => ({ default: () => <div data-testid="panel-health" /> }));
@@ -75,14 +76,14 @@ describe("ModelsAndEndpointsPage", () => {
     const { getByRole, getByTestId, queryByTestId } = renderPage();
     await user.click(getByRole("tab", { name: "Health Status" }));
     expect(getByTestId("panel-health")).toBeInTheDocument();
-    expect(queryByTestId("panel-all-models")).toBeNull();
+    expect(queryByTestId("panel-all-models")).not.toBeInTheDocument();
   });
 
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {
     detailState.modelId = "abc-123";
     const { getByTestId, queryByRole } = renderPage();
     expect(getByTestId("model-info")).toHaveTextContent("model:abc-123");
-    expect(queryByRole("tab", { name: "All Models" })).toBeNull();
+    expect(queryByRole("tab", { name: "All Models" })).not.toBeInTheDocument();
   });
 
   it("renders the team detail overlay from the ?team drill-in", () => {
@@ -94,7 +95,37 @@ describe("ModelsAndEndpointsPage", () => {
   it("hides admin-only tabs for a non-admin user", () => {
     mockUseAuthorized.mockReturnValue(NON_ADMIN);
     const { queryByRole } = renderPage();
-    expect(queryByRole("tab", { name: "LLM Credentials" })).toBeNull();
-    expect(queryByRole("tab", { name: "Health Status" })).toBeNull();
+    expect(queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
+    expect(queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
+  });
+
+  // Auto-routers are excluded from the All Models table, so this tab is their home: the only
+  // place in the product to list, create, edit or delete one.
+  describe("Auto-Routers tab", () => {
+    it("sits third, after All Models and Add Model", () => {
+      const { getAllByRole } = renderPage();
+
+      const tabs = getAllByRole("tab").map((tab) => tab.textContent);
+      expect(tabs[0]).toContain("All Models");
+      expect(tabs[1]).toBe("Add Model");
+      expect(tabs[2]).toContain("Auto-Routers");
+      // Badged Beta while the tab settles; BetaBadge renders the label text.
+      expect(tabs[2]).toContain("Beta");
+    });
+
+    it("renders its panel when selected", async () => {
+      const user = userEvent.setup();
+      const { getByRole, getByTestId } = renderPage();
+
+      await user.click(getByRole("tab", { name: /Auto-Routers/ }));
+      expect(getByTestId("panel-auto-routers")).toBeInTheDocument();
+    });
+
+    it("is hidden from non-admins, who cannot write models", () => {
+      mockUseAuthorized.mockReturnValue(NON_ADMIN);
+      const { queryByRole } = renderPage();
+
+      expect(queryByRole("tab", { name: /Auto-Routers/ })).not.toBeInTheDocument();
+    });
   });
 });

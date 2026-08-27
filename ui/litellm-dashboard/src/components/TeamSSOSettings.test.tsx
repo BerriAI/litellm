@@ -1,11 +1,10 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../tests/test-utils";
+import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../tests/test-utils";
 import TeamSSOSettings from "./TeamSSOSettings";
 import * as networking from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("./networking");
 
@@ -37,6 +36,46 @@ vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: vi.fn((model: string) => model),
 }));
 
+vi.mock("./common_components/OrganizationDropdown", () => ({
+  default: ({
+    organizations,
+    value,
+    onChange,
+    placeholder,
+    loading,
+  }: {
+    organizations?: { organization_id: string; organization_alias: string }[] | null;
+    value?: string;
+    onChange?: (value: string) => void;
+    placeholder?: string;
+    loading?: boolean;
+  }) => (
+    <div>
+      <select
+        data-testid="organization-dropdown"
+        data-loading={String(Boolean(loading))}
+        aria-label="Default organization"
+        value={value ?? ""}
+        onChange={(e) => onChange?.(e.target.value)}
+      >
+        <option value="">{placeholder}</option>
+        {organizations?.map((org) => (
+          <option key={org.organization_id} value={org.organization_id}>
+            {org.organization_alias} ({org.organization_id})
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        data-testid="organization-dropdown-clear"
+        onClick={() => onChange?.(undefined as unknown as string)}
+      >
+        Clear organization
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("./ModelSelect/ModelSelect", () => {
   const ModelSelect = ({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) => (
     <select
@@ -57,95 +96,15 @@ vi.mock("./ModelSelect/ModelSelect", () => {
   return { ModelSelect };
 });
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  const React = await import("react");
-
-  const SelectComponent = ({
-    value,
-    onChange,
-    mode,
-    children,
-    className,
-  }: {
-    value: any;
-    onChange: (value: any) => void;
-    mode?: string;
-    children: React.ReactNode;
-    className?: string;
-  }) => {
-    const isMultiple = mode === "multiple";
-    const selectValue = isMultiple ? (Array.isArray(value) ? value : []) : value || "";
-    return React.createElement(
-      "select",
-      {
-        multiple: isMultiple,
-        value: selectValue,
-        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
-          const selectedValues = Array.from(e.target.selectedOptions, (option) => option.value);
-          onChange(isMultiple ? selectedValues : selectedValues[0] || undefined);
-        },
-        className,
-        "aria-label": "Select",
-        role: "listbox",
-      },
-      children,
-    );
-  };
-  SelectComponent.displayName = "Select";
-
-  const SelectOption = ({
-    value: optionValue,
-    children: optionChildren,
-  }: {
-    value: string;
-    children: React.ReactNode;
-  }) => React.createElement("option", { value: optionValue }, optionChildren);
-  SelectOption.displayName = "SelectOption";
-  SelectComponent.Option = SelectOption;
-
-  const Spin = ({ size }: { size?: string }) =>
-    React.createElement("div", { "data-testid": "spinner", "data-size": size });
-  Spin.displayName = "Spin";
-
-  const InputNumber = ({
-    value,
-    onChange,
-    placeholder,
-    prefix,
-  }: {
-    value: number | null;
-    onChange: (value: number | null) => void;
-    placeholder?: string;
-    prefix?: string;
-    min?: number;
-    className?: string;
-    style?: React.CSSProperties;
-  }) =>
-    React.createElement("input", {
-      type: "number",
-      value: value ?? "",
-      onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
-        const v = e.target.value === "" ? null : Number(e.target.value);
-        onChange(v);
-      },
-      placeholder,
-      "data-prefix": prefix,
-      "aria-label": "number input",
-    });
-  InputNumber.displayName = "InputNumber";
-
-  return {
-    ...actual,
-    Spin,
-    Select: SelectComponent,
-    InputNumber,
-  };
-});
-
 const mockGetDefaultTeamSettings = vi.mocked(networking.getDefaultTeamSettings);
 const mockUpdateDefaultTeamSettings = vi.mocked(networking.updateDefaultTeamSettings);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockOrganizationListCall = vi.mocked(networking.organizationListCall);
+const mockToast = vi.mocked(toast);
+
+const MOCK_ORGANIZATIONS = [
+  { organization_id: "org-1", organization_alias: "Engineering" },
+  { organization_id: "org-2", organization_alias: "Sales" },
+];
 
 describe("TeamSSOSettings", () => {
   const defaultProps = {
@@ -167,16 +126,19 @@ describe("TeamSSOSettings", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
+    mockOrganizationListCall.mockResolvedValue(MOCK_ORGANIZATIONS);
   });
 
   // --- Loading & Error States ---
 
-  it("should show loading spinner while fetching settings", () => {
+  it("should show an accessible loading state while fetching settings", () => {
     mockGetDefaultTeamSettings.mockImplementation(() => new Promise(() => {}));
 
-    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+    const { container } = renderWithProviders(<TeamSSOSettings {...defaultProps} />);
 
-    expect(screen.getByTestId("spinner")).toBeInTheDocument();
+    expect(container.querySelector('[aria-busy="true"]')).toBeInTheDocument();
+    expect(screen.queryByText("Default Team Settings")).not.toBeInTheDocument();
   });
 
   it("should display error message when fetch fails", async () => {
@@ -189,7 +151,7 @@ describe("TeamSSOSettings", () => {
         screen.getByText("No team settings available or you do not have permission to view them."),
       ).toBeInTheDocument();
     });
-    expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to fetch team settings");
+    expect(mockToast.fromError).toHaveBeenCalledWith("Failed to fetch team settings");
   });
 
   it("should not fetch settings when access token is null", async () => {
@@ -384,14 +346,18 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
 
     await waitFor(() => {
-      const numberInputs = screen.getAllByLabelText("number input");
-      // max_budget, tpm_limit, rpm_limit
-      expect(numberInputs.length).toBe(3);
+      expect(screen.getAllByRole("spinbutton")).toHaveLength(3);
     });
   });
 
-  it("should show permissions multi-select in edit mode", async () => {
+  it("should let users add a permission and persist it", async () => {
     mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: {
+        ...mockSettingsResponse.values,
+        team_member_permissions: ["/key/generate", "/key/update", "/key/delete"],
+      },
+    });
 
     renderWithProviders(<TeamSSOSettings {...defaultProps} />);
 
@@ -400,11 +366,24 @@ describe("TeamSSOSettings", () => {
     });
 
     await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+    const permissionComboboxes = screen.getAllByRole("combobox");
+    const permissionCombobox = permissionComboboxes[permissionComboboxes.length - 1];
+    expect(permissionCombobox).toBeInTheDocument();
+    await userEvent.click(permissionCombobox!);
+    const deletePermissionOptions = await screen.findAllByText("/key/delete");
+    await userEvent.click(deletePermissionOptions[deletePermissionOptions.length - 1]);
+    await userEvent.keyboard("{Escape}");
+
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
 
     await waitFor(() => {
-      const listboxes = screen.getAllByRole("listbox");
-      expect(listboxes.length).toBeGreaterThan(0);
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", {
+        ...mockSettingsResponse.values,
+        organization_id: null,
+        team_member_permissions: ["/key/generate", "/key/update", "/key/delete"],
+      });
     });
+    expect(screen.getByText("/key/delete")).toBeInTheDocument();
   });
 
   // --- Save ---
@@ -428,11 +407,129 @@ describe("TeamSSOSettings", () => {
       expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", expect.any(Object));
     });
 
-    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Default team settings updated successfully");
+    expect(mockToast.success).toHaveBeenCalledWith("Default team settings updated successfully");
 
     // Should exit edit mode after save
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+  });
+
+  // --- Default Organization ---
+
+  it("should display the default organization alias and id in view mode", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, organization_id: "org-2" },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Sales (org-2)")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("Teams created without an explicit organization are assigned to this organization."),
+    ).toBeInTheDocument();
+  });
+
+  it("should fall back to the raw organization id when it is not in the organization list", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, organization_id: "org-deleted" },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("org-deleted")).toBeInTheDocument();
+    });
+  });
+
+  it("should display 'Not set' when the settings payload has no organization_id", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Not set")).toBeInTheDocument();
+    });
+  });
+
+  it("should populate the organization dropdown with the fetched organizations in edit mode", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+
+    await waitFor(() => {
+      const dropdown = screen.getByTestId("organization-dropdown");
+      expect(within(dropdown).getByRole("option", { name: "Engineering (org-1)" })).toBeInTheDocument();
+      expect(within(dropdown).getByRole("option", { name: "Sales (org-2)" })).toBeInTheDocument();
+    });
+  });
+
+  it("should send the selected organization_id when saving", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: { ...mockSettingsResponse.values, organization_id: "org-2" },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "Sales (org-2)" })).toBeInTheDocument();
+    });
+    await userEvent.selectOptions(screen.getByTestId("organization-dropdown"), "org-2");
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", {
+        ...mockSettingsResponse.values,
+        organization_id: "org-2",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Sales (org-2)")).toBeInTheDocument();
+    });
+  });
+
+  it("should send a null organization_id when the selection is cleared", async () => {
+    mockGetDefaultTeamSettings.mockResolvedValue({
+      values: { ...mockSettingsResponse.values, organization_id: "org-2" },
+    });
+    mockUpdateDefaultTeamSettings.mockResolvedValue({
+      settings: { ...mockSettingsResponse.values, organization_id: null },
+    });
+
+    renderWithProviders(<TeamSSOSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /Edit Settings/i }));
+    await userEvent.click(screen.getByTestId("organization-dropdown-clear"));
+    await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateDefaultTeamSettings).toHaveBeenCalledWith("test-token", {
+        ...mockSettingsResponse.values,
+        organization_id: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Not set")).toBeInTheDocument();
     });
   });
 
@@ -450,7 +547,7 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to update team settings");
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to update team settings");
     });
   });
 

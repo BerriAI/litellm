@@ -3,78 +3,64 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VectorStore } from "./types";
 import VectorStoreSelector from "./VectorStoreSelector";
 
-// Mock dependencies
 const mockVectorStoreListCall = vi.fn();
 
 vi.mock("../networking", () => ({
-  vectorStoreListCall: (...args: any[]) => mockVectorStoreListCall(...args),
+  vectorStoreListCall: (...args: unknown[]) => mockVectorStoreListCall(...args),
 }));
 
-// Mock antd Select component
-vi.mock("antd", () => ({
-  Select: vi.fn(),
+vi.mock("@/components/shared/MultiSelect", () => ({
+  MultiSelect: vi.fn(),
 }));
 
-// Import the mocked Select
-import { Select as MockedSelect } from "antd";
+import { MultiSelect as MockedMultiSelect } from "@/components/shared/MultiSelect";
 
-// Configure the mock to render a simple div with data attributes
-(MockedSelect as any).mockImplementation((props: any) => {
-  const {
-    onChange,
-    value,
-    placeholder,
-    loading,
-    className,
-    disabled,
-    options,
-    mode,
-    showSearch,
-    optionFilterProp,
-    style,
-  } = props;
+(MockedMultiSelect as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+  (props: {
+    onValueChange?: (value: string[]) => void;
+    value?: string[];
+    placeholder?: string;
+    loading?: boolean;
+    className?: string;
+    disabled?: boolean;
+    options?: Array<{ value: string; label: string; description?: string }>;
+  }) => {
+    const { onValueChange, value, placeholder, loading, className, disabled, options } = props;
 
-  return (
-    <div
-      data-testid="vector-store-select"
-      data-loading={loading}
-      data-disabled={disabled}
-      data-mode={mode}
-      data-show-search={showSearch}
-      data-option-filter-prop={optionFilterProp}
-      data-placeholder={placeholder}
-      data-value={value !== undefined ? JSON.stringify(value) : undefined}
-      data-options={JSON.stringify(options)}
-      className={className}
-      style={style}
-      onClick={(e: any) => {
-        // For testing purposes, allow simulating different selection behaviors
-        // The test can control this by setting data attributes on the element
-        const testSelection = e.target.getAttribute("data-test-selection");
-        if (testSelection && onChange) {
-          onChange(JSON.parse(testSelection));
-        } else if (onChange && options?.length > 0) {
-          // Default behavior: select first option
-          onChange([options[0].value]);
-        }
-      }}
-    >
-      {options?.map((opt: any) => (
-        <div
-          key={opt.value}
-          data-option-value={opt.value}
-          data-option-label={opt.label}
-          data-option-title={opt.title}
-          data-testid={`option-${opt.value}`}
-        >
-          {opt.label}
-        </div>
-      ))}
-    </div>
-  );
-});
+    return (
+      <div
+        data-testid="vector-store-select"
+        data-loading={loading}
+        data-disabled={disabled}
+        data-placeholder={placeholder}
+        data-value={value !== undefined ? JSON.stringify(value) : undefined}
+        data-options={JSON.stringify(options)}
+        className={className}
+        onClick={(e) => {
+          const testSelection = (e.target as HTMLElement).getAttribute("data-test-selection");
+          if (testSelection && onValueChange) {
+            onValueChange(JSON.parse(testSelection) as string[]);
+          } else if (onValueChange && options && options.length > 0) {
+            onValueChange([options[0].value]);
+          }
+        }}
+      >
+        {options?.map((opt) => (
+          <div
+            key={opt.value}
+            data-option-value={opt.value}
+            data-option-label={opt.label}
+            data-option-description={opt.description}
+            data-testid={`option-${opt.value}`}
+          >
+            {opt.label}
+          </div>
+        ))}
+      </div>
+    );
+  },
+);
 
-// Test helpers
 const mockOnChange = vi.fn();
 const mockAccessToken = "test-token";
 
@@ -98,7 +84,6 @@ const mockVectorStores: VectorStore[] = [
   {
     vector_store_id: "store-3",
     custom_llm_provider: "pg_vector",
-    // No vector_store_name to test fallback to vector_store_id
     vector_store_description: "Store without name",
     created_at: "2024-01-03T00:00:00Z",
     updated_at: "2024-01-03T00:00:00Z",
@@ -110,7 +95,6 @@ const defaultProps = {
   accessToken: mockAccessToken,
 };
 
-// Helper functions
 const renderComponent = (props = {}) => {
   return render(<VectorStoreSelector {...defaultProps} {...props} />);
 };
@@ -124,7 +108,7 @@ const waitForDataFetch = async () => {
 const getSelectElement = () => screen.getByTestId("vector-store-select");
 
 const getOptionElements = () =>
-  screen.getAllByTestId(/^vector-store-select/).filter((el) => el.hasAttribute("data-option-value"));
+  screen.queryAllByTestId(/^option-/).filter((el) => el.hasAttribute("data-option-value"));
 
 describe("VectorStoreSelector", () => {
   beforeEach(() => {
@@ -142,56 +126,27 @@ describe("VectorStoreSelector", () => {
 
     it("should render with default placeholder", () => {
       renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-placeholder", "Select vector stores");
+      expect(getSelectElement()).toHaveAttribute("data-placeholder", "Select vector stores");
     });
 
     it("should render with custom placeholder", () => {
       renderComponent({ placeholder: "Choose stores" });
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-placeholder", "Choose stores");
+      expect(getSelectElement()).toHaveAttribute("data-placeholder", "Choose stores");
     });
 
     it("should apply custom className", () => {
       renderComponent({ className: "custom-class" });
-      const select = getSelectElement();
-      expect(select).toHaveClass("custom-class");
+      expect(getSelectElement()).toHaveClass("custom-class");
     });
 
     it("should render with disabled state", () => {
       renderComponent({ disabled: true });
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-disabled", "true");
+      expect(getSelectElement()).toHaveAttribute("data-disabled", "true");
     });
 
     it("should render with enabled state by default", () => {
       renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-disabled", "false");
-    });
-
-    it("should render with multiple mode", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-mode", "multiple");
-    });
-
-    it("should render with showSearch enabled", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-show-search", "true");
-    });
-
-    it("should render with optionFilterProp set to label", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-option-filter-prop", "label");
-    });
-
-    it("should render with full width style", () => {
-      renderComponent();
-      const select = getSelectElement();
-      expect(select).toHaveStyle({ width: "100%" });
+      expect(getSelectElement()).toHaveAttribute("data-disabled", "false");
     });
   });
 
@@ -207,10 +162,10 @@ describe("VectorStoreSelector", () => {
       const { rerender } = render(<VectorStoreSelector {...defaultProps} accessToken="" />);
       expect(mockVectorStoreListCall).not.toHaveBeenCalled();
 
-      rerender(<VectorStoreSelector {...defaultProps} accessToken={null as any} />);
+      rerender(<VectorStoreSelector {...defaultProps} accessToken={null as unknown as string} />);
       expect(mockVectorStoreListCall).not.toHaveBeenCalled();
 
-      rerender(<VectorStoreSelector {...defaultProps} accessToken={undefined as any} />);
+      rerender(<VectorStoreSelector {...defaultProps} accessToken={undefined as unknown as string} />);
       expect(mockVectorStoreListCall).not.toHaveBeenCalled();
     });
 
@@ -228,7 +183,7 @@ describe("VectorStoreSelector", () => {
     });
 
     it("should set loading state while fetching", async () => {
-      let resolvePromise: (value: any) => void;
+      let resolvePromise: (value: unknown) => void;
       const promise = new Promise((resolve) => {
         resolvePromise = resolve;
       });
@@ -247,8 +202,7 @@ describe("VectorStoreSelector", () => {
     it("should clear loading state after successful fetch", async () => {
       renderComponent();
       await waitForDataFetch();
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-loading", "false");
+      expect(getSelectElement()).toHaveAttribute("data-loading", "false");
     });
 
     it("should clear loading state after failed fetch", async () => {
@@ -258,8 +212,7 @@ describe("VectorStoreSelector", () => {
       renderComponent();
       await waitForDataFetch();
 
-      const select = getSelectElement();
-      expect(select).toHaveAttribute("data-loading", "false");
+      expect(getSelectElement()).toHaveAttribute("data-loading", "false");
       consoleErrorSpy.mockRestore();
     });
   });
@@ -280,7 +233,7 @@ describe("VectorStoreSelector", () => {
 
       const option1 = screen.getByText("My Store (store-1)");
       expect(option1).toBeInTheDocument();
-      expect(option1).toHaveAttribute("data-option-title", "A test store");
+      expect(option1).toHaveAttribute("data-option-description", "A test store");
     });
 
     it("should fallback to vector_store_id when vector_store_name is missing", async () => {
@@ -289,19 +242,18 @@ describe("VectorStoreSelector", () => {
 
       const option3 = screen.getByText("store-3 (store-3)");
       expect(option3).toBeInTheDocument();
-      // When vector_store_name is missing, title uses vector_store_description if available, otherwise vector_store_id
-      expect(option3).toHaveAttribute("data-option-title", "Store without name");
+      expect(option3).toHaveAttribute("data-option-description", "Store without name");
     });
 
-    it("should use vector_store_description as title when available", async () => {
+    it("should use vector_store_description as description when available", async () => {
       renderComponent();
       await waitForDataFetch();
 
       const option1 = screen.getByText("My Store (store-1)");
-      expect(option1).toHaveAttribute("data-option-title", "A test store");
+      expect(option1).toHaveAttribute("data-option-description", "A test store");
     });
 
-    it("should fallback to vector_store_id as title when vector_store_description is missing", async () => {
+    it("should omit description when vector_store_description is missing", async () => {
       const storesWithoutDescription: VectorStore[] = [
         {
           vector_store_id: "store-no-desc",
@@ -318,7 +270,7 @@ describe("VectorStoreSelector", () => {
       await waitForDataFetch();
 
       const option = screen.getByText("store-no-desc (store-no-desc)");
-      expect(option).toHaveAttribute("data-option-title", "store-no-desc");
+      expect(option).not.toHaveAttribute("data-option-description");
     });
 
     it("should use vector_store_id as option value", async () => {
@@ -337,8 +289,7 @@ describe("VectorStoreSelector", () => {
       renderComponent();
       await waitForDataFetch();
 
-      const options = getOptionElements();
-      expect(options.length).toBe(0);
+      expect(getOptionElements().length).toBe(0);
     });
 
     it("should handle response without data property", async () => {
@@ -347,8 +298,7 @@ describe("VectorStoreSelector", () => {
       renderComponent();
       await waitForDataFetch();
 
-      const options = getOptionElements();
-      expect(options.length).toBe(0);
+      expect(getOptionElements().length).toBe(0);
     });
   });
 
@@ -357,27 +307,21 @@ describe("VectorStoreSelector", () => {
       renderComponent({ value: ["store-1", "store-2"] });
       await waitForDataFetch();
 
-      const select = getSelectElement();
-      const dataValue = select.getAttribute("data-value");
-      expect(dataValue).toBe(JSON.stringify(["store-1", "store-2"]));
+      expect(getSelectElement()).toHaveAttribute("data-value", JSON.stringify(["store-1", "store-2"]));
     });
 
     it("should handle empty value array", async () => {
       renderComponent({ value: [] });
       await waitForDataFetch();
 
-      const select = getSelectElement();
-      const dataValue = select.getAttribute("data-value");
-      expect(dataValue).toBe(JSON.stringify([]));
+      expect(getSelectElement()).toHaveAttribute("data-value", JSON.stringify([]));
     });
 
     it("should handle undefined value", async () => {
       renderComponent({ value: undefined });
       await waitForDataFetch();
 
-      const select = getSelectElement();
-      const dataValue = select.getAttribute("data-value");
-      expect(dataValue).toBeNull(); // undefined value results in no data-value attribute
+      expect(getSelectElement()).not.toHaveAttribute("data-value");
     });
   });
 
@@ -387,7 +331,6 @@ describe("VectorStoreSelector", () => {
       await waitForDataFetch();
 
       const select = getSelectElement();
-      // Simulate selecting store-1 by setting test data attribute
       select.setAttribute("data-test-selection", '["store-1"]');
       fireEvent.click(select);
 
@@ -399,7 +342,6 @@ describe("VectorStoreSelector", () => {
       await waitForDataFetch();
 
       const select = getSelectElement();
-      // Simulate selecting multiple values
       select.setAttribute("data-test-selection", '["store-1", "store-2"]');
       fireEvent.click(select);
 
@@ -411,7 +353,6 @@ describe("VectorStoreSelector", () => {
       await waitForDataFetch();
 
       const select = getSelectElement();
-      // Simulate deselecting store-1
       select.setAttribute("data-test-selection", '["store-2"]');
       fireEvent.click(select);
 
@@ -450,7 +391,6 @@ describe("VectorStoreSelector", () => {
       renderComponent();
       await waitForDataFetch();
 
-      // Component should still render
       expect(getSelectElement()).toBeInTheDocument();
       consoleErrorSpy.mockRestore();
     });
@@ -474,8 +414,7 @@ describe("VectorStoreSelector", () => {
       await waitForDataFetch();
 
       expect(screen.getByText("minimal-store (minimal-store)")).toBeInTheDocument();
-      const option = screen.getByText("minimal-store (minimal-store)");
-      expect(option).toHaveAttribute("data-option-title", "minimal-store");
+      expect(screen.getByText("minimal-store (minimal-store)")).not.toHaveAttribute("data-option-description");
     });
 
     it("should handle very long vector store names", async () => {
@@ -495,8 +434,7 @@ describe("VectorStoreSelector", () => {
       renderComponent();
       await waitForDataFetch();
 
-      const expectedLabel = `${"A".repeat(200)} (store-long)`;
-      expect(screen.getByText(expectedLabel)).toBeInTheDocument();
+      expect(screen.getByText(`${"A".repeat(200)} (store-long)`)).toBeInTheDocument();
     });
 
     it("should handle special characters in vector store names", async () => {

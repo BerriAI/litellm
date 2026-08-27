@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -23,12 +24,12 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         """
         OPTIONAL
 
@@ -43,12 +44,12 @@ class BaseAnthropicMessagesConfig(ABC):
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         OPTIONAL
@@ -67,11 +68,11 @@ class BaseAnthropicMessagesConfig(ABC):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         pass
 
     @abstractmethod
@@ -89,11 +90,11 @@ class BaseAnthropicMessagesConfig(ABC):
         optional_params: dict,
         request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        stream: Optional[bool] = None,
-        fake_stream: Optional[bool] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
         """
         OPTIONAL
 
@@ -137,7 +138,7 @@ class BaseAnthropicMessagesConfig(ABC):
         raise NotImplementedError("Subclasses must implement this method")
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers
     ) -> "BaseLLMException":
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 

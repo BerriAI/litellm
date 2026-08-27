@@ -1,4 +1,4 @@
-from typing import Any, Literal, List
+from typing import Any, Literal
 
 
 class CustomDB:
@@ -13,21 +13,18 @@ class CustomDB:
         """
         Check if key valid
         """
-        pass
 
     def insert_data(self, value: Any, table_name: Literal["user", "key", "config"]):
         """
         For new key / user logic
         """
-        pass
 
     def update_data(self, key: str, value: Any, table_name: Literal["user", "key", "config"]):
         """
         For cost tracking logic
         """
-        pass
 
-    def delete_data(self, keys: List[str], table_name: Literal["user", "key", "config"]):
+    def delete_data(self, keys: list[str], table_name: Literal["user", "key", "config"]):
         """
         For /key/delete endpoint s
         """
@@ -38,7 +35,6 @@ class CustomDB:
         """
         For connecting to db and creating / updating any tables
         """
-        pass
 
     def disconnect(
         self,
@@ -46,4 +42,3 @@ class CustomDB:
         """
         For closing connection on server shutdown
         """
-        pass
