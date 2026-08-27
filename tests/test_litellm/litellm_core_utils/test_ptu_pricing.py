@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from litellm.litellm_core_utils.ptu_pricing import (
+    is_threshold_rate_key,
     ptu_config_error,
     ptu_identity_error,
     CUSTOM_PRICING_FIELDS,
@@ -163,6 +164,115 @@ def test_a_rate_the_deployment_declares_itself_is_zeroed_too():
 
     assert override is not None
     assert override[extra] == 0.0
+
+
+@pytest.mark.parametrize(
+    "threshold_field",
+    [
+        "input_cost_per_token_above_32k_tokens",
+        "output_cost_per_token_above_32k_tokens",
+        "cache_read_input_token_cost_above_32k_tokens",
+        "cache_creation_input_token_cost_above_32k_tokens",
+        "cache_creation_input_token_cost_above_1hr_above_32k_tokens",
+    ],
+)
+def test_arbitrary_threshold_rate_the_deployment_declares_is_zeroed_too(threshold_field):
+    """Threshold rates a deployment can declare but CustomPricingLiteLLMParams does not
+    enumerate (e.g. input_cost_per_token_above_32k_tokens) must be zeroed like any other
+    declared rate, or a PTU deployment bills per token past the threshold on top of the
+    hourly charge."""
+    assert threshold_field not in CUSTOM_PRICING_FIELDS
+    assert threshold_field not in PTU_ZEROED_PRICING_FIELDS
+
+    override = _with_flag(_VALID, declared={threshold_field: 9e-06})
+
+    assert override is not None
+    assert override.get(threshold_field, 9e-06) == 0.0
+
+
+@pytest.mark.parametrize(
+    "threshold_field",
+    [
+        "output_cost_per_token_above_32k_tokens_priority",
+        "cache_read_input_token_cost_above_32k_tokens_priority",
+    ],
+)
+def test_service_tier_qualified_threshold_rate_declared_is_zeroed_too(threshold_field):
+    """A tier-qualified threshold rate the deployment declares must be zeroed like every
+    other declared rate, or a PTU deployment bills per token past the threshold."""
+    assert threshold_field not in CUSTOM_PRICING_FIELDS
+    assert threshold_field not in PTU_ZEROED_PRICING_FIELDS
+
+    override = _with_flag(_VALID, declared={threshold_field: 9e-06})
+
+    assert override is not None
+    assert override.get(threshold_field, 9e-06) == 0.0
+
+
+@pytest.mark.parametrize(
+    "param_field",
+    [
+        "api_key_above_32k_tokens",
+        "secret_above_32k_tokens",
+        "credential_above_32k_tokens",
+        "custom_provider_param_above_32k_tokens",
+    ],
+)
+def test_threshold_like_non_pricing_params_are_left_alone(param_field):
+    """The threshold matcher must only cover the cost calculator's pricing base keys: a
+    deployment param that merely ends in _above_<N>k_tokens is not a charge and must keep
+    its value."""
+    override = _with_flag(_VALID, declared={param_field: "keep-me"})
+
+    assert override is not None
+    assert param_field not in override
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_cost_per_token_above_32k_tokens",
+        "output_cost_per_token_above_64k_tokens",
+        "cache_read_input_token_cost_above_128k_tokens",
+        "cache_creation_input_token_cost_above_200k_tokens",
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens",
+    ],
+)
+def test_is_threshold_rate_key_accepts_supported_threshold_rates(field):
+    assert is_threshold_rate_key(field)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_cost_per_token_above_32k_tokens_priority",
+        "output_cost_per_token_above_32k_tokens_flex",
+        "cache_read_input_token_cost_above_200k_tokens_priority",
+        "cache_creation_input_token_cost_above_32k_tokens_ultrafast",
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens_priority",
+    ],
+)
+def test_is_threshold_rate_key_accepts_service_tier_qualified_threshold_rates(field):
+    assert is_threshold_rate_key(field)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "api_key_above_32k_tokens",
+        "secret_above_32k_tokens",
+        "credential_above_32k_tokens",
+        "custom_provider_param_above_32k_tokens",
+        "api_key_above_32k_tokens_priority",
+        "secret_above_32k_tokens_flex",
+        "credential_above_200k_tokens_ultrafast",
+        "custom_provider_param_above_32k_tokens_priority",
+        "input_cost_per_token",
+        "tiered_pricing",
+    ],
+)
+def test_is_threshold_rate_key_rejects_non_pricing_fields(field):
+    assert not is_threshold_rate_key(field)
 
 
 def test_a_setting_that_is_not_a_charge_is_left_alone():

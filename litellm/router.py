@@ -304,6 +304,36 @@ def _cost_value_as_float(value: str | float | None) -> float | None:
         return None
 
 
+_CUSTOM_PRICING_THRESHOLD_COST_KEY: Final[re.Pattern[str]] = re.compile(
+    r"^(?:"
+    r"input_cost_per_token|"
+    r"output_cost_per_token|"
+    r"cache_creation_input_token_cost(?:_above_1hr)?|"
+    r"cache_read_input_token_cost"
+    r")_above_\d+k?_tokens(?:_(?:priority|flex|ultrafast))?$"
+)
+
+
+def _is_custom_pricing_field(field: str) -> bool:
+    return (
+        field in CustomPricingLiteLLMParams.model_fields or _CUSTOM_PRICING_THRESHOLD_COST_KEY.search(field) is not None
+    )
+
+
+def _copy_custom_pricing_fields(
+    model_info: dict[str, Any],  # mutable-ok: updates model-cost entry in place
+    litellm_params: LiteLLM_Params,
+) -> None:
+    """Copy declared and arbitrary threshold pricing into a model-cost entry."""
+    model_info.update(
+        {
+            field: value
+            for field, value in litellm_params.model_dump(exclude_none=True).items()
+            if _is_custom_pricing_field(field)
+        }
+    )
+
+
 def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
     """Single owner of the environment-gating rule: a deployment whose model_info names
     `supported_environments` loads only on pods whose LITELLM_ENVIRONMENT is in that list.
@@ -8170,9 +8200,10 @@ class Router:
                 litellm_params=litellm_params,
                 model_info=_model_info,
             )
-            for field in CustomPricingLiteLLMParams.model_fields:
-                if deployment.litellm_params.get(field) is not None:
-                    _model_info[field] = deployment.litellm_params[field]
+            _copy_custom_pricing_fields(
+                model_info=_model_info,
+                litellm_params=deployment.litellm_params,
+            )
 
             if _model_info.get("input_cost_per_token") is not None:
                 Router._inherit_builtin_cache_pricing(
@@ -8910,10 +8941,10 @@ class Router:
         self._add_deployment(deployment=deployment)
 
         _model_info_dict: Final[dict] = deployment.model_info.model_dump(exclude_none=True)
-        for field in CustomPricingLiteLLMParams.model_fields:
-            field_value = deployment.litellm_params.get(field)
-            if field_value is not None:
-                _model_info_dict[field] = field_value
+        _copy_custom_pricing_fields(
+            model_info=_model_info_dict,
+            litellm_params=deployment.litellm_params,
+        )
 
         if _model_info_dict.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
@@ -9165,10 +9196,10 @@ class Router:
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
         model_info: Final[dict] = deployment.model_info.model_dump(exclude_none=True)  # mutable-ok: built in place
-        for field in CustomPricingLiteLLMParams.model_fields:
-            field_value = deployment.litellm_params.get(field)
-            if field_value is not None:
-                model_info[field] = field_value
+        _copy_custom_pricing_fields(
+            model_info=model_info,
+            litellm_params=deployment.litellm_params,
+        )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
@@ -9206,10 +9237,16 @@ class Router:
         """
         if classify_strategy_router_model(model) is not None:
             model_info = {  # mutable-ok: filtered copy of the caller's entry, handed straight to register_model
-                k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields
+                k: v for k, v in model_info.items() if not _is_custom_pricing_field(k)
             }
 
         if model_id is not None:
+            existing_model_info = litellm.model_cost.get(model_id)
+            if existing_model_info is not None:
+                for field in tuple(existing_model_info):
+                    if _is_custom_pricing_field(field) and field not in model_info:
+                        existing_model_info.pop(field, None)
+
             litellm.register_model(model_cost={model_id: model_info}, persist_across_reloads=False)
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes

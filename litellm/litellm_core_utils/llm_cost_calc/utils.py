@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -46,6 +47,15 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 # substring match resolves "_ultrafast" before "_fast".
 _SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
     sorted((f"_{st.value}" for st in ServiceTier), key=len, reverse=True)
+)
+
+_ABOVE_TOKEN_THRESHOLD_COST_KEY: Final[re.Pattern[str]] = re.compile(
+    r"^(?P<base_key>"
+    r"input_cost_per_token|"
+    r"output_cost_per_token|"
+    r"cache_creation_input_token_cost(?:_above_1hr)?|"
+    r"cache_read_input_token_cost"
+    r")_above_\d+k?_tokens(?:_(?P<tier>priority|flex|ultrafast))?$"
 )
 
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
@@ -211,7 +221,7 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
 
 
 def _parse_above_token_threshold(key: str) -> float:
-    threshold_str: Final = key.split("_above_")[1].split("_tokens")[0]
+    threshold_str: Final = key.rsplit("_above_", 1)[1].split("_tokens")[0]
     return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
 
 
@@ -276,8 +286,9 @@ def _get_token_base_cost(
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
 
-    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
-    then we use the corresponding threshold cost for all token types.
+    For each token cost type, use its highest configured
+    `*_above_[x]k_tokens` or `*_above_[x]_tokens` rate when prompt tokens
+    exceed that threshold.
 
     `threshold_is_inclusive` switches that comparison to >=, for providers such as xAI
     that bill the higher tier once the prompt reaches the threshold.
@@ -312,127 +323,70 @@ def _get_token_base_cost(
     cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
 
     ## CHECK IF ABOVE THRESHOLD
-    # Optimization: collect threshold keys first to avoid sorting all model_info keys.
-    # Most models don't have threshold pricing, so we can return early.
-    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
-    # so that the threshold detection loop only processes standard keys.  The
-    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
-    threshold_keys: Final = [
-        k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
-    ]
-    if not threshold_keys:
-        return (
-            prompt_base_cost,
-            completion_base_cost,
-            cache_creation_cost,
-            cache_creation_cost_above_1hr,
-            cache_read_cost,
+    selected_threshold_keys: dict[str, tuple[float, str, str | None]] = {}  # mutable-ok: threshold accumulator
+
+    for key in model_info:
+        if "_above_" not in key or not key.endswith(("_tokens", "_priority", "_flex", "_ultrafast")):
+            continue
+
+        match = _ABOVE_TOKEN_THRESHOLD_COST_KEY.fullmatch(key)
+        if match is None or model_info.get(key) is None:
+            continue
+
+        threshold_key_tier = match.group("tier")
+        active_pricing_tier = (
+            None if service_tier is None else _SERVICE_TIER_TO_COST_KEY_SUFFIX.get(service_tier.lower())
+        )
+        if threshold_key_tier is not None and threshold_key_tier != active_pricing_tier:
+            continue
+
+        try:
+            threshold = _parse_above_token_threshold(key)
+        except (IndexError, ValueError):
+            continue
+
+        if usage.prompt_tokens < threshold or (usage.prompt_tokens == threshold and not threshold_is_inclusive):
+            continue
+
+        base_key = match.group("base_key")
+        selected = selected_threshold_keys.get(base_key)
+        selected_specificity = 0 if selected is None or selected[2] is None else 1
+        candidate_specificity = 0 if threshold_key_tier is None else 1
+
+        if selected is None or (threshold, candidate_specificity) > (selected[0], selected_specificity):
+            selected_threshold_keys[base_key] = (
+                threshold,
+                key,
+                threshold_key_tier,
+            )
+
+    costs_by_base_key = {  # mutable-ok: selected-rate updates
+        "input_cost_per_token": prompt_base_cost,
+        "output_cost_per_token": completion_base_cost,
+        "cache_creation_input_token_cost": cache_creation_cost,
+        "cache_creation_input_token_cost_above_1hr": (cache_creation_cost_above_1hr),
+        "cache_read_input_token_cost": cache_read_cost,
+    }
+
+    for base_key, (_, threshold_key, threshold_key_tier) in selected_threshold_keys.items():
+        cost_key = (
+            threshold_key if threshold_key_tier is not None else _get_service_tier_cost_key(threshold_key, service_tier)
+        )
+        costs_by_base_key[base_key] = cast(
+            float,
+            _get_cost_per_unit(
+                model_info,
+                cost_key,
+                costs_by_base_key[base_key],
+            ),
         )
 
-    # Only sort the threshold keys (typically 1-2 keys instead of 66+)
-    threshold: float | None = None
-    for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
-        value = model_info.get(key)
-        if value is not None:
-            try:
-                # Handle both formats: _above_128k_tokens and _above_128_tokens
-                threshold_str = key.split("_above_")[1].split("_tokens")[0]
-                threshold = _parse_above_token_threshold(key)
-                if usage.prompt_tokens > threshold or (threshold_is_inclusive and usage.prompt_tokens == threshold):
-                    # Prefer a service_tier-specific above-threshold key when available,
-                    # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
-                    # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
-                    # via _get_cost_per_unit's service_tier fallback logic.
-                    tiered_input_key = (
-                        _get_service_tier_cost_key(
-                            f"input_cost_per_token_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else key
-                    )
-                    prompt_base_cost = cast(
-                        float,
-                        _get_cost_per_unit(model_info, tiered_input_key, prompt_base_cost),
-                    )
-                    tiered_output_key = (
-                        _get_service_tier_cost_key(
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"output_cost_per_token_above_{threshold_str}_tokens"
-                    )
-                    completion_base_cost = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            tiered_output_key,
-                            completion_base_cost,
-                        ),
-                    )
-
-                    # Apply tiered pricing to cache costs
-                    cache_creation_tiered_key = (
-                        _get_service_tier_cost_key(
-                            f"cache_creation_input_token_cost_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
-                    )
-                    cache_creation_1hr_tiered_key = (
-                        _get_service_tier_cost_key(
-                            f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
-                    )
-                    cache_read_tiered_key = (
-                        _get_service_tier_cost_key(
-                            f"cache_read_input_token_cost_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_read_input_token_cost_above_{threshold_str}_tokens"
-                    )
-
-                    cache_creation_cost = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            cache_creation_tiered_key,
-                            cache_creation_cost,
-                        ),
-                    )
-
-                    cache_creation_cost_above_1hr = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            cache_creation_1hr_tiered_key,
-                            cache_creation_cost_above_1hr,
-                        ),
-                    )
-
-                    cache_read_cost = cast(
-                        float,
-                        _get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost),
-                    )
-
-                    break
-            except (IndexError, ValueError):
-                continue
-            except Exception:
-                continue
-
     return (
-        prompt_base_cost,
-        completion_base_cost,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        cache_read_cost,
+        costs_by_base_key["input_cost_per_token"],
+        costs_by_base_key["output_cost_per_token"],
+        costs_by_base_key["cache_creation_input_token_cost"],
+        costs_by_base_key["cache_creation_input_token_cost_above_1hr"],
+        costs_by_base_key["cache_read_input_token_cost"],
     )
 
 

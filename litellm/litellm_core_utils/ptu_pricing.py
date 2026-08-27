@@ -6,6 +6,7 @@ together because they have to agree: a deployment the rollup declines to charge 
 router prices at zero serves its traffic for free.
 """
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
@@ -43,6 +44,26 @@ SEARCH_CONTEXT_SIZES: Final = ("search_context_size_low", "search_context_size_m
 # and zeroing one of those would destroy the deployment's configuration rather than stop a
 # charge.
 CUSTOM_PRICING_FIELDS: Final = frozenset(f for f in CustomPricingLiteLLMParams.model_fields if "cost" in f)
+# Custom threshold rates the router copies from litellm_params into the cost map (e.g.
+# input_cost_per_token_above_32k_tokens) are not enumerated in CustomPricingLiteLLMParams,
+# so they are matched here and zeroed like every other declared rate. Only the cost
+# calculator's base keys qualify, so a param that merely ends in _above_<N>k_tokens (e.g.
+# api_key_above_32k_tokens) is not treated as a charge.
+_THRESHOLD_RATE_KEY: Final[re.Pattern[str]] = re.compile(
+    r"^(?:"
+    r"input_cost_per_token|"
+    r"output_cost_per_token|"
+    r"cache_creation_input_token_cost(?:_above_1hr)?|"
+    r"cache_read_input_token_cost"
+    r")_above_\d+k?_tokens(?:_(?:priority|flex|ultrafast))?$"
+)
+
+
+def is_threshold_rate_key(field: str) -> bool:
+    """Whether ``field`` is a custom above-threshold rate key the cost calculator reads."""
+    return _THRESHOLD_RATE_KEY.fullmatch(field) is not None
+
+
 PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()] | Mapping[str, float]]] = MappingProxyType(
     {
         **dict.fromkeys(PTU_ZEROED_PRICING_FIELDS, 0.0),
@@ -224,6 +245,7 @@ def zeroed_ptu_pricing(
         return None
     if not is_ptu_cost_attribution_enabled():
         return None
+    declared_threshold_rates: Final = frozenset(key for key in declared if is_threshold_rate_key(key))
     return MappingProxyType(
         {
             **PTU_ZEROED_PRICING,
@@ -233,5 +255,6 @@ def zeroed_ptu_pricing(
                 .difference(PTU_EMPTIED_PRICING_FIELDS),
                 0.0,
             ),
+            **dict.fromkeys(declared_threshold_rates, 0.0),
         }
     )

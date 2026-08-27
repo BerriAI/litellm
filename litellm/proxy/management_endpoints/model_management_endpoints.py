@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     PTU_ZEROED_PRICING_FIELDS,
     PTU_ZEROED_TABLE_FIELDS,
     SEARCH_CONTEXT_SIZES,
+    is_threshold_rate_key,
     ptu_config_error,
 )
 from litellm.proxy._types import (
@@ -420,6 +421,9 @@ def _raise_if_ptu_deployment_is_priced(*, model_info: Mapping[str, object], supp
         sorted(
             tuple(field for field in _CUSTOM_PRICING_FIELDS if _is_nonzero_price(supplied.get(field)))
             + tuple(field for field in _PTU_EMPTIED_PRICING_FIELDS if supplied.get(field))
+            + tuple(
+                field for field in supplied if is_threshold_rate_key(field) and _is_nonzero_price(supplied.get(field))
+            )
         )
     )
     if not priced:
@@ -459,9 +463,12 @@ def _ptu_zeroed_pricing(
     if model_info.get("ptu_count") is None or model_info.get("cost_per_ptu_per_hour") is None:
         return _NO_PRICING_OVERRIDE
     _raise_if_ptu_deployment_is_priced(model_info=model_info, supplied=supplied)
+    candidates: Final = _CUSTOM_PRICING_FIELDS | frozenset(
+        field for field in (*model_info.keys(), *litellm_params.keys()) if is_threshold_rate_key(field)
+    )
     stored: Final = frozenset(
         field
-        for field in _CUSTOM_PRICING_FIELDS
+        for field in candidates
         if _is_nonzero_price(model_info.get(field)) or _is_nonzero_price(litellm_params.get(field))
     )
     return MappingProxyType(
@@ -501,7 +508,11 @@ def _ptu_pricing_delta(
         return _NO_PRICING_OVERRIDE, frozenset()
     return _NO_PRICING_OVERRIDE, frozenset(
         field
-        for field in _CUSTOM_PRICING_FIELDS.union(_PTU_ZEROED_PRICING_FIELDS, _PTU_EMPTIED_PRICING_FIELDS)
+        for field in _CUSTOM_PRICING_FIELDS.union(
+            _PTU_ZEROED_PRICING_FIELDS,
+            _PTU_EMPTIED_PRICING_FIELDS,
+            frozenset(field for field in (*model_info.keys(), *litellm_params.keys()) if is_threshold_rate_key(field)),
+        )
         if _is_zero_price(model_info.get(field)) or _is_zero_price(litellm_params.get(field))
     )
 

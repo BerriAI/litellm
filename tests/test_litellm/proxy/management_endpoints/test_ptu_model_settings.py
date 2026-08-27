@@ -794,6 +794,22 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert exc.value.status_code == 400
         assert "tiered_pricing" in str(exc.value.detail)
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "input_cost_per_token_above_32k_tokens",
+            "output_cost_per_token_above_32k_tokens",
+            "input_cost_per_token_above_32k_tokens_priority",
+        ],
+    )
+    def test_an_arbitrary_threshold_rate_the_caller_supplies_is_refused(self, field):
+        """The router lets deployments declare arbitrary above-threshold rates; those bill a
+        PTU deployment past the threshold just as surely as a flat rate, so the refusal must
+        cover them too."""
+        with pytest.raises(HTTPException) as exc:
+            self._zeroed(model_info=self.PTU, supplied={field: 9e-06})
+        assert exc.value.status_code == 400
+        assert field in str(exc.value.detail)
     def test_a_search_context_price_the_caller_supplies_is_refused(self):
         """The rates sit in a table keyed by context size, so a guard that only reads numbers
         lets a per-request charge onto a deployment its reserved capacity already pays for."""
@@ -880,6 +896,19 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert zeroed["input_cost_per_second"] == 0
         assert zeroed["input_cost_per_token"] == 0
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "input_cost_per_token_above_32k_tokens",
+            "output_cost_per_token_above_32k_tokens",
+            "output_cost_per_token_above_32k_tokens_priority",
+        ],
+    )
+    def test_an_arbitrary_threshold_rate_already_on_the_row_is_zeroed(self, field):
+        """A row priced through a path this rule does not cover must heal on its next save."""
+        zeroed = self._zeroed(model_info={**self.PTU, field: 9e-06}, litellm_params={})
+        assert zeroed[field] == 0
+        assert zeroed["input_cost_per_token"] == 0
     @pytest.mark.asyncio
     async def test_a_refused_price_does_not_leave_the_team_changed(self):
         """The team ACL write autocommits, so the refusal has to run before it. Otherwise a
@@ -944,6 +973,34 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert priced.litellm_params.get("regional_processing_uplift_multiplier_eu") == 1.15
         assert priced.litellm_params.get("input_cost_per_token") == 0
 
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "api_key_above_32k_tokens",
+            "secret_above_32k_tokens",
+            "credential_above_32k_tokens",
+            "custom_provider_param_above_32k_tokens",
+            "api_key_above_32k_tokens_priority",
+            "custom_provider_param_above_32k_tokens_flex",
+        ],
+    )
+    def test_a_threshold_like_setting_that_is_not_a_price_is_left_alone(self, param):
+        """Only the cost calculator's base keys qualify as threshold rates: a deployment param
+        that merely ends in _above_<N>k_tokens is not a charge and must keep its value."""
+        priced = _ptu_priced_deployment(
+            Deployment(
+                model_name="settings",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", **{param: "keep-me"}),
+                model_info=ModelInfo(
+                    id="dep-settings",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                ),
+            )
+        )
+        assert priced.litellm_params.get(param) == "keep-me"
+        assert priced.litellm_params.get("input_cost_per_token") == 0
     def test_removing_ptu_config_releases_every_rate_it_zeroed(self):
         """The zeroing covers any stored rate, so a release that only spans the mirrored fields
         leaves a per-second deployment billing nothing for that dimension forever."""
@@ -975,6 +1032,73 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             ),
         )
         assert "input_cost_per_second" not in json.loads(off["litellm_params"])
+
+    def test_removing_ptu_config_releases_a_zeroed_threshold_rate(self):
+        """The zeroing spans threshold rates too, so a release that only spans the enumeration
+        sets would leave one billing nothing past the threshold forever."""
+        on = update_db_model(
+            db_model=Deployment(
+                model_name="threshold",
+                litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", input_cost_per_token_above_32k_tokens=9e-06),
+                model_info=ModelInfo(id="dep-thr", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-thr",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        assert json.loads(on["litellm_params"])["input_cost_per_token_above_32k_tokens"] == 0
+
+        off = update_db_model(
+            db_model=Deployment(
+                model_name="threshold",
+                litellm_params=LiteLLM_Params(**json.loads(on["litellm_params"])),
+                model_info=ModelInfo(**json.loads(on["model_info"])),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-thr", ptu_count=None, cost_per_ptu_per_hour=None)
+            ),
+        )
+        assert "input_cost_per_token_above_32k_tokens" not in json.loads(off["litellm_params"])
+
+    def test_removing_ptu_config_releases_a_zeroed_tier_qualified_threshold_rate(self):
+        """The zeroing spans tier-qualified threshold rates too, so a release that only
+        spans the enumeration sets would leave one billing nothing past the threshold
+        forever."""
+        on = update_db_model(
+            db_model=Deployment(
+                model_name="tier-threshold",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-4o-mini", output_cost_per_token_above_32k_tokens_priority=9e-06
+                ),
+                model_info=ModelInfo(id="dep-tier-thr", team_id="t"),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(
+                    id="dep-tier-thr",
+                    team_id="t",
+                    ptu_effective_from=datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
+                    **self.PTU,
+                )
+            ),
+        )
+        assert json.loads(on["litellm_params"])["output_cost_per_token_above_32k_tokens_priority"] == 0
+
+        off = update_db_model(
+            db_model=Deployment(
+                model_name="tier-threshold",
+                litellm_params=LiteLLM_Params(**json.loads(on["litellm_params"])),
+                model_info=ModelInfo(**json.loads(on["model_info"])),
+            ),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-tier-thr", ptu_count=None, cost_per_ptu_per_hour=None)
+            ),
+        )
+        assert "output_cost_per_token_above_32k_tokens_priority" not in json.loads(off["litellm_params"])
 
     def test_removing_ptu_config_releases_a_zeroed_search_context_table(self):
         """The all-zero table exists only to stop the double charge, so a deployment taken off PTU
