@@ -651,9 +651,13 @@ def test_translate_anthropic_messages_to_openai_drops_empty_midturn_system(
 
 def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     """
-    Request level: the trusted top-level prompt is hoisted to index 0 exactly once and the
-    in-sequence correction keeps its own position and `role: "system"` -- no duplication of
-    either, and no reordering of the surrounding turns.
+    All system messages — the top-level prompt and any mid-turn injections — are merged
+    into a single system entry at position 0. Non-system messages keep their original
+    relative order.
+
+    Jinja-template backends (llama-server, ollama, vllm) raise "System message must be
+    at the beginning" for any system message at a later index, so consolidation is
+    required when translating to OpenAI-compat format.
     """
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={
@@ -670,12 +674,93 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     )
 
     assert openai_request["messages"] == [
-        {"role": "system", "content": "Trusted top-level prompt."},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Trusted top-level prompt."},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+        },
         {"role": "user", "content": "First question."},
         {"role": "assistant", "content": "First answer.", "thinking_blocks": None},
-        {"role": "system", "content": "Use the corrected result."},
         {"role": "user", "content": "Continue."},
     ]
+
+
+def test_translate_anthropic_to_openai_consolidates_mid_turn_system_string_content():
+    """
+    Mid-turn system messages with string content (e.g. MCP server instructions injected
+    by Claude Code CLI) are merged with the top-level system prompt into a single entry
+    at position 0. Non-system messages keep their original relative order.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "openai/qwen3-27b",
+            "max_tokens": 100,
+            "system": "You are a helpful assistant.",
+            "messages": [
+                {"role": "user", "content": "Hello."},
+                {"role": "assistant", "content": "Hi there."},
+                # Mid-turn system injection from the SDK (e.g. MCP server instructions)
+                {"role": "system", "content": "MCP server instructions: tools available."},
+                {"role": "user", "content": "What tools do you have?"},
+            ],
+        }
+    )
+
+    messages = openai_request["messages"]
+
+    # Exactly one system message, at position 0
+    system_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
+    assert len(system_messages) == 1
+    assert messages[0]["role"] == "system"
+
+    # Both system contents appear in the merged entry
+    merged_content = messages[0]["content"]
+    assert isinstance(merged_content, list)
+    all_text = " ".join(block["text"] for block in merged_content if block.get("type") == "text")
+    assert "You are a helpful assistant." in all_text
+    assert "MCP server instructions" in all_text
+
+    # Non-system messages keep their original relative order
+    non_system = [m for m in messages if isinstance(m, dict) and m.get("role") != "system"]
+    assert [m["role"] for m in non_system] == ["user", "assistant", "user"]
+
+
+def test_translate_anthropic_to_openai_consolidates_mid_turn_system_list_content():
+    """
+    Mid-turn system messages with list-type content are extended (not nested) into the
+    merged system entry so each content block stays at the top level.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "openai/qwen3-27b",
+            "max_tokens": 100,
+            "system": "Base instructions.",
+            "messages": [
+                {"role": "user", "content": "Go."},
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Injected rule A."},
+                        {"type": "text", "text": "Injected rule B."},
+                    ],
+                },
+                {"role": "user", "content": "Continue."},
+            ],
+        }
+    )
+
+    messages = openai_request["messages"]
+    system_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
+    assert len(system_messages) == 1
+
+    merged_content = messages[0]["content"]
+    assert isinstance(merged_content, list)
+    texts = [block["text"] for block in merged_content if block.get("type") == "text"]
+    assert "Base instructions." in texts
+    assert "Injected rule A." in texts
+    assert "Injected rule B." in texts
 
 
 def _translate_with_metadata(

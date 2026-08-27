@@ -1140,6 +1140,25 @@ class LiteLLMAnthropicMessagesAdapter:
         ## ADD SYSTEM MESSAGE TO MESSAGES
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
 
+        ## CONSOLIDATE SYSTEM MESSAGES
+        # Jinja-template backends (llama-server, ollama, vllm) reject any system
+        # message after position 0. Merge all system messages — including mid-turn
+        # injections from the SDK — into a single entry at index 0.
+        system_msgs = [m for m in new_messages if isinstance(m, dict) and m.get("role") == "system"]
+        if len(system_msgs) > 1:
+            non_system_msgs = [
+                m for m in new_messages
+                if not (isinstance(m, dict) and m.get("role") == "system")
+            ]
+            merged_content: list = []
+            for sm in system_msgs:
+                content = sm.get("content", "")
+                if isinstance(content, str):
+                    merged_content.append({"type": "text", "text": content})
+                elif isinstance(content, list):
+                    merged_content.extend(content)
+            new_messages = [{"role": "system", "content": merged_content}] + non_system_msgs
+
         new_kwargs: Final[ChatCompletionRequest] = {
             "model": anthropic_message_request["model"],
             "messages": new_messages,
