@@ -1,5 +1,6 @@
 # tests/test_budget_endpoints.py
 
+import json
 import types
 from datetime import datetime, timedelta, timezone
 import pytest
@@ -388,3 +389,34 @@ async def test_update_budget_duration_none_does_not_recompute(client_and_mocks):
 
     assert "budget_duration" in captured and captured["budget_duration"] is None
     assert "budget_reset_at" not in captured
+
+
+@pytest.mark.asyncio
+async def test_update_budget_serializes_model_max_budget_for_prisma(
+    client_and_mocks, monkeypatch
+):
+    monkeypatch.setattr(ps, "premium_user", True)
+
+    client, _, mock_table = client_and_mocks
+    captured = _capture_update_data(mock_table)
+
+    resp = client.post(
+        "/budget/update",
+        json={
+            "budget_id": "budget_per_model",
+            "model_max_budget": {
+                "gpt4o": {"budget_limit": 5.0, "time_period": "1d"},
+                "glm-5.2": {"budget_limit": 7.5, "time_period": "30d"},
+            },
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    stored = captured["model_max_budget"]
+    assert isinstance(stored, str), (
+        f"model_max_budget must reach prisma as a JSON string, got {type(stored).__name__}"
+    )
+    assert json.loads(stored) == {
+        "gpt4o": {"max_budget": 5.0, "budget_duration": "1d"},
+        "glm-5.2": {"max_budget": 7.5, "budget_duration": "30d"},
+    }
