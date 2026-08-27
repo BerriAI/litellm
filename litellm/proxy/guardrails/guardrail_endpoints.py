@@ -1231,7 +1231,10 @@ async def patch_guardrail(
                     guardrail_id=guardrail_id,
                     guardrail_name=existing_guardrail.get("guardrail_name") or "",
                     litellm_params=LitellmParams(**existing_litellm_params),
-                    guardrail_info=existing_guardrail.get("guardrail_info", {}),
+                    guardrail_info=existing_guardrail.get(
+                        "guardrail_info",
+                        {},  # mutable-ok: Guardrail's own constructor takes a plain dict
+                    ),
                 ),
                 prisma_client=prisma_client,
             )
