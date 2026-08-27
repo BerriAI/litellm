@@ -11,7 +11,7 @@ Request format:
     "input": {
         "messages": [{"role": "user", "content": [{"text": "<prompt>"}]}]
     },
-    "parameters": {"size": "1024*1024", ...}
+    "parameters": {"size": "1024*1024", "n": 1, ...}
 }
 
 Response format:
@@ -19,7 +19,7 @@ Response format:
     "output": {
         "choices": [{"message": {"content": [{"image": "<url>"}]}}]
     },
-    "usage": {"input_tokens": 0, "output_tokens": 0, "width": 1024, "height": 1024, "image_count": 1}
+    "usage": {"output_width": 1024, "output_height": 1024, "output_image_count": 1}
 }
 """
 
@@ -46,6 +46,9 @@ else:
 
 DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
+# get_llm_provider resolves every dashscope route to the chat/embed base, which cannot serve images
+CHAT_COMPATIBLE_MODE_PATH: Final = "/compatible-mode/v1"
+
 # Maps OpenAI size strings (WxH) to DashScope size strings (W*H)
 OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
     "256x256": "256*256",
@@ -59,7 +62,8 @@ OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
 
 class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
     """
-    Configuration for DashScope image generation (qwen-image-2.0, qwen-image-2.0-pro).
+    Configuration for DashScope image generation (qwen-image-2.0, qwen-image-2.0-pro,
+    qwen-image-3.0, qwen-image-3.0-pro).
     """
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
@@ -82,8 +86,8 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
             if k == "size":
                 # Convert "WxH" → "W*H"
                 mapped["size"] = OPENAI_TO_DASHSCOPE_SIZE.get(v, v.replace("x", "*"))
-            elif k == "n":
-                mapped["image_count"] = v
+            else:
+                mapped[k] = v
         return mapped
 
     def get_complete_url(
@@ -95,7 +99,10 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        return api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+        image_api_base: Final = (
+            api_base if api_base and not api_base.rstrip("/").endswith(CHAT_COMPATIBLE_MODE_PATH) else None
+        )
+        return image_api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
 
     def validate_environment(
         self,
