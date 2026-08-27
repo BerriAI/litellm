@@ -1219,6 +1219,7 @@ def _register_custom_pricing_for_request(
             shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
         },
         persist_across_reloads=False,
+        warning_display_name=shared_key,
     )
 
 
