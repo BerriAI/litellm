@@ -2574,20 +2574,18 @@ async def test_pass_through_with_httpbin_redirect():
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )
-
-        # Should get the final response (200) from /get endpoint, not the redirect (302)
-        assert response.status_code == 200
-
-        # The response should be from the /get endpoint
-        response_content = bytes(response.body).decode("utf-8")
-
-        # httpbin.org/get returns JSON with info about the request
-        assert '"url": "https://httpbin.org/get"' in response_content
     except Exception as e:
         # If httpbin.org is not accessible, skip the test
-        import pytest
-
         pytest.skip(f"Could not reach httpbin.org for integration test: {e}")
+
+    # Should get the final response (200) from /get endpoint, not the redirect (302)
+    assert response.status_code == 200
+
+    # The response should be from the /get endpoint
+    response_content = bytes(response.body).decode("utf-8")
+
+    # httpbin.org/get returns JSON with info about the request
+    assert '"url": "https://httpbin.org/get"' in response_content
 
 
 @pytest.mark.asyncio

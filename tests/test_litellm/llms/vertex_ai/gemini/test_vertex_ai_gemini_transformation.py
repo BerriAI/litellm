@@ -1669,12 +1669,29 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
     ]
 
 
-def test_convert_tool_response_with_url_image():
+def test_convert_tool_response_with_url_image(monkeypatch):
     """Test tool response with HTTP URL image (will download and convert)."""
-    import pytest
+    import httpx
 
-    # Use a publicly accessible test image URL
-    test_image_url = "https://via.placeholder.com/1x1.png"
+    import litellm
+
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    monkeypatch.setattr(
+        litellm.module_level_client,
+        "client",
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, content=png_bytes, headers={"Content-Type": "image/png"}
+                )
+            )
+        ),
+    )
+
+    # A literal public IP keeps the SSRF check off DNS; MockTransport answers the request
+    test_image_url = "https://1.1.1.1/screenshot.png"
 
     tool_message = {
         "role": "tool",
@@ -1697,30 +1714,24 @@ def test_convert_tool_response_with_url_image():
         ]
     }
 
-    try:
-        result = convert_to_gemini_tool_call_result(
-            tool_message, last_message_with_tool_calls
-        )
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
 
-        assert isinstance(
-            result, list
-        ), "Should return a parts list when media is present"
-        assert len(result) == 1, "Should return one function_response part"
-        result_part = result[0]
-        assert "function_response" in result_part
-        assert "inline_data" not in result_part
-        function_response = result_part["function_response"]
-        assert function_response["name"] == "type_text_at"
+    assert isinstance(result, list), "Should return a parts list when media is present"
+    assert len(result) == 1, "Should return one function_response part"
+    result_part = result[0]
+    assert "function_response" in result_part
+    assert "inline_data" not in result_part
+    function_response = result_part["function_response"]
+    assert function_response["name"] == "type_text_at"
 
-        # Check inline_data is nested under functionResponse.parts.
-        assert "parts" in function_response
-        assert len(function_response["parts"]) == 1
-        inline_data: BlobType = function_response["parts"][0]["inline_data"]
-        assert "data" in inline_data
-        assert "mime_type" in inline_data
-    except Exception as e:
-        # Skip test if URL download fails (no internet connection, etc.)
-        pytest.skip(f"Failed to download image from URL: {e}")
+    # Check inline_data is nested under functionResponse.parts.
+    assert "parts" in function_response
+    assert len(function_response["parts"]) == 1
+    inline_data: BlobType = function_response["parts"][0]["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
 
 
 def test_convert_tool_response_text_only():

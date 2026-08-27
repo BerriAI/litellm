@@ -52,6 +52,17 @@ TQ008   A `patch(...)` whose target is a `litellm.` internal. Patching the SDK's
         functions pins the test to the current wiring instead of the behaviour, and it
         is the idiom the suite reaches for instead of faking the HTTP boundary. Mocking
         a third-party client, a transport, or anything outside `litellm.` is untouched.
+TQ009   An `assert` inside a `try` whose handler catches `AssertionError`. A failing
+        assertion raises `AssertionError`, which is an `Exception`, so a bare `except:`
+        or an `except Exception` in the same test catches it. The handler returns
+        normally, and pytest records a pass on exactly the regression the assertion was
+        written to catch. A handler that re-raises, or that calls `pytest.fail`, is
+        reporting the failure and is untouched; `pytest.skip` is not, since it turns a
+        real regression into a skip that reads as somebody's deliberate guard. Put the
+        assertions below the block, or narrow the handler to the error the call under
+        test actually raises. `pytest.raises` and `pytest.fail` inside the body are
+        untouched too: `Failed` inherits from `BaseException`, so `except Exception`
+        never sees them.
 TQ007   A module global that a conftest saves before every test and restores after it.
         The save/restore list is a hand-maintained inventory of the leaks the suite
         already knows about, so it is allowed to shrink and never to grow: a new entry
@@ -133,6 +144,8 @@ MOCK_INSPECTION_ATTRIBUTES: Final = frozenset((
 MOCK_ASSERTION_PREFIX: Final = "assert_"
 
 PATCH_MEMBERS: Final = frozenset(("object", "dict", "multiple"))
+
+ASSERTION_ERROR_CATCHERS: Final = frozenset(("Exception", "BaseException", "AssertionError"))
 
 ENVIRON_READERS: Final = frozenset(("os.environ.get", "environ.get", "os.getenv", "getenv"))
 ENVIRON_MAPPINGS: Final = frozenset(("os.environ", "environ"))
@@ -404,6 +417,66 @@ def iter_assertion_violations(path: Path, tree: ast.Module) -> Iterator[Violatio
                 f"called, which restates the implementation; assert what the caller observes "
                 f"(suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
             )
+
+
+def _raises_assertion_error(nodes: Iterable[ast.AST]) -> bool:
+    """An `assert` or an `assert*()` call, the two shapes that fail via AssertionError.
+    `pytest.raises`/`fail` are excluded: `Failed` inherits from BaseException, so an
+    `except Exception` never catches them."""
+    return any(
+        isinstance(node, ast.Assert)
+        or (isinstance(node, ast.Call) and _is_assertion_helper_call(node))
+        for parent in nodes
+        for node in ast.walk(parent)
+    )
+
+
+def _catches_assertion_error(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return True
+    named: Final = handler.type.elts if isinstance(handler.type, ast.Tuple) else (handler.type,)
+    return any(_dotted_name(node).rpartition(".")[2] in ASSERTION_ERROR_CATCHERS for node in named)
+
+
+def _reports_the_failure(handler: ast.ExceptHandler) -> bool:
+    """Re-raising, or failing the test, passes the failure on rather than eating it."""
+    return any(
+        isinstance(node, ast.Raise)
+        or (isinstance(node, ast.Call) and _is_pytest_assertion_call(node))
+        for parent in handler.body
+        for node in ast.walk(parent)
+    ) or _raises_assertion_error(handler.body)
+
+
+def _swallowing_handler(node: ast.Try) -> ast.ExceptHandler | None:
+    if not _raises_assertion_error(node.body):
+        return None
+    return next(
+        (
+            handler
+            for handler in node.handlers
+            if _catches_assertion_error(handler) and not _reports_the_failure(handler)
+        ),
+        None,
+    )
+
+
+def iter_swallowed_assertion_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    for function in iter_test_functions(tree):
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Try):
+                continue
+            handler: Final = _swallowing_handler(node)
+            if handler is not None:
+                yield Violation(
+                    path,
+                    handler.lineno,
+                    "TQ009",
+                    f"an assertion in this `try` fails with AssertionError, which `{function.name}` "
+                    "catches here and discards, so the test reports green on the regression it was "
+                    "written to catch; move the assertions below the block or narrow the handler "
+                    f"(suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+                )
 
 
 def iter_sys_path_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
@@ -740,6 +813,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
         violation
         for violation in (
             *iter_assertion_violations(path, tree),
+            *iter_swallowed_assertion_violations(path, tree),
             *iter_sys_path_violations(path, tree),
             *iter_environ_violations(path, tree),
             *iter_global_mutation_violations(path, tree),

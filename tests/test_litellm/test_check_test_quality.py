@@ -681,6 +681,204 @@ def test_an_sdk_patch_can_be_suppressed(tmp_path):
     assert "TQ008" not in _codes(tmp_path, source)
 
 
+def _swallowed(tmp_path, body):
+    return _codes(tmp_path, "import pytest\n\n\ndef test_x():\n" + body)
+
+
+def test_an_assert_caught_by_except_exception_is_flagged(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_bare_except_swallows_it_just_the_same(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except:\n"
+        "        print('oh well')\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_naming_assertion_error_directly_is_flagged(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except AssertionError:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_tuple_handler_is_flagged_when_any_member_catches_it(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except (ValueError, Exception):\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_skip_reports_the_failure_as_somebody_elses_guard(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception as e:\n"
+        "        pytest.skip(f'no network: {e}')\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_an_assertion_helper_call_counts_as_the_assertion(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert_auth_denied(call(), 'missing header')\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_nested_assert_below_a_loop_is_still_inside_the_block(tmp_path):
+    body = (
+        "    try:\n"
+        "        for item in items:\n"
+        "            assert item.ok\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_a_narrow_handler_that_cannot_see_assertion_error_is_left_alone(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except ValueError:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_a_handler_that_reraises_is_left_alone(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception:\n"
+        "        print('context')\n"
+        "        raise\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_a_handler_that_fails_the_test_is_left_alone(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception as e:\n"
+        "        pytest.fail(f'boom: {e}')\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_a_handler_that_asserts_on_the_error_is_left_alone(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception as e:\n"
+        "        assert 'boom' in str(e)\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_a_try_block_with_no_assertion_in_it_is_left_alone(tmp_path):
+    body = (
+        "    try:\n"
+        "        value = compute()\n"
+        "    except Exception:\n"
+        "        pytest.skip('no network')\n"
+        "    assert value == 3\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_pytest_raises_in_the_body_escapes_an_except_exception(tmp_path):
+    body = (
+        "    try:\n"
+        "        with pytest.raises(ValueError):\n"
+        "            compute()\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_pytest_fail_in_the_body_escapes_an_except_exception(tmp_path):
+    body = (
+        "    try:\n"
+        "        if compute() != 3:\n"
+        "            pytest.fail('wrong')\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_the_swallow_is_reported_at_the_handler_not_the_try(tmp_path):
+    snippet = tmp_path / "test_snippet.py"
+    snippet.write_text(
+        "def test_x():\n"
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    swallowed = [v for v in checker.check_file(snippet) if v.code == "TQ009"]
+    assert [v.line for v in swallowed] == [4]
+
+
+def test_only_the_swallowing_handler_of_several_is_reported(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except ValueError:\n"
+        "        raise\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == ["TQ009"]
+
+
+def test_the_swallow_is_suppressible_with_a_reason(tmp_path):
+    body = (
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception:  # test-quality-ok: the flake is tracked in LIT-1234\n"
+        "        pass\n"
+    )
+    assert _swallowed(tmp_path, body) == []
+
+
+def test_a_swallow_outside_a_test_function_is_left_alone(tmp_path):
+    source = (
+        "def _helper():\n"
+        "    try:\n"
+        "        assert compute() == 3\n"
+        "    except Exception:\n"
+        "        pass\n\n\n"
+        "def test_x():\n"
+        "    assert _helper() is None\n"
+    )
+    assert _codes(tmp_path, source) == []
+
+
 _FANS_OUT = checker._worker_count(checker.PARALLEL_MIN_PATHS) > 1
 _SERIAL_ONLY = "one usable core, so scan_paths stays serial and there is no fan-out to compare"
 

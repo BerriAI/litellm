@@ -142,7 +142,14 @@ def test_introduced_keeps_only_violations_on_changed_lines():
 
 def test_the_shipped_budget_covers_every_rule_the_checker_can_emit():
     import json
+    import re
 
+    emitted = set(
+        re.findall(r'"(TQ\d+)"', (_REPO_ROOT / "scripts" / "check_test_quality.py").read_text())
+    )
+    # TQ000 is the unreadable-file/syntax-error code, a hard failure rather than a
+    # countable violation, so it is the one code the budget deliberately omits.
     budget = json.loads((_REPO_ROOT / "test-quality-budget.json").read_text())
-    assert set(budget) == {"TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ008"}
+    assert "TQ000" in emitted
+    assert set(budget) == emitted - {"TQ000"}
     assert all(spec["limit"] >= 0 for spec in budget.values())

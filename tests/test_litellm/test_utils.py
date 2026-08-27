@@ -1922,14 +1922,15 @@ class TestProxyFunctionCalling:
         for model_name, expected_result in test_cases:
             try:
                 result = supports_function_calling(model=model_name)
-                # For malformed models, we expect False or the function to handle gracefully
-                assert (
-                    result == expected_result
-                ), f"Edge case {model_name} returned {result}, expected {expected_result}"
             except Exception:
                 # It's acceptable for malformed model names to raise exceptions
                 # rather than returning False, as long as they're handled gracefully
-                pass
+                continue
+
+            # For malformed models, we expect False or the function to handle gracefully
+            assert (
+                result == expected_result
+            ), f"Edge case {model_name} returned {result}, expected {expected_result}"
 
     def test_proxy_model_resolution_demonstration(self):
         """
@@ -2131,6 +2132,11 @@ class TestProxyFunctionCalling:
         # Test the underlying model directly to verify it supports function calling
         try:
             underlying_result = supports_function_calling(underlying_bedrock_model)
+        except Exception as e:
+            print(
+                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
+            )
+        else:
             print(f"  Underlying model function calling support: {underlying_result}")
 
             # Most Bedrock Converse API models with Anthropic Claude should support function calling
@@ -2138,10 +2144,6 @@ class TestProxyFunctionCalling:
                 assert (
                     underlying_result is True
                 ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
-        except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
 
         # Test the proxy model - should return False due to lack of configuration context
         proxy_result = supports_function_calling(proxy_model_name)
@@ -2224,13 +2226,15 @@ class TestProxyFunctionCalling:
         for model in bedrock_models:
             try:
                 result = supports_function_calling(model)
-                print(f"Direct test - {model}: {result}")
-                # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
             except Exception as e:
                 print(f"Could not test {model}: {e}")
+                continue
+
+            print(f"Direct test - {model}: {result}")
+            # Claude 3 models should support function calling
+            assert (
+                result is True
+            ), f"Claude 3 model should support function calling: {model}"
 
 
 def test_register_model_with_scientific_notation():

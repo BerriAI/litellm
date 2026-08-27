@@ -61,31 +61,15 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
 
 
 def test_sentry_sample_rate(monkeypatch):
-    existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
-    try:
-        # test with default value by removing the environment variable
-        if existing_sample_rate:
-            del os.environ["SENTRY_API_SAMPLE_RATE"]
+    import sentry_sdk
 
-        set_callbacks(["sentry"])
-        # Check if the default sample rate is set to 1.0
-        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "1.0"
+    monkeypatch.delenv("SENTRY_API_SAMPLE_RATE", raising=False)
+    set_callbacks(["sentry"])
+    assert sentry_sdk.get_client().options["sample_rate"] == 1.0
 
-        # test with custom value
-        monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", "0.5")
-
-        set_callbacks(["sentry"])
-        # Check if the custom sample rate is set correctly
-        assert os.environ.get("SENTRY_API_SAMPLE_RATE") == "0.5"
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        # Restore the original environment variable
-        if existing_sample_rate:
-            monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", existing_sample_rate)
-        else:
-            if "SENTRY_API_SAMPLE_RATE" in os.environ:
-                del os.environ["SENTRY_API_SAMPLE_RATE"]
+    monkeypatch.setenv("SENTRY_API_SAMPLE_RATE", "0.5")
+    set_callbacks(["sentry"])
+    assert sentry_sdk.get_client().options["sample_rate"] == 0.5
 
 
 def test_sentry_environment(monkeypatch):
@@ -106,8 +90,8 @@ def test_sentry_environment(monkeypatch):
     mock_sentry_sdk.init = mock_init
 
     # Inject mocks into sys.modules
-    sys.modules["sentry_sdk"] = mock_sentry_sdk
-    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
+    monkeypatch.setitem(sys.modules, "sentry_sdk", mock_sentry_sdk)
+    monkeypatch.setitem(sys.modules, "sentry_sdk.scrubber", mock_scrubber_module)
 
     try:
         # Set a mock DSN to allow Sentry initialization
@@ -2147,8 +2131,8 @@ def test_sentry_event_scrubber_initialization(monkeypatch):
     mock_sentry_sdk.init = mock_init
 
     # Step 3: Inject both into sys.modules BEFORE import occurs
-    sys.modules["sentry_sdk"] = mock_sentry_sdk
-    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
+    monkeypatch.setitem(sys.modules, "sentry_sdk", mock_sentry_sdk)
+    monkeypatch.setitem(sys.modules, "sentry_sdk.scrubber", mock_scrubber_module)
 
     # Step 4: Run the actual sentry setup code
     set_callbacks(["sentry"])
