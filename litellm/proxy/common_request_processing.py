@@ -3024,7 +3024,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _flush_deferred_async_logging(
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         exception_raised: bool,
     ) -> None:
         """
@@ -3052,7 +3052,7 @@ class ProxyBaseLLMRequestProcessing:
         _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
-        logging_obj._enqueue_deferred_logging = None
+        logging_obj.clear_deferred_logging_enqueue()
         if exception_raised:
             return
         try:

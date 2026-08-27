@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from typing import Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
@@ -33,6 +33,9 @@ from ..common_utils import (
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Bedrock batch input files are uploaded as
 # s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
@@ -261,7 +264,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         litellm_params: dict,
     ) -> LiteLLMBatch:
         """
@@ -527,7 +530,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         litellm_params: dict,
     ) -> LiteLLMBatch:
         """

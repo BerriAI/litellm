@@ -2,9 +2,13 @@
 Shared utilities for the Soniox provider (https://soniox.com).
 """
 
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Final, TypeAlias
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+SonioxToken: TypeAlias = Mapping[str, object]
 
 # Soniox API base URL.
 SONIOX_API_BASE: Final[str] = "https://api.soniox.com"
@@ -63,7 +67,15 @@ def get_soniox_api_base(api_base: str | None = None) -> str:
     return base.rstrip("/")
 
 
-def render_soniox_tokens(tokens: list[dict[str, Any]]) -> str:
+def _token_text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _token_milliseconds(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def render_soniox_tokens(tokens: Sequence[SonioxToken]) -> str:
     """
     Render a list of Soniox tokens to a readable transcript string.
 
@@ -80,11 +92,11 @@ def render_soniox_tokens(tokens: list[dict[str, Any]]) -> str:
         return ""
 
     text_parts: Final[list[str]] = []
-    current_speaker: Any | None = None
-    current_language: Any | None = None
+    current_speaker: object = None
+    current_language: object = None
 
     for token in tokens:
-        text = token.get("text", "")
+        text = _token_text(token.get("text", ""))
         speaker = token.get("speaker")
         language = token.get("language")
         is_translation = token.get("translation_status") == "translation"
@@ -102,7 +114,7 @@ def render_soniox_tokens(tokens: list[dict[str, Any]]) -> str:
             current_language = language
             prefix = "[Translation] " if is_translation else ""
             text_parts.append(f"\n{prefix}[{current_language}] ")
-            text = text.lstrip() if isinstance(text, str) else text
+            text = text.lstrip()
 
         text_parts.append(text)
 
@@ -144,9 +156,16 @@ def _format_timestamp_vtt(ms: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
 
 
+@dataclass(frozen=True, slots=True)
+class _SubtitleCue:
+    start_ms: int
+    end_ms: int
+    text: str
+
+
 def _group_tokens_into_cues(
-    tokens: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    tokens: Sequence[SonioxToken],
+) -> list[_SubtitleCue]:
     """
     Group Soniox tokens into subtitle cues.
 
@@ -161,28 +180,28 @@ def _group_tokens_into_cues(
       - A new cue starts when the speaker changes (if diarization is on).
       - Tokens without timestamps are appended to the current cue.
     """
-    cues: Final[list[dict[str, Any]]] = []
+    cues: Final[list[_SubtitleCue]] = []
     current_tokens: list[str] = []
     current_start: int | None = None
     current_end: int | None = None
-    current_speaker: Any | None = None
+    current_speaker: object = None
 
     def _flush() -> None:
         if current_tokens and current_start is not None:
             text: Final = "".join(current_tokens).strip()
             if text:
                 cues.append(
-                    {
-                        "start_ms": current_start,
-                        "end_ms": (current_end if current_end is not None else current_start),
-                        "text": text,
-                    }
+                    _SubtitleCue(
+                        start_ms=current_start,
+                        end_ms=(current_end if current_end is not None else current_start),
+                        text=text,
+                    )
                 )
 
     for token in tokens:
-        start_ms = token.get("start_ms")
-        end_ms = token.get("end_ms")
-        text = token.get("text", "")
+        start_ms = _token_milliseconds(token.get("start_ms"))
+        end_ms = _token_milliseconds(token.get("end_ms"))
+        text = _token_text(token.get("text", ""))
         speaker = token.get("speaker")
 
         # Skip tokens with no timestamp data entirely if we have no cue started
@@ -226,7 +245,7 @@ def _group_tokens_into_cues(
     return cues
 
 
-def render_soniox_tokens_as_srt(tokens: list[dict[str, Any]]) -> str:
+def render_soniox_tokens_as_srt(tokens: Sequence[SonioxToken]) -> str:
     """
     Render Soniox tokens as SRT (SubRip) subtitle format.
 
@@ -238,17 +257,17 @@ def render_soniox_tokens_as_srt(tokens: list[dict[str, Any]]) -> str:
 
     lines: Final[list[str]] = []
     for idx, cue in enumerate(cues, start=1):
-        start = _format_timestamp_srt(cue["start_ms"])
-        end = _format_timestamp_srt(cue["end_ms"])
+        start = _format_timestamp_srt(cue.start_ms)
+        end = _format_timestamp_srt(cue.end_ms)
         lines.append(str(idx))
         lines.append(f"{start} --> {end}")
-        lines.append(cue["text"])
+        lines.append(cue.text)
         lines.append("")  # blank line between cues
 
     return "\n".join(lines)
 
 
-def render_soniox_tokens_as_vtt(tokens: list[dict[str, Any]]) -> str:
+def render_soniox_tokens_as_vtt(tokens: Sequence[SonioxToken]) -> str:
     """
     Render Soniox tokens as WebVTT subtitle format.
 
@@ -258,10 +277,10 @@ def render_soniox_tokens_as_vtt(tokens: list[dict[str, Any]]) -> str:
 
     lines: Final[list[str]] = ["WEBVTT", ""]
     for cue in cues:
-        start = _format_timestamp_vtt(cue["start_ms"])
-        end = _format_timestamp_vtt(cue["end_ms"])
+        start = _format_timestamp_vtt(cue.start_ms)
+        end = _format_timestamp_vtt(cue.end_ms)
         lines.append(f"{start} --> {end}")
-        lines.append(cue["text"])
+        lines.append(cue.text)
         lines.append("")  # blank line between cues
 
     return "\n".join(lines)
