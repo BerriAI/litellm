@@ -1,13 +1,16 @@
 {
   "anthropic_family": {
     "label": "Anthropic Family",
-    "description": "Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus for complex and reasoning-heavy requests.",
+    "description": "Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus for complex, Opus at high thinking for reasoning.",
     "complexity_router_config": {
       "tiers": {
         "SIMPLE": ["claude-haiku-4-5"],
         "MEDIUM": ["claude-sonnet-5"],
         "COMPLEX": ["claude-opus-5"],
-        "REASONING": ["claude-fable-5"]
+        "REASONING": ["claude-opus-5"]
+      },
+      "tier_model_configs": {
+        "REASONING": [{ "model_name": "claude-opus-5", "litellm_params": { "reasoning_effort": "high" } }]
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
