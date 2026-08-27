@@ -16,6 +16,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
@@ -640,49 +641,6 @@ def claude_2_1_pt(
     if messages[-1]["role"] != "assistant":
         prompt += f"{AnthropicConstants.AI_PROMPT.value}"  # prompt must end with \"\n\nAssistant: " turn
     return prompt
-
-
-### TOGETHER AI
-
-
-def get_model_info(token, model):
-    try:
-        headers: Final = {"Authorization": f"Bearer {token}"}
-        client: Final = HTTPHandler(concurrent_limit=1)
-        response: Final = client.get("https://api.together.xyz/models/info", headers=headers)
-        if response.status_code == 200:
-            model_info: Final = response.json()
-            for m in model_info:
-                if m["name"].lower().strip() == model.strip():
-                    return m["config"].get("prompt_format", None), m["config"].get("chat_template", None)
-            return None, None
-        else:
-            return None, None
-    except Exception:  # safely fail a prompt template request
-        return None, None
-
-
-## OLD TOGETHER AI FLOW
-# def format_prompt_togetherai(messages, prompt_format, chat_template):
-#     if prompt_format is None:
-#         return default_pt(messages)
-
-#     human_prompt, assistant_prompt = prompt_format.split("{prompt}")
-
-#     if chat_template is not None:
-#         prompt = hf_chat_template(
-#             model=None, messages=messages, chat_template=chat_template
-#         )
-#     elif prompt_format is not None:
-#         prompt = custom_prompt(
-#             role_dict={},
-#             messages=messages,
-#             initial_prompt_value=human_prompt,
-#             final_prompt_value=assistant_prompt,
-#         )
-#     else:
-#         prompt = default_pt(messages)
-#     return prompt
 
 
 ### IBM Granite
@@ -5395,12 +5353,13 @@ def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) ->
         return raw
     if not isinstance(raw, str):
         return {}
+    normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         parse_tool_call_arguments,
     )
 
     try:
-        parsed: Final = parse_tool_call_arguments(raw, tool_name=tool_name, context=context)
+        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
         return {}

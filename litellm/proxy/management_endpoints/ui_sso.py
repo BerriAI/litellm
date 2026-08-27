@@ -29,7 +29,6 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
-    TypeVar,
     Union,
     cast,
     overload,
@@ -122,6 +121,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -171,51 +171,16 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS: Final = frozenset(
     }
 )
 
-_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
-
-
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(
-        self,
-        where: Mapping[str, object],
-    ) -> _DbRecordT | None: ...
-
-    async def find_first(
-        self,
-        where: Mapping[str, object] | None = None,
-    ) -> _DbRecordT | None: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, bool] | None = None,
-    ) -> Sequence[_DbRecordT]: ...
-
-    async def update(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> _DbRecordT: ...
-
-    async def update_many(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> int: ...
-
 
 class _UserMetadataRow(Protocol):
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
 
 
-class _HasUserMetadataTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_UserMetadataRow]": ...
-
-
-def _user_meta_db(repo: "_HasUserMetadataTable") -> "_PrismaTableActions[_UserMetadataRow]":
-    return repo.table
+def _user_meta_db(repo: UserRepository) -> "TableActions[_UserMetadataRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UserMetadataRow]", repo.table
+    )
 
 
 class _SsoConfigRow(Protocol):
@@ -223,25 +188,17 @@ class _SsoConfigRow(Protocol):
     def sso_settings(self) -> Mapping[str, object] | None: ...
 
 
-class _HasSsoConfigTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_SsoConfigRow]": ...
-
-
-def _sso_config_db(repo: "_HasSsoConfigTable") -> "_PrismaTableActions[_SsoConfigRow]":
-    return repo.table
+def _sso_config_db(repo: SSOConfigRepository) -> "TableActions[_SsoConfigRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoConfigRow]", repo.table
+    )
 
 
 class _TeamDetailRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _HasTeamDetailTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_TeamDetailRow]": ...
-
-
-def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDetailRow]":
+def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 

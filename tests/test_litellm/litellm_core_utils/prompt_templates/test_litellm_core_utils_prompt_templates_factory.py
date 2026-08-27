@@ -1,7 +1,9 @@
 import base64
 import json
+import logging
 import os
 import socket
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3311,6 +3313,66 @@ def test_get_tool_calls_from_response_include_all_choices_reads_every_choice():
 
     names = [tc["name"] for tc in get_tool_calls_from_response(response, include_all_choices=True)]
     assert names == ["tool_alpha", "tool_beta"]
+
+
+def test_get_tool_calls_from_response_silences_redacted_arguments(caplog):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "Read",
+                                "arguments": "redacted-by-litellm",
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
+    assert "Failed to parse tool call arguments" not in caplog.text
+
+
+def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "Read",
+                                "arguments": "not-json",
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
+    assert "Failed to parse tool call arguments" in caplog.text
 
 
 def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():

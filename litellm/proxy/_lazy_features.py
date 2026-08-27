@@ -8,8 +8,8 @@ omits each feature's routes until the feature is warmed.
 
 import asyncio
 import importlib
-import sys
 from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
@@ -397,11 +397,27 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
     return router
 
 
-def inject_lazy_stubs(schema: dict) -> dict:
-    """Inject openapi entries for unloaded features. Uses the snapshot file
-    when available (full route info), otherwise falls back to a single
-    placeholder per feature. Any failure logs and returns the schema unchanged
-    so /openapi.json never 500s on a cosmetic injection bug."""
+def loaded_lazy_modules(app: "FastAPI") -> frozenset[str]:
+    """The set of lazy feature modules whose routers are actually registered
+    on this app (tracked by _force_load), empty before the middleware ever ran.
+    sys.modules is the wrong signal: boot code imports several feature modules
+    (mcp_management, cloudzero, vantage, config_overrides) without mounting
+    their routers, and their stubs must still be injected."""
+    loaded: Final = getattr(app.state, "lazy_loaded", None)
+    if not isinstance(loaded, set):
+        return frozenset()
+    return frozenset(m for m in loaded if isinstance(m, str))
+
+
+def inject_lazy_stubs(
+    schema: dict,
+    loaded_modules: AbstractSet[str],
+    features: tuple[LazyFeature, ...] = LAZY_FEATURES,
+) -> dict:
+    """Inject openapi entries for features not in loaded_modules. Uses the
+    snapshot file when available (full route info), otherwise falls back to a
+    single placeholder per feature. Any failure logs and returns the schema
+    unchanged so /openapi.json never 500s on a cosmetic injection bug."""
     try:
         from litellm.proxy._lazy_openapi_snapshot import load_snapshot
 
@@ -409,8 +425,8 @@ def inject_lazy_stubs(schema: dict) -> dict:
         paths: Final = schema.setdefault("paths", {})
         schemas: Final = schema.setdefault("components", {}).setdefault("schemas", {})
 
-        for feat in LAZY_FEATURES:
-            if feat.module_path in sys.modules and not feat.persistent_swagger_stub:
+        for feat in features:
+            if feat.module_path in loaded_modules and not feat.persistent_swagger_stub:
                 continue
 
             fragment = (snapshot or {}).get(feat.name)
