@@ -5093,18 +5093,16 @@ async def test_builder_ui_sentinel_team_never_hits_get_team_object():  # test-qu
                 new_callable=AsyncMock,
             ) as mock_get_team_object,
         ):
-            try:
-                await _user_api_key_auth_builder(
-                    request=request,
-                    api_key=f"Bearer {api_key}",
-                    azure_api_key_header="",
-                    anthropic_api_key_header=None,
-                    google_ai_studio_api_key_header=None,
-                    azure_apim_header=None,
-                    request_data={},
-                )
-            except Exception:
-                pass
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+        assert result.team_id == UI_TEAM_ID
         mock_get_team_object.assert_not_awaited()
     finally:
         for k, v in originals.items():

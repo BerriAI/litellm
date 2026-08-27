@@ -2154,7 +2154,6 @@ async def _user_api_key_auth_builder(
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 try:
-                    # UI_TEAM_ID never has a LiteLLM_TeamTable row; skip the guaranteed-miss lookup
                     if valid_token.team_id == UI_TEAM_ID:
                         raise TeamNotFoundError(team_id=UI_TEAM_ID)
                     with tracer.trace("litellm.proxy.auth.get_team_object"):
