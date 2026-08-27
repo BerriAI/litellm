@@ -483,6 +483,9 @@ def _tool_use_blocks(content: list[AnthropicContentBlock] | None) -> list[Anthro
 def _validated_tool_use_id(block: AnthropicContentBlock) -> str:
     assert block.name == "get_weather", f"wrong tool called: {block}"
     assert block.id, f"tool_use block carries no id, so a tool_result cannot answer it: {block}"
+    assert block.input is not None, f"tool_use block carries no input: {block}"
+    args = _WeatherArgs.model_validate(block.input)
+    assert "paris" in args.location.lower(), f"tool input lost the location: {args}"
     return block.id
 
 
