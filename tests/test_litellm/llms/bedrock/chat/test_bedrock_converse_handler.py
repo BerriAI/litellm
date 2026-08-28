@@ -96,10 +96,8 @@ def _completion_kwargs(**overrides):
     return kwargs
 
 
-def _run(**overrides):
-    with patch.object(
-        BedrockConverseLLM, "get_credentials", return_value=RESOLVED_CREDENTIALS
-    ):
+def _run(*, credentials=RESOLVED_CREDENTIALS, **overrides):
+    with patch.object(BedrockConverseLLM, "get_credentials", return_value=credentials):
         return BedrockConverseLLM().completion(**_completion_kwargs(**overrides))
 
 
@@ -140,8 +138,7 @@ def test_bearer_token_only_deployment_omits_iam_keys_without_crashing():
     chain) resolves no boto3 Credentials; the core still gets the call, with
     no IAM keys that do not exist rather than a crash reading them (#38579)."""
     seen = _inject()
-    with patch.object(BedrockConverseLLM, "get_credentials", return_value=None):
-        BedrockConverseLLM().completion(**_completion_kwargs())
+    _run(credentials=None)
 
     params = seen["call"][0]["optional_params"]
     assert "aws_access_key_id" not in params
