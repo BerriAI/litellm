@@ -1,6 +1,6 @@
 # LiteLLM Terraform Provider
 
-This Terraform provider allows you to manage LiteLLM resources through Infrastructure as Code. It provides support for managing models, teams, team members, and API keys via the LiteLLM REST API.
+This Terraform provider allows you to manage LiteLLM resources through Infrastructure as Code. It provides support for managing models, teams, team members, API keys, users, organizations, budgets, tags, projects, guardrails, prompts, agents, search tools, access groups, fallbacks, MCP servers, credentials and vector stores via the LiteLLM REST API, along with read-only data sources for each of them.
 
 ## Source of truth
 
