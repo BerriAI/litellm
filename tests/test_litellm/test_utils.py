@@ -4412,6 +4412,71 @@ class TestVertexEmbeddingEncodingFormat:
         assert optional_params.get("outputDimensionality") == 256
 
 
+class TestBedrockCohereEmbeddingParams:
+    """All Bedrock Cohere Embed models are served by the same Cohere Embed API
+    and share one transformation class, so they must all reach it. Previously
+    only multilingual-v3 and v4 were routed there, and english-v3 fell through
+    to the unmapped-model branch that supports no params at all — rejecting
+    encoding_format="float", the OpenAI SDK default. Issue #38659."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_encoding_format_float_is_supported(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="float",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_dimensions_is_mapped(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            dimensions=512,
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("output_dimension") == 512
+
+    def test_region_prefixed_model_id_is_supported(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="us.cohere.embed-english-v3",
+            encoding_format="float",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
+    def test_unsupported_param_still_rejected(self):
+        with pytest.raises(Exception, match="To drop these, set `litellm\\.drop_params=True` or for proxy"):
+            litellm.utils.get_optional_params_embeddings(
+                model="cohere.embed-english-v3",
+                user="some-user",
+                custom_llm_provider="bedrock",
+            )
+
+    def test_unsupported_param_dropped_with_drop_params(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="cohere.embed-english-v3",
+            user="some-user",
+            custom_llm_provider="bedrock",
+            drop_params=True,
+        )
+        assert "user" not in optional_params
+
+
 @pytest.mark.parametrize(
     "model",
     [
