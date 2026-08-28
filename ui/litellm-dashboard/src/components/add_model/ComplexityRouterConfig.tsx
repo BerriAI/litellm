@@ -24,7 +24,8 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
-import { type TierRow, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
+import { type CustomTierSet, type TierRow, activeTierRows, resolveComplexityDefaultModel } from "./tier_rows";
+export type { CustomTierSet, TierRow } from "./tier_rows";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 
@@ -133,7 +134,12 @@ export const heuristicScoringRoleFor = (
 };
 
 export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
-  heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+  value.custom_tier_set ? "never" : heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+
+// Derived, never written into the value, so undoing a tier edit reverts the form with nothing left behind.
+export const effectiveClassifierType = (
+  value: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type">,
+): ClassifierType => (value.custom_tier_set ? "llm" : value.classifier_type);
 
 export type AdaptiveEligible = "all" | "classified_tier";
 
@@ -179,6 +185,7 @@ export interface ComplexityRouterConfigValue {
    * params object is held, not just reasoning_effort, so keys authored in config.yaml survive an
    * edit round-trip.
    */
+  custom_tier_set?: CustomTierSet;
   tier_model_params?: TierModelParamsByTier;
 }
 
@@ -241,6 +248,104 @@ export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
  * circuit every request and leave the classifier unreachable, which the backend rejects.
  */
 export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
+
+const AffinityControls: React.FC<{
+  value: ComplexityRouterConfigValue;
+  onChange: (value: ComplexityRouterConfigValue) => void;
+}> = ({ value, onChange }) => (
+  <>
+    <div className="flex items-center gap-2 mb-2">
+      <Switch
+        checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
+        onCheckedChange={(deploymentAffinity) => onChange({ ...value, deployment_affinity: deploymentAffinity })}
+        aria-label="Pin a session to one deployment per model group"
+      />
+      <strong className="font-semibold">Pin a session to one deployment per model group</strong>
+    </div>
+    <span className="block text-xs mb-3 text-muted-foreground">
+      Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off to
+      load-balance every turn.
+    </span>
+    <div className="flex items-center gap-2 mb-2">
+      <Switch
+        checked={value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
+        onCheckedChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
+        aria-label="Pin a session to its first model"
+      />
+      <strong className="font-semibold">Pin a session to its first model</strong>
+    </div>
+    <span className="block text-xs text-muted-foreground">
+      Keeps a session on its first turn&apos;s model instead of re-classifying each turn. Also pins the deployment.
+    </span>
+  </>
+);
+
+const PlanModeOverrideControls: React.FC<{
+  value: ComplexityRouterConfigValue;
+  onChange: (value: ComplexityRouterConfigValue) => void;
+  planModeTierOptions: { value: string; label: string }[];
+}> = ({ value, onChange, planModeTierOptions }) => (
+  <>
+    <div className="flex items-center gap-2 mb-2">
+      <Switch
+        checked={value.plan_mode_min_tier !== undefined}
+        disabled={planModeTierOptions.length === 0}
+        onCheckedChange={(enabled) =>
+          onChange({
+            ...value,
+            plan_mode_min_tier: enabled ? planModeTierOptions.at(-1)?.value : undefined,
+          })
+        }
+        aria-label="Route plan-mode requests to a minimum tier"
+      />
+      <strong className="font-semibold">Route plan-mode requests to a minimum tier</strong>
+    </div>
+    <span className="block text-xs mb-3 text-muted-foreground">
+      Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier. The classifier
+      still wins when it picks higher, and the override only lasts while plan mode is active.
+      {planModeTierOptions.length === 0 && " Add models to a tier to enable this."}
+    </span>
+    {value.plan_mode_min_tier !== undefined && (
+      <div style={{ maxWidth: 320 }}>
+        <Select
+          items={planModeTierOptions}
+          value={value.plan_mode_min_tier}
+          onValueChange={(tier: string | null) => tier && onChange({ ...value, plan_mode_min_tier: tier })}
+        >
+          <SelectTrigger aria-label="Plan-mode minimum tier" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {planModeTierOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    )}
+  </>
+);
+
+const ResponseFormatControls: React.FC<{
+  value: ComplexityRouterConfigValue;
+  onChange: (value: ComplexityRouterConfigValue) => void;
+}> = ({ value, onChange }) => (
+  <>
+    <div className="flex items-center gap-2 mb-2">
+      <Switch
+        checked={value.return_raw_model_name ?? false}
+        onCheckedChange={(returnRawModelName) => onChange({ ...value, return_raw_model_name: returnRawModelName })}
+        aria-label="Return raw model name"
+      />
+      <strong className="font-semibold">Return raw model name</strong>
+    </div>
+    <span className="block text-xs text-muted-foreground">
+      Return the resolved underlying model name in responses instead of the autorouter alias.
+    </span>
+  </>
+);
 
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   modelInfo,
@@ -459,104 +564,19 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           {
             key: "affinity",
             label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
-            children: (
-              <>
-                <div className="flex items-center gap-2 mb-2">
-                  <Switch
-                    checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
-                    onCheckedChange={(deploymentAffinity) =>
-                      onChange({ ...value, deployment_affinity: deploymentAffinity })
-                    }
-                    aria-label="Pin a session to one deployment per model group"
-                  />
-                  <strong className="font-semibold">Pin a session to one deployment per model group</strong>
-                </div>
-                <span className="block text-xs mb-3 text-muted-foreground">
-                  Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off
-                  to load-balance every turn.
-                </span>
-                <div className="flex items-center gap-2 mb-2">
-                  <Switch
-                    checked={value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
-                    onCheckedChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
-                    aria-label="Pin a session to its first model"
-                  />
-                  <strong className="font-semibold">Pin a session to its first model</strong>
-                </div>
-                <span className="block text-xs text-muted-foreground">
-                  Keeps a session on its first turn&apos;s model instead of re-classifying each turn. Also pins the
-                  deployment.
-                </span>
-              </>
-            ),
+            children: <AffinityControls value={value} onChange={onChange} />,
           },
           {
             key: "plan-mode",
             label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
             children: (
-              <>
-                <div className="flex items-center gap-2 mb-2">
-                  <Switch
-                    checked={value.plan_mode_min_tier !== undefined}
-                    disabled={planModeTierOptions.length === 0}
-                    onCheckedChange={(enabled) =>
-                      onChange({
-                        ...value,
-                        plan_mode_min_tier: enabled ? planModeTierOptions.at(-1)?.value : undefined,
-                      })
-                    }
-                    aria-label="Route plan-mode requests to a minimum tier"
-                  />
-                  <strong className="font-semibold">Route plan-mode requests to a minimum tier</strong>
-                </div>
-                <span className="block text-xs mb-3 text-muted-foreground">
-                  Requests from coding agents in plan mode (Claude Code, GitHub Copilot) route to at least this tier.
-                  The classifier still wins when it picks higher, and the override only lasts while plan mode is active.
-                  {planModeTierOptions.length === 0 && " Add models to a tier to enable this."}
-                </span>
-                {value.plan_mode_min_tier !== undefined && (
-                  <div style={{ maxWidth: 320 }}>
-                    <Select
-                      items={planModeTierOptions}
-                      value={value.plan_mode_min_tier}
-                      onValueChange={(tier: string | null) => tier && onChange({ ...value, plan_mode_min_tier: tier })}
-                    >
-                      <SelectTrigger aria-label="Plan-mode minimum tier" className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {planModeTierOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </>
+              <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
             ),
           },
           {
             key: "response",
             label: <strong className="text-foreground font-semibold">Advanced: Response Format</strong>,
-            children: (
-              <>
-                <div className="flex items-center gap-2 mb-2">
-                  <Switch
-                    checked={value.return_raw_model_name ?? false}
-                    onCheckedChange={(returnRawModelName) =>
-                      onChange({ ...value, return_raw_model_name: returnRawModelName })
-                    }
-                    aria-label="Return raw model name"
-                  />
-                  <strong className="font-semibold">Return raw model name</strong>
-                </div>
-                <span className="block text-xs text-muted-foreground">
-                  Return the resolved underlying model name in responses instead of the autorouter alias.
-                </span>
-              </>
-            ),
+            children: <ResponseFormatControls value={value} onChange={onChange} />,
           },
           ...(onEscalationKeywordsChange
             ? [
