@@ -81,6 +81,11 @@ const AllModelsTab = ({
   }, [modelNameSearch, debouncedUpdateSearch]);
 
   const teamIdForQuery = selectedTeamValue === PERSONAL_TEAM_VALUE ? undefined : selectedTeamValue;
+  const isConcreteModelGroup =
+    Boolean(selectedModelGroup) &&
+    selectedModelGroup !== ALL_MODEL_GROUPS_VALUE &&
+    selectedModelGroup !== WILDCARD_MODEL_GROUP_VALUE;
+  const searchForQuery = debouncedSearch || (isConcreteModelGroup ? selectedModelGroup ?? undefined : undefined);
 
   const sortBy = useMemo(() => {
     if (sorting.length === 0) return undefined;
@@ -100,7 +105,7 @@ const AllModelsTab = ({
   } = useModelsInfo(
     pagination.pageIndex + 1,
     pagination.pageSize,
-    debouncedSearch || undefined,
+    searchForQuery,
     undefined,
     teamIdForQuery,
     sortBy,
