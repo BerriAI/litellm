@@ -178,8 +178,15 @@ async def test_config_file_success_callback_registers_custom_logger_instance(mon
 
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
 
-    config_content = {"litellm_settings": {"success_callback": ["langfuse"]}}
+    config_content = {
+        "litellm_settings": {
+            "success_callback": ["langfuse", "sentry"],
+            "failure_callback": ["langfuse"],
+        }
+    }
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
         yaml.dump(config_content, temp_file)
         temp_file_path = temp_file.name
@@ -191,11 +198,18 @@ async def test_config_file_success_callback_registers_custom_logger_instance(mon
             config_file_path=temp_file_path,
         )
 
+        # custom-logger-compatible names are registered as instances, not strings
         assert "langfuse" not in litellm.success_callback
+        # non-compatible names still take the string path
+        assert "sentry" in litellm.success_callback
         num_langfuse_instances = sum(
             isinstance(callback, LangfusePromptManagement) for callback in litellm._async_success_callback
         )
         assert num_langfuse_instances == 1
+        num_failure_instances = sum(
+            isinstance(callback, LangfusePromptManagement) for callback in litellm._async_failure_callback
+        )
+        assert num_failure_instances == 1
     finally:
         os.unlink(temp_file_path)
 
