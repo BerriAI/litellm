@@ -3,6 +3,7 @@ import pytest
 
 
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1319,8 +1320,8 @@ async def test_enrich_failure_metadata_ignores_flag_when_alias_present():
 async def test_track_cost_callback_reads_key_only_for_in_request_logs(call_type, expect_key_read):
     """
     The batch cost row is logged long after the batch was created, so it keeps the
-    identity persisted at create time. Every other call type still backfills from
-    the key.
+    identity persisted at create time. In-request logs can backfill identity
+    that was not captured during authentication.
     """
     logger = _ProxyDBLogger()
 
@@ -1339,7 +1340,6 @@ async def test_track_cost_callback_reads_key_only_for_in_request_logs(call_type,
             "metadata": {
                 "user_api_key": "hashed_key",
                 "user_api_key_alias": None,
-                "user_api_key_user_id": None,
                 "user_api_key_team_id": None,
                 "user_api_key_org_id": None,
             }
@@ -1377,7 +1377,7 @@ async def test_track_cost_callback_reads_key_only_for_in_request_logs(call_type,
         assert written["user_api_key_user_id"] == "user-assigned-later"
         assert written["user_api_key_team_id"] == "team-assigned-later"
     else:
-        assert written["user_api_key_user_id"] is None
+        assert written.get("user_api_key_user_id") is None
         assert written["user_api_key_team_id"] is None
         assert written["user_api_key_org_id"] is None
 
@@ -1875,3 +1875,54 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
         assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
             1 if expect_spend_log else 0
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+async def test_track_cost_callback_preserves_authenticated_null_identity(metadata_key: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    identity: Final = UserAPIKeyAuth(api_key="authenticated-key")
+    metadata: Final = {
+        **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(identity),
+        "user_api_key": identity.api_key,
+    }
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "model": "test-model",
+        "litellm_params": {metadata_key: metadata},
+        "response_cost": 0.25,
+    }
+    with (
+        patch(  # test-quality-ok: [TQ008] observes the legacy callback's imported lookup boundary
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=UserAPIKeyAuth(api_key=identity.api_key, user_id="reassigned-user"),
+        ) as lookup,
+        patch(  # test-quality-ok: [TQ008] callback imports the counter singleton at call time
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as increment,
+        patch(  # test-quality-ok: [TQ008] callback imports the cache writer at call time
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: [TQ008] callback imports the logging singleton at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as logging,
+    ):
+        logging.db_spend_update_writer.update_database = AsyncMock()
+        logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        await _ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response={"id": "authenticated-completion"},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        lookup.assert_not_awaited()
+        increment.assert_awaited_once()
+        logging.db_spend_update_writer.update_database.assert_awaited_once()
+        for call in (increment.await_args, logging.db_spend_update_writer.update_database.await_args):
+            assert call.kwargs["user_id"] is None
+            assert call.kwargs["team_id"] is None
+            assert call.kwargs["org_id"] is None
+            assert call.kwargs["response_cost"] == 0.25

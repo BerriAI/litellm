@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if TYPE_CHECKING:
@@ -563,6 +563,60 @@ async def test_get_key_object_should_reconnect_once_on_db_connection_error():
         timeout_seconds=2.0,
         lock_timeout_seconds=0.1,
     )
+
+
+@pytest.mark.asyncio
+async def test_key_lookup_limit_is_shared_by_auth_and_logging_and_survives_cancellation() -> None:
+    from litellm.proxy.auth.resolvers.store import IdentityStore
+
+    started: Final = asyncio.Event()
+    semaphore: Final = asyncio.Semaphore(1)
+
+    async def lookup(token: str, **_kwargs: object) -> UserAPIKeyAuth:
+        if token == "first-key":
+            started.set()
+            await asyncio.Event().wait()
+        return UserAPIKeyAuth(token=token)
+
+    database: Final = MagicMock(key_lookup_semaphore=semaphore, get_data=AsyncMock(side_effect=lookup))
+    cache: Final = UserApiKeyCache()
+    first: Final = asyncio.create_task(
+        get_key_object(hashed_token="first-key", prisma_client=database, user_api_key_cache=cache)
+    )
+    second: Final = asyncio.create_task(IdentityStore(prisma_client=database, cache=cache).resolve("second-key"))
+    cancelled_waiter: Final = asyncio.create_task(
+        get_key_object(hashed_token="cancelled-key", prisma_client=database, user_api_key_cache=cache)
+    )
+    tasks: Final = (first, second, cancelled_waiter)
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        await asyncio.sleep(0)
+        assert database.get_data.await_count == 1
+
+        cancelled_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_waiter
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        principal: Final = await asyncio.wait_for(second, timeout=5)
+        assert principal.source_key is not None
+        assert principal.source_key.token == "second-key"
+        final_key: Final = await get_key_object(
+            hashed_token="after-cancellation", prisma_client=database, user_api_key_cache=cache
+        )
+        assert final_key.token == "after-cancellation"
+        assert tuple(call.kwargs["token"] for call in database.get_data.await_args_list) == (
+            "first-key",
+            "second-key",
+            "after-cancellation",
+        )
+        assert not semaphore.locked()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.mark.asyncio

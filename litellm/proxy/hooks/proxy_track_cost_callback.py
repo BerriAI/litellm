@@ -238,7 +238,10 @@ class _ProxyDBLogger(CustomLogger):
             if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
                 metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(  # rebind-ok: enriched metadata replaces the original
                     metadata=metadata,
-                    resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
+                    resolve_missing_key_identity=(
+                        "user_api_key_user_id" not in metadata
+                        and str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES
+                    ),
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)

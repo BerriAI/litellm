@@ -1659,6 +1659,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
+PRISMA_KEY_LOOKUP_CONCURRENCY: Final = get_env_int_in_range("PRISMA_KEY_LOOKUP_CONCURRENCY", 16, 1, 1000)
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
