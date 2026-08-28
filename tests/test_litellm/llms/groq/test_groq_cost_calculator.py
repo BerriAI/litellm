@@ -77,3 +77,13 @@ def test_invalid_pricing_type_safe():
     cost = cost_per_web_search_request(usage=_usage_with_actions(4), model_info=invalid_priced)
     assert cost == 0.0
 
+    bool_priced = ModelInfo(
+        key="groq/openai/gpt-oss-20b",
+        litellm_provider="groq",
+        mode="chat",
+        search_context_cost_per_query=True,
+    )
+    cost_bool = cost_per_web_search_request(usage=_usage_with_actions(4), model_info=bool_priced)
+    assert cost_bool == 0.0
+
+

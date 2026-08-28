@@ -7,7 +7,8 @@ Groq bills the built-in browser tool per executed action
 action kinds off `executed_tools` into `usage.server_tool_use`.
 """
 
-from typing import TYPE_CHECKING, Final, Mapping
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 from litellm.constants import GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL
 from litellm.types.utils import Usage
@@ -31,3 +32,4 @@ def cost_per_web_search_request(usage: Usage, model_info: "ModelInfo") -> float:
     searches: Final = server_tool_use.web_search_requests or 0
     opens: Final = server_tool_use.browser_open_requests or 0
     return searches * cost_per_search + opens * GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL
+
