@@ -74,9 +74,9 @@ def upstream():
 
 
 @pytest.mark.asyncio
-async def test_untracked_openai_route_passthrough_logging(upstream):
-    """Keep this on a route `_is_supported_openai_endpoint` does not claim, or the
-    OpenAI-specific handler takes over and the generic payload stops being exercised."""
+async def test_passthrough_logging_payload_for_a_route_no_provider_handler_claims(
+    upstream,
+):
     base_url, upstream_received = upstream
 
     test_custom_logger = TestCustomLogger()
