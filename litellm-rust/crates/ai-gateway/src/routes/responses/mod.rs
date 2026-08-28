@@ -1,4 +1,5 @@
 mod service;
+pub(crate) mod upstream;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,9 +17,9 @@ use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
 use crate::state::AppState;
+use litellm_core::callbacks::custom_logger::CustomLogger;
+use litellm_core::callbacks::types::RequestMetadata;
 
 static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -239,7 +240,7 @@ async fn bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::realtime_pool::RealtimePool;
+    use crate::routes::realtime::pool::RealtimePool;
     use crate::state::AppState;
     use axum::body::Body;
     use axum::http::Request;

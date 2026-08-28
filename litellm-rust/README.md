@@ -1,57 +1,42 @@
 # LiteLLM Rust
 
-This workspace contains the staged Rust implementation for LiteLLM.
+The Cargo workspace and lockfile live at the repository root. Rust sources live under `litellm-rust/`
 
-`litellm-core` is the LiteLLM SDK in Rust: one entrypoint per top-level call
-that makes the LLM call and hands back a typed response, the same shape as
-`litellm.messages()` in Python.
+## Packages
 
-```rust
-let response = litellm_core::messages::messages(MessagesRequest {
-    model: "claude-sonnet-4-5",
-    body,
-    api_key: Some(key),
-    ..
-})
-.await?;
+| Package | Location | Responsibility |
+|---------|----------|----------------|
+| `litellm` | `apps/litellm` | CLI that starts the gateway |
+| `litellm-core` | `crates/core` | Provider calls, transforms, routing, and callback contracts |
+| `litellm-ai-gateway` | `crates/ai-gateway` | HTTP/WebSocket server, client authentication, configuration, and callback I/O |
+| `litellm-python-bridge` | `crates/python-bridge` | PyO3 adapter exposing core calls to Python |
+
+The CLI depends on the gateway. The gateway and Python bridge each depend on core, independently of one another
+
+## Run
+
+From the repository root, with LiteLLM importable in the Python interpreter used by PyO3:
+
+```bash
+cargo run -p litellm -- --config litellm-rust/crates/ai-gateway/config.yaml
 ```
 
-Python continues to own configuration, retries, routing policy, logging,
-callbacks, spend tracking, and customer plugins until each Rust path has parity
-coverage and production evidence.
+`--config` overrides `LITELLM_CONFIG_PATH`. With neither set, the server uses its existing environment-based deployment fallback
 
-## Crates
+The `litellm-ai-gateway` binary remains available. It runs without Python by default; enable `python-config` to load a proxy configuration file
 
-| Crate | Role |
-|-------|------|
-| litellm-core | The SDK. Per-route entrypoints (`messages::messages()`), types, provider transforms (modules under `providers/`), provider resolution, auth, the provider HTTP call, and the router. |
-| litellm-ai-gateway | The axum server (behind the `server` feature) and WebSocket hosts. Translates HTTP/WS to core entrypoints; no provider handlers. |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
-
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
-
-## Layout
-
-```text
-crates/
-  core/           The SDK: route modules + provider transforms.
-    src/messages/   mod.rs (entrypoint), types, transformation, prepare, handler, client
-    src/providers/anthropic/messages/transformation.rs
-  ai-gateway/     Axum server + WebSocket hosts; calls core entrypoints.
-  python-bridge/  PyO3 bridge for Python LiteLLM.
-```
-
-The folder shape follows the Python provider tree:
-`core/src/providers/<provider>/<route>/transformation.rs`. The bridge exposes one
-function per top-level route, mirroring the core entrypoints.
+See the [gateway README](crates/ai-gateway/README.md) for authentication, environment variables, and deployment configuration
 
 ## Checks
 
-Run these before pushing Rust changes. GitHub Actions runs the same checks for
-changes under `litellm-rust/`.
+Run from the repository root. `rust-toolchain.toml` pins the compiler and tools
 
 ```bash
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+cargo clippy -p litellm-core --all-targets --no-default-features --locked -- -D warnings
+cargo test -p litellm-core --no-default-features --locked
 ```
+
+The workspace tests enforce the package set and dependency direction. The [Realtime benchmark](crates/ai-gateway/benches/realtime/README.md) runs separately and requires provider credentials

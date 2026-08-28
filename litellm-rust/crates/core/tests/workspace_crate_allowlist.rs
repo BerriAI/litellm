@@ -1,98 +1,129 @@
-//! Enforcement: the litellm-rust workspace has exactly three crates.
-//!
-//! `core` (pure translation), `ai-gateway` (routes + all network I/O), and
-//! `python-bridge` (the PyO3 cdylib). Adding or removing a crate must be a
-//! deliberate act: this test fails until the allowlist here is updated, forcing
-//! whoever changes the crate set to justify the new crate per the rule that a
-//! crate is a layer needing independent compilation / its own deps / a separate
-//! artifact — and to keep `litellm-rust/AGENTS.md` in sync.
-//!
-//! Std-only (no toml crate): we scan the workspace manifest's `members = [...]`
-//! block and the `crates/` directory directly.
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-/// The one true crate set. Update BOTH this and `litellm-rust/AGENTS.md` when the
-/// workspace legitimately gains or loses a crate.
-const EXPECTED_MEMBERS: &[&str] = &["crates/core", "crates/ai-gateway", "crates/python-bridge"];
+use serde::Deserialize;
 
-/// The crate subdirectory names that must exist under `crates/`.
-const EXPECTED_CRATE_DIRS: &[&str] = &["core", "ai-gateway", "python-bridge"];
+const EXPECTED_MEMBERS: &[&str] = &[
+    "litellm-rust/apps/litellm",
+    "litellm-rust/crates/core",
+    "litellm-rust/crates/ai-gateway",
+    "litellm-rust/crates/python-bridge",
+];
 
-const MISMATCH: &str = "litellm-rust crate set changed — update this allowlist AND litellm-rust/AGENTS.md, and justify the crate per the rule (crate = layer needing independent compilation / its own deps / a separate artifact).";
+#[derive(Deserialize)]
+struct Metadata {
+    workspace_root: PathBuf,
+    packages: Vec<Package>,
+}
 
-/// Absolute path to the workspace root (`litellm-rust/`).
+#[derive(Deserialize)]
+struct Package {
+    name: String,
+    manifest_path: PathBuf,
+    dependencies: Vec<Dependency>,
+}
+
+#[derive(Deserialize)]
+struct Dependency {
+    name: String,
+    path: Option<PathBuf>,
+}
+
 fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is `.../litellm-rust/crates/core`; the workspace root is
-    // two levels up.
-    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
         .canonicalize()
-        .expect("workspace root should resolve")
+        .expect("repository root should resolve")
 }
 
-/// Parse the `members = [ ... ]` array out of the workspace `[workspace]` table.
-///
-/// Minimal hand-rolled scan: find `members`, then collect every double-quoted
-/// string up to the closing `]`. Good enough for our fixed manifest shape and
-/// keeps this test dependency-free.
-fn parse_members(manifest: &str) -> BTreeSet<String> {
-    let after_members = manifest
-        .split_once("members")
-        .map(|(_, rest)| rest)
-        .expect("workspace manifest should declare members");
-    let open = after_members.find('[').expect("members should be an array");
-    let close = after_members[open..]
-        .find(']')
-        .map(|offset| open + offset)
-        .expect("members array should be closed");
-    let body = &after_members[open + 1..close];
-
-    let mut members = BTreeSet::new();
-    let mut rest = body;
-    while let Some(start) = rest.find('"') {
-        let after_quote = &rest[start + 1..];
-        let end = after_quote
-            .find('"')
-            .expect("opening quote should be matched");
-        members.insert(after_quote[..end].to_string());
-        rest = &after_quote[end + 1..];
-    }
-    members
-}
-
-/// The crate subdirectory names under `crates/`.
-///
-/// A directory counts as a crate only when it holds a `Cargo.toml`; non-crate
-/// directories (e.g. docs like `CODING_STANDARDS/`) are ignored so they can live
-/// under `crates/` without tripping the crate-proliferation guard.
-fn crate_dirs(root: &Path) -> BTreeSet<String> {
-    fs::read_dir(root.join("crates"))
-        .expect("crates/ directory should exist")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false))
-        .filter(|entry| entry.path().join("Cargo.toml").is_file())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect()
+fn metadata() -> Metadata {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version=1",
+            "--locked",
+            "--offline",
+        ])
+        .current_dir(workspace_root())
+        .output()
+        .expect("cargo metadata should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("cargo metadata should return valid JSON")
 }
 
 #[test]
 fn workspace_members_match_allowlist() {
-    let root = workspace_root();
-    let manifest = fs::read_to_string(root.join("Cargo.toml"))
-        .expect("workspace Cargo.toml should be readable");
-
-    let actual = parse_members(&manifest);
-    let expected: BTreeSet<String> = EXPECTED_MEMBERS.iter().map(|s| s.to_string()).collect();
-    assert_eq!(actual, expected, "{MISMATCH}");
+    let metadata = metadata();
+    assert_eq!(metadata.workspace_root, workspace_root());
+    let actual: BTreeSet<_> = metadata
+        .packages
+        .iter()
+        .map(|package| {
+            package
+                .manifest_path
+                .parent()
+                .expect("manifest directory")
+                .strip_prefix(&metadata.workspace_root)
+                .expect("workspace member")
+                .to_path_buf()
+        })
+        .collect();
+    let expected: BTreeSet<_> = EXPECTED_MEMBERS.iter().map(PathBuf::from).collect();
+    assert_eq!(
+        actual, expected,
+        "update the allowlist and AGENTS.md when adding a package"
+    );
 }
 
 #[test]
 fn crates_directory_matches_allowlist() {
     let root = workspace_root();
+    let actual: BTreeSet<_> = ["litellm-rust/apps", "litellm-rust/crates"]
+        .into_iter()
+        .flat_map(|directory| fs::read_dir(root.join(directory)).expect("package directory"))
+        .map(|entry| entry.expect("package entry").path())
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .map(|path| {
+            path.strip_prefix(&root)
+                .expect("workspace package")
+                .to_path_buf()
+        })
+        .collect();
+    let expected: BTreeSet<_> = EXPECTED_MEMBERS.iter().map(PathBuf::from).collect();
+    assert_eq!(
+        actual, expected,
+        "every package must be an explicit workspace member"
+    );
+}
 
-    let actual = crate_dirs(&root);
-    let expected: BTreeSet<String> = EXPECTED_CRATE_DIRS.iter().map(|s| s.to_string()).collect();
-    assert_eq!(actual, expected, "{MISMATCH}");
+#[test]
+fn workspace_dependencies_follow_layers() {
+    for package in metadata().packages {
+        let expected: BTreeSet<_> = match package.name.as_str() {
+            "litellm" => ["litellm-ai-gateway"].into_iter().collect(),
+            "litellm-ai-gateway" | "litellm-python-bridge" => {
+                ["litellm-core"].into_iter().collect()
+            }
+            "litellm-core" => BTreeSet::new(),
+            name => panic!("unexpected workspace package: {name}"),
+        };
+        let actual: BTreeSet<_> = package
+            .dependencies
+            .iter()
+            .filter(|dependency| dependency.path.is_some())
+            .map(|dependency| dependency.name.as_str())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "{} has incorrect workspace dependencies",
+            package.name
+        );
+    }
 }

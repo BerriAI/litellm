@@ -6,15 +6,15 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 
 ## Crates
 
-`litellm-rust` is exactly three crates (a crate is a **layer**, not a route):
+The workspace has three library/host crates and a CLI under `apps/litellm`:
 
 | Crate | Role |
 |-------|------|
 | litellm-core | The LiteLLM SDK in Rust — per-route entrypoints (`messages::messages()`) that resolve the provider, transform, and make the call; plus types, provider transforms, and the router. |
-| litellm-ai-gateway | The Axum server (behind the `server` feature) and WebSocket hosts. Translates HTTP/WS to core entrypoints; no provider handlers. |
+| litellm-ai-gateway | The Axum server host. Translates HTTP/WS to core entrypoints; no provider handlers. |
 | litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+The CLI depends on the gateway. The gateway and Python bridge each depend on core, independently of one another
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
@@ -133,7 +133,7 @@ docker run --rm -p 4001:4001 \
 
 ```bash
 # config.yaml mode — needs litellm importable in the active python env
-LITELLM_CONFIG_PATH=./crates/ai-gateway/config.yaml \
+LITELLM_CONFIG_PATH=./litellm-rust/crates/ai-gateway/config.yaml \
   cargo run --release -p litellm-ai-gateway --features python-config
 
 # env stand-in mode — no python, no config

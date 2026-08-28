@@ -1,0 +1,16 @@
+[package]
+name = "litellm"
+version = "0.1.0-alpha.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "litellm"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["env"] }
+litellm-ai-gateway = { workspace = true, features = ["python-config"] }
+tokio.workspace = true

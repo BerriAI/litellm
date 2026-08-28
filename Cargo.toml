@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "litellm-rust/apps/litellm",
+    "litellm-rust/crates/core",
+    "litellm-rust/crates/ai-gateway",
+    "litellm-rust/crates/python-bridge",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/BerriAI/litellm"
+
+[workspace.dependencies]
+litellm-core = { path = "litellm-rust/crates/core" }
+litellm-ai-gateway = { path = "litellm-rust/crates/ai-gateway" }
+clap = { version = "4", features = ["derive"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+pyo3 = "0.29.0"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "http2", "json", "rustls-tls", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }

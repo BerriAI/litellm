@@ -2,6 +2,8 @@ litellm-core is the LiteLLM SDK in Rust — it makes the LLM call. Each top-leve
 
 A route module owns everything the call needs: types, the provider template trait, provider transforms (under `providers/`), provider/auth/URL resolution, and the handler that performs the HTTP call. Handlers belong here, never in a host crate.
 
-Not here: serving HTTP (axum routes, extractors), config file reading, rollout state, databases, or callback dispatch. Env reads are limited to credential fallback in a route's `prepare.rs`.
+The callback/guardrail traits, runners, and payload types live in `callbacks/`; the generic lifecycle runner in `call_lifecycle/`.
+
+Not here: serving HTTP (axum routes, extractors), config file reading, rollout state, databases, or callback I/O implementations (hosts ship the payloads). Env reads are limited to credential fallback in a route's `prepare.rs`.
 
 Routes (messages, ocr, realtime) and providers (anthropic, mistral, openai) are modules, not crates.

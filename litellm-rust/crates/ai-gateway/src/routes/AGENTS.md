@@ -22,13 +22,17 @@ When a route has business logic worth testing without axum, put it in a sibling
 Rust with **no axum types**, and its job is to pick the deployment and call the
 `core` route entrypoint (see `messages/service.rs` calling
 `litellm_core::messages::messages`). Never build a provider request, resolve a
-key, or perform the provider call here. `realtime/` is the older example:
+key, or perform the provider call here. `realtime/` is the exception that owns
+host-side WS transport (dial + splice are transport, not provider logic):
 ```
 realtime/
   mod.rs       # axum surface: router() + handler + the WS<->events adapter
-  service.rs   # pure logic: select deployment + call provider (no axum) — testable
+  service.rs   # pure logic: select deployment, warm-pool or fresh dial (no axum) — testable
+  upstream.rs  # upstream OpenAI dial + frame splice
+  pool.rs      # pre-warmed upstream connection pool
+  streaming.rs # session usage/status accounting for logging
 ```
-Split `service` further (or add `transport`, `repo`, …) only once a single file
+Split `service` further (or add `upstream`, `repo`, …) only once a single file
 genuinely gets hard to read.
 
 ## Invariants

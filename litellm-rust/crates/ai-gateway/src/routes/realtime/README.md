@@ -84,4 +84,4 @@ upstream sockets, which is why warm sockets are short-lived
   attempts against a broken key so it can't exhaust upstream rate limits and degrade
   valid cold-path traffic; the backoff resets the moment a dial succeeds.
 
-Benchmarks and repro: `../../benchmarks/realtime/README.md`.
+Benchmarks and repro: `../../../benches/realtime/README.md`.

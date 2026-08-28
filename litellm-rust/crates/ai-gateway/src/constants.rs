@@ -9,6 +9,9 @@
 /// `LITELLM_PROXY_BASE_URL` is unset.
 pub(crate) const DEFAULT_PROXY_BASE_URL: &str = "http://localhost:4000";
 
+pub(crate) const DEFAULT_HOST: &str = "127.0.0.1";
+pub(crate) const DEFAULT_PORT: u16 = 4001;
+
 /// The logs ingest path appended to the proxy base. Not a tunable; it is the
 /// proxy's API contract (the rust-control-plane router on the Python proxy).
 pub(crate) const RUST_CONTROL_PLANE_LOGS_PATH: &str = "/v1/rust_control_plane/logs";
@@ -26,17 +29,14 @@ pub(crate) const DEFAULT_MAX_BATCH_SIZE: usize = 256;
 pub(crate) const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 
 /// Provider attributed to realtime sessions in the logging payload.
-#[cfg(feature = "server")]
 pub(crate) const DEFAULT_PROVIDER: &str = "openai";
 
 pub(crate) const DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub(crate) const DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS: u64 = 300;
 
 /// HTTP path for the non-streaming Anthropic Messages route.
-#[cfg(feature = "server")]
 pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
 
 /// Request headers owned by the gateway and never forwarded upstream.
-#[cfg(feature = "server")]
 pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] =
     &["authorization", "connection", "content-length", "host"];

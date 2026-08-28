@@ -143,7 +143,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::super::app;
-    use crate::io::realtime_pool::RealtimePool;
+    use crate::routes::realtime::pool::RealtimePool;
     use crate::state::AppState;
 
     fn state(model: &str, api_base: String, master_key: Option<&str>) -> AppState {

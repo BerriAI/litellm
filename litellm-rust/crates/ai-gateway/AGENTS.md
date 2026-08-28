@@ -7,8 +7,9 @@ such as `litellm_core::messages::messages`. No provider handler lives here.
 
 ```
 src/
-  main.rs            # entrypoint: build AppState (router + master key), bind, serve
-  state.rs           # AppState — shared Arc<Router> + master_key
+  main.rs            # compatibility binary calling server::run
+  server.rs          # build AppState, bind, serve; shared with apps/litellm
+  state.rs           # AppState — shared Arc<Router> + master_key + loggers + pool
   gil.rs             # GIL-activity tracker (records Python acquisitions)
   auth/              # authentication as an axum extractor — added to handler args
     mod.rs           #   RequireMasterKey: FromRequestParts, single master key (LITELLM_MASTER_KEY)
@@ -17,9 +18,18 @@ src/
     mod.rs           #   app(): merges every module's router()
     health.rs        #   simple route (one file): router() + liveness/readiness
     gil.rs           #   simple route (one file): router() + GET /health/gil
-    realtime/        #   route with logic → axum surface + a no-axum service:
+    messages/        #   route with logic → axum surface + a no-axum service:
+      mod.rs         #     router() + handler (the axum surface)
+      service.rs     #     business logic (select deployment, call core) — no axum, testable
+    realtime/        #   WS route: surface + service + host transport:
       mod.rs         #     router() + handler + WS<->events adapter (the axum surface)
-      service.rs     #     business logic (select deployment, call provider) — no axum, testable
+      service.rs     #     pick deployment, warm-pool or fresh dial — no axum, testable
+      upstream.rs    #     the upstream OpenAI dial + frame splice
+      pool.rs        #     pre-warmed upstream connection pool
+      streaming.rs   #     session usage/status accounting for logging
+    responses/       #   WS route: surface + service + upstream dial/splice
+  integrations/      # host-side callback I/O (traits live in litellm_core::callbacks)
+    litellm_python_proxy_api/  # ships logs to the Python proxy over HTTP
   python/            # Python interop (feature: python-config) — load-time only
     mod.rs, config.rs, AGENTS.md
 ```
@@ -40,7 +50,7 @@ src/
   builds a provider request itself is a bug (`routes/messages/service.rs` is
   the reference).
 - **State is shared and cheap to clone.** Long-lived handles live behind `Arc` in
-  `state.rs`; read env/config only in `main.rs` when building state.
+  `state.rs`; read env/config in `server.rs` when building state.
 
 ## Auth (interim)
 

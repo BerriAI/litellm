@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::constants::{
     DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS, DEFAULT_MAX_BATCH_SIZE,
 };
-use crate::integrations::types::StandardLoggingPayload;
+use litellm_core::callbacks::types::StandardLoggingPayload;
 
 #[derive(Serialize)]
 pub struct CallbackLogsRequest {

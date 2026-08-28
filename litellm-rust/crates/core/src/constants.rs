@@ -33,6 +33,19 @@ pub(crate) const CHAT_COMPLETIONS_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 
+/// Full-request timeout ceiling for OCR provider calls, in seconds.
+pub(crate) const OCR_TIMEOUT_SECS: u64 = 600;
+
+/// Connect timeout for OCR provider calls, in seconds.
+pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// Full-request timeout ceiling for audio transcription provider calls, in
+/// seconds.
+pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;
+
+/// Connect timeout for audio transcription provider calls, in seconds.
+pub(crate) const AUDIO_TRANSCRIPTION_CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// Placeholder Python substitutes for empty or whitespace-only message text,
 /// which Anthropic and Bedrock both reject. Must match
 /// `_EMPTY_TEXT_PLACEHOLDER` in

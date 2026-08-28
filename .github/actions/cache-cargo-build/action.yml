@@ -25,7 +25,7 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          litellm-rust/target
-        key: ${{ runner.os }}-cargo-release-${{ hashFiles('litellm-rust/Cargo.lock') }}
+          target
+        key: ${{ runner.os }}-cargo-release-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-release-

@@ -1,16 +1,21 @@
 //! `GET /v1/realtime` (WebSocket).
 //!
 //! This file is the **axum surface**: `router()`, the handler, and the small
-//! socket↔events adapter. The pure logic (no axum) lives in [`service`]. Auth is
-//! the `RequireMasterKey` extractor, so the handler stays thin.
+//! socket↔events adapter. The pure logic (no axum) lives in [`service`], the
+//! upstream dial + splice in [`upstream`], the pre-warmed connection pool in
+//! [`pool`], and session usage accounting in [`streaming`]. Auth is the
+//! `RequireMasterKey` extractor, so the handler stays thin.
 
+pub mod pool;
 mod service;
+pub(crate) mod streaming;
+pub(crate) mod upstream;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::io::realtime_pool::RealtimePool;
+use crate::routes::realtime::pool::RealtimePool;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -23,10 +28,10 @@ use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
-use crate::realtime::streaming::{RealTimeStreaming, SessionStatus};
+use crate::routes::realtime::streaming::{RealTimeStreaming, SessionStatus};
 use crate::state::AppState;
+use litellm_core::callbacks::custom_logger::CustomLogger;
+use litellm_core::callbacks::types::RequestMetadata;
 
 /// Process-local monotonic counter, mixed into the per-session call id so two
 /// sessions opened in the same nanosecond still get distinct ids.

@@ -20,13 +20,17 @@ Allowed:
 - Serialization helpers that intentionally mirror Python output shape.
 - Route templates that match Python base config responsibilities, such as
   `messages::transformation::AnthropicMessagesProviderConfig`.
+- Callback and guardrail traits, runners, payload types, and lifecycle
+  orchestration (`callbacks`, `call_lifecycle`). Hosts own the I/O
+  implementations that ship those payloads anywhere.
 
 Not allowed:
 - Serving HTTP: axum routers, extractors, and other transport concerns.
 - Filesystem, database, or cache access.
 - Config file reading or rollout state; the host resolves those and passes them
   in. Env reads are limited to credential fallback in a route's `prepare.rs`.
-- Logging callbacks, tracing spans, spend writes, or customer callbacks.
+- Callback I/O implementations (e.g. shipping logs over HTTP), tracing spans,
+  or spend writes.
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
 
