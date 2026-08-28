@@ -1478,3 +1478,60 @@ def test_async_sentinel_keeps_the_credential_provider_off_the_monitors(markers, 
     master_kwargs = mock_sentinel_cls.return_value.master_for.call_args[1]
     assert isinstance(master_kwargs["credential_provider"], provider_cls)
     assert "password" not in master_kwargs
+
+
+@pytest.mark.parametrize("client_mode", ["cluster", "client", "pool"])
+@pytest.mark.parametrize(
+    ("credential_attribute", "credential_value", "provider_type"),
+    [
+        ("_azure_credential", object(), AzureADCredentialProvider),
+        (
+            "_gcp_service_account",
+            "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com",
+            GCPIAMCredentialProvider,
+        ),
+    ],
+)
+def test_credential_provider_excludes_explicit_credentials(
+    client_mode: str,
+    credential_attribute: str,
+    credential_value: object,
+    provider_type: type[object],
+) -> None:
+    connect_func = SimpleNamespace(**{credential_attribute: credential_value})
+    redis_kwargs = {
+        **(
+            {"startup_nodes": [{"host": "redis.example.com", "port": 6379}]}
+            if client_mode == "cluster"
+            else {"host": "redis.example.com", "port": 6379}
+        ),
+        "username": "configured-user",
+        "password": "configured-password",
+        "redis_connect_func": connect_func,
+    }
+    builder, constructor_path = (
+        (get_redis_async_client, "litellm._redis.async_redis.RedisCluster")
+        if client_mode == "cluster"
+        else (
+            (get_redis_async_client, "litellm._redis.async_redis.Redis")
+            if client_mode == "client"
+            else (
+                get_redis_connection_pool,
+                "litellm._redis.async_redis.BlockingConnectionPool",
+            )
+        )
+    )
+
+    with (
+        patch(constructor_path) as constructor,
+        patch(
+            "litellm._redis._get_redis_client_logic",
+            return_value=redis_kwargs,
+        ),
+    ):
+        builder()
+
+    call_kwargs = constructor.call_args.kwargs
+    assert isinstance(call_kwargs["credential_provider"], provider_type)
+    assert "username" not in call_kwargs
+    assert "password" not in call_kwargs
