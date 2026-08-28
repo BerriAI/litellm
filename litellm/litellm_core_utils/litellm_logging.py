@@ -886,6 +886,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_id: str | None = None,
         prompt_spec: PromptSpec | None = None,
         prompt_management_logger: CustomLogger | None = None,
+        tools: list[dict] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
@@ -894,6 +895,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         custom_logger: Final = prompt_management_logger or self.get_custom_logger_for_prompt_management(
             model=model,
+            tools=tools,
             non_default_params=non_default_params,
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
@@ -902,21 +904,45 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if custom_logger:
             breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
-            (
-                model,
-                messages,
-                non_default_params,
-            ) = custom_logger.get_chat_completion_prompt(
-                model=model,
-                messages=messages,
-                non_default_params=non_default_params or {},
-                prompt_id=prompt_id,
-                prompt_spec=prompt_spec,
-                prompt_variables=prompt_variables,
-                dynamic_callback_params=self.standard_callback_dynamic_params,
-                prompt_label=prompt_label,
-                prompt_version=prompt_version,
-            )
+            # Only the cache-control hook reads tools, and it is the only prompt
+            # manager that declares the parameter: completion() keeps tools out of
+            # non_default_params, so the census cannot see a client-marked tool
+            # unless it is handed over separately. The async dispatch can pass it
+            # unconditionally because the base class declares it there.
+            resolved_non_default_params: Final = non_default_params or {}
+            if isinstance(custom_logger, AnthropicCacheControlHook):
+                (
+                    model,
+                    messages,
+                    non_default_params,
+                ) = custom_logger.get_chat_completion_prompt(
+                    model=model,
+                    messages=messages,
+                    non_default_params=resolved_non_default_params,
+                    prompt_id=prompt_id,
+                    prompt_spec=prompt_spec,
+                    prompt_variables=prompt_variables,
+                    dynamic_callback_params=self.standard_callback_dynamic_params,
+                    prompt_label=prompt_label,
+                    prompt_version=prompt_version,
+                    tools=tools,
+                )
+            else:
+                (
+                    model,
+                    messages,
+                    non_default_params,
+                ) = custom_logger.get_chat_completion_prompt(
+                    model=model,
+                    messages=messages,
+                    non_default_params=resolved_non_default_params,
+                    prompt_id=prompt_id,
+                    prompt_spec=prompt_spec,
+                    prompt_variables=prompt_variables,
+                    dynamic_callback_params=self.standard_callback_dynamic_params,
+                    prompt_label=prompt_label,
+                    prompt_version=prompt_version,
+                )
             if request_kwargs is not None:
                 AnthropicCacheControlHook.record_gateway_injection(
                     request_kwargs,

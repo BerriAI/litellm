@@ -3030,3 +3030,97 @@ def test_count_tool_cache_breakpoints_counts_both_shapes():
     )
     assert count == 2
     assert AnthropicCacheControlHook.count_tool_cache_breakpoints(None) == 0
+
+
+def test_sync_dispatch_forwards_tools_to_the_census():
+    """The census must see tools on the synchronous path too.
+
+    completion() strips `tools` from non_default_params (it is a standard OpenAI
+    param, and get_non_default_completion_params keeps only the non-default ones),
+    so the sync dispatch has to pass it separately the way the async one does.
+    Without that, a client-marked tool is invisible here and injection can still
+    push the request past the cap.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    _, processed, _ = logging_obj.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
+        prompt_variables=None,
+        prompt_id=None,
+        prompt_management_logger=AnthropicCacheControlHook(),
+        tools=[_marked_tool_anthropic_shape()],
+    )
+
+    assert _count_cache_control(processed) == 3, "The marked tool must consume the fourth slot"
+
+
+def test_completion_strips_tools_from_non_default_params():
+    """Guards the reason the parameter is needed: tools never survives in non_default_params."""
+    from litellm.utils import get_non_default_completion_params
+
+    non_default = get_non_default_completion_params(
+        kwargs={"model": "gpt-4o", "tools": [_marked_tool_anthropic_shape()]}
+    )
+    assert "tools" not in non_default
+
+
+def test_sync_dispatch_does_not_hand_tools_to_other_prompt_managers():
+    """Only the cache-control hook declares `tools` on the sync signature.
+
+    The sync dispatch resolves any registered prompt manager, and the others take
+    the base signature, so forwarding tools to all of them would raise TypeError
+    on every non-Anthropic prompt-managed request.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    class _PromptManagerWithoutTools(CustomLogger):
+        def get_chat_completion_prompt(
+            self,
+            model,
+            messages,
+            non_default_params,
+            prompt_id,
+            prompt_variables,
+            dynamic_callback_params,
+            prompt_spec=None,
+            prompt_label=None,
+            prompt_version=None,
+            ignore_prompt_manager_model=False,
+            ignore_prompt_manager_optional_params=False,
+        ):
+            return model, messages, non_default_params
+
+    logging_obj = Logging(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="test-call-id-2",
+        function_id="test-function-id-2",
+    )
+
+    _, processed, _ = logging_obj.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        non_default_params={},
+        prompt_variables=None,
+        prompt_id=None,
+        prompt_management_logger=_PromptManagerWithoutTools(),
+        tools=[_marked_tool_anthropic_shape()],
+    )
+
+    assert processed == [{"role": "user", "content": "hello"}]
